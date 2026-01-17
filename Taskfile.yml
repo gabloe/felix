@@ -9,3 +9,5 @@ tasks:
     cmds: ["cargo test --workspace"]
   build:
     cmds: ["cargo build --workspace"]
+  demo:
+    cmds: ["cargo run -p broker --bin demo"]

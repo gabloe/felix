@@ -1,8 +1,8 @@
 # felix-transport
 
-Transport configuration and connection primitives.
+QUIC transport configuration and connection primitives.
 
 Responsibilities:
 - Transport-level configuration defaults
 - Connection identity and metadata
-- Future home for QUIC/TCP implementations
+- QUIC endpoint wrappers for client/server connections
