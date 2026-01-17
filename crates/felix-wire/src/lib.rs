@@ -1,5 +1,6 @@
 // Simple wire format for framing bytes on the network.
 use bytes::{Buf, Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 
 pub const MAGIC: u32 = 0x464C5831;
 pub const VERSION: u16 = 1;
@@ -16,6 +17,10 @@ pub enum Error {
     FrameTooLarge,
     #[error("incomplete frame")]
     Incomplete,
+    #[error("failed to serialize message")]
+    Serialize(serde_json::Error),
+    #[error("failed to deserialize message")]
+    Deserialize(serde_json::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +128,39 @@ impl Frame {
     }
 }
 
+/// V1 wire messages encoded in framed payloads.
+///
+/// ```
+/// use felix_wire::Message;
+///
+/// let message = Message::Publish {
+///     stream: "updates".to_string(),
+///     payload: b"hello".to_vec(),
+/// };
+/// let frame = message.encode().expect("encode");
+/// let decoded = Message::decode(frame).expect("decode");
+/// assert_eq!(message, decoded);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Message {
+    Publish { stream: String, payload: Vec<u8> },
+    Subscribe { stream: String },
+    Event { stream: String, payload: Vec<u8> },
+    Ok,
+    Error { message: String },
+}
+
+impl Message {
+    pub fn encode(&self) -> Result<Frame> {
+        let payload = serde_json::to_vec(self).map_err(Error::Serialize)?;
+        Frame::new(0, Bytes::from(payload))
+    }
+
+    pub fn decode(frame: Frame) -> Result<Self> {
+        serde_json::from_slice(&frame.payload).map_err(Error::Deserialize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +216,26 @@ mod tests {
         buf.extend_from_slice(b"hi");
         let err = Frame::decode(buf.freeze()).expect_err("incomplete payload");
         assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn message_round_trip() {
+        let message = Message::Publish {
+            stream: "topic".to_string(),
+            payload: b"payload".to_vec(),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn message_error_round_trip() {
+        let message = Message::Error {
+            message: "oops".to_string(),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
     }
 }
