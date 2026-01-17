@@ -1,0 +1,11 @@
+version: "3"
+
+tasks:
+  fmt:
+    cmds: ["cargo fmt --all"]
+  lint:
+    cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
+  test:
+    cmds: ["cargo test --workspace"]
+  build:
+    cmds: ["cargo build --workspace"]
