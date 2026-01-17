@@ -1,0 +1,9 @@
+[package]
+name = "felix-router"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+felix-common = { path = "../felix-common" }
