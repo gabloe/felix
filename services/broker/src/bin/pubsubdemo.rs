@@ -1,4 +1,4 @@
-// Console demo that exercises the broker protocol over QUIC.
+// Console demo that exercises pub/sub over QUIC using felix-wire frames.
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::Broker;
@@ -15,10 +15,11 @@ use tokio::time::Duration;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Keep the demo output readable and step-by-step.
-    println!("== Felix QUIC Broker Demo ==");
-    println!("Goal: publish and subscribe over QUIC using felix-wire frames.");
+    println!("== Felix QUIC Pub/Sub Demo ==");
+    println!("Goal: demonstrate publish/subscribe over QUIC (not cache).");
+    println!("This demo spins up an in-process broker + QUIC server, then runs a client.");
 
-    println!("Step 1/4: booting QUIC server.");
+    println!("Step 1/6: booting in-process broker + QUIC server.");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
@@ -30,7 +31,7 @@ async fn main() -> Result<()> {
 
     let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
 
-    println!("Step 2/4: connecting QUIC client.");
+    println!("Step 2/6: connecting QUIC client.");
     let client = QuicClient::bind(
         "0.0.0.0:0".parse()?,
         build_client_config(cert)?,
@@ -38,7 +39,7 @@ async fn main() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    println!("Step 3/4: subscribing and publishing messages.");
+    println!("Step 3/6: opening a subscription stream.");
     let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
     quic::write_message(
         &mut sub_send,
@@ -51,6 +52,7 @@ async fn main() -> Result<()> {
     let response = quic::read_message(&mut sub_recv).await?;
     println!("Subscribe response: {:?}", response);
 
+    println!("Step 4/6: publishing two messages on the same stream.");
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let recv_task = tokio::spawn(async move {
         while let Ok(Some(message)) = quic::read_message(&mut sub_recv).await {
@@ -63,7 +65,7 @@ async fn main() -> Result<()> {
     publish(&connection, "demo-topic", b"hello").await?;
     publish(&connection, "demo-topic", b"world").await?;
 
-    println!("Step 4/4: shutting down.");
+    println!("Step 5/6: receiving events.");
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await {
             Ok(Some((stream, payload))) => {
@@ -83,6 +85,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+    println!("Shutting down demo.");
     recv_task.abort();
     drop(connection);
     server_task.abort();
