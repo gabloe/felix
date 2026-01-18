@@ -12,6 +12,7 @@ members = [
   "crates/felix-crypto",
   "crates/felix-authz",
   "crates/felix-client",
+  "crates/felix-conformance",
   "services/controlplane",
   "services/agent",
   "services/broker",

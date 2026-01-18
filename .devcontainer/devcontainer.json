@@ -23,7 +23,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "rustc --version",
+	"postCreateCommand": "rustup toolchain install 1.92.0 && rustup default 1.92.0",
 
 	// Configure tool-specific properties.
 	// "customizations": {},

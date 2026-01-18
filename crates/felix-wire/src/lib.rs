@@ -1,4 +1,5 @@
 // Simple wire format for framing bytes on the network.
+use base64::Engine;
 use bytes::{Buf, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 
@@ -142,9 +143,11 @@ impl Frame {
 /// assert_eq!(message, decoded);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
     Publish {
         stream: String,
+        #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
     },
     Subscribe {
@@ -152,10 +155,12 @@ pub enum Message {
     },
     Event {
         stream: String,
+        #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
     },
     CachePut {
         key: String,
+        #[serde(with = "base64_bytes")]
         value: Vec<u8>,
         ttl_ms: Option<u64>,
     },
@@ -164,6 +169,7 @@ pub enum Message {
     },
     CacheValue {
         key: String,
+        #[serde(with = "base64_option")]
         value: Option<Vec<u8>>,
     },
     Ok,
@@ -180,6 +186,64 @@ impl Message {
 
     pub fn decode(frame: Frame) -> Result<Self> {
         serde_json::from_slice(&frame.payload).map_err(Error::Deserialize)
+    }
+}
+
+mod base64_bytes {
+    use super::*;
+    use serde::de::Error;
+
+    pub fn serialize<S>(value: &Vec<u8>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(D::Error::custom)
+    }
+}
+
+mod base64_option {
+    use super::*;
+    use serde::de::Error;
+
+    pub fn serialize<S>(
+        value: &Option<Vec<u8>>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match value {
+            Some(bytes) => {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                serializer.serialize_some(&encoded)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Option<Vec<u8>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = Option::<String>::deserialize(deserializer)?;
+        match encoded {
+            Some(value) => base64::engine::general_purpose::STANDARD
+                .decode(value.as_bytes())
+                .map(Some)
+                .map_err(D::Error::custom),
+            None => Ok(None),
+        }
     }
 }
 

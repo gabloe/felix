@@ -225,6 +225,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "felix-conformance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "broker",
+ "felix-broker",
+ "felix-storage",
+ "felix-transport",
+ "felix-wire",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "tokio",
+]
+
+[[package]]
 name = "felix-consensus"
 version = "0.1.0"
 
@@ -269,6 +285,7 @@ dependencies = [
 name = "felix-wire"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "serde",
  "serde_json",

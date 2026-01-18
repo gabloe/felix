@@ -20,8 +20,13 @@ durability, clustering, or advanced observability.
 
 ## Wire protocol v1 (`felix-wire`)
 - [X] Versioned frame header (magic/version/flags/len)
+- [ ] Add message type in header (type field) for non-JSON parsing
 - [X] Message types: `Publish`, `Subscribe`, `Event`, `Ok`, `Error`
 - [X] Encode/decode message payloads with frames
+- [ ] Define v1 wire spec in `PROTOCOL.md`
+- [X] Define v1 wire spec in `PROTOCOL.md`
+- [X] Add test vectors in `crates/felix-wire/tests/vectors/`
+- [X] Add conformance runner tool (felix-conformance)
 - [ ] Add fuzz tests for frame + message decoding
 - [ ] Add compatibility notes (reserved fields for future encryption/compression)
 
@@ -55,6 +60,7 @@ durability, clustering, or advanced observability.
 - [X] Client can publish to a named stream over QUIC
 - [X] Subscribers receive stream events over QUIC
 - [X] Cache `put/get` available over QUIC
+- [ ] Latency target: p999 <= 1 ms for small payloads on localhost baseline
 - [ ] Basic metrics exist and show throughput/latency
 - [X] Unit tests cover wire encode/decode and broker fanout behavior
 
