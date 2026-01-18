@@ -12,6 +12,8 @@ pub enum BrokerError {
     CapacityTooLarge,
     #[error("cursor too old (oldest {oldest}, requested {requested})")]
     CursorTooOld { oldest: u64, requested: u64 },
+    #[error("stream not found: {0}")]
+    StreamNotFound(String),
 }
 
 const DEFAULT_TOPIC_CAPACITY: usize = 1024;
@@ -79,6 +81,10 @@ impl StreamState {
 /// let broker = Broker::new(EphemeralCache::new());
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
+///     broker
+///         .register_stream("topic", Default::default())
+///         .await
+///         .expect("register");
 ///     let mut sub = broker.subscribe("topic").await.expect("subscribe");
 ///     broker
 ///         .publish("topic", Bytes::from_static(b"hello"))
@@ -92,6 +98,8 @@ impl StreamState {
 pub struct Broker {
     // Map of topic name -> stream state (broadcast + log).
     topics: RwLock<HashMap<String, StreamState>>,
+    // Map of stream name -> metadata for existence checks.
+    streams: RwLock<HashMap<String, StreamMetadata>>,
     // Ephemeral cache used by demos and simple workflows.
     cache: EphemeralCache,
     // Broadcast channel capacity for each topic.
@@ -100,11 +108,27 @@ pub struct Broker {
     log_capacity: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct StreamMetadata {
+    pub durable: bool,
+    pub shards: u32,
+}
+
+impl Default for StreamMetadata {
+    fn default() -> Self {
+        Self {
+            durable: false,
+            shards: 1,
+        }
+    }
+}
+
 impl Broker {
     // Start with an empty topic table and default capacity.
     pub fn new(cache: EphemeralCache) -> Self {
         Self {
             topics: RwLock::new(HashMap::new()),
+            streams: RwLock::new(HashMap::new()),
             cache,
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
             log_capacity: DEFAULT_LOG_CAPACITY,
@@ -129,6 +153,9 @@ impl Broker {
     }
 
     pub async fn publish(&self, topic: &str, payload: Bytes) -> Result<usize> {
+        if !self.stream_exists(topic).await {
+            return Err(BrokerError::StreamNotFound(topic.to_string()));
+        }
         // Fan-out to current subscribers; ignore backpressure errors for now.
         let sender = {
             let mut guard = self.topics.write().await;
@@ -142,6 +169,9 @@ impl Broker {
     }
 
     pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Bytes>> {
+        if !self.stream_exists(topic).await {
+            return Err(BrokerError::StreamNotFound(topic.to_string()));
+        }
         // Create the topic lazily so callers don't need a setup step.
         let mut guard = self.topics.write().await;
         let stream = guard
@@ -151,6 +181,9 @@ impl Broker {
     }
 
     pub async fn cursor_tail(&self, topic: &str) -> Result<Cursor> {
+        if !self.stream_exists(topic).await {
+            return Err(BrokerError::StreamNotFound(topic.to_string()));
+        }
         let mut guard = self.topics.write().await;
         let stream = guard
             .entry(topic.to_string())
@@ -165,6 +198,9 @@ impl Broker {
         topic: &str,
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
+        if !self.stream_exists(topic).await {
+            return Err(BrokerError::StreamNotFound(topic.to_string()));
+        }
         let mut guard = self.topics.write().await;
         let stream = guard
             .entry(topic.to_string())
@@ -190,6 +226,32 @@ impl Broker {
         &self.cache
     }
 
+    pub async fn register_stream(
+        &self,
+        stream: impl Into<String>,
+        metadata: StreamMetadata,
+    ) -> Result<()> {
+        let stream = stream.into();
+        self.streams.write().await.insert(stream.clone(), metadata);
+        let mut guard = self.topics.write().await;
+        guard
+            .entry(stream)
+            .or_insert_with(|| StreamState::new(self.topic_capacity));
+        Ok(())
+    }
+
+    pub async fn remove_stream(&self, stream: &str) -> Result<bool> {
+        let removed = self.streams.write().await.remove(stream).is_some();
+        if removed {
+            self.topics.write().await.remove(stream);
+        }
+        Ok(removed)
+    }
+
+    pub async fn stream_exists(&self, stream: &str) -> bool {
+        self.streams.read().await.contains_key(stream)
+    }
+
     // get_or_create_topic removed; stream creation handled inline for cursor/log support.
 }
 
@@ -201,6 +263,10 @@ mod tests {
     async fn publish_delivers_to_subscriber() {
         // Basic pub/sub flow with a single subscriber.
         let broker = Broker::new(EphemeralCache::new());
+        broker
+            .register_stream("orders", StreamMetadata::default())
+            .await
+            .expect("register");
         let mut sub = broker.subscribe("orders").await.expect("subscribe");
         broker
             .publish("orders", Bytes::from_static(b"hello"))
@@ -213,6 +279,10 @@ mod tests {
     #[tokio::test]
     async fn publish_without_subscribers_returns_zero() {
         let broker = Broker::new(EphemeralCache::new());
+        broker
+            .register_stream("empty", StreamMetadata::default())
+            .await
+            .expect("register");
         let delivered = broker
             .publish("empty", Bytes::from_static(b"payload"))
             .await
@@ -223,6 +293,10 @@ mod tests {
     #[tokio::test]
     async fn multiple_subscribers_receive_payload() {
         let broker = Broker::new(EphemeralCache::new());
+        broker
+            .register_stream("orders", StreamMetadata::default())
+            .await
+            .expect("register");
         let mut sub_a = broker.subscribe("orders").await.expect("subscribe");
         let mut sub_b = broker.subscribe("orders").await.expect("subscribe");
         broker
@@ -242,6 +316,10 @@ mod tests {
     #[tokio::test]
     async fn cursor_replays_log_then_streams_new_events() {
         let broker = Broker::new(EphemeralCache::new());
+        broker
+            .register_stream("orders", StreamMetadata::default())
+            .await
+            .expect("register");
         let cursor = broker.cursor_tail("orders").await.expect("cursor");
         broker
             .publish("orders", Bytes::from_static(b"one"))

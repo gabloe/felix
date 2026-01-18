@@ -5,4 +5,5 @@ In-process broker core.
 Responsibilities:
 - Topic registry and pub/sub fanout
 - Message publish/subscribe APIs
+- Stream existence checks against control-plane metadata
 - Cache access via storage crate

@@ -1,7 +1,7 @@
 // Console demo that exercises pub/sub over QUIC using felix-wire frames.
 use anyhow::{Context, Result};
 use broker::quic;
-use felix_broker::Broker;
+use felix_broker::{Broker, StreamMetadata};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::Message;
@@ -21,6 +21,9 @@ async fn main() -> Result<()> {
 
     println!("Step 1/6: booting in-process broker + QUIC server.");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    broker
+        .register_stream("demo-topic", StreamMetadata::default())
+        .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
