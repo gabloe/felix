@@ -15,8 +15,8 @@ durability, clustering, or advanced observability.
 - [X] `cargo build --workspace` succeeds cleanly
 - [X] `cargo test --workspace` exists and runs
 - [X] `Taskfile.yml` targets: `build`, `test`, `fmt`, `lint`, `demo`
-- [ ] Add CI workflow: fmt, clippy, test, deny (licenses/advisories)
-- [ ] Add baseline deps management: `cargo-deny` + `deny.toml`
+- [X] Add CI workflow: fmt, clippy, test
+- [X] Add baseline deps management: `cargo-deny` + `deny.toml`
 
 ## Wire protocol v1 (`felix-wire`)
 - [X] Versioned frame header (magic/version/flags/len)
@@ -48,13 +48,13 @@ durability, clustering, or advanced observability.
 
 ## Demo + examples
 - [X] QUIC broker demo using framed messages
-- [ ] Demo for cache `put/get` over QUIC (or document separate cache API)
+- [X] Demo for cache `put/get` over QUIC (or document separate cache API)
 
 ## MVP Definition of Done
 - [X] Single broker accepts QUIC connections
 - [X] Client can publish to a named stream over QUIC
 - [X] Subscribers receive stream events over QUIC
-- [ ] Cache `put/get` available over QUIC
+- [X] Cache `put/get` available over QUIC
 - [ ] Basic metrics exist and show throughput/latency
 - [X] Unit tests cover wire encode/decode and broker fanout behavior
 
