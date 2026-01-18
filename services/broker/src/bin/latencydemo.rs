@@ -140,7 +140,7 @@ fn encode_payload(payload_bytes: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(16 + payload_bytes);
     buf.extend_from_slice(&timestamp.to_be_bytes());
     if payload_bytes > 0 {
-        buf.extend(std::iter::repeat(0u8).take(payload_bytes));
+        buf.extend(std::iter::repeat_n(0u8, payload_bytes));
     }
     buf
 }

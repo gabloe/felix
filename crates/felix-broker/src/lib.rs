@@ -1,7 +1,7 @@
 // In-process pub/sub broker with a tiny cache hook.
 use bytes::Bytes;
 use felix_storage::EphemeralCache;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use tokio::sync::{RwLock, broadcast};
 
 pub type Result<T> = std::result::Result<T, BrokerError>;
@@ -10,9 +10,64 @@ pub type Result<T> = std::result::Result<T, BrokerError>;
 pub enum BrokerError {
     #[error("topic capacity too large")]
     CapacityTooLarge,
+    #[error("cursor too old (oldest {oldest}, requested {requested})")]
+    CursorTooOld { oldest: u64, requested: u64 },
 }
 
 const DEFAULT_TOPIC_CAPACITY: usize = 1024;
+const DEFAULT_LOG_CAPACITY: usize = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
+    next_seq: u64,
+}
+
+impl Cursor {
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+}
+
+#[derive(Debug)]
+struct LogEntry {
+    seq: u64,
+    payload: Bytes,
+}
+
+#[derive(Debug)]
+struct StreamState {
+    sender: broadcast::Sender<Bytes>,
+    log: VecDeque<LogEntry>,
+    next_seq: u64,
+}
+
+impl StreamState {
+    fn new(topic_capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(topic_capacity);
+        Self {
+            sender,
+            log: VecDeque::new(),
+            next_seq: 0,
+        }
+    }
+
+    fn append(&mut self, payload: Bytes, log_capacity: usize) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.log.push_back(LogEntry { seq, payload });
+        while self.log.len() > log_capacity {
+            self.log.pop_front();
+        }
+        seq
+    }
+
+    fn oldest_seq(&self) -> u64 {
+        self.log
+            .front()
+            .map(|entry| entry.seq)
+            .unwrap_or(self.next_seq)
+    }
+}
 
 /// In-process broker for pub/sub messaging.
 ///
@@ -35,12 +90,14 @@ const DEFAULT_TOPIC_CAPACITY: usize = 1024;
 /// ```
 #[derive(Debug)]
 pub struct Broker {
-    // Map of topic name -> broadcast sender.
-    topics: RwLock<HashMap<String, broadcast::Sender<Bytes>>>,
+    // Map of topic name -> stream state (broadcast + log).
+    topics: RwLock<HashMap<String, StreamState>>,
     // Ephemeral cache used by demos and simple workflows.
     cache: EphemeralCache,
     // Broadcast channel capacity for each topic.
     topic_capacity: usize,
+    // Per-topic in-memory log capacity.
+    log_capacity: usize,
 }
 
 impl Broker {
@@ -50,6 +107,7 @@ impl Broker {
             topics: RwLock::new(HashMap::new()),
             cache,
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
+            log_capacity: DEFAULT_LOG_CAPACITY,
         }
     }
 
@@ -62,16 +120,69 @@ impl Broker {
         Ok(self)
     }
 
+    pub fn with_log_capacity(mut self, capacity: usize) -> Result<Self> {
+        if capacity == 0 {
+            return Err(BrokerError::CapacityTooLarge);
+        }
+        self.log_capacity = capacity;
+        Ok(self)
+    }
+
     pub async fn publish(&self, topic: &str, payload: Bytes) -> Result<usize> {
         // Fan-out to current subscribers; ignore backpressure errors for now.
-        let sender = self.get_or_create_topic(topic).await?;
+        let sender = {
+            let mut guard = self.topics.write().await;
+            let stream = guard
+                .entry(topic.to_string())
+                .or_insert_with(|| StreamState::new(self.topic_capacity));
+            stream.append(payload.clone(), self.log_capacity);
+            stream.sender.clone()
+        };
         Ok(sender.send(payload).unwrap_or(0))
     }
 
     pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Bytes>> {
         // Create the topic lazily so callers don't need a setup step.
-        let sender = self.get_or_create_topic(topic).await?;
-        Ok(sender.subscribe())
+        let mut guard = self.topics.write().await;
+        let stream = guard
+            .entry(topic.to_string())
+            .or_insert_with(|| StreamState::new(self.topic_capacity));
+        Ok(stream.sender.subscribe())
+    }
+
+    pub async fn cursor_tail(&self, topic: &str) -> Result<Cursor> {
+        let mut guard = self.topics.write().await;
+        let stream = guard
+            .entry(topic.to_string())
+            .or_insert_with(|| StreamState::new(self.topic_capacity));
+        Ok(Cursor {
+            next_seq: stream.next_seq,
+        })
+    }
+
+    pub async fn subscribe_with_cursor(
+        &self,
+        topic: &str,
+        cursor: Cursor,
+    ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
+        let mut guard = self.topics.write().await;
+        let stream = guard
+            .entry(topic.to_string())
+            .or_insert_with(|| StreamState::new(self.topic_capacity));
+        let oldest = stream.oldest_seq();
+        if cursor.next_seq < oldest {
+            return Err(BrokerError::CursorTooOld {
+                oldest,
+                requested: cursor.next_seq,
+            });
+        }
+        let backlog = stream
+            .log
+            .iter()
+            .filter(|entry| entry.seq >= cursor.next_seq)
+            .map(|entry| entry.payload.clone())
+            .collect();
+        Ok((backlog, stream.sender.subscribe()))
     }
 
     pub fn cache(&self) -> &EphemeralCache {
@@ -79,16 +190,7 @@ impl Broker {
         &self.cache
     }
 
-    async fn get_or_create_topic(&self, topic: &str) -> Result<broadcast::Sender<Bytes>> {
-        // One write lock protects creation so we don't race two channels.
-        let mut guard = self.topics.write().await;
-        if let Some(sender) = guard.get(topic) {
-            return Ok(sender.clone());
-        }
-        let (sender, _) = broadcast::channel(self.topic_capacity);
-        guard.insert(topic.to_string(), sender.clone());
-        Ok(sender)
-    }
+    // get_or_create_topic removed; stream creation handled inline for cursor/log support.
 }
 
 #[cfg(test)]
@@ -134,6 +236,36 @@ mod tests {
         assert_eq!(
             sub_b.recv().await.expect("recv"),
             Bytes::from_static(b"fanout")
+        );
+    }
+
+    #[tokio::test]
+    async fn cursor_replays_log_then_streams_new_events() {
+        let broker = Broker::new(EphemeralCache::new());
+        let cursor = broker.cursor_tail("orders").await.expect("cursor");
+        broker
+            .publish("orders", Bytes::from_static(b"one"))
+            .await
+            .expect("publish");
+        broker
+            .publish("orders", Bytes::from_static(b"two"))
+            .await
+            .expect("publish");
+        let (backlog, mut sub) = broker
+            .subscribe_with_cursor("orders", cursor)
+            .await
+            .expect("subscribe");
+        assert_eq!(
+            backlog,
+            vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")]
+        );
+        broker
+            .publish("orders", Bytes::from_static(b"three"))
+            .await
+            .expect("publish");
+        assert_eq!(
+            sub.recv().await.expect("recv"),
+            Bytes::from_static(b"three")
         );
     }
 
