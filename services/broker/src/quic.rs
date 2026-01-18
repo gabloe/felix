@@ -49,16 +49,39 @@ async fn handle_stream(
     };
     match message {
         Message::Publish { stream, payload } => {
-            broker
-                .publish(&stream, Bytes::from(payload))
-                .await
-                .context("publish")?;
-            write_message(&mut send, Message::Ok).await?;
+            match broker.publish(&stream, Bytes::from(payload)).await {
+                Ok(_) => {
+                    write_message(&mut send, Message::Ok).await?;
+                }
+                Err(err) => {
+                    write_message(
+                        &mut send,
+                        Message::Error {
+                            message: err.to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
             send.finish()?;
             let _ = send.stopped().await;
         }
         Message::Subscribe { stream } => {
-            let mut receiver = broker.subscribe(&stream).await.context("subscribe")?;
+            let mut receiver = match broker.subscribe(&stream).await {
+                Ok(receiver) => receiver,
+                Err(err) => {
+                    write_message(
+                        &mut send,
+                        Message::Error {
+                            message: err.to_string(),
+                        },
+                    )
+                    .await?;
+                    send.finish()?;
+                    let _ = send.stopped().await;
+                    return Ok(());
+                }
+            };
             write_message(&mut send, Message::Ok).await?;
             loop {
                 match receiver.recv().await {

@@ -1,7 +1,7 @@
 // Console demo that measures QUIC pub/sub latency distribution.
 use anyhow::{Context, Result};
 use broker::quic;
-use felix_broker::Broker;
+use felix_broker::{Broker, StreamMetadata};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::Message;
@@ -22,6 +22,9 @@ async fn main() -> Result<()> {
     println!("Target: p999 <= 1 ms (local baseline)");
 
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    broker
+        .register_stream("latency", StreamMetadata::default())
+        .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,

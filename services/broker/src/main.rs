@@ -1,4 +1,6 @@
 // Broker service main entry point.
+mod controlplane;
+
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::Broker;
@@ -32,15 +34,37 @@ async fn main() -> Result<()> {
     );
     tracing::info!(addr = %quic_server.local_addr()?, "quic listener started");
 
+    let broker = Arc::new(broker);
     let accept_task = {
         let quic_server = Arc::clone(&quic_server);
-        let broker = Arc::new(broker);
+        let broker = Arc::clone(&broker);
         tokio::spawn(async move {
             if let Err(err) = quic::serve(quic_server, broker).await {
                 tracing::warn!(error = %err, "quic accept loop exited");
             }
         })
     };
+
+    if let Ok(base_url) = std::env::var("FELIX_CP_URL") {
+        let interval_ms = std::env::var("FELIX_CP_SYNC_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(2000);
+        let broker = Arc::clone(&broker);
+        tokio::spawn(async move {
+            if let Err(err) = controlplane::start_sync(
+                broker,
+                base_url,
+                std::time::Duration::from_millis(interval_ms),
+            )
+            .await
+            {
+                tracing::warn!(error = %err, "control plane sync exited");
+            }
+        });
+    } else {
+        tracing::info!("control plane sync disabled (FELIX_CP_URL not set)");
+    }
 
     // Block until SIGINT so the process stays alive.
     let _ = tokio::signal::ctrl_c().await;

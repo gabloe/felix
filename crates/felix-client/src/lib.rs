@@ -14,9 +14,13 @@ use tokio::sync::broadcast;
 /// use std::sync::Arc;
 ///
 /// let broker = Arc::new(Broker::new(EphemeralCache::new()));
-/// let client = Client::in_process(broker);
+/// let client = Client::in_process(broker.clone());
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
+///     broker
+///         .register_stream("updates", Default::default())
+///         .await
+///         .expect("register");
 ///     let mut sub = client.subscribe("updates").await.expect("subscribe");
 ///     client
 ///         .publish("updates", Bytes::from_static(b"payload"))
@@ -58,6 +62,10 @@ mod tests {
     async fn in_process_publish_and_subscribe() {
         // Smoke-test the in-process path without any network transport.
         let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        broker
+            .register_stream("updates", Default::default())
+            .await
+            .expect("register");
         let client = Client::in_process(broker);
         let mut receiver = client.subscribe("updates").await.expect("subscribe");
         client
@@ -71,6 +79,10 @@ mod tests {
     #[tokio::test]
     async fn clients_share_broker_state() {
         let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        broker
+            .register_stream("shared", Default::default())
+            .await
+            .expect("register");
         let publisher = Client::in_process(broker.clone());
         let subscriber = Client::in_process(broker);
         let mut receiver = subscriber.subscribe("shared").await.expect("subscribe");
