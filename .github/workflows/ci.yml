@@ -35,7 +35,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        run: cargo install cargo-deny --version 0.18.3 --locked
 
       - name: cargo-deny
         run: cargo deny check
