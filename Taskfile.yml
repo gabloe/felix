@@ -10,7 +10,7 @@ tasks:
   build:
     cmds: ["cargo build --workspace"]
   deny:
-    cmds: ["cargo install cargo-deny --locked", "cargo-deny check"]
+    cmds: ["cargo install cargo-deny --version 0.18.3 --locked", "cargo-deny check"]
   demo:
     cmds: ["cargo run -p broker --bin pubsubdemo"]
   demo-pubsub:
