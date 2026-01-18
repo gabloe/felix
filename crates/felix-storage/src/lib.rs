@@ -93,12 +93,12 @@ impl EphemeralCache {
         let entry = CacheEntry { value, expires_at };
         let mut guard = self.inner.write().await;
         guard.insert(key.into(), entry);
-        if let Some(max_entries) = self.max_entries {
-            if guard.len() > max_entries {
-                // Placeholder eviction: remove an arbitrary key until capped.
-                if let Some(key) = guard.keys().next().cloned() {
-                    guard.remove(&key);
-                }
+        if let Some(max_entries) = self.max_entries
+            && guard.len() > max_entries
+        {
+            // Placeholder eviction: remove an arbitrary key until capped.
+            if let Some(key) = guard.keys().next().cloned() {
+                guard.remove(&key);
             }
         }
     }
