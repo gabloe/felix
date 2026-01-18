@@ -19,3 +19,7 @@ tasks:
     cmds: ["cargo run -p broker --bin pubsubdemo"]
   demo-cache:
     cmds: ["cargo run -p broker --bin cachedemo"]
+  demo-latency:
+    cmds: ["cargo run -p broker --bin latencydemo"]
+  conformance:
+    cmds: ["cargo run -p felix-conformance"]

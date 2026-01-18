@@ -1,0 +1,6 @@
+{
+  "name": "ok",
+  "payload_json": "{\"type\":\"ok\"}",
+  "payload_hex": "7b2274797065223a226f6b227d",
+  "frame_hex": "464c5831000100000000000d7b2274797065223a226f6b227d"
+}
