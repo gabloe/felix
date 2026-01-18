@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     .await?;
     sub_send.finish()?;
     let response = quic::read_message(&mut sub_recv).await?;
-    println!("Subscribe response: {:?}", response);
+    println!("Subscribe response: {response:?}");
 
     println!("Step 4/6: publishing two messages on the same stream.");
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -105,7 +105,7 @@ async fn publish(
     .await?;
     send.finish()?;
     let response = quic::read_message(&mut recv).await?;
-    println!("Publish response: {:?}", response);
+    println!("Publish response: {response:?}");
     Ok(())
 }
 
