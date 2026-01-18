@@ -4,6 +4,5 @@ Storage abstractions and implementations.
 
 Responsibilities:
 - Ephemeral in-memory cache with TTL
-- Durable log and retention (future)
-- Log + tiered storage abstractions (scaffolding)
+- Durable log + tiered storage (scaffolding now, implementation later)
 - Storage-related tests and invariants
