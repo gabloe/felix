@@ -143,18 +143,33 @@ impl Frame {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
-    Publish { stream: String, payload: Vec<u8> },
-    Subscribe { stream: String },
-    Event { stream: String, payload: Vec<u8> },
+    Publish {
+        stream: String,
+        payload: Vec<u8>,
+    },
+    Subscribe {
+        stream: String,
+    },
+    Event {
+        stream: String,
+        payload: Vec<u8>,
+    },
     CachePut {
         key: String,
         value: Vec<u8>,
         ttl_ms: Option<u64>,
     },
-    CacheGet { key: String },
-    CacheValue { key: String, value: Option<Vec<u8>> },
+    CacheGet {
+        key: String,
+    },
+    CacheValue {
+        key: String,
+        value: Option<Vec<u8>>,
+    },
     Ok,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl Message {

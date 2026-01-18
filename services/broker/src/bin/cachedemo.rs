@@ -7,8 +7,8 @@ use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::Message;
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,7 +55,10 @@ async fn main() -> Result<()> {
         },
     )
     .await?;
-    println!("Cache get response: {}", format_cache_response(&get_response));
+    println!(
+        "Cache get response: {}",
+        format_cache_response(&get_response)
+    );
 
     println!("Step 4/4: waiting for TTL expiry and reading again.");
     tokio::time::sleep(Duration::from_millis(650)).await;
@@ -66,7 +69,10 @@ async fn main() -> Result<()> {
         },
     )
     .await?;
-    println!("Cache get after TTL: {}", format_cache_response(&expired_response));
+    println!(
+        "Cache get after TTL: {}",
+        format_cache_response(&expired_response)
+    );
 
     drop(connection);
     server_task.abort();
@@ -102,8 +108,9 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = CertificateDer::from(cert.serialize_der()?);
     let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
-    let server_config = quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
-        .context("build server config")?;
+    let server_config =
+        quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
+            .context("build server config")?;
     Ok((server_config, cert_der))
 }
 

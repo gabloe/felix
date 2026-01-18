@@ -79,21 +79,14 @@ async fn handle_stream(
         }
         Message::CachePut { key, value, ttl_ms } => {
             let ttl = ttl_ms.map(Duration::from_millis);
-            broker
-                .cache()
-                .put(key, Bytes::from(value), ttl)
-                .await;
+            broker.cache().put(key, Bytes::from(value), ttl).await;
             write_message(&mut send, Message::Ok).await?;
             send.finish()?;
             let _ = send.stopped().await;
         }
         Message::CacheGet { key } => {
             let value = broker.cache().get(&key).await.map(|b| b.to_vec());
-            write_message(
-                &mut send,
-                Message::CacheValue { key, value },
-            )
-            .await?;
+            write_message(&mut send, Message::CacheValue { key, value }).await?;
             send.finish()?;
             let _ = send.stopped().await;
         }
@@ -159,8 +152,8 @@ mod tests {
     use felix_transport::{QuicClient, TransportConfig};
     use quinn::ClientConfig;
     use rcgen::generate_simple_self_signed;
-    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use rustls::RootCertStore;
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use std::sync::Arc;
 
     #[tokio::test]

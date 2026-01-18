@@ -102,14 +102,9 @@ mod tests {
     #[tokio::test]
     async fn put_get_delete_round_trip() {
         let cache = EphemeralCache::new();
-        cache
-            .put("k", Bytes::from_static(b"value"), None)
-            .await;
+        cache.put("k", Bytes::from_static(b"value"), None).await;
         assert_eq!(cache.get("k").await, Some(Bytes::from_static(b"value")));
-        assert_eq!(
-            cache.delete("k").await,
-            Some(Bytes::from_static(b"value"))
-        );
+        assert_eq!(cache.delete("k").await, Some(Bytes::from_static(b"value")));
         assert!(cache.get("k").await.is_none());
     }
 
@@ -118,9 +113,7 @@ mod tests {
         let cache = EphemeralCache::new();
         assert!(cache.is_empty().await);
         assert_eq!(cache.len().await, 0);
-        cache
-            .put("k1", Bytes::from_static(b"a"), None)
-            .await;
+        cache.put("k1", Bytes::from_static(b"a"), None).await;
         assert!(!cache.is_empty().await);
         assert_eq!(cache.len().await, 1);
         cache.delete("k1").await;

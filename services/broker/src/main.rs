@@ -53,5 +53,8 @@ fn build_server_config() -> Result<ServerConfig> {
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = CertificateDer::from(cert.serialize_der()?);
     let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
-    Ok(ServerConfig::with_single_cert(vec![cert_der], key_der.into())?)
+    Ok(ServerConfig::with_single_cert(
+        vec![cert_der],
+        key_der.into(),
+    )?)
 }

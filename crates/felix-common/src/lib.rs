@@ -128,7 +128,7 @@ impl NodeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ids::RegionId, Error, NodeConfig};
+    use super::{Error, NodeConfig, ids::RegionId};
     use std::str::FromStr;
 
     #[test]
