@@ -23,7 +23,7 @@ durability, clustering, or advanced observability.
 - [ ] Add message type in header (type field) for non-JSON parsing
 - [X] Message types: `Publish`, `Subscribe`, `Event`, `Ok`, `Error`
 - [X] Encode/decode message payloads with frames
-- [X] Define v1 wire spec in `PROTOCOL.md`
+- [X] Define v1 wire spec in `docs/PROTOCOL.md`
 - [X] Add test vectors in `crates/felix-wire/tests/vectors/`
 - [X] Add conformance runner tool (felix-conformance)
 - [ ] Add fuzz tests for frame + message decoding
