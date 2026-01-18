@@ -180,15 +180,24 @@ pub enum Message {
         payload: Vec<u8>,
     },
     CachePut {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
         key: String,
         #[serde(with = "base64_bytes")]
         value: Vec<u8>,
         ttl_ms: Option<u64>,
     },
     CacheGet {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
         key: String,
     },
     CacheValue {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
         key: String,
         #[serde(with = "base64_option")]
         value: Option<Vec<u8>>,

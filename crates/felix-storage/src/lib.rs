@@ -53,6 +53,30 @@ pub struct CacheEntry {
     expires_at: Option<Instant>,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct CacheKey {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+    key: String,
+}
+
+impl CacheKey {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+        cache: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            namespace: namespace.into(),
+            cache: cache.into(),
+            key: key.into(),
+        }
+    }
+}
+
 /// Simple in-memory cache with optional TTL expiry.
 ///
 /// ```
@@ -62,14 +86,19 @@ pub struct CacheEntry {
 /// let cache = EphemeralCache::new();
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
-///     cache.put("k", Bytes::from_static(b"v"), None).await;
-///     assert_eq!(cache.get("k").await, Some(Bytes::from_static(b"v")));
+///     cache
+///         .put("t1", "default", "primary", "k", Bytes::from_static(b"v"), None)
+///         .await;
+///     assert_eq!(
+///         cache.get("t1", "default", "primary", "k").await,
+///         Some(Bytes::from_static(b"v"))
+///     );
 /// });
 /// ```
 #[derive(Debug)]
 pub struct EphemeralCache {
     // RwLock allows concurrent readers while updates take exclusive access.
-    inner: RwLock<HashMap<String, CacheEntry>>,
+    inner: RwLock<HashMap<CacheKey, CacheEntry>>,
     // Optional size cap to enable future eviction policies.
     max_entries: Option<usize>,
 }
@@ -87,12 +116,20 @@ impl EphemeralCache {
         }
     }
 
-    pub async fn put(&self, key: impl Into<String>, value: Bytes, ttl: Option<Duration>) {
+    pub async fn put(
+        &self,
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+        cache: impl Into<String>,
+        key: impl Into<String>,
+        value: Bytes,
+        ttl: Option<Duration>,
+    ) {
         // Compute expiry once so reads only compare Instants.
         let expires_at = ttl.map(|ttl| Instant::now() + ttl);
         let entry = CacheEntry { value, expires_at };
         let mut guard = self.inner.write().await;
-        guard.insert(key.into(), entry);
+        guard.insert(CacheKey::new(tenant_id, namespace, cache, key), entry);
         if let Some(max_entries) = self.max_entries
             && guard.len() > max_entries
         {
@@ -103,14 +140,21 @@ impl EphemeralCache {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<Bytes> {
+    pub async fn get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Option<Bytes> {
         // Take a write lock so we can evict expired entries.
         let mut guard = self.inner.write().await;
-        if let Some(entry) = guard.get(key) {
+        let scoped_key = CacheKey::new(tenant_id, namespace, cache, key);
+        if let Some(entry) = guard.get(&scoped_key) {
             if let Some(expires_at) = entry.expires_at {
                 // Lazy-expire on read to avoid a background sweeper.
                 if Instant::now() >= expires_at {
-                    guard.remove(key);
+                    guard.remove(&scoped_key);
                     return None;
                 }
             }
@@ -119,12 +163,18 @@ impl EphemeralCache {
         None
     }
 
-    pub async fn delete(&self, key: &str) -> Option<Bytes> {
+    pub async fn delete(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Option<Bytes> {
         // Remove and return the stored value, if any.
         self.inner
             .write()
             .await
-            .remove(key)
+            .remove(&CacheKey::new(tenant_id, namespace, cache, key))
             .map(|entry| entry.value)
     }
 
@@ -159,22 +209,40 @@ mod tests {
         let cache = EphemeralCache::new();
         cache
             .put(
+                "t1",
+                "default",
+                "primary",
                 "k",
                 Bytes::from_static(b"v"),
                 Some(Duration::from_millis(10)),
             )
             .await;
         sleep(Duration::from_millis(15)).await;
-        assert!(cache.get("k").await.is_none());
+        assert!(cache.get("t1", "default", "primary", "k").await.is_none());
     }
 
     #[tokio::test]
     async fn put_get_delete_round_trip() {
         let cache = EphemeralCache::new();
-        cache.put("k", Bytes::from_static(b"value"), None).await;
-        assert_eq!(cache.get("k").await, Some(Bytes::from_static(b"value")));
-        assert_eq!(cache.delete("k").await, Some(Bytes::from_static(b"value")));
-        assert!(cache.get("k").await.is_none());
+        cache
+            .put(
+                "t1",
+                "default",
+                "primary",
+                "k",
+                Bytes::from_static(b"value"),
+                None,
+            )
+            .await;
+        assert_eq!(
+            cache.get("t1", "default", "primary", "k").await,
+            Some(Bytes::from_static(b"value"))
+        );
+        assert_eq!(
+            cache.delete("t1", "default", "primary", "k").await,
+            Some(Bytes::from_static(b"value"))
+        );
+        assert!(cache.get("t1", "default", "primary", "k").await.is_none());
     }
 
     #[tokio::test]
@@ -182,10 +250,19 @@ mod tests {
         let cache = EphemeralCache::new();
         assert!(cache.is_empty().await);
         assert_eq!(cache.len().await, 0);
-        cache.put("k1", Bytes::from_static(b"a"), None).await;
+        cache
+            .put(
+                "t1",
+                "default",
+                "primary",
+                "k1",
+                Bytes::from_static(b"a"),
+                None,
+            )
+            .await;
         assert!(!cache.is_empty().await);
         assert_eq!(cache.len().await, 1);
-        cache.delete("k1").await;
+        cache.delete("t1", "default", "primary", "k1").await;
         assert!(cache.is_empty().await);
         assert_eq!(cache.len().await, 0);
     }
@@ -193,8 +270,26 @@ mod tests {
     #[tokio::test]
     async fn capacity_enforces_placeholder_eviction() {
         let cache = EphemeralCache::with_capacity(1);
-        cache.put("k1", Bytes::from_static(b"a"), None).await;
-        cache.put("k2", Bytes::from_static(b"b"), None).await;
+        cache
+            .put(
+                "t1",
+                "default",
+                "primary",
+                "k1",
+                Bytes::from_static(b"a"),
+                None,
+            )
+            .await;
+        cache
+            .put(
+                "t1",
+                "default",
+                "primary",
+                "k2",
+                Bytes::from_static(b"b"),
+                None,
+            )
+            .await;
         assert_eq!(cache.len().await, 1);
     }
 }

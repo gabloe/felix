@@ -147,11 +147,22 @@ impl Client {
         Ok(Subscription { recv })
     }
 
-    pub async fn cache_put(&self, key: &str, value: Vec<u8>, ttl_ms: Option<u64>) -> Result<()> {
+    pub async fn cache_put(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+        value: Vec<u8>,
+        ttl_ms: Option<u64>,
+    ) -> Result<()> {
         let (mut send, mut recv) = self.connection.open_bi().await?;
         write_message(
             &mut send,
             Message::CachePut {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                cache: cache.to_string(),
                 key: key.to_string(),
                 value,
                 ttl_ms,
@@ -166,11 +177,20 @@ impl Client {
         Ok(())
     }
 
-    pub async fn cache_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    pub async fn cache_get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>> {
         let (mut send, mut recv) = self.connection.open_bi().await?;
         write_message(
             &mut send,
             Message::CacheGet {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                cache: cache.to_string(),
                 key: key.to_string(),
             },
         )

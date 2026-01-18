@@ -19,6 +19,8 @@ async fn main() -> Result<()> {
 
     println!("Step 1/4: booting in-process broker + QUIC server.");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -33,11 +35,20 @@ async fn main() -> Result<()> {
 
     println!("Step 3/4: writing cache entry with TTL.");
     client
-        .cache_put("demo-key", b"cached".to_vec(), Some(500))
+        .cache_put(
+            "t1",
+            "default",
+            "primary",
+            "demo-key",
+            b"cached".to_vec(),
+            Some(500),
+        )
         .await?;
     println!("Cache put response: Ok");
 
-    let get_response = client.cache_get("demo-key").await?;
+    let get_response = client
+        .cache_get("t1", "default", "primary", "demo-key")
+        .await?;
     println!(
         "Cache get response: {}",
         format_cache_response(&get_response)
@@ -45,7 +56,9 @@ async fn main() -> Result<()> {
 
     println!("Step 4/4: waiting for TTL expiry and reading again.");
     tokio::time::sleep(Duration::from_millis(650)).await;
-    let expired_response = client.cache_get("demo-key").await?;
+    let expired_response = client
+        .cache_get("t1", "default", "primary", "demo-key")
+        .await?;
     println!(
         "Cache get after TTL: {}",
         format_cache_response(&expired_response)

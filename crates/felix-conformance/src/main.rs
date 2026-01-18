@@ -112,6 +112,9 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
     quic::write_message(
         &mut send,
         Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
             key: "conformance-key".to_string(),
             value: b"value".to_vec(),
             ttl_ms: Some(100),
@@ -145,6 +148,9 @@ async fn cache_get(
     quic::write_message(
         &mut send,
         Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
             key: key.to_string(),
         },
     )

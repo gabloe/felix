@@ -449,6 +449,16 @@ impl Broker {
             .contains_key(&StreamKey::new(tenant_id, namespace, stream))
     }
 
+    pub async fn namespace_exists(&self, tenant_id: &str, namespace: &str) -> bool {
+        if !self.tenants.read().await.contains_key(tenant_id) {
+            return false;
+        }
+        self.namespaces
+            .read()
+            .await
+            .contains_key(&NamespaceKey::new(tenant_id, namespace))
+    }
+
     pub async fn register_tenant(&self, tenant_id: impl Into<String>) -> Result<bool> {
         let tenant_id = tenant_id.into();
         let mut guard = self.tenants.write().await;
