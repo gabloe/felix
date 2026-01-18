@@ -39,7 +39,7 @@ fn vectors_match_frame_encoding() {
 }
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    assert!(hex.len() % 2 == 0, "hex length must be even");
+    assert!(hex.len().is_multiple_of(2), "hex length must be even");
     hex.as_bytes()
         .chunks(2)
         .map(|pair| {
