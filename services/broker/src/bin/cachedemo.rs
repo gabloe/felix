@@ -1,7 +1,7 @@
 // Console demo that exercises cache Put/Get over QUIC using felix-wire frames.
 use anyhow::{Context, Result};
 use broker::quic;
-use felix_broker::Broker;
+use felix_broker::{Broker, CacheMetadata};
 use felix_client::Client;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -21,6 +21,9 @@ async fn main() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
+    broker
+        .register_cache("t1", "default", "primary", CacheMetadata)
+        .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,

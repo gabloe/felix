@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use broker::quic;
-use felix_broker::Broker;
+use felix_broker::{Broker, CacheMetadata};
+use felix_client::Client;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
-use felix_wire::Message;
+use felix_wire::{AckMode, Message};
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
@@ -18,6 +19,9 @@ async fn main() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
+        .register_cache("t1", "default", "primary", CacheMetadata)
+        .await?;
+    broker
         .register_stream("t1", "default", "conformance", Default::default())
         .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
@@ -31,13 +35,15 @@ async fn main() -> Result<()> {
 
     let client = QuicClient::bind(
         "0.0.0.0:0".parse()?,
-        build_client_config(cert)?,
+        build_client_config(cert.clone())?,
         TransportConfig::default(),
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
     run_pubsub(&connection).await?;
     run_cache(&connection).await?;
+    run_client_pubsub(addr, cert.clone()).await?;
+    run_client_cache(addr, cert).await?;
 
     drop(connection);
     server_task.abort();
@@ -136,6 +142,63 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
     let expired = cache_get(connection, "conformance-key").await?;
     if expired.is_some() {
         return Err(anyhow!("cache entry should be expired"));
+    }
+    Ok(())
+}
+
+async fn run_client_pubsub(
+    addr: std::net::SocketAddr,
+    cert: CertificateDer<'static>,
+) -> Result<()> {
+    println!("Running client pub/sub checks...");
+    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let mut subscription = client.subscribe("t1", "default", "conformance").await?;
+    let mut publisher = client.publisher().await?;
+    publisher
+        .publish(
+            "t1",
+            "default",
+            "conformance",
+            b"client-alpha".to_vec(),
+            AckMode::None,
+        )
+        .await?;
+    let event = subscription
+        .next_event()
+        .await?
+        .ok_or_else(|| anyhow!("client subscription ended early"))?;
+    if event.payload != b"client-alpha".to_vec() {
+        return Err(anyhow!("client event mismatch: {:?}", event.payload));
+    }
+    publisher.finish().await?;
+    Ok(())
+}
+
+async fn run_client_cache(addr: std::net::SocketAddr, cert: CertificateDer<'static>) -> Result<()> {
+    println!("Running client cache checks...");
+    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    client
+        .cache_put(
+            "t1",
+            "default",
+            "primary",
+            "client-key",
+            b"value".to_vec(),
+            Some(100),
+        )
+        .await?;
+    let value = client
+        .cache_get("t1", "default", "primary", "client-key")
+        .await?;
+    if value != Some(b"value".to_vec()) {
+        return Err(anyhow!("client cache get mismatch: {value:?}"));
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let expired = client
+        .cache_get("t1", "default", "primary", "client-key")
+        .await?;
+    if expired.is_some() {
+        return Err(anyhow!("client cache entry should be expired"));
     }
     Ok(())
 }

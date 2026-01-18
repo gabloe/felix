@@ -3,6 +3,8 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::Broker;
+#[cfg(test)]
+use felix_broker::CacheMetadata;
 use felix_transport::{QuicConnection, QuicServer};
 use felix_wire::{Frame, FrameHeader, Message};
 use quinn::{ReadExactError, RecvStream, SendStream};
@@ -310,7 +312,7 @@ async fn handle_stream(
                 value,
                 ttl_ms,
             } => {
-                if !broker.namespace_exists(&tenant_id, &namespace).await {
+                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
                     write_message(
                         &mut send,
                         Message::Error {
@@ -340,7 +342,7 @@ async fn handle_stream(
                 cache,
                 key,
             } => {
-                if !broker.namespace_exists(&tenant_id, &namespace).await {
+                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
                     write_message(
                         &mut send,
                         Message::Error {
@@ -514,6 +516,9 @@ mod tests {
         let broker = Arc::new(Broker::new(EphemeralCache::new()));
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
+        broker
+            .register_cache("t1", "default", "primary", CacheMetadata)
+            .await?;
         let (server_config, cert) = build_server_config()?;
         let server = Arc::new(QuicServer::bind(
             "127.0.0.1:0".parse()?,
