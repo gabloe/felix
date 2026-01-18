@@ -1,4 +1,5 @@
 // Console demo that exercises pub/sub over QUIC using felix-wire frames.
+// Shows the end-to-end flow: broker boot, subscribe, publish, receive.
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::{Broker, StreamMetadata};
@@ -19,10 +20,15 @@ async fn main() -> Result<()> {
     println!("Goal: demonstrate publish/subscribe over QUIC (not cache).");
     println!("This demo spins up an in-process broker + QUIC server, then runs a client.");
 
+    // Create the broker with an ephemeral in-memory cache.
     println!("Step 1/6: booting in-process broker + QUIC server.");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+
+    // Seed tenant/namespace so scoped streams are accepted.
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
+
+    // Register the demo stream so publishes and subscriptions succeed.
     broker
         .register_stream("t1", "default", "demo-topic", StreamMetadata::default())
         .await?;
@@ -34,6 +40,7 @@ async fn main() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
+    // Start the broker with QUIC transport in a background task to accept client connections.
     let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
 
     println!("Step 2/6: connecting QUIC client.");
@@ -46,6 +53,8 @@ async fn main() -> Result<()> {
 
     println!("Step 3/6: opening a subscription stream.");
     let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
+
+    // Send a subscribe request over a bi-directional stream.
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
@@ -56,11 +65,15 @@ async fn main() -> Result<()> {
     )
     .await?;
     sub_send.finish()?;
+
+    // Expect Ok as a subscription acknowledgment.
     let response = quic::read_message(&mut sub_recv).await?;
     println!("Subscribe response: {response:?}");
 
     println!("Step 4/6: publishing two messages on the same stream.");
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Drain events in a background task so publishing can proceed concurrently.
     let recv_task = tokio::spawn(async move {
         while let Ok(Some(message)) = quic::read_message(&mut sub_recv).await {
             if let Message::Event {
@@ -107,6 +120,7 @@ async fn publish(
     payload: &[u8],
 ) -> Result<()> {
     let (mut send, mut recv) = connection.open_bi().await?;
+    // Publish one message and wait for the broker acknowledgment.
     quic::write_message(
         &mut send,
         Message::Publish {
