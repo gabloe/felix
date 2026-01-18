@@ -67,3 +67,4 @@ durability, clustering, or advanced observability.
 - [ ] Queue semantics (consumer groups, ack/redelivery, delivery guarantees)
 - [ ] Distributed cache backed by Raft/consensus
 - [ ] Multi-node clustering and replication
+- [ ] Design sharding/replication/quorum to move beyond single-node; align with the RAFT control-plane draft and work through the details
