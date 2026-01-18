@@ -21,9 +21,9 @@ implementation are still moving quickly.
 
 ## Current Focus
 
+- Fanout, backpressure, and isolation as core product behavior
 - Broker/data-plane foundations
-- Control-plane metadata and sync
-- Storage abstractions
+- Control-plane metadata and sync (including locality-aware routing policies)
 - Protocol and conformance
 
 ## Docs
@@ -33,7 +33,7 @@ implementation are still moving quickly.
 - `docs/control-plane.md`
 - `docs/todos.md`
 - Defining a stable wire envelope and internal data model
-- Measuring latency and backpressure behavior early
+- Measuring latency/backpressure behavior early to keep p99/p999 predictable
 
 The project is intentionally building depth before breadth.
 
@@ -50,7 +50,9 @@ The initial MVP targets:
 - Basic observability (structured logs)
 - Tests validating core invariants
 
-Durability, clustering, regions, and security are layered on incrementally after the MVP.
+Durability, clustering, and security are layered on incrementally after the MVP. Cross-region
+locality/isolation is treated as a control-plane routing policy without forcing early consensus
+complexity.
 
 ---
 
@@ -62,7 +64,7 @@ crates/
   felix-wire        # wire framing and protocol
   felix-transport   # QUIC-based transport
   felix-storage     # ephemeral + durable storage
-  felix-broker      # broker core (streams, queues, cache)
+  felix-broker      # broker core (fanout, isolation, cache)
   felix-metadata    # metadata abstractions
   felix-router      # region-aware routing
   felix-crypto      # encryption and key handling
@@ -123,6 +125,7 @@ At this stage, Felix runs as a local, single-node process intended for developme
 ## Design Discipline
 
 Felix intentionally prioritizes:
+- Fanout + backpressure + isolation over unified feature bundles
 - Clear invariants over feature count
 - Explicit boundaries over implicit behavior
 - Measured performance over assumptions
@@ -136,7 +139,7 @@ If a feature cannot be enforced in code, it is considered incomplete.
 - Single-node broker MVP
 - QUIC transport + backpressure
 - Durable log and retention
-- Metadata and control plane
+- Metadata and control plane with locality-aware routing defaults
 - Intra-region clustering
 - Explicit cross-region bridges
 - Security hardening (mTLS, RBAC, E2EE)
