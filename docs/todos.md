@@ -53,6 +53,7 @@ durability, clustering, or advanced observability.
 ## Demo + examples (Done)
 - [X] QUIC broker demo using framed messages
 - [X] Demo for cache `put/get` over QUIC (or document separate cache API)
+- [X] Demo for testing latency with a comprehensive-ish matrix
 
 ## MVP Definition of Done
 - [X] Single broker accepts QUIC connections
@@ -82,3 +83,18 @@ durability, clustering, or advanced observability.
 - [ ] Handle crash/recover of data/broker and control plane nodes (read from disk first, then re-sync from new leader?)
 - [ ] Define requirements for tiered storage (hot/cold path, LCU?)
 - [ ] Implement tiered storage primitives (durability funneled down to K8s FS mounts?)
+
+## Performance optimization
+- [ ] Figure out how to handle backpressure
+- [ ] Measure P999 tail latency and throughput
+- [ ] Identify optimizations and minspec clustering for optimization
+
+## Kubernetes deployment + scale units
+- [ ] Define scale unit boundaries (per-tenant vs per-namespace vs per-cache/stream)
+- [ ] Create Helm chart or Kustomize manifests for control plane + broker
+- [ ] Add ConfigMap/Secret wiring (QUIC bind, control plane URL, auth keys)
+- [ ] Implement readiness/liveness endpoints used by probes
+- [ ] Expose service types (ClusterIP + optional LoadBalancer) for broker QUIC
+- [ ] Add horizontal scaling plan (replicas + shard assignment)
+- [ ] Add PodDisruptionBudget and resource requests/limits
+- [ ] Document deployment topology and upgrade/rollback steps
