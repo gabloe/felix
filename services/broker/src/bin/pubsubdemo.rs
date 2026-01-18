@@ -21,8 +21,10 @@ async fn main() -> Result<()> {
 
     println!("Step 1/6: booting in-process broker + QUIC server.");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
     broker
-        .register_stream("demo-topic", StreamMetadata::default())
+        .register_stream("t1", "default", "demo-topic", StreamMetadata::default())
         .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
@@ -47,6 +49,8 @@ async fn main() -> Result<()> {
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
             stream: "demo-topic".to_string(),
         },
     )
@@ -59,14 +63,17 @@ async fn main() -> Result<()> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let recv_task = tokio::spawn(async move {
         while let Ok(Some(message)) = quic::read_message(&mut sub_recv).await {
-            if let Message::Event { stream, payload } = message {
+            if let Message::Event {
+                stream, payload, ..
+            } = message
+            {
                 let _ = event_tx.send((stream, payload));
             }
         }
     });
 
-    publish(&connection, "demo-topic", b"hello").await?;
-    publish(&connection, "demo-topic", b"world").await?;
+    publish(&connection, "t1", "default", "demo-topic", b"hello").await?;
+    publish(&connection, "t1", "default", "demo-topic", b"world").await?;
 
     println!("Step 5/6: receiving events.");
     for _ in 0..2 {
@@ -94,6 +101,8 @@ async fn main() -> Result<()> {
 
 async fn publish(
     connection: &felix_transport::QuicConnection,
+    tenant_id: &str,
+    namespace: &str,
     stream: &str,
     payload: &[u8],
 ) -> Result<()> {
@@ -101,8 +110,11 @@ async fn publish(
     quic::write_message(
         &mut send,
         Message::Publish {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
             stream: stream.to_string(),
             payload: payload.to_vec(),
+            ack: None,
         },
     )
     .await?;

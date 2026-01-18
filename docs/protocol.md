@@ -43,17 +43,22 @@ Message payloads are JSON objects with a `type` discriminator.
 
 ### Publish
 ```
-{ "type": "publish", "stream": "<string>", "payload": "<base64>" }
+{ "type": "publish", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>", "ack": "<none|per_message>" }
+```
+
+### PublishBatch
+```
+{ "type": "publish_batch", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payloads": ["<base64>", ...], "ack": "<none|per_batch>" }
 ```
 
 ### Subscribe
 ```
-{ "type": "subscribe", "stream": "<string>" }
+{ "type": "subscribe", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>" }
 ```
 
 ### Event (server -> client)
 ```
-{ "type": "event", "stream": "<string>", "payload": "<base64>" }
+{ "type": "event", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>" }
 ```
 
 ### CachePut
@@ -83,10 +88,30 @@ Message payloads are JSON objects with a `type` discriminator.
 
 ## Semantics (v1)
 - Subscribe starts at tail (no historical replay).
-- Publish returns `ok` when accepted by the broker.
+- Publish returns `ok` when accepted by the broker unless `ack` is `none`.
+- PublishBatch returns `ok` once for the batch unless `ack` is `none`.
 - CachePut returns `ok` when stored (TTL is optional).
 - CacheGet returns `cache_value` with `null` when missing/expired.
 - Backpressure: v1 is best-effort; subscribers may miss events if they fall behind.
+
+## Binary PublishBatch (experimental)
+When `flags & 0x0001 != 0`, the frame payload is a binary publish batch:
+
+```
+u16 tenant_len
+u8[tenant_len] tenant_id
+u16 namespace_len
+u8[namespace_len] namespace
+u16 stream_len
+u8[stream_len] stream
+u32 count
+repeated count times:
+  u32 payload_len
+  u8[payload_len] payload
+```
+
+This is a throughput optimization for the data plane and is not used by control
+plane APIs.
 
 ## Future Compatibility
 - Non-zero `flags` are reserved for compression/encryption negotiation.

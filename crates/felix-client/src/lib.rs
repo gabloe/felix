@@ -18,12 +18,23 @@ use tokio::sync::broadcast;
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
 ///     broker
-///         .register_stream("updates", Default::default())
+///         .register_tenant("t1")
+///         .await
+///         .expect("tenant");
+///     broker
+///         .register_namespace("t1", "default")
+///         .await
+///         .expect("namespace");
+///     broker
+///         .register_stream("t1", "default", "updates", Default::default())
 ///         .await
 ///         .expect("register");
-///     let mut sub = client.subscribe("updates").await.expect("subscribe");
+///     let mut sub = client
+///         .subscribe("t1", "default", "updates")
+///         .await
+///         .expect("subscribe");
 ///     client
-///         .publish("updates", Bytes::from_static(b"payload"))
+///         .publish("t1", "default", "updates", Bytes::from_static(b"payload"))
 ///         .await
 ///         .expect("publish");
 ///     let msg = sub.recv().await.expect("recv");
@@ -43,13 +54,26 @@ impl Client {
     }
 
     // Forward publish calls directly to the broker.
-    pub async fn publish(&self, topic: &str, payload: Bytes) -> Result<usize> {
-        self.broker.publish(topic, payload).await
+    pub async fn publish(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Bytes,
+    ) -> Result<usize> {
+        self.broker
+            .publish(tenant_id, namespace, stream, payload)
+            .await
     }
 
     // Subscribe to a topic and return a broadcast receiver.
-    pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Bytes>> {
-        self.broker.subscribe(topic).await
+    pub async fn subscribe(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<broadcast::Receiver<Bytes>> {
+        self.broker.subscribe(tenant_id, namespace, stream).await
     }
 }
 
@@ -62,14 +86,22 @@ mod tests {
     async fn in_process_publish_and_subscribe() {
         // Smoke-test the in-process path without any network transport.
         let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("updates", Default::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "updates", Default::default())
             .await
             .expect("register");
         let client = Client::in_process(broker);
-        let mut receiver = client.subscribe("updates").await.expect("subscribe");
+        let mut receiver = client
+            .subscribe("t1", "default", "updates")
+            .await
+            .expect("subscribe");
         client
-            .publish("updates", Bytes::from_static(b"payload"))
+            .publish("t1", "default", "updates", Bytes::from_static(b"payload"))
             .await
             .expect("publish");
         let msg = receiver.recv().await.expect("recv");
@@ -79,15 +111,28 @@ mod tests {
     #[tokio::test]
     async fn clients_share_broker_state() {
         let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("shared", Default::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "shared", Default::default())
             .await
             .expect("register");
         let publisher = Client::in_process(broker.clone());
         let subscriber = Client::in_process(broker);
-        let mut receiver = subscriber.subscribe("shared").await.expect("subscribe");
+        let mut receiver = subscriber
+            .subscribe("t1", "default", "shared")
+            .await
+            .expect("subscribe");
         publisher
-            .publish("shared", Bytes::from_static(b"from-publisher"))
+            .publish(
+                "t1",
+                "default",
+                "shared",
+                Bytes::from_static(b"from-publisher"),
+            )
             .await
             .expect("publish");
         let msg = receiver.recv().await.expect("recv");

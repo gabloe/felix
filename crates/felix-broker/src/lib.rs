@@ -2,6 +2,7 @@
 use bytes::Bytes;
 use felix_storage::EphemeralCache;
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{RwLock, broadcast};
 
 pub type Result<T> = std::result::Result<T, BrokerError>;
@@ -12,8 +13,12 @@ pub enum BrokerError {
     CapacityTooLarge,
     #[error("cursor too old (oldest {oldest}, requested {requested})")]
     CursorTooOld { oldest: u64, requested: u64 },
-    #[error("stream not found: {0}")]
-    StreamNotFound(String),
+    #[error("stream not found: tenant={tenant_id} namespace={namespace} stream={stream}")]
+    StreamNotFound {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+    },
 }
 
 const DEFAULT_TOPIC_CAPACITY: usize = 1024;
@@ -39,6 +44,11 @@ struct LogEntry {
 #[derive(Debug)]
 struct StreamState {
     sender: broadcast::Sender<Bytes>,
+    log_state: Mutex<LogState>,
+}
+
+#[derive(Debug)]
+struct LogState {
     log: VecDeque<LogEntry>,
     next_seq: u64,
 }
@@ -48,26 +58,43 @@ impl StreamState {
         let (sender, _) = broadcast::channel(topic_capacity);
         Self {
             sender,
-            log: VecDeque::new(),
-            next_seq: 0,
+            log_state: Mutex::new(LogState {
+                log: VecDeque::new(),
+                next_seq: 0,
+            }),
         }
     }
 
-    fn append(&mut self, payload: Bytes, log_capacity: usize) -> u64 {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.log.push_back(LogEntry { seq, payload });
-        while self.log.len() > log_capacity {
-            self.log.pop_front();
+    fn append(&self, payload: Bytes, log_capacity: usize) -> u64 {
+        let mut state = self.log_state.lock().expect("log lock");
+        let seq = state.next_seq;
+        state.next_seq += 1;
+        state.log.push_back(LogEntry { seq, payload });
+        while state.log.len() > log_capacity {
+            state.log.pop_front();
         }
         seq
     }
 
-    fn oldest_seq(&self) -> u64 {
-        self.log
+    fn snapshot_from(&self, from_seq: u64) -> (u64, Vec<Bytes>) {
+        let state = self.log_state.lock().expect("log lock");
+        let oldest = state
+            .log
             .front()
             .map(|entry| entry.seq)
-            .unwrap_or(self.next_seq)
+            .unwrap_or(state.next_seq);
+        let backlog = state
+            .log
+            .iter()
+            .filter(|entry| entry.seq >= from_seq)
+            .map(|entry| entry.payload.clone())
+            .collect();
+        (oldest, backlog)
+    }
+
+    fn tail_seq(&self) -> u64 {
+        let state = self.log_state.lock().expect("log lock");
+        state.next_seq
     }
 }
 
@@ -82,12 +109,23 @@ impl StreamState {
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
 ///     broker
-///         .register_stream("topic", Default::default())
+///         .register_tenant("t1")
+///         .await
+///         .expect("tenant");
+///     broker
+///         .register_namespace("t1", "default")
+///         .await
+///         .expect("namespace");
+///     broker
+///         .register_stream("t1", "default", "topic", Default::default())
 ///         .await
 ///         .expect("register");
-///     let mut sub = broker.subscribe("topic").await.expect("subscribe");
+///     let mut sub = broker
+///         .subscribe("t1", "default", "topic")
+///         .await
+///         .expect("subscribe");
 ///     broker
-///         .publish("topic", Bytes::from_static(b"hello"))
+///         .publish("t1", "default", "topic", Bytes::from_static(b"hello"))
 ///         .await
 ///         .expect("publish");
 ///     let msg = sub.recv().await.expect("recv");
@@ -96,10 +134,14 @@ impl StreamState {
 /// ```
 #[derive(Debug)]
 pub struct Broker {
-    // Map of topic name -> stream state (broadcast + log).
-    topics: RwLock<HashMap<String, StreamState>>,
-    // Map of stream name -> metadata for existence checks.
-    streams: RwLock<HashMap<String, StreamMetadata>>,
+    // Map of stream key -> stream state (broadcast + log).
+    topics: RwLock<HashMap<StreamKey, Arc<StreamState>>>,
+    // Map of stream key -> metadata for existence checks.
+    streams: RwLock<HashMap<StreamKey, StreamMetadata>>,
+    // Map of tenant id -> active marker.
+    tenants: RwLock<HashMap<String, ()>>,
+    // Map of namespace key -> active marker.
+    namespaces: RwLock<HashMap<NamespaceKey, ()>>,
     // Ephemeral cache used by demos and simple workflows.
     cache: EphemeralCache,
     // Broadcast channel capacity for each topic.
@@ -112,6 +154,42 @@ pub struct Broker {
 pub struct StreamMetadata {
     pub durable: bool,
     pub shards: u32,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct NamespaceKey {
+    tenant_id: String,
+    namespace: String,
+}
+
+impl NamespaceKey {
+    pub fn new(tenant_id: impl Into<String>, namespace: impl Into<String>) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            namespace: namespace.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct StreamKey {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+}
+
+impl StreamKey {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+        stream: impl Into<String>,
+    ) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            namespace: namespace.into(),
+            stream: stream.into(),
+        }
+    }
 }
 
 impl Default for StreamMetadata {
@@ -129,6 +207,8 @@ impl Broker {
         Self {
             topics: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
+            tenants: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(HashMap::new()),
             cache,
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
             log_capacity: DEFAULT_LOG_CAPACITY,
@@ -152,73 +232,125 @@ impl Broker {
         Ok(self)
     }
 
-    pub async fn publish(&self, topic: &str, payload: Bytes) -> Result<usize> {
-        if !self.stream_exists(topic).await {
-            return Err(BrokerError::StreamNotFound(topic.to_string()));
+    pub async fn publish(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Bytes,
+    ) -> Result<usize> {
+        if !self.stream_exists(tenant_id, namespace, stream).await {
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
         }
         // Fan-out to current subscribers; ignore backpressure errors for now.
-        let sender = {
-            let mut guard = self.topics.write().await;
-            let stream = guard
-                .entry(topic.to_string())
-                .or_insert_with(|| StreamState::new(self.topic_capacity));
-            stream.append(payload.clone(), self.log_capacity);
-            stream.sender.clone()
-        };
-        Ok(sender.send(payload).unwrap_or(0))
+        let stream_state = {
+            let guard = self.topics.read().await;
+            guard
+                .get(&StreamKey::new(tenant_id, namespace, stream))
+                .cloned()
+        }
+        .ok_or_else(|| BrokerError::StreamNotFound {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        })?;
+        stream_state.append(payload.clone(), self.log_capacity);
+        Ok(stream_state.sender.send(payload).unwrap_or(0))
     }
 
-    pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Bytes>> {
-        if !self.stream_exists(topic).await {
-            return Err(BrokerError::StreamNotFound(topic.to_string()));
+    pub async fn subscribe(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<broadcast::Receiver<Bytes>> {
+        if !self.stream_exists(tenant_id, namespace, stream).await {
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
         }
-        // Create the topic lazily so callers don't need a setup step.
-        let mut guard = self.topics.write().await;
-        let stream = guard
-            .entry(topic.to_string())
-            .or_insert_with(|| StreamState::new(self.topic_capacity));
-        Ok(stream.sender.subscribe())
+        let stream_state = {
+            let guard = self.topics.read().await;
+            guard
+                .get(&StreamKey::new(tenant_id, namespace, stream))
+                .cloned()
+        }
+        .ok_or_else(|| BrokerError::StreamNotFound {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        })?;
+        Ok(stream_state.sender.subscribe())
     }
 
-    pub async fn cursor_tail(&self, topic: &str) -> Result<Cursor> {
-        if !self.stream_exists(topic).await {
-            return Err(BrokerError::StreamNotFound(topic.to_string()));
+    pub async fn cursor_tail(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<Cursor> {
+        if !self.stream_exists(tenant_id, namespace, stream).await {
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
         }
-        let mut guard = self.topics.write().await;
-        let stream = guard
-            .entry(topic.to_string())
-            .or_insert_with(|| StreamState::new(self.topic_capacity));
+        let stream_state = {
+            let guard = self.topics.read().await;
+            guard
+                .get(&StreamKey::new(tenant_id, namespace, stream))
+                .cloned()
+        }
+        .ok_or_else(|| BrokerError::StreamNotFound {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        })?;
         Ok(Cursor {
-            next_seq: stream.next_seq,
+            next_seq: stream_state.tail_seq(),
         })
     }
 
     pub async fn subscribe_with_cursor(
         &self,
-        topic: &str,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
-        if !self.stream_exists(topic).await {
-            return Err(BrokerError::StreamNotFound(topic.to_string()));
+        if !self.stream_exists(tenant_id, namespace, stream).await {
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
         }
-        let mut guard = self.topics.write().await;
-        let stream = guard
-            .entry(topic.to_string())
-            .or_insert_with(|| StreamState::new(self.topic_capacity));
-        let oldest = stream.oldest_seq();
+        let stream_state = {
+            let guard = self.topics.read().await;
+            guard
+                .get(&StreamKey::new(tenant_id, namespace, stream))
+                .cloned()
+        }
+        .ok_or_else(|| BrokerError::StreamNotFound {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        })?;
+        let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
         if cursor.next_seq < oldest {
             return Err(BrokerError::CursorTooOld {
                 oldest,
                 requested: cursor.next_seq,
             });
         }
-        let backlog = stream
-            .log
-            .iter()
-            .filter(|entry| entry.seq >= cursor.next_seq)
-            .map(|entry| entry.payload.clone())
-            .collect();
-        Ok((backlog, stream.sender.subscribe()))
+        Ok((backlog, stream_state.sender.subscribe()))
     }
 
     pub fn cache(&self) -> &EphemeralCache {
@@ -228,28 +360,74 @@ impl Broker {
 
     pub async fn register_stream(
         &self,
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
         stream: impl Into<String>,
         metadata: StreamMetadata,
     ) -> Result<()> {
-        let stream = stream.into();
-        self.streams.write().await.insert(stream.clone(), metadata);
+        let key = StreamKey::new(tenant_id, namespace, stream);
+        self.streams.write().await.insert(key.clone(), metadata);
         let mut guard = self.topics.write().await;
         guard
-            .entry(stream)
-            .or_insert_with(|| StreamState::new(self.topic_capacity));
+            .entry(key)
+            .or_insert_with(|| Arc::new(StreamState::new(self.topic_capacity)));
         Ok(())
     }
 
-    pub async fn remove_stream(&self, stream: &str) -> Result<bool> {
-        let removed = self.streams.write().await.remove(stream).is_some();
+    pub async fn remove_stream(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<bool> {
+        let key = StreamKey::new(tenant_id, namespace, stream);
+        let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
-            self.topics.write().await.remove(stream);
+            self.topics.write().await.remove(&key);
         }
         Ok(removed)
     }
 
-    pub async fn stream_exists(&self, stream: &str) -> bool {
-        self.streams.read().await.contains_key(stream)
+    pub async fn stream_exists(&self, tenant_id: &str, namespace: &str, stream: &str) -> bool {
+        if !self.tenants.read().await.contains_key(tenant_id) {
+            return false;
+        }
+        if !self
+            .namespaces
+            .read()
+            .await
+            .contains_key(&NamespaceKey::new(tenant_id, namespace))
+        {
+            return false;
+        }
+        self.streams
+            .read()
+            .await
+            .contains_key(&StreamKey::new(tenant_id, namespace, stream))
+    }
+
+    pub async fn register_tenant(&self, tenant_id: impl Into<String>) -> Result<()> {
+        self.tenants.write().await.insert(tenant_id.into(), ());
+        Ok(())
+    }
+
+    pub async fn remove_tenant(&self, tenant_id: &str) -> Result<bool> {
+        Ok(self.tenants.write().await.remove(tenant_id).is_some())
+    }
+
+    pub async fn register_namespace(
+        &self,
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+    ) -> Result<()> {
+        let key = NamespaceKey::new(tenant_id, namespace);
+        self.namespaces.write().await.insert(key, ());
+        Ok(())
+    }
+
+    pub async fn remove_namespace(&self, tenant_id: &str, namespace: &str) -> Result<bool> {
+        let key = NamespaceKey::new(tenant_id, namespace);
+        Ok(self.namespaces.write().await.remove(&key).is_some())
     }
 
     // get_or_create_topic removed; stream creation handled inline for cursor/log support.
@@ -263,13 +441,21 @@ mod tests {
     async fn publish_delivers_to_subscriber() {
         // Basic pub/sub flow with a single subscriber.
         let broker = Broker::new(EphemeralCache::new());
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("orders", StreamMetadata::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
             .await
             .expect("register");
-        let mut sub = broker.subscribe("orders").await.expect("subscribe");
+        let mut sub = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
         broker
-            .publish("orders", Bytes::from_static(b"hello"))
+            .publish("t1", "default", "orders", Bytes::from_static(b"hello"))
             .await
             .expect("publish");
         let msg = sub.recv().await.expect("recv");
@@ -279,12 +465,17 @@ mod tests {
     #[tokio::test]
     async fn publish_without_subscribers_returns_zero() {
         let broker = Broker::new(EphemeralCache::new());
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("empty", StreamMetadata::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "empty", StreamMetadata::default())
             .await
             .expect("register");
         let delivered = broker
-            .publish("empty", Bytes::from_static(b"payload"))
+            .publish("t1", "default", "empty", Bytes::from_static(b"payload"))
             .await
             .expect("publish");
         assert_eq!(delivered, 0);
@@ -293,14 +484,25 @@ mod tests {
     #[tokio::test]
     async fn multiple_subscribers_receive_payload() {
         let broker = Broker::new(EphemeralCache::new());
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("orders", StreamMetadata::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
             .await
             .expect("register");
-        let mut sub_a = broker.subscribe("orders").await.expect("subscribe");
-        let mut sub_b = broker.subscribe("orders").await.expect("subscribe");
+        let mut sub_a = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
+        let mut sub_b = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
         broker
-            .publish("orders", Bytes::from_static(b"fanout"))
+            .publish("t1", "default", "orders", Bytes::from_static(b"fanout"))
             .await
             .expect("publish");
         assert_eq!(
@@ -316,21 +518,29 @@ mod tests {
     #[tokio::test]
     async fn cursor_replays_log_then_streams_new_events() {
         let broker = Broker::new(EphemeralCache::new());
+        broker.register_tenant("t1").await.expect("tenant");
         broker
-            .register_stream("orders", StreamMetadata::default())
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
             .await
             .expect("register");
-        let cursor = broker.cursor_tail("orders").await.expect("cursor");
+        let cursor = broker
+            .cursor_tail("t1", "default", "orders")
+            .await
+            .expect("cursor");
         broker
-            .publish("orders", Bytes::from_static(b"one"))
+            .publish("t1", "default", "orders", Bytes::from_static(b"one"))
             .await
             .expect("publish");
         broker
-            .publish("orders", Bytes::from_static(b"two"))
+            .publish("t1", "default", "orders", Bytes::from_static(b"two"))
             .await
             .expect("publish");
         let (backlog, mut sub) = broker
-            .subscribe_with_cursor("orders", cursor)
+            .subscribe_with_cursor("t1", "default", "orders", cursor)
             .await
             .expect("subscribe");
         assert_eq!(
@@ -338,7 +548,7 @@ mod tests {
             vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")]
         );
         broker
-            .publish("orders", Bytes::from_static(b"three"))
+            .publish("t1", "default", "orders", Bytes::from_static(b"three"))
             .await
             .expect("publish");
         assert_eq!(
