@@ -15,6 +15,11 @@ use std::time::Duration;
 async fn main() -> Result<()> {
     println!("== Felix Conformance Runner ==");
     let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream("t1", "default", "conformance", Default::default())
+        .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -46,6 +51,8 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
             stream: "conformance".to_string(),
         },
     )
@@ -83,8 +90,11 @@ async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -
     quic::write_message(
         &mut send,
         Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
             stream: "conformance".to_string(),
             payload: payload.to_vec(),
+            ack: None,
         },
     )
     .await?;

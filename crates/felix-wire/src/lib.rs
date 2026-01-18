@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAGIC: u32 = 0x464C5831;
 pub const VERSION: u16 = 1;
+pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -135,8 +136,11 @@ impl Frame {
 /// use felix_wire::Message;
 ///
 /// let message = Message::Publish {
+///     tenant_id: "t1".to_string(),
+///     namespace: "default".to_string(),
 ///     stream: "updates".to_string(),
 ///     payload: b"hello".to_vec(),
+///     ack: None,
 /// };
 /// let frame = message.encode().expect("encode");
 /// let decoded = Message::decode(frame).expect("decode");
@@ -146,14 +150,31 @@ impl Frame {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
     Publish {
+        tenant_id: String,
+        namespace: String,
         stream: String,
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ack: Option<AckMode>,
+    },
+    PublishBatch {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        #[serde(with = "base64_vec")]
+        payloads: Vec<Vec<u8>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ack: Option<AckMode>,
     },
     Subscribe {
+        tenant_id: String,
+        namespace: String,
         stream: String,
     },
     Event {
+        tenant_id: String,
+        namespace: String,
         stream: String,
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
@@ -176,6 +197,14 @@ pub enum Message {
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AckMode {
+    None,
+    PerMessage,
+    PerBatch,
 }
 
 impl Message {
@@ -247,6 +276,127 @@ mod base64_option {
     }
 }
 
+mod base64_vec {
+    use super::*;
+    use serde::de::Error;
+
+    pub fn serialize<S>(values: &[Vec<u8>], serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let encoded: Vec<String> = values
+            .iter()
+            .map(|value| base64::engine::general_purpose::STANDARD.encode(value))
+            .collect();
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = Vec::<String>::deserialize(deserializer)?;
+        encoded
+            .into_iter()
+            .map(|value| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(value.as_bytes())
+                    .map_err(D::Error::custom)
+            })
+            .collect()
+    }
+}
+
+pub mod binary {
+    use super::*;
+    use bytes::BufMut;
+    use serde::de::Error as SerdeError;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PublishBatch {
+        pub tenant_id: String,
+        pub namespace: String,
+        pub stream: String,
+        pub payloads: Vec<Vec<u8>>,
+    }
+
+    pub fn encode_publish_batch(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<Frame> {
+        let mut buf = BytesMut::new();
+        let tenant_bytes = tenant_id.as_bytes();
+        let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        buf.put_u16(tenant_len);
+        buf.extend_from_slice(tenant_bytes);
+        let namespace_bytes = namespace.as_bytes();
+        let namespace_len =
+            u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        buf.put_u16(namespace_len);
+        buf.extend_from_slice(namespace_bytes);
+        let stream_bytes = stream.as_bytes();
+        let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        buf.put_u16(stream_len);
+        buf.extend_from_slice(stream_bytes);
+        buf.put_u32(payloads.len() as u32);
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            buf.put_u32(len);
+            buf.extend_from_slice(payload);
+        }
+        Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze())
+    }
+
+    pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
+        let mut buf = frame.payload.clone();
+        if buf.remaining() < 2 {
+            return Err(Error::Incomplete);
+        }
+        let tenant_len = buf.get_u16() as usize;
+        if buf.remaining() < tenant_len + 2 {
+            return Err(Error::Incomplete);
+        }
+        let tenant_bytes = buf.copy_to_bytes(tenant_len);
+        let tenant_id = String::from_utf8(tenant_bytes.to_vec())
+            .map_err(|_| Error::Deserialize(SerdeError::custom("invalid tenant id")))?;
+        let namespace_len = buf.get_u16() as usize;
+        if buf.remaining() < namespace_len + 2 {
+            return Err(Error::Incomplete);
+        }
+        let namespace_bytes = buf.copy_to_bytes(namespace_len);
+        let namespace = String::from_utf8(namespace_bytes.to_vec())
+            .map_err(|_| Error::Deserialize(SerdeError::custom("invalid namespace")))?;
+        let stream_len = buf.get_u16() as usize;
+        if buf.remaining() < stream_len + 4 {
+            return Err(Error::Incomplete);
+        }
+        let stream_bytes = buf.copy_to_bytes(stream_len);
+        let stream = String::from_utf8(stream_bytes.to_vec())
+            .map_err(|_| Error::Deserialize(SerdeError::custom("invalid stream name")))?;
+        let count = buf.get_u32() as usize;
+        let mut payloads = Vec::with_capacity(count);
+        for _ in 0..count {
+            if buf.remaining() < 4 {
+                return Err(Error::Incomplete);
+            }
+            let len = buf.get_u32() as usize;
+            if buf.remaining() < len {
+                return Err(Error::Incomplete);
+            }
+            let bytes = buf.copy_to_bytes(len);
+            payloads.push(bytes.to_vec());
+        }
+        Ok(PublishBatch {
+            tenant_id,
+            namespace,
+            stream,
+            payloads,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,8 +457,11 @@ mod tests {
     #[test]
     fn message_round_trip() {
         let message = Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
             stream: "topic".to_string(),
             payload: b"payload".to_vec(),
+            ack: None,
         };
         let frame = message.encode().expect("encode");
         let decoded = Message::decode(frame).expect("decode");

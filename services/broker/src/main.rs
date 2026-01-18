@@ -1,5 +1,6 @@
 // Broker service main entry point.
 mod controlplane;
+mod observability;
 
 use anyhow::{Context, Result};
 use broker::quic;
@@ -11,17 +12,20 @@ use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure logging from environment for easy local tweaking.
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let metrics_handle = observability::init_observability("felix-broker");
 
     // Start an in-process broker with an ephemeral cache backend.
     let broker = Broker::new(EphemeralCache::new());
     tracing::info!("broker started");
+
+    let metrics_addr: SocketAddr = std::env::var("FELIX_BROKER_METRICS_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+        .parse()
+        .expect("FELIX_BROKER_METRICS_BIND");
+    tokio::spawn(observability::serve_metrics(metrics_handle, metrics_addr));
 
     let bind_addr = std::env::var("FELIX_QUIC_BIND")
         .unwrap_or_else(|_| "0.0.0.0:5000".to_string())

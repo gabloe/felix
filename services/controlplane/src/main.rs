@@ -1,3 +1,5 @@
+mod observability;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -6,12 +8,12 @@ use axum::{
     routing::get,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing_subscriber::EnvFilter;
+use tower_http::trace::TraceLayer;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use utoipa::{OpenApi, ToSchema};
 
 #[derive(Clone, Debug)]
@@ -19,6 +21,10 @@ struct AppState {
     region: Region,
     api_version: String,
     features: FeatureFlags,
+    tenants: Arc<RwLock<HashMap<String, Tenant>>>,
+    namespaces: Arc<RwLock<HashMap<NamespaceKey, Namespace>>>,
+    tenant_changes: Arc<RwLock<TenantChangeLog>>,
+    namespace_changes: Arc<RwLock<NamespaceChangeLog>>,
     streams: Arc<RwLock<HashMap<StreamKey, Stream>>>,
     stream_changes: Arc<RwLock<StreamChangeLog>>,
 }
@@ -46,6 +52,154 @@ struct HealthStatus {
 struct Region {
     region_id: String,
     display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct Tenant {
+    tenant_id: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
+struct NamespaceKey {
+    tenant_id: String,
+    namespace: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct Namespace {
+    tenant_id: String,
+    namespace: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct TenantCreateRequest {
+    tenant_id: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct NamespaceCreateRequest {
+    namespace: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct TenantListResponse {
+    items: Vec<Tenant>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct TenantSnapshotResponse {
+    items: Vec<Tenant>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct TenantChange {
+    seq: u64,
+    op: TenantChangeOp,
+    tenant_id: String,
+    tenant: Option<Tenant>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct TenantChangesResponse {
+    items: Vec<TenantChange>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+enum TenantChangeOp {
+    Created,
+    Deleted,
+}
+
+#[derive(Debug, Default)]
+struct TenantChangeLog {
+    next_seq: u64,
+    items: VecDeque<TenantChange>,
+}
+
+impl TenantChangeLog {
+    fn record(&mut self, op: TenantChangeOp, tenant_id: String, tenant: Option<Tenant>) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.items.push_back(TenantChange {
+            seq,
+            op,
+            tenant_id,
+            tenant,
+        });
+        const MAX_CHANGES: usize = 1024;
+        while self.items.len() > MAX_CHANGES {
+            self.items.pop_front();
+        }
+        seq
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct NamespaceListResponse {
+    items: Vec<Namespace>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct NamespaceSnapshotResponse {
+    items: Vec<Namespace>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct NamespaceChange {
+    seq: u64,
+    op: NamespaceChangeOp,
+    key: NamespaceKey,
+    namespace: Option<Namespace>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct NamespaceChangesResponse {
+    items: Vec<NamespaceChange>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+enum NamespaceChangeOp {
+    Created,
+    Deleted,
+}
+
+#[derive(Debug, Default)]
+struct NamespaceChangeLog {
+    next_seq: u64,
+    items: VecDeque<NamespaceChange>,
+}
+
+impl NamespaceChangeLog {
+    fn record(
+        &mut self,
+        op: NamespaceChangeOp,
+        key: NamespaceKey,
+        namespace: Option<Namespace>,
+    ) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.items.push_back(NamespaceChange {
+            seq,
+            op,
+            key,
+            namespace,
+        });
+        const MAX_CHANGES: usize = 1024;
+        while self.items.len() > MAX_CHANGES {
+            self.items.pop_front();
+        }
+        seq
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
@@ -275,20 +429,375 @@ async fn get_region(
         ("namespace" = String, Path, description = "Namespace identifier")
     ),
     responses(
-        (status = 200, description = "List streams", body = StreamListResponse)
+        (status = 200, description = "List streams", body = StreamListResponse),
+        (status = 404, description = "Tenant or namespace not found", body = ErrorResponse)
     )
 )]
 async fn list_streams(
     Path((tenant_id, namespace)): Path<(String, String)>,
     State(state): State<AppState>,
-) -> Json<StreamListResponse> {
+) -> Result<Json<StreamListResponse>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let guard = state.streams.read().await;
     let items = guard
         .values()
         .filter(|stream| stream.tenant_id == tenant_id && stream.namespace == namespace)
         .cloned()
         .collect();
-    Json(StreamListResponse { items })
+    Ok(Json(StreamListResponse { items }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants",
+    tag = "tenants",
+    responses(
+        (status = 200, description = "List tenants", body = TenantListResponse)
+    )
+)]
+async fn list_tenants(State(state): State<AppState>) -> Json<TenantListResponse> {
+    let guard = state.tenants.read().await;
+    Json(TenantListResponse {
+        items: guard.values().cloned().collect(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tenants",
+    tag = "tenants",
+    request_body = TenantCreateRequest,
+    responses(
+        (status = 201, description = "Tenant created", body = Tenant),
+        (status = 409, description = "Tenant already exists", body = ErrorResponse)
+    )
+)]
+async fn create_tenant(
+    State(state): State<AppState>,
+    Json(body): Json<TenantCreateRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut guard = state.tenants.write().await;
+    if guard.contains_key(&body.tenant_id) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            body: ErrorResponse {
+                code: "already_exists".to_string(),
+                message: "tenant already exists".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    let tenant = Tenant {
+        tenant_id: body.tenant_id,
+        display_name: body.display_name,
+    };
+    guard.insert(tenant.tenant_id.clone(), tenant.clone());
+    state.tenant_changes.write().await.record(
+        TenantChangeOp::Created,
+        tenant.tenant_id.clone(),
+        Some(tenant.clone()),
+    );
+    Ok((StatusCode::CREATED, Json(tenant)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tenants/{tenant_id}",
+    tag = "tenants",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier")
+    ),
+    responses(
+        (status = 204, description = "Tenant deleted"),
+        (status = 404, description = "Tenant not found", body = ErrorResponse)
+    )
+)]
+async fn delete_tenant(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let mut tenants = state.tenants.write().await;
+    if tenants.remove(&tenant_id).is_none() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "not_found".to_string(),
+                message: "tenant not found".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    drop(tenants);
+
+    let mut namespaces = state.namespaces.write().await;
+    let namespace_keys = namespaces
+        .keys()
+        .filter(|key| key.tenant_id == tenant_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in &namespace_keys {
+        if let Some(namespace) = namespaces.remove(key) {
+            state.namespace_changes.write().await.record(
+                NamespaceChangeOp::Deleted,
+                key.clone(),
+                Some(namespace),
+            );
+        }
+    }
+    drop(namespaces);
+
+    let mut streams = state.streams.write().await;
+    let stream_keys = streams
+        .keys()
+        .filter(|key| key.tenant_id == tenant_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in &stream_keys {
+        if let Some(stream) = streams.remove(key) {
+            state.stream_changes.write().await.record(
+                StreamChangeOp::Deleted,
+                key.clone(),
+                Some(stream),
+            );
+        }
+    }
+    metrics::gauge!("felix_streams_total").set(streams.len() as f64);
+    state
+        .tenant_changes
+        .write()
+        .await
+        .record(TenantChangeOp::Deleted, tenant_id, None);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/snapshot",
+    tag = "tenants",
+    responses(
+        (status = 200, description = "Full tenant snapshot", body = TenantSnapshotResponse)
+    )
+)]
+async fn tenant_snapshot(State(state): State<AppState>) -> Json<TenantSnapshotResponse> {
+    let guard = state.tenants.read().await;
+    let items = guard.values().cloned().collect::<Vec<_>>();
+    let next_seq = state.tenant_changes.read().await.next_seq;
+    Json(TenantSnapshotResponse { items, next_seq })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/changes",
+    tag = "tenants",
+    params(
+        ("since" = Option<u64>, Query, description = "Last seen sequence")
+    ),
+    responses(
+        (status = 200, description = "Tenant change list", body = TenantChangesResponse)
+    )
+)]
+async fn tenant_changes(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Json<TenantChangesResponse> {
+    let since = params
+        .get("since")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let guard = state.tenant_changes.read().await;
+    let items = guard
+        .items
+        .iter()
+        .filter(|item| item.seq >= since)
+        .cloned()
+        .collect();
+    Json(TenantChangesResponse {
+        items,
+        next_seq: guard.next_seq,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/{tenant_id}/namespaces",
+    tag = "namespaces",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier")
+    ),
+    responses(
+        (status = 200, description = "List namespaces", body = NamespaceListResponse),
+        (status = 404, description = "Tenant not found", body = ErrorResponse)
+    )
+)]
+async fn list_namespaces(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<NamespaceListResponse>, ApiError> {
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let guard = state.namespaces.read().await;
+    Ok(Json(NamespaceListResponse {
+        items: guard
+            .values()
+            .filter(|namespace| namespace.tenant_id == tenant_id)
+            .cloned()
+            .collect(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tenants/{tenant_id}/namespaces",
+    tag = "namespaces",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier")
+    ),
+    request_body = NamespaceCreateRequest,
+    responses(
+        (status = 201, description = "Namespace created", body = Namespace),
+        (status = 404, description = "Tenant not found", body = ErrorResponse),
+        (status = 409, description = "Namespace already exists", body = ErrorResponse)
+    )
+)]
+async fn create_namespace(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<NamespaceCreateRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let key = NamespaceKey {
+        tenant_id: tenant_id.clone(),
+        namespace: body.namespace.clone(),
+    };
+    let mut guard = state.namespaces.write().await;
+    if guard.contains_key(&key) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            body: ErrorResponse {
+                code: "already_exists".to_string(),
+                message: "namespace already exists".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    let namespace = Namespace {
+        tenant_id,
+        namespace: body.namespace,
+        display_name: body.display_name,
+    };
+    guard.insert(key.clone(), namespace.clone());
+    state.namespace_changes.write().await.record(
+        NamespaceChangeOp::Created,
+        key,
+        Some(namespace.clone()),
+    );
+    Ok((StatusCode::CREATED, Json(namespace)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}",
+    tag = "namespaces",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier")
+    ),
+    responses(
+        (status = 204, description = "Namespace deleted"),
+        (status = 404, description = "Tenant or namespace not found", body = ErrorResponse)
+    )
+)]
+async fn delete_namespace(
+    Path((tenant_id, namespace)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let key = NamespaceKey {
+        tenant_id: tenant_id.clone(),
+        namespace: namespace.clone(),
+    };
+    let mut namespaces = state.namespaces.write().await;
+    let removed = namespaces.remove(&key);
+    drop(namespaces);
+    if removed.is_none() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "not_found".to_string(),
+                message: "namespace not found".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    state
+        .namespace_changes
+        .write()
+        .await
+        .record(NamespaceChangeOp::Deleted, key.clone(), None);
+
+    let mut streams = state.streams.write().await;
+    let stream_keys = streams
+        .keys()
+        .filter(|stream_key| stream_key.tenant_id == tenant_id && stream_key.namespace == namespace)
+        .cloned()
+        .collect::<Vec<_>>();
+    for stream_key in &stream_keys {
+        if let Some(stream) = streams.remove(stream_key) {
+            state.stream_changes.write().await.record(
+                StreamChangeOp::Deleted,
+                stream_key.clone(),
+                Some(stream),
+            );
+        }
+    }
+    metrics::gauge!("felix_streams_total").set(streams.len() as f64);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces/snapshot",
+    tag = "namespaces",
+    responses(
+        (status = 200, description = "Full namespace snapshot", body = NamespaceSnapshotResponse)
+    )
+)]
+async fn namespace_snapshot(State(state): State<AppState>) -> Json<NamespaceSnapshotResponse> {
+    let guard = state.namespaces.read().await;
+    let items = guard.values().cloned().collect::<Vec<_>>();
+    let next_seq = state.namespace_changes.read().await.next_seq;
+    Json(NamespaceSnapshotResponse { items, next_seq })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/namespaces/changes",
+    tag = "namespaces",
+    params(
+        ("since" = Option<u64>, Query, description = "Last seen sequence")
+    ),
+    responses(
+        (status = 200, description = "Namespace change list", body = NamespaceChangesResponse)
+    )
+)]
+async fn namespace_changes(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Json<NamespaceChangesResponse> {
+    let since = params
+        .get("since")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let guard = state.namespace_changes.read().await;
+    let items = guard
+        .items
+        .iter()
+        .filter(|item| item.seq >= since)
+        .cloned()
+        .collect();
+    Json(NamespaceChangesResponse {
+        items,
+        next_seq: guard.next_seq,
+    })
 }
 
 #[utoipa::path(
@@ -349,6 +858,7 @@ async fn stream_changes(
     request_body = StreamCreateRequest,
     responses(
         (status = 201, description = "Stream created", body = Stream),
+        (status = 404, description = "Tenant or namespace not found", body = ErrorResponse),
         (status = 409, description = "Stream already exists", body = ErrorResponse)
     )
 )]
@@ -357,6 +867,7 @@ async fn create_stream(
     State(state): State<AppState>,
     Json(body): Json<StreamCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let key = StreamKey {
         tenant_id: tenant_id.clone(),
         namespace: namespace.clone(),
@@ -390,6 +901,8 @@ async fn create_stream(
         .write()
         .await
         .record(StreamChangeOp::Created, key, Some(stream.clone()));
+    metrics::counter!("felix_stream_changes_total", "op" => "created").increment(1);
+    metrics::gauge!("felix_streams_total").set(guard.len() as f64);
     Ok((StatusCode::CREATED, Json(stream)))
 }
 
@@ -404,13 +917,14 @@ async fn create_stream(
     ),
     responses(
         (status = 200, description = "Fetch stream", body = Stream),
-        (status = 404, description = "Stream not found", body = ErrorResponse)
+        (status = 404, description = "Stream or namespace not found", body = ErrorResponse)
     )
 )]
 async fn get_stream(
     Path((tenant_id, namespace, stream)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> Result<Json<Stream>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let guard = state.streams.read().await;
     let key = StreamKey {
         tenant_id: tenant_id.clone(),
@@ -439,7 +953,7 @@ async fn get_stream(
     request_body = StreamPatchRequest,
     responses(
         (status = 200, description = "Stream updated", body = Stream),
-        (status = 404, description = "Stream not found", body = ErrorResponse)
+        (status = 404, description = "Stream or namespace not found", body = ErrorResponse)
     )
 )]
 async fn patch_stream(
@@ -447,6 +961,7 @@ async fn patch_stream(
     State(state): State<AppState>,
     Json(body): Json<StreamPatchRequest>,
 ) -> Result<Json<Stream>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let key = StreamKey {
         tenant_id: tenant_id.clone(),
         namespace: namespace.clone(),
@@ -484,6 +999,7 @@ async fn patch_stream(
         .write()
         .await
         .record(StreamChangeOp::Updated, key, Some(stream.clone()));
+    metrics::counter!("felix_stream_changes_total", "op" => "updated").increment(1);
     Ok(Json(stream.clone()))
 }
 
@@ -498,13 +1014,14 @@ async fn patch_stream(
     ),
     responses(
         (status = 204, description = "Stream deleted"),
-        (status = 404, description = "Stream not found", body = ErrorResponse)
+        (status = 404, description = "Stream or namespace not found", body = ErrorResponse)
     )
 )]
 async fn delete_stream(
     Path((tenant_id, namespace, stream)): Path<(String, String, String)>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let key = StreamKey {
         tenant_id,
         namespace,
@@ -526,6 +1043,8 @@ async fn delete_stream(
         .write()
         .await
         .record(StreamChangeOp::Deleted, key, None);
+    metrics::counter!("felix_stream_changes_total", "op" => "deleted").increment(1);
+    metrics::gauge!("felix_streams_total").set(guard.len() as f64);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -541,6 +1060,16 @@ async fn delete_stream(
         system_health,
         list_regions,
         get_region,
+        list_tenants,
+        create_tenant,
+        delete_tenant,
+        tenant_snapshot,
+        tenant_changes,
+        list_namespaces,
+        create_namespace,
+        delete_namespace,
+        namespace_snapshot,
+        namespace_changes,
         stream_snapshot,
         stream_changes,
         list_streams,
@@ -556,6 +1085,20 @@ async fn delete_stream(
         Region,
         ListRegionsResponse,
         ErrorResponse,
+        Tenant,
+        TenantCreateRequest,
+        TenantListResponse,
+        TenantSnapshotResponse,
+        TenantChange,
+        TenantChangesResponse,
+        TenantChangeOp,
+        Namespace,
+        NamespaceCreateRequest,
+        NamespaceListResponse,
+        NamespaceSnapshotResponse,
+        NamespaceChange,
+        NamespaceChangesResponse,
+        NamespaceChangeOp,
         Stream,
         StreamKind,
         StreamCreateRequest,
@@ -573,6 +1116,8 @@ async fn delete_stream(
     tags(
         (name = "system", description = "System and discovery endpoints"),
         (name = "regions", description = "Region metadata"),
+        (name = "tenants", description = "Tenant management"),
+        (name = "namespaces", description = "Namespace management"),
         (name = "streams", description = "Stream management")
     )
 )]
@@ -580,14 +1125,33 @@ struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let metrics_handle = observability::init_observability("felix-controlplane");
 
+    let state = default_state();
+
+    let metrics_addr: SocketAddr = std::env::var("FELIX_CP_METRICS_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+        .parse()
+        .expect("FELIX_CP_METRICS_BIND");
+    tokio::spawn(observability::serve_metrics(metrics_handle, metrics_addr));
+
+    let app = build_app(state);
+
+    let addr: SocketAddr = std::env::var("FELIX_CP_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
+        .parse()
+        .expect("FELIX_CP_BIND");
+    tracing::info!(%addr, "control plane listening");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app.into_make_service()).await
+}
+
+fn default_state() -> AppState {
     let region = Region {
         region_id: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
         display_name: "Local Region".to_string(),
     };
-    let state = AppState {
+    AppState {
         region,
         api_version: "v1".to_string(),
         features: FeatureFlags {
@@ -595,17 +1159,53 @@ async fn main() -> Result<(), std::io::Error> {
             tiered_storage: false,
             bridges: false,
         },
+        tenants: Arc::new(RwLock::new(HashMap::new())),
+        namespaces: Arc::new(RwLock::new(HashMap::new())),
+        tenant_changes: Arc::new(RwLock::new(TenantChangeLog::default())),
+        namespace_changes: Arc::new(RwLock::new(NamespaceChangeLog::default())),
         streams: Arc::new(RwLock::new(HashMap::new())),
         stream_changes: Arc::new(RwLock::new(StreamChangeLog::default())),
-    };
+    }
+}
 
-    let app = Router::new()
+fn build_app(state: AppState) -> Router {
+    let trace_layer =
+        TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+            let parent = observability::trace_context_from_headers(request.headers());
+            let span = tracing::info_span!(
+                "http.request",
+                method = %request.method(),
+                uri = %request.uri(),
+                version = ?request.version()
+            );
+            span.set_parent(parent);
+            span
+        });
+
+    Router::new()
         .route("/v1/system/info", get(system_info))
         .route("/v1/system/health", get(system_health))
         .route("/v1/regions", get(list_regions))
         .route("/v1/regions/:region_id", get(get_region))
+        .route("/v1/tenants/snapshot", get(tenant_snapshot))
+        .route("/v1/tenants/changes", get(tenant_changes))
+        .route("/v1/namespaces/snapshot", get(namespace_snapshot))
+        .route("/v1/namespaces/changes", get(namespace_changes))
         .route("/v1/streams/snapshot", get(stream_snapshot))
         .route("/v1/streams/changes", get(stream_changes))
+        .route("/v1/tenants", get(list_tenants).post(create_tenant))
+        .route(
+            "/v1/tenants/:tenant_id",
+            axum::routing::delete(delete_tenant),
+        )
+        .route(
+            "/v1/tenants/:tenant_id/namespaces",
+            get(list_namespaces).post(create_namespace),
+        )
+        .route(
+            "/v1/tenants/:tenant_id/namespaces/:namespace",
+            axum::routing::delete(delete_namespace),
+        )
         .route(
             "/v1/tenants/:tenant_id/namespaces/:namespace/streams",
             get(list_streams).post(create_stream),
@@ -617,13 +1217,158 @@ async fn main() -> Result<(), std::io::Error> {
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/docs").url("/v1/openapi.json", ApiDoc::openapi()),
         )
-        .with_state(state);
+        .layer(trace_layer)
+        .with_state(state)
+}
 
-    let addr: SocketAddr = std::env::var("FELIX_CP_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
-        .parse()
-        .expect("FELIX_CP_BIND");
-    tracing::info!(%addr, "control plane listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await
+async fn ensure_tenant_namespace(
+    state: &AppState,
+    tenant_id: &str,
+    namespace: &str,
+) -> Result<(), ApiError> {
+    ensure_tenant_exists(state, tenant_id).await?;
+    let namespace_key = NamespaceKey {
+        tenant_id: tenant_id.to_string(),
+        namespace: namespace.to_string(),
+    };
+    if !state.namespaces.read().await.contains_key(&namespace_key) {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "not_found".to_string(),
+                message: "namespace not found".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    Ok(())
+}
+
+async fn ensure_tenant_exists(state: &AppState, tenant_id: &str) -> Result<(), ApiError> {
+    if !state.tenants.read().await.contains_key(tenant_id) {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "not_found".to_string(),
+                message: "tenant not found".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request")
+    }
+
+    async fn read_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        serde_json::from_slice(&bytes).expect("json")
+    }
+
+    #[tokio::test]
+    async fn streams_crud_and_changes_smoke() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state()).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/streams",
+            serde_json::json!({
+                "stream": "orders",
+                "kind": "Stream",
+                "shards": 1,
+                "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+                "consistency": "Leader",
+                "delivery": "AtLeastOnce",
+                "durable": false
+            }),
+        );
+        let response = app.clone().oneshot(create).await.expect("create");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let list = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/streams")
+            .body(Body::empty())
+            .expect("list");
+        let response = app.clone().oneshot(list).await.expect("list");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+
+        let get = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+            .body(Body::empty())
+            .expect("get");
+        let response = app.clone().oneshot(get).await.expect("get");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let patch = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/streams/orders",
+            serde_json::json!({
+                "retention": { "max_age_seconds": 7200, "max_size_bytes": null }
+            }),
+        );
+        let response = app.clone().oneshot(patch).await.expect("patch");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let changes = Request::builder()
+            .uri("/v1/streams/changes?since=0")
+            .body(Body::empty())
+            .expect("changes");
+        let response = app.clone().oneshot(changes).await.expect("changes");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert!(!payload["items"].as_array().unwrap().is_empty());
+
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+            .body(Body::empty())
+            .expect("delete");
+        let response = app.clone().oneshot(delete).await.expect("delete");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
 }
