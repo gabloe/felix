@@ -1,3 +1,7 @@
+// Control plane HTTP API for metadata management.
+// Maintains in-memory registries for tenants, namespaces, and streams, plus
+// change logs that brokers poll to keep their local caches up to date.
+mod config;
 mod observability;
 
 use axum::{
@@ -9,7 +13,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
@@ -476,6 +479,7 @@ async fn create_tenant(
     State(state): State<AppState>,
     Json(body): Json<TenantCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Create a tenant and emit a change for broker cache refresh.
     let mut guard = state.tenants.write().await;
     if guard.contains_key(&body.tenant_id) {
         return Err(ApiError {
@@ -663,6 +667,7 @@ async fn create_namespace(
     State(state): State<AppState>,
     Json(body): Json<NamespaceCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Require a valid tenant before allowing namespace creation.
     ensure_tenant_exists(&state, &tenant_id).await?;
     let key = NamespaceKey {
         tenant_id: tenant_id.clone(),
@@ -867,6 +872,7 @@ async fn create_stream(
     State(state): State<AppState>,
     Json(body): Json<StreamCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Streams are scoped to tenant + namespace, so validate both first.
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let key = StreamKey {
         tenant_id: tenant_id.clone(),
@@ -1127,28 +1133,25 @@ struct ApiDoc;
 async fn main() -> Result<(), std::io::Error> {
     let metrics_handle = observability::init_observability("felix-controlplane");
 
-    let state = default_state();
-
-    let metrics_addr: SocketAddr = std::env::var("FELIX_CP_METRICS_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
-        .parse()
-        .expect("FELIX_CP_METRICS_BIND");
-    tokio::spawn(observability::serve_metrics(metrics_handle, metrics_addr));
+    let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
+    let state = default_state_with_region_id(config.region_id.clone());
+    tokio::spawn(observability::serve_metrics(
+        metrics_handle,
+        config.metrics_bind,
+    ));
 
     let app = build_app(state);
 
-    let addr: SocketAddr = std::env::var("FELIX_CP_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
-        .parse()
-        .expect("FELIX_CP_BIND");
+    let addr = config.bind_addr;
     tracing::info!(%addr, "control plane listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await
 }
 
-fn default_state() -> AppState {
+fn default_state_with_region_id(region_id: String) -> AppState {
+    // In-memory state for local development; durable metadata comes later.
     let region = Region {
-        region_id: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
+        region_id,
         display_name: "Local Region".to_string(),
     };
     AppState {
@@ -1169,6 +1172,7 @@ fn default_state() -> AppState {
 }
 
 fn build_app(state: AppState) -> Router {
+    // API surface: system/regions, change feeds, CRUD for tenants/namespaces/streams.
     let trace_layer =
         TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
             let parent = observability::trace_context_from_headers(request.headers());
@@ -1226,6 +1230,7 @@ async fn ensure_tenant_namespace(
     tenant_id: &str,
     namespace: &str,
 ) -> Result<(), ApiError> {
+    // Centralized guard so stream routes return consistent 404s.
     ensure_tenant_exists(state, tenant_id).await?;
     let namespace_key = NamespaceKey {
         tenant_id: tenant_id.to_string(),
@@ -1284,7 +1289,7 @@ mod tests {
     #[tokio::test]
     async fn streams_crud_and_changes_smoke() {
         let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
-            build_app(default_state()).into_service();
+            build_app(default_state_with_region_id("local".to_string())).into_service();
 
         let create_tenant = json_request(
             "POST",

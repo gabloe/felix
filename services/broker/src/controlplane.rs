@@ -1,3 +1,6 @@
+// Control plane sync loop for the broker.
+// Fetches snapshots on cold start, then polls change feeds to keep local
+// tenant/namespace/stream registries up to date without touching the hot path.
 use anyhow::{Context, Result};
 use felix_broker::{Broker, StreamMetadata};
 use serde::Deserialize;
@@ -122,6 +125,7 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
     let mut next_namespace_seq = 0u64;
     let mut next_stream_seq = 0u64;
     loop {
+        // Seed local caches on first run so the data plane can enforce existence checks.
         if next_tenant_seq == 0 {
             match fetch_tenant_snapshot(&client, &base_url).await {
                 Ok(snapshot) => {
@@ -176,6 +180,7 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
             }
         }
 
+        // Apply incremental tenant changes for revocation/creation.
         match fetch_tenant_changes(&client, &base_url, next_tenant_seq).await {
             Ok(changes) => {
                 for change in changes.items {
@@ -197,6 +202,7 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
             }
         }
 
+        // Apply incremental namespace changes for revocation/creation.
         match fetch_namespace_changes(&client, &base_url, next_namespace_seq).await {
             Ok(changes) => {
                 for change in changes.items {
@@ -222,6 +228,7 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
             }
         }
 
+        // Apply incremental stream changes last so existence checks have up-to-date scopes.
         match fetch_changes(&client, &base_url, next_stream_seq).await {
             Ok(changes) => {
                 for change in changes.items {

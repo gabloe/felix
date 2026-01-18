@@ -1,4 +1,5 @@
 // Broker service main entry point.
+mod config;
 mod controlplane;
 mod observability;
 
@@ -10,27 +11,23 @@ use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let metrics_handle = observability::init_observability("felix-broker");
 
-    // Start an in-process broker with an ephemeral cache backend.
+    // Start an in-process broker with an ephemeral cache backend. TODO: support other storage backends via config.
     let broker = Broker::new(EphemeralCache::new());
     tracing::info!("broker started");
 
-    let metrics_addr: SocketAddr = std::env::var("FELIX_BROKER_METRICS_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
-        .parse()
-        .expect("FELIX_BROKER_METRICS_BIND");
-    tokio::spawn(observability::serve_metrics(metrics_handle, metrics_addr));
+    let config = config::BrokerConfig::from_env_or_yaml()?;
+    tokio::spawn(observability::serve_metrics(
+        metrics_handle,
+        config.metrics_bind,
+    ));
 
-    let bind_addr = std::env::var("FELIX_QUIC_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:5000".to_string())
-        .parse::<SocketAddr>()
-        .context("parse FELIX_QUIC_BIND")?;
+    let bind_addr = config.quic_bind;
     let server_config = build_server_config().context("build QUIC server config")?;
     let quic_server = Arc::new(
         QuicServer::bind(bind_addr, server_config, TransportConfig::default())
@@ -38,6 +35,7 @@ async fn main() -> Result<()> {
     );
     tracing::info!(addr = %quic_server.local_addr()?, "quic listener started");
 
+    // Start accepting QUIC connections in a background task.
     let broker = Arc::new(broker);
     let accept_task = {
         let quic_server = Arc::clone(&quic_server);
@@ -49,11 +47,10 @@ async fn main() -> Result<()> {
         })
     };
 
-    if let Ok(base_url) = std::env::var("FELIX_CP_URL") {
-        let interval_ms = std::env::var("FELIX_CP_SYNC_INTERVAL_MS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(2000);
+    // Start control plane sync task if configured. This periodically syncs metadata from the control plane to keep
+    // the broker up to date with tenants, namespaces, and streams.
+    if let Some(base_url) = config.controlplane_url.clone() {
+        let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
         tokio::spawn(async move {
             if let Err(err) = controlplane::start_sync(

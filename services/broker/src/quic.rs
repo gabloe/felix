@@ -1,3 +1,5 @@
+// QUIC transport adapter for the broker.
+// Decodes felix-wire frames, enforces stream scope, and fans out events to subscribers.
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::Broker;
@@ -23,6 +25,7 @@ pub async fn serve(server: Arc<QuicServer>, broker: Arc<Broker>) -> Result<()> {
 
 async fn handle_connection(broker: Arc<Broker>, connection: QuicConnection) -> Result<()> {
     loop {
+        // Accept both bi-directional control streams and uni-directional publish streams.
         tokio::select! {
             result = connection.accept_bi() => {
                 let (send, recv) = match result {
@@ -68,6 +71,7 @@ async fn handle_stream(
             Some(frame) => frame,
             None => break,
         };
+        // Binary batches bypass JSON decoding for high-throughput publish.
         if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
             let batch = felix_wire::binary::decode_publish_batch(&frame)
                 .context("decode binary publish batch")?;
@@ -100,6 +104,7 @@ async fn handle_stream(
                 payload,
                 ack,
             } => {
+                // Per-message publish path with optional ack.
                 let start = Instant::now();
                 let span = tracing::trace_span!(
                     "publish",
@@ -154,6 +159,7 @@ async fn handle_stream(
                 payloads,
                 ack,
             } => {
+                // Batch publish trades latency for throughput, returns a single ack.
                 let span = tracing::trace_span!(
                     "publish_batch",
                     tenant_id = %tenant_id,
@@ -201,6 +207,7 @@ async fn handle_stream(
                 namespace,
                 stream,
             } => {
+                // Subscribe keeps the stream open and pushes events until the client closes.
                 let span = tracing::trace_span!(
                     "subscribe",
                     tenant_id = %tenant_id,
@@ -229,6 +236,7 @@ async fn handle_stream(
                 write_message(&mut send, Message::Ok).await?;
                 let batch_size = fanout_batch_size();
                 if batch_size <= 1 {
+                    // Latency-focused path: send each event immediately.
                     loop {
                         match receiver.recv().await {
                             Ok(payload) => {
@@ -253,6 +261,7 @@ async fn handle_stream(
                         }
                     }
                 } else {
+                    // Throughput-focused path: batch subscriber sends to reduce overhead.
                     loop {
                         let payload = match receiver.recv().await {
                             Ok(payload) => payload,
@@ -336,6 +345,7 @@ async fn handle_uni_stream(broker: Arc<Broker>, mut recv: RecvStream) -> Result<
             Some(frame) => frame,
             None => break,
         };
+        // Uni streams are publish-only; responses are not sent.
         if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
             let batch = felix_wire::binary::decode_publish_batch(&frame)
                 .context("decode binary publish batch")?;
@@ -541,10 +551,7 @@ mod tests {
             .register_stream("t1", "default", "missing", Default::default())
             .await
             .expect("register");
-        broker
-            .register_tenant("t1")
-            .await
-            .expect("tenant");
+        broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
             .await

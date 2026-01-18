@@ -1,4 +1,6 @@
 // In-process pub/sub broker with a tiny cache hook.
+// The broker enforces tenant/namespace/stream existence via local registries
+// that are kept in sync by the control plane watcher.
 use bytes::Bytes;
 use felix_storage::EphemeralCache;
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +20,13 @@ pub enum BrokerError {
         tenant_id: String,
         namespace: String,
         stream: String,
+    },
+    #[error("tenant not found: {0}")]
+    TenantNotFound(String),
+    #[error("namespace not found: tenant={tenant_id} namespace={namespace}")]
+    NamespaceNotFound {
+        tenant_id: String,
+        namespace: String,
     },
 }
 
@@ -239,6 +248,7 @@ impl Broker {
         stream: &str,
         payload: Bytes,
     ) -> Result<usize> {
+        // Fast-path guard: reject unknown scopes before touching the stream map.
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -246,7 +256,8 @@ impl Broker {
                 stream: stream.to_string(),
             });
         }
-        // Fan-out to current subscribers; ignore backpressure errors for now.
+        // Fan-out to current subscribers.
+        // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
         let stream_state = {
             let guard = self.topics.read().await;
             guard
@@ -268,6 +279,7 @@ impl Broker {
         namespace: &str,
         stream: &str,
     ) -> Result<broadcast::Receiver<Bytes>> {
+        // Fast-path guard: reject unknown scopes before opening a receiver.
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -289,12 +301,14 @@ impl Broker {
         Ok(stream_state.sender.subscribe())
     }
 
+    // Return a cursor positioned at the tail of the stream log.
     pub async fn cursor_tail(
         &self,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
     ) -> Result<Cursor> {
+        // Fast-path guard: reject unknown scopes before touching the stream map.
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -325,6 +339,7 @@ impl Broker {
         stream: &str,
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
+        // Fast-path guard: reject unknown scopes before touching the stream map.
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -365,6 +380,21 @@ impl Broker {
         stream: impl Into<String>,
         metadata: StreamMetadata,
     ) -> Result<()> {
+        // Fast-path guard: reject unknown scopes before attempting to create the stream.
+        let tenant_id = tenant_id.into();
+        let namespace = namespace.into();
+        let stream = stream.into();
+        if !self.tenants.read().await.contains_key(&tenant_id) {
+            return Err(BrokerError::TenantNotFound(tenant_id));
+        }
+        let namespace_key = NamespaceKey::new(tenant_id.clone(), namespace.clone());
+        // Fast-path guard: reject unknown namespace.
+        if !self.namespaces.read().await.contains_key(&namespace_key) {
+            return Err(BrokerError::NamespaceNotFound {
+                tenant_id,
+                namespace,
+            });
+        }
         let key = StreamKey::new(tenant_id, namespace, stream);
         self.streams.write().await.insert(key.clone(), metadata);
         let mut guard = self.topics.write().await;
@@ -380,6 +410,18 @@ impl Broker {
         namespace: &str,
         stream: &str,
     ) -> Result<bool> {
+        // Fast-path guard: reject unknown scopes before attempting to remove the stream.
+        if !self.tenants.read().await.contains_key(tenant_id) {
+            return Err(BrokerError::TenantNotFound(tenant_id.to_string()));
+        }
+        let namespace_key = NamespaceKey::new(tenant_id, namespace);
+        // Fast-path guard: reject unknown namespace.
+        if !self.namespaces.read().await.contains_key(&namespace_key) {
+            return Err(BrokerError::NamespaceNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+            });
+        }
         let key = StreamKey::new(tenant_id, namespace, stream);
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
@@ -389,6 +431,7 @@ impl Broker {
     }
 
     pub async fn stream_exists(&self, tenant_id: &str, namespace: &str, stream: &str) -> bool {
+        // Scope checks are in-memory and intended for per-request enforcement.
         if !self.tenants.read().await.contains_key(tenant_id) {
             return false;
         }
@@ -406,28 +449,55 @@ impl Broker {
             .contains_key(&StreamKey::new(tenant_id, namespace, stream))
     }
 
-    pub async fn register_tenant(&self, tenant_id: impl Into<String>) -> Result<()> {
-        self.tenants.write().await.insert(tenant_id.into(), ());
-        Ok(())
+    pub async fn register_tenant(&self, tenant_id: impl Into<String>) -> Result<bool> {
+        let tenant_id = tenant_id.into();
+        let mut guard = self.tenants.write().await;
+        // Fast-path guard: no-op if tenant already exists.
+        if guard.contains_key(&tenant_id) {
+            return Ok(false);
+        }
+        guard.insert(tenant_id, ());
+        Ok(true)
     }
 
     pub async fn remove_tenant(&self, tenant_id: &str) -> Result<bool> {
-        Ok(self.tenants.write().await.remove(tenant_id).is_some())
+        let mut guard = self.tenants.write().await;
+        // Fast-path guard: no-op if tenant doesn't even exist.
+        if !guard.contains_key(tenant_id) {
+            return Ok(false);
+        }
+        Ok(guard.remove(tenant_id).is_some())
     }
 
     pub async fn register_namespace(
         &self,
         tenant_id: impl Into<String>,
         namespace: impl Into<String>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let tenant_id = tenant_id.into();
+        let namespace = namespace.into();
+        // Fast-path guard: reject unknown tenant before creating namespace.
+        if !self.tenants.read().await.contains_key(&tenant_id) {
+            return Err(BrokerError::TenantNotFound(tenant_id));
+        }
         let key = NamespaceKey::new(tenant_id, namespace);
-        self.namespaces.write().await.insert(key, ());
-        Ok(())
+        let mut guard = self.namespaces.write().await;
+        // Fast-path guard: no-op if namespace already exists.
+        if guard.contains_key(&key) {
+            return Ok(false);
+        }
+        guard.insert(key, ());
+        Ok(true)
     }
 
     pub async fn remove_namespace(&self, tenant_id: &str, namespace: &str) -> Result<bool> {
         let key = NamespaceKey::new(tenant_id, namespace);
-        Ok(self.namespaces.write().await.remove(&key).is_some())
+        let mut guard = self.namespaces.write().await;
+        // Fast-path guard: no-op if namespace doesn't even exist.
+        if !guard.contains_key(&key) {
+            return Ok(false);
+        }
+        Ok(guard.remove(&key).is_some())
     }
 
     // get_or_create_topic removed; stream creation handled inline for cursor/log support.
