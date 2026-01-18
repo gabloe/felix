@@ -11,7 +11,7 @@ durability, clustering, or advanced observability.
 
 ---
 
-## Build + repo health
+## Build + repo health (Done)
 - [X] `cargo build --workspace` succeeds cleanly
 - [X] `cargo test --workspace` exists and runs
 - [X] `Taskfile.yml` targets: `build`, `test`, `fmt`, `lint`, `demo`
@@ -50,7 +50,7 @@ durability, clustering, or advanced observability.
 - [ ] Health endpoints: `/live`, `/ready`
 - [ ] Metrics endpoint (Prometheus)
 
-## Demo + examples
+## Demo + examples (Done)
 - [X] QUIC broker demo using framed messages
 - [X] Demo for cache `put/get` over QUIC (or document separate cache API)
 
