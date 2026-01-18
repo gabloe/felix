@@ -547,15 +547,15 @@ mod tests {
         let response = read_message(&mut recv).await?;
         assert!(matches!(response, Some(Message::Error { .. })));
 
-        broker
-            .register_stream("t1", "default", "missing", Default::default())
-            .await
-            .expect("register");
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
             .await
             .expect("namespace");
+        broker
+            .register_stream("t1", "default", "missing", Default::default())
+            .await
+            .expect("register");
         let (mut send, mut recv) = connection.open_bi().await?;
         write_message(
             &mut send,
