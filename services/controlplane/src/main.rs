@@ -296,7 +296,12 @@ impl CacheChangeLog {
     fn record(&mut self, op: CacheChangeOp, key: CacheKey, cache: Option<Cache>) -> u64 {
         let seq = self.next_seq;
         self.next_seq += 1;
-        self.items.push_back(CacheChange { seq, op, key, cache });
+        self.items.push_back(CacheChange {
+            seq,
+            op,
+            key,
+            cache,
+        });
         const MAX_CHANGES: usize = 1024;
         while self.items.len() > MAX_CHANGES {
             self.items.pop_front();
@@ -682,11 +687,11 @@ async fn delete_tenant(
         .collect::<Vec<_>>();
     for key in &cache_keys {
         if let Some(cache) = caches.remove(key) {
-            state
-                .cache_changes
-                .write()
-                .await
-                .record(CacheChangeOp::Deleted, key.clone(), Some(cache));
+            state.cache_changes.write().await.record(
+                CacheChangeOp::Deleted,
+                key.clone(),
+                Some(cache),
+            );
         }
     }
     metrics::gauge!("felix_caches_total").set(caches.len() as f64);
@@ -883,18 +888,16 @@ async fn delete_namespace(
     let mut caches = state.caches.write().await;
     let cache_keys = caches
         .keys()
-        .filter(|cache_key| {
-            cache_key.tenant_id == tenant_id && cache_key.namespace == namespace
-        })
+        .filter(|cache_key| cache_key.tenant_id == tenant_id && cache_key.namespace == namespace)
         .cloned()
         .collect::<Vec<_>>();
     for cache_key in &cache_keys {
         if let Some(cache) = caches.remove(cache_key) {
-            state
-                .cache_changes
-                .write()
-                .await
-                .record(CacheChangeOp::Deleted, cache_key.clone(), Some(cache));
+            state.cache_changes.write().await.record(
+                CacheChangeOp::Deleted,
+                cache_key.clone(),
+                Some(cache),
+            );
         }
     }
     metrics::gauge!("felix_caches_total").set(caches.len() as f64);
