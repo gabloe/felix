@@ -1,5 +1,5 @@
 // Control plane HTTP API for metadata management.
-// Maintains in-memory registries for tenants, namespaces, and streams, plus
+// Maintains in-memory registries for tenants, namespaces, streams, and caches, plus
 // change logs that brokers poll to keep their local caches up to date.
 mod config;
 mod observability;
@@ -30,6 +30,8 @@ struct AppState {
     namespace_changes: Arc<RwLock<NamespaceChangeLog>>,
     streams: Arc<RwLock<HashMap<StreamKey, Stream>>>,
     stream_changes: Arc<RwLock<StreamChangeLog>>,
+    caches: Arc<RwLock<HashMap<CacheKey, Cache>>>,
+    cache_changes: Arc<RwLock<CacheChangeLog>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -223,6 +225,84 @@ struct Stream {
     consistency: ConsistencyLevel,
     delivery: DeliveryGuarantee,
     durable: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct Cache {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CacheCreateRequest {
+    cache: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CachePatchRequest {
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CacheListResponse {
+    items: Vec<Cache>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CacheSnapshotResponse {
+    items: Vec<Cache>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CacheChange {
+    seq: u64,
+    op: CacheChangeOp,
+    key: CacheKey,
+    cache: Option<Cache>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+struct CacheChangesResponse {
+    items: Vec<CacheChange>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+enum CacheChangeOp {
+    Created,
+    Updated,
+    Deleted,
+}
+
+#[derive(Debug, Default)]
+struct CacheChangeLog {
+    next_seq: u64,
+    items: VecDeque<CacheChange>,
+}
+
+impl CacheChangeLog {
+    fn record(&mut self, op: CacheChangeOp, key: CacheKey, cache: Option<Cache>) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.items.push_back(CacheChange { seq, op, key, cache });
+        const MAX_CHANGES: usize = 1024;
+        while self.items.len() > MAX_CHANGES {
+            self.items.pop_front();
+        }
+        seq
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -452,6 +532,33 @@ async fn list_streams(
 
 #[utoipa::path(
     get,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
+    tag = "caches",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier")
+    ),
+    responses(
+        (status = 200, description = "List caches", body = CacheListResponse),
+        (status = 404, description = "Tenant or namespace not found", body = ErrorResponse)
+    )
+)]
+async fn list_caches(
+    Path((tenant_id, namespace)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<CacheListResponse>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let guard = state.caches.read().await;
+    let items = guard
+        .values()
+        .filter(|cache| cache.tenant_id == tenant_id && cache.namespace == namespace)
+        .cloned()
+        .collect();
+    Ok(Json(CacheListResponse { items }))
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/tenants",
     tag = "tenants",
     responses(
@@ -566,6 +673,23 @@ async fn delete_tenant(
         }
     }
     metrics::gauge!("felix_streams_total").set(streams.len() as f64);
+
+    let mut caches = state.caches.write().await;
+    let cache_keys = caches
+        .keys()
+        .filter(|key| key.tenant_id == tenant_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in &cache_keys {
+        if let Some(cache) = caches.remove(key) {
+            state
+                .cache_changes
+                .write()
+                .await
+                .record(CacheChangeOp::Deleted, key.clone(), Some(cache));
+        }
+    }
+    metrics::gauge!("felix_caches_total").set(caches.len() as f64);
     state
         .tenant_changes
         .write()
@@ -755,6 +879,25 @@ async fn delete_namespace(
         }
     }
     metrics::gauge!("felix_streams_total").set(streams.len() as f64);
+
+    let mut caches = state.caches.write().await;
+    let cache_keys = caches
+        .keys()
+        .filter(|cache_key| {
+            cache_key.tenant_id == tenant_id && cache_key.namespace == namespace
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for cache_key in &cache_keys {
+        if let Some(cache) = caches.remove(cache_key) {
+            state
+                .cache_changes
+                .write()
+                .await
+                .record(CacheChangeOp::Deleted, cache_key.clone(), Some(cache));
+        }
+    }
+    metrics::gauge!("felix_caches_total").set(caches.len() as f64);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -847,6 +990,53 @@ async fn stream_changes(
         .cloned()
         .collect();
     Json(StreamChangesResponse {
+        items,
+        next_seq: guard.next_seq,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/caches/snapshot",
+    tag = "caches",
+    responses(
+        (status = 200, description = "Full cache snapshot", body = CacheSnapshotResponse)
+    )
+)]
+async fn cache_snapshot(State(state): State<AppState>) -> Json<CacheSnapshotResponse> {
+    let guard = state.caches.read().await;
+    let items = guard.values().cloned().collect::<Vec<_>>();
+    let next_seq = state.cache_changes.read().await.next_seq;
+    Json(CacheSnapshotResponse { items, next_seq })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/caches/changes",
+    tag = "caches",
+    params(
+        ("since" = Option<u64>, Query, description = "Last seen sequence")
+    ),
+    responses(
+        (status = 200, description = "Cache change list", body = CacheChangesResponse)
+    )
+)]
+async fn cache_changes(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Json<CacheChangesResponse> {
+    let since = params
+        .get("since")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let guard = state.cache_changes.read().await;
+    let items = guard
+        .items
+        .iter()
+        .filter(|item| item.seq >= since)
+        .cloned()
+        .collect();
+    Json(CacheChangesResponse {
         items,
         next_seq: guard.next_seq,
     })
@@ -1054,6 +1244,187 @@ async fn delete_stream(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
+    tag = "caches",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier")
+    ),
+    request_body = CacheCreateRequest,
+    responses(
+        (status = 201, description = "Cache created", body = Cache),
+        (status = 404, description = "Tenant or namespace not found", body = ErrorResponse),
+        (status = 409, description = "Cache already exists", body = ErrorResponse)
+    )
+)]
+async fn create_cache(
+    Path((tenant_id, namespace)): Path<(String, String)>,
+    State(state): State<AppState>,
+    Json(body): Json<CacheCreateRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let key = CacheKey {
+        tenant_id: tenant_id.clone(),
+        namespace: namespace.clone(),
+        cache: body.cache.clone(),
+    };
+    let mut guard = state.caches.write().await;
+    if guard.contains_key(&key) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            body: ErrorResponse {
+                code: "conflict".to_string(),
+                message: "cache already exists".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    let cache = Cache {
+        tenant_id,
+        namespace,
+        cache: body.cache,
+        display_name: body.display_name,
+    };
+    guard.insert(key.clone(), cache.clone());
+    state
+        .cache_changes
+        .write()
+        .await
+        .record(CacheChangeOp::Created, key, Some(cache.clone()));
+    metrics::counter!("felix_cache_changes_total", "op" => "created").increment(1);
+    metrics::gauge!("felix_caches_total").set(guard.len() as f64);
+    Ok((StatusCode::CREATED, Json(cache)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
+    tag = "caches",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier"),
+        ("cache" = String, Path, description = "Cache identifier")
+    ),
+    responses(
+        (status = 200, description = "Fetch cache", body = Cache),
+        (status = 404, description = "Cache or namespace not found", body = ErrorResponse)
+    )
+)]
+async fn get_cache(
+    Path((tenant_id, namespace, cache)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<Cache>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let guard = state.caches.read().await;
+    let key = CacheKey {
+        tenant_id: tenant_id.clone(),
+        namespace: namespace.clone(),
+        cache,
+    };
+    guard.get(&key).cloned().map(Json).ok_or(ApiError {
+        status: StatusCode::NOT_FOUND,
+        body: ErrorResponse {
+            code: "not_found".to_string(),
+            message: "cache not found".to_string(),
+            request_id: None,
+        },
+    })
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
+    tag = "caches",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier"),
+        ("cache" = String, Path, description = "Cache identifier")
+    ),
+    request_body = CachePatchRequest,
+    responses(
+        (status = 200, description = "Cache updated", body = Cache),
+        (status = 404, description = "Cache or namespace not found", body = ErrorResponse)
+    )
+)]
+async fn patch_cache(
+    Path((tenant_id, namespace, cache)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+    Json(body): Json<CachePatchRequest>,
+) -> Result<Json<Cache>, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let key = CacheKey {
+        tenant_id: tenant_id.clone(),
+        namespace: namespace.clone(),
+        cache,
+    };
+    let mut guard = state.caches.write().await;
+    let cache = guard.get_mut(&key).ok_or(ApiError {
+        status: StatusCode::NOT_FOUND,
+        body: ErrorResponse {
+            code: "not_found".to_string(),
+            message: "cache not found".to_string(),
+            request_id: None,
+        },
+    })?;
+    if let Some(display_name) = body.display_name {
+        cache.display_name = display_name;
+    }
+    state
+        .cache_changes
+        .write()
+        .await
+        .record(CacheChangeOp::Updated, key, Some(cache.clone()));
+    metrics::counter!("felix_cache_changes_total", "op" => "updated").increment(1);
+    Ok(Json(cache.clone()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
+    tag = "caches",
+    params(
+        ("tenant_id" = String, Path, description = "Tenant identifier"),
+        ("namespace" = String, Path, description = "Namespace identifier"),
+        ("cache" = String, Path, description = "Cache identifier")
+    ),
+    responses(
+        (status = 204, description = "Cache deleted"),
+        (status = 404, description = "Cache or namespace not found", body = ErrorResponse)
+    )
+)]
+async fn delete_cache(
+    Path((tenant_id, namespace, cache)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let key = CacheKey {
+        tenant_id,
+        namespace,
+        cache,
+    };
+    let mut guard = state.caches.write().await;
+    if guard.remove(&key).is_none() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse {
+                code: "not_found".to_string(),
+                message: "cache not found".to_string(),
+                request_id: None,
+            },
+        });
+    }
+    state
+        .cache_changes
+        .write()
+        .await
+        .record(CacheChangeOp::Deleted, key, None);
+    metrics::counter!("felix_cache_changes_total", "op" => "deleted").increment(1);
+    metrics::gauge!("felix_caches_total").set(guard.len() as f64);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -1076,13 +1447,20 @@ async fn delete_stream(
         delete_namespace,
         namespace_snapshot,
         namespace_changes,
+        cache_snapshot,
+        cache_changes,
         stream_snapshot,
         stream_changes,
         list_streams,
+        list_caches,
         create_stream,
         get_stream,
         patch_stream,
-        delete_stream
+        delete_stream,
+        create_cache,
+        get_cache,
+        patch_cache,
+        delete_cache
     ),
     components(schemas(
         FeatureFlags,
@@ -1105,6 +1483,15 @@ async fn delete_stream(
         NamespaceChange,
         NamespaceChangesResponse,
         NamespaceChangeOp,
+        Cache,
+        CacheKey,
+        CacheCreateRequest,
+        CachePatchRequest,
+        CacheListResponse,
+        CacheSnapshotResponse,
+        CacheChange,
+        CacheChangesResponse,
+        CacheChangeOp,
         Stream,
         StreamKind,
         StreamCreateRequest,
@@ -1124,7 +1511,8 @@ async fn delete_stream(
         (name = "regions", description = "Region metadata"),
         (name = "tenants", description = "Tenant management"),
         (name = "namespaces", description = "Namespace management"),
-        (name = "streams", description = "Stream management")
+        (name = "streams", description = "Stream management"),
+        (name = "caches", description = "Cache management")
     )
 )]
 struct ApiDoc;
@@ -1168,11 +1556,13 @@ fn default_state_with_region_id(region_id: String) -> AppState {
         namespace_changes: Arc::new(RwLock::new(NamespaceChangeLog::default())),
         streams: Arc::new(RwLock::new(HashMap::new())),
         stream_changes: Arc::new(RwLock::new(StreamChangeLog::default())),
+        caches: Arc::new(RwLock::new(HashMap::new())),
+        cache_changes: Arc::new(RwLock::new(CacheChangeLog::default())),
     }
 }
 
 fn build_app(state: AppState) -> Router {
-    // API surface: system/regions, change feeds, CRUD for tenants/namespaces/streams.
+    // API surface: system/regions, change feeds, CRUD for tenants/namespaces/streams/caches.
     let trace_layer =
         TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
             let parent = observability::trace_context_from_headers(request.headers());
@@ -1195,6 +1585,8 @@ fn build_app(state: AppState) -> Router {
         .route("/v1/tenants/changes", get(tenant_changes))
         .route("/v1/namespaces/snapshot", get(namespace_snapshot))
         .route("/v1/namespaces/changes", get(namespace_changes))
+        .route("/v1/caches/snapshot", get(cache_snapshot))
+        .route("/v1/caches/changes", get(cache_changes))
         .route("/v1/streams/snapshot", get(stream_snapshot))
         .route("/v1/streams/changes", get(stream_changes))
         .route("/v1/tenants", get(list_tenants).post(create_tenant))
@@ -1217,6 +1609,14 @@ fn build_app(state: AppState) -> Router {
         .route(
             "/v1/tenants/:tenant_id/namespaces/:namespace/streams/:stream",
             get(get_stream).patch(patch_stream).delete(delete_stream),
+        )
+        .route(
+            "/v1/tenants/:tenant_id/namespaces/:namespace/caches",
+            get(list_caches).post(create_cache),
+        )
+        .route(
+            "/v1/tenants/:tenant_id/namespaces/:namespace/caches/:cache",
+            get(get_cache).patch(patch_cache).delete(delete_cache),
         )
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/docs").url("/v1/openapi.json", ApiDoc::openapi()),
@@ -1371,6 +1771,92 @@ mod tests {
         let delete = Request::builder()
             .method("DELETE")
             .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+            .body(Body::empty())
+            .expect("delete");
+        let response = app.clone().oneshot(delete).await.expect("delete");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn caches_crud_and_changes_smoke() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            serde_json::json!({
+                "cache": "primary",
+                "display_name": "Primary Cache"
+            }),
+        );
+        let response = app.clone().oneshot(create).await.expect("create");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let list = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/caches")
+            .body(Body::empty())
+            .expect("list");
+        let response = app.clone().oneshot(list).await.expect("list");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+
+        let get = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+            .body(Body::empty())
+            .expect("get");
+        let response = app.clone().oneshot(get).await.expect("get");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let patch = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/caches/primary",
+            serde_json::json!({
+                "display_name": "Primary Cache Updated"
+            }),
+        );
+        let response = app.clone().oneshot(patch).await.expect("patch");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let changes = Request::builder()
+            .uri("/v1/caches/changes?since=0")
+            .body(Body::empty())
+            .expect("changes");
+        let response = app.clone().oneshot(changes).await.expect("changes");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert!(!payload["items"].as_array().unwrap().is_empty());
+
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default/caches/primary")
             .body(Body::empty())
             .expect("delete");
         let response = app.clone().oneshot(delete).await.expect("delete");

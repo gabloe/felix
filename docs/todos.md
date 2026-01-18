@@ -39,10 +39,10 @@ durability, clustering, or advanced observability.
 ## Broker core (`felix-broker`)
 - [X] In-memory stream registry (create-on-first-publish)
 - [X] Fanout to N subscribers
-- [ ] Cursor model (tail-only is fine for MVP)
-- [ ] Append-only in-memory log per stream (ring buffer)
+- [X] Cursor model (tail-only is fine for MVP)
+- [X] Append-only in-memory log per stream (ring buffer)
 - [X] Cache: `Put/Get` with TTL expiry
-- [ ] Cache eviction policy placeholder (size cap + LRU later)
+- [X] Cache eviction policy placeholder (size cap + LRU later)
 
 ## Broker service (`services/broker`)
 - [X] Wire QUIC transport to broker protocol handler
@@ -68,3 +68,17 @@ durability, clustering, or advanced observability.
 - [ ] Distributed cache backed by Raft/consensus
 - [ ] Multi-node clustering and replication
 - [ ] Design sharding/replication/quorum to move beyond single-node; align with the RAFT control-plane draft and work through the details
+
+## Data scalability with sharding
+- [X] Steams should be defined with shard count
+- [ ] Caches should be defined with shard count
+- [ ] Ops should be directed to the correct shard leader
+- [ ] Leader election should be managed
+- [ ] Leader failover should be handled (RAFT handles it?)
+
+## Data durability and persistence
+- [ ] Add durable backend for control plane
+- [ ] Add durable backend for data plane
+- [ ] Handle crash/recover of data/broker and control plane nodes (read from disk first, then re-sync from new leader?)
+- [ ] Define requirements for tiered storage (hot/cold path, LCU?)
+- [ ] Implement tiered storage primitives (durability funneled down to K8s FS mounts?)
