@@ -66,10 +66,13 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
 }
 
 pub async fn serve_metrics(handle: PrometheusHandle, addr: SocketAddr) -> std::io::Result<()> {
-    let app = axum::Router::new().route(
-        "/metrics",
-        axum::routing::get(move || async move { handle.render() }),
-    );
+    let app = axum::Router::new()
+        .route(
+            "/metrics",
+            axum::routing::get(move || async move { handle.render() }),
+        )
+        .route("/live", axum::routing::get(|| async { "ok" }))
+        .route("/ready", axum::routing::get(|| async { "ok" }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await
 }

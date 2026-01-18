@@ -47,8 +47,8 @@ durability, clustering, or advanced observability.
 ## Broker service (`services/broker`)
 - [X] Wire QUIC transport to broker protocol handler
 - [X] Env var for QUIC bind address (`FELIX_QUIC_BIND`)
-- [ ] Health endpoints: `/live`, `/ready`
-- [ ] Metrics endpoint (Prometheus)
+- [X] Health endpoints: `/live`, `/ready`
+- [X] Metrics endpoint (Prometheus)
 
 ## Demo + examples (Done)
 - [X] QUIC broker demo using framed messages

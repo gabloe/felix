@@ -654,6 +654,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_delivers_in_order_to_single_subscriber() {
+        let broker = Broker::new(EphemeralCache::new());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "ordered", StreamMetadata::default())
+            .await
+            .expect("register");
+        let mut sub = broker
+            .subscribe("t1", "default", "ordered")
+            .await
+            .expect("subscribe");
+        broker
+            .publish("t1", "default", "ordered", Bytes::from_static(b"one"))
+            .await
+            .expect("publish");
+        broker
+            .publish("t1", "default", "ordered", Bytes::from_static(b"two"))
+            .await
+            .expect("publish");
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"one"));
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"two"));
+    }
+
+    #[tokio::test]
+    async fn lagging_subscriber_drops_messages() {
+        let broker = Broker::new(EphemeralCache::new())
+            .with_topic_capacity(1)
+            .expect("capacity");
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "laggy", StreamMetadata::default())
+            .await
+            .expect("register");
+        let mut sub = broker
+            .subscribe("t1", "default", "laggy")
+            .await
+            .expect("subscribe");
+        broker
+            .publish("t1", "default", "laggy", Bytes::from_static(b"one"))
+            .await
+            .expect("publish");
+        broker
+            .publish("t1", "default", "laggy", Bytes::from_static(b"two"))
+            .await
+            .expect("publish");
+        match sub.recv().await {
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            other => panic!("expected lagged error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn multiple_subscribers_receive_payload() {
         let broker = Broker::new(EphemeralCache::new());
         broker.register_tenant("t1").await.expect("tenant");

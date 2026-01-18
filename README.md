@@ -31,6 +31,7 @@ implementation are still moving quickly.
 - `docs/architecture.md`
 - `docs/protocol.md`
 - `docs/control-plane.md`
+- `docs/semantics.md`
 - `docs/todos.md`
 - Defining a stable wire envelope and internal data model
 - Measuring latency/backpressure behavior early to keep p99/p999 predictable
