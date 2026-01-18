@@ -3,9 +3,10 @@
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::{Broker, StreamMetadata};
+use felix_client::Client;
 use felix_storage::EphemeralCache;
-use felix_transport::{QuicClient, QuicServer, TransportConfig};
-use felix_wire::Message;
+use felix_transport::{QuicServer, TransportConfig};
+use felix_wire::AckMode;
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
@@ -44,58 +45,49 @@ async fn main() -> Result<()> {
     let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
 
     println!("Step 2/6: connecting QUIC client.");
-    let client = QuicClient::bind(
-        "0.0.0.0:0".parse()?,
-        build_client_config(cert)?,
-        TransportConfig::default(),
-    )?;
-    let connection = client.connect(addr, "localhost").await?;
+    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
 
     println!("Step 3/6: opening a subscription stream.");
-    let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
-
-    // Send a subscribe request over a bi-directional stream.
-    quic::write_message(
-        &mut sub_send,
-        Message::Subscribe {
-            tenant_id: "t1".to_string(),
-            namespace: "default".to_string(),
-            stream: "demo-topic".to_string(),
-        },
-    )
-    .await?;
-    sub_send.finish()?;
-
-    // Expect Ok as a subscription acknowledgment.
-    let response = quic::read_message(&mut sub_recv).await?;
-    println!("Subscribe response: {response:?}");
+    let mut subscription = client.subscribe("t1", "default", "demo-topic").await?;
+    println!("Subscribe response: Ok");
 
     println!("Step 4/6: publishing two messages on the same stream.");
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    // Drain events in a background task so publishing can proceed concurrently.
-    let recv_task = tokio::spawn(async move {
-        while let Ok(Some(message)) = quic::read_message(&mut sub_recv).await {
-            if let Message::Event {
-                stream, payload, ..
-            } = message
-            {
-                let _ = event_tx.send((stream, payload));
-            }
-        }
-    });
-
-    publish(&connection, "t1", "default", "demo-topic", b"hello").await?;
-    publish(&connection, "t1", "default", "demo-topic", b"world").await?;
+    let mut publisher = client.publisher().await?;
+    publisher
+        .publish(
+            "t1",
+            "default",
+            "demo-topic",
+            b"hello".to_vec(),
+            AckMode::PerMessage,
+        )
+        .await?;
+    publisher
+        .publish(
+            "t1",
+            "default",
+            "demo-topic",
+            b"world".to_vec(),
+            AckMode::PerMessage,
+        )
+        .await?;
 
     println!("Step 5/6: receiving events.");
     for _ in 0..2 {
-        match tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await {
-            Ok(Some((stream, payload))) => {
-                println!("Event on {}: {}", stream, String::from_utf8_lossy(&payload));
+        match tokio::time::timeout(Duration::from_secs(1), subscription.next_event()).await {
+            Ok(Ok(Some(event))) => {
+                println!(
+                    "Event on {}: {}",
+                    event.stream,
+                    String::from_utf8_lossy(&event.payload)
+                );
             }
-            Ok(None) => {
+            Ok(Ok(None)) => {
                 println!("Event stream closed early.");
+                break;
+            }
+            Ok(Err(err)) => {
+                println!("Event stream error: {err}");
                 break;
             }
             Err(_) => {
@@ -105,36 +97,8 @@ async fn main() -> Result<()> {
         }
     }
     println!("Shutting down demo.");
-    recv_task.abort();
-    drop(connection);
     server_task.abort();
     println!("Demo complete.");
-    Ok(())
-}
-
-async fn publish(
-    connection: &felix_transport::QuicConnection,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    payload: &[u8],
-) -> Result<()> {
-    let (mut send, mut recv) = connection.open_bi().await?;
-    // Publish one message and wait for the broker acknowledgment.
-    quic::write_message(
-        &mut send,
-        Message::Publish {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-            payload: payload.to_vec(),
-            ack: None,
-        },
-    )
-    .await?;
-    send.finish()?;
-    let response = quic::read_message(&mut recv).await?;
-    println!("Publish response: {response:?}");
     Ok(())
 }
 

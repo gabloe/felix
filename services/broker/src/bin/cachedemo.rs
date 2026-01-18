@@ -2,9 +2,9 @@
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::Broker;
+use felix_client::Client;
 use felix_storage::EphemeralCache;
-use felix_transport::{QuicClient, QuicServer, TransportConfig};
-use felix_wire::Message;
+use felix_transport::{QuicServer, TransportConfig};
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
@@ -29,32 +29,15 @@ async fn main() -> Result<()> {
     let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
 
     println!("Step 2/4: connecting QUIC client.");
-    let client = QuicClient::bind(
-        "0.0.0.0:0".parse()?,
-        build_client_config(cert)?,
-        TransportConfig::default(),
-    )?;
-    let connection = client.connect(addr, "localhost").await?;
+    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
 
     println!("Step 3/4: writing cache entry with TTL.");
-    let put_response = request(
-        &connection,
-        Message::CachePut {
-            key: "demo-key".to_string(),
-            value: b"cached".to_vec(),
-            ttl_ms: Some(500),
-        },
-    )
-    .await?;
-    println!("Cache put response: {put_response:?}");
+    client
+        .cache_put("demo-key", b"cached".to_vec(), Some(500))
+        .await?;
+    println!("Cache put response: Ok");
 
-    let get_response = request(
-        &connection,
-        Message::CacheGet {
-            key: "demo-key".to_string(),
-        },
-    )
-    .await?;
+    let get_response = client.cache_get("demo-key").await?;
     println!(
         "Cache get response: {}",
         format_cache_response(&get_response)
@@ -62,45 +45,23 @@ async fn main() -> Result<()> {
 
     println!("Step 4/4: waiting for TTL expiry and reading again.");
     tokio::time::sleep(Duration::from_millis(650)).await;
-    let expired_response = request(
-        &connection,
-        Message::CacheGet {
-            key: "demo-key".to_string(),
-        },
-    )
-    .await?;
+    let expired_response = client.cache_get("demo-key").await?;
     println!(
         "Cache get after TTL: {}",
         format_cache_response(&expired_response)
     );
-
-    drop(connection);
     server_task.abort();
     println!("Demo complete.");
     Ok(())
 }
 
-async fn request(
-    connection: &felix_transport::QuicConnection,
-    message: Message,
-) -> Result<Option<Message>> {
-    let (mut send, mut recv) = connection.open_bi().await?;
-    quic::write_message(&mut send, message).await?;
-    send.finish()?;
-    quic::read_message(&mut recv).await
-}
-
-fn format_cache_response(response: &Option<Message>) -> String {
+fn format_cache_response(response: &Option<Vec<u8>>) -> String {
     match response {
-        Some(Message::CacheValue { key, value }) => match value {
-            Some(bytes) => format!(
-                "CacheValue {{ key: {:?}, value: {:?} }}",
-                key,
-                String::from_utf8_lossy(bytes)
-            ),
-            None => format!("CacheValue {{ key: {key:?}, value: None }}"),
-        },
-        other => format!("{other:?}"),
+        Some(bytes) => format!(
+            "CacheValue {{ value: {:?} }}",
+            String::from_utf8_lossy(bytes)
+        ),
+        None => "CacheValue { value: None }".to_string(),
     }
 }
 

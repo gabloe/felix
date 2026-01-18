@@ -199,6 +199,7 @@ dependencies = [
  "axum",
  "bytes",
  "felix-broker",
+ "felix-client",
  "felix-storage",
  "felix-transport",
  "felix-wire",
@@ -463,9 +464,13 @@ dependencies = [
 name = "felix-client"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "felix-broker",
  "felix-storage",
+ "felix-transport",
+ "felix-wire",
+ "quinn",
  "tokio",
 ]
 

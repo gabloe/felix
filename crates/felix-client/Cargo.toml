@@ -6,7 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 felix-broker = { path = "../felix-broker", version = "0.1.0" }
 felix-storage = { path = "../felix-storage", version = "0.1.0" }
+felix-transport = { path = "../felix-transport", version = "0.1.0" }
+felix-wire = { path = "../felix-wire", version = "0.1.0" }
+quinn = "0.11"

@@ -1,10 +1,10 @@
 // Console demo that measures QUIC pub/sub latency distribution.
 use anyhow::{Context, Result};
-use broker::quic;
 use felix_broker::{Broker, StreamMetadata};
+use felix_client::{Client, Publisher, Subscription};
 use felix_storage::EphemeralCache;
-use felix_transport::{QuicClient, QuicServer, TransportConfig};
-use felix_wire::{AckMode, Message};
+use felix_transport::{QuicServer, TransportConfig};
+use felix_wire::AckMode;
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
@@ -199,17 +199,12 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
-    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
+    let server_task = tokio::spawn(broker::quic::serve(Arc::clone(&server), broker));
 
-    let client = QuicClient::bind(
-        "0.0.0.0:0".parse()?,
-        build_client_config(cert)?,
-        TransportConfig::default(),
-    )?;
-    let connection = Arc::new(client.connect(addr, "localhost").await?);
+    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
 
-    let (primary_recv, drain_tasks) =
-        setup_subscribers(Arc::clone(&connection), config.fanout, total_events).await?;
+    let (primary_sub, drain_tasks) =
+        setup_subscribers(&client, config.fanout, total_events).await?;
 
     let (warmup_tx, warmup_rx) = oneshot::channel();
     let idle_timeout = Duration::from_millis(config.idle_ms);
@@ -222,15 +217,15 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
         {
             let _ = tx.send(());
         }
-        let mut recv = primary_recv;
+        let mut sub = primary_sub;
         while results.len() < config.total {
-            let next = tokio::time::timeout(idle_timeout, quic::read_message(&mut recv)).await;
-            let message = match next {
+            let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
+            let event = match next {
                 Ok(result) => result,
                 Err(_) => break,
             };
-            match message {
-                Ok(Some(Message::Event { payload, .. })) => {
+            match event {
+                Ok(Some(event)) => {
                     if seen < config.warmup {
                         seen += 1;
                         if seen == config.warmup
@@ -240,10 +235,10 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
                         }
                         continue;
                     }
-                    let elapsed = decode_latency(&payload);
+                    let elapsed = decode_latency(&event.payload);
                     results.push(elapsed);
                 }
-                Ok(_) => continue,
+                Ok(None) => break,
                 Err(_) => break,
             }
         }
@@ -251,16 +246,9 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
     });
 
     let use_ack = config.batch_size <= 1 && !config.binary;
-    let (mut pub_send, mut pub_recv) = if config.binary {
-        let send = connection.open_uni().await?;
-        (send, None)
-    } else {
-        let (send, recv) = connection.open_bi().await?;
-        (send, Some(recv))
-    };
+    let mut publisher = client.publisher().await?;
     publish_batches(
-        &mut pub_send,
-        pub_recv.as_mut(),
+        &mut publisher,
         config.payload_bytes,
         config.warmup,
         config.batch_size,
@@ -272,8 +260,7 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
 
     let start = Instant::now();
     publish_batches(
-        &mut pub_send,
-        pub_recv.as_mut(),
+        &mut publisher,
         config.payload_bytes,
         config.total,
         config.batch_size,
@@ -284,11 +271,7 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
 
     let mut latencies = recv_task.await.expect("join");
     let elapsed = start.elapsed();
-    pub_send.finish()?;
-    if let Some(recv) = pub_recv.as_mut() {
-        let _ = recv.read_to_end(usize::MAX).await;
-    }
-    drop(connection);
+    publisher.finish().await?;
     for task in drain_tasks {
         task.abort();
     }
@@ -313,43 +296,28 @@ async fn run_case(config: DemoConfig) -> Result<DemoResult> {
 }
 
 async fn setup_subscribers(
-    connection: Arc<felix_transport::QuicConnection>,
+    client: &Client,
     fanout: usize,
     total_events: usize,
-) -> Result<(quinn::RecvStream, Vec<tokio::task::JoinHandle<()>>)> {
+) -> Result<(Subscription, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
-    let mut primary_recv = None;
+    let mut primary_sub = None;
     for _ in 0..fanout {
-        let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
-        quic::write_message(
-            &mut sub_send,
-            Message::Subscribe {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "latency".to_string(),
-            },
-        )
-        .await?;
-        sub_send.finish()?;
-        let response = quic::read_message(&mut sub_recv).await?;
-        if response != Some(Message::Ok) {
-            return Err(anyhow::anyhow!("subscribe failed: {response:?}"));
-        }
-        if primary_recv.is_none() {
-            primary_recv = Some(sub_recv);
+        let sub = client.subscribe("t1", "default", "latency").await?;
+        if primary_sub.is_none() {
+            primary_sub = Some(sub);
         } else {
-            let mut recv = sub_recv;
+            let mut sub = sub;
             let idle_timeout = Duration::from_millis(2000);
             drain_tasks.push(tokio::spawn(async move {
                 let mut remaining = total_events;
                 while remaining > 0 {
-                    let next =
-                        tokio::time::timeout(idle_timeout, quic::read_message(&mut recv)).await;
+                    let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
                     match next {
-                        Ok(Ok(Some(Message::Event { .. }))) => {
+                        Ok(Ok(Some(_))) => {
                             remaining -= 1;
                         }
-                        Ok(Ok(_)) => continue,
+                        Ok(Ok(None)) => break,
                         Ok(Err(_)) => break,
                         Err(_) => break,
                     }
@@ -357,12 +325,11 @@ async fn setup_subscribers(
             }));
         }
     }
-    Ok((primary_recv.expect("primary subscriber"), drain_tasks))
+    Ok((primary_sub.expect("primary subscriber"), drain_tasks))
 }
 
 async fn publish_batches(
-    send: &mut quinn::SendStream,
-    mut recv: Option<&mut quinn::RecvStream>,
+    publisher: &mut Publisher,
     payload_bytes: usize,
     total: usize,
     batch_size: usize,
@@ -372,23 +339,14 @@ async fn publish_batches(
     let mut remaining = total;
     while remaining > 0 {
         let count = remaining.min(batch_size);
-        publish_batch(
-            send,
-            recv.as_deref_mut(),
-            payload_bytes,
-            count,
-            binary,
-            use_ack,
-        )
-        .await?;
+        publish_batch(publisher, payload_bytes, count, binary, use_ack).await?;
         remaining -= count;
     }
     Ok(())
 }
 
 async fn publish_batch(
-    send: &mut quinn::SendStream,
-    recv: Option<&mut quinn::RecvStream>,
+    publisher: &mut Publisher,
     payload_bytes: usize,
     batch_size: usize,
     binary: bool,
@@ -398,55 +356,38 @@ async fn publish_batch(
         .map(|_| encode_payload(payload_bytes))
         .collect::<Vec<_>>();
     if binary {
-        let frame =
-            felix_wire::binary::encode_publish_batch("t1", "default", "latency", &payloads)?;
-        send.write_all(&frame.encode()).await?;
-        return Ok(());
+        return publisher
+            .publish_batch_binary("t1", "default", "latency", &payloads)
+            .await;
     }
     if batch_size == 1 {
-        quic::write_message(
-            send,
-            Message::Publish {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "latency".to_string(),
-                payload: payloads[0].clone(),
-                ack: Some(if use_ack {
+        publisher
+            .publish(
+                "t1",
+                "default",
+                "latency",
+                payloads[0].clone(),
+                if use_ack {
                     AckMode::PerMessage
                 } else {
                     AckMode::None
-                }),
-            },
-        )
-        .await?;
-        if use_ack
-            && let Some(recv) = recv
-            && quic::read_message(recv).await? != Some(Message::Ok)
-        {
-            return Err(anyhow::anyhow!("publish ack failed"));
-        }
+                },
+            )
+            .await?;
     } else {
-        quic::write_message(
-            send,
-            Message::PublishBatch {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "latency".to_string(),
+        publisher
+            .publish_batch(
+                "t1",
+                "default",
+                "latency",
                 payloads,
-                ack: Some(if use_ack {
+                if use_ack {
                     AckMode::PerBatch
                 } else {
                     AckMode::None
-                }),
-            },
-        )
-        .await?;
-        if use_ack
-            && let Some(recv) = recv
-            && quic::read_message(recv).await? != Some(Message::Ok)
-        {
-            return Err(anyhow::anyhow!("publish batch ack failed"));
-        }
+                },
+            )
+            .await?;
     }
     Ok(())
 }

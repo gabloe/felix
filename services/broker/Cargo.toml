@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 felix-broker = { path = "../../crates/felix-broker", version = "0.1.0" }
+felix-client = { path = "../../crates/felix-client", version = "0.1.0" }
 felix-transport = { path = "../../crates/felix-transport", version = "0.1.0" }
 felix-wire = { path = "../../crates/felix-wire", version = "0.1.0" }
 felix-storage = { path = "../../crates/felix-storage", version = "0.1.0" }
