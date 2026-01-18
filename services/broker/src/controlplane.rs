@@ -1,8 +1,8 @@
 // Control plane sync loop for the broker.
 // Fetches snapshots on cold start, then polls change feeds to keep local
-// tenant/namespace/stream registries up to date without touching the hot path.
+// tenant/namespace/stream/cache registries up to date without touching the hot path.
 use anyhow::{Context, Result};
-use felix_broker::{Broker, StreamMetadata};
+use felix_broker::{Broker, CacheMetadata, StreamMetadata};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,12 @@ use std::time::Duration;
 #[derive(Debug, Deserialize)]
 struct StreamSnapshotResponse {
     items: Vec<Stream>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CacheSnapshotResponse {
+    items: Vec<Cache>,
     next_seq: u64,
 }
 
@@ -28,6 +34,12 @@ struct NamespaceSnapshotResponse {
 #[derive(Debug, Deserialize)]
 struct StreamChangesResponse {
     items: Vec<StreamChange>,
+    next_seq: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CacheChangesResponse {
+    items: Vec<CacheChange>,
     next_seq: u64,
 }
 
@@ -65,6 +77,13 @@ struct StreamChange {
 }
 
 #[derive(Debug, Deserialize)]
+struct CacheChange {
+    op: CacheChangeOp,
+    key: CacheKey,
+    cache: Option<Cache>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Tenant {
     tenant_id: String,
 }
@@ -80,6 +99,13 @@ struct StreamKey {
     tenant_id: String,
     namespace: String,
     stream: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CacheKey {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +137,14 @@ enum StreamChangeOp {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CacheChangeOp {
+    Created,
+    Updated,
+    Deleted,
+}
+
+#[derive(Debug, Deserialize)]
 struct Stream {
     tenant_id: String,
     namespace: String,
@@ -119,10 +153,18 @@ struct Stream {
     durable: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct Cache {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+}
+
 pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
     let client = reqwest::Client::new();
     let mut next_tenant_seq = 0u64;
     let mut next_namespace_seq = 0u64;
+    let mut next_cache_seq = 0u64;
     let mut next_stream_seq = 0u64;
     loop {
         // Seed local caches on first run so the data plane can enforce existence checks.
@@ -152,6 +194,27 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "control plane namespace snapshot failed");
+                }
+            }
+        }
+
+        if next_cache_seq == 0 {
+            match fetch_cache_snapshot(&client, &base_url).await {
+                Ok(snapshot) => {
+                    for cache in snapshot.items {
+                        broker
+                            .register_cache(
+                                cache.tenant_id,
+                                cache.namespace,
+                                cache.cache,
+                                CacheMetadata,
+                            )
+                            .await?;
+                    }
+                    next_cache_seq = snapshot.next_seq;
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "control plane cache snapshot failed");
                 }
             }
         }
@@ -228,6 +291,40 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
             }
         }
 
+        match fetch_cache_changes(&client, &base_url, next_cache_seq).await {
+            Ok(changes) => {
+                for change in changes.items {
+                    match change.op {
+                        CacheChangeOp::Created | CacheChangeOp::Updated => {
+                            if let Some(cache) = change.cache {
+                                broker
+                                    .register_cache(
+                                        cache.tenant_id,
+                                        cache.namespace,
+                                        cache.cache,
+                                        CacheMetadata,
+                                    )
+                                    .await?;
+                            }
+                        }
+                        CacheChangeOp::Deleted => {
+                            let _ = broker
+                                .remove_cache(
+                                    &change.key.tenant_id,
+                                    &change.key.namespace,
+                                    &change.key.cache,
+                                )
+                                .await?;
+                        }
+                    }
+                }
+                next_cache_seq = changes.next_seq;
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "control plane cache change poll failed");
+            }
+        }
+
         // Apply incremental stream changes last so existence checks have up-to-date scopes.
         match fetch_changes(&client, &base_url, next_stream_seq).await {
             Ok(changes) => {
@@ -284,6 +381,21 @@ async fn fetch_snapshot(
     response.json().await.context("snapshot body")
 }
 
+async fn fetch_cache_snapshot(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<CacheSnapshotResponse> {
+    let url = format!("{}/v1/caches/snapshot", base_url.trim_end_matches('/'));
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("cache snapshot request")?
+        .error_for_status()
+        .context("cache snapshot status")?;
+    response.json().await.context("cache snapshot body")
+}
+
 async fn fetch_tenant_snapshot(
     client: &reqwest::Client,
     base_url: &str,
@@ -332,6 +444,26 @@ async fn fetch_changes(
         .error_for_status()
         .context("changes status")?;
     response.json().await.context("changes body")
+}
+
+async fn fetch_cache_changes(
+    client: &reqwest::Client,
+    base_url: &str,
+    since: u64,
+) -> Result<CacheChangesResponse> {
+    let url = format!(
+        "{}/v1/caches/changes?since={}",
+        base_url.trim_end_matches('/'),
+        since
+    );
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("cache changes request")?
+        .error_for_status()
+        .context("cache changes status")?;
+    response.json().await.context("cache changes body")
 }
 
 async fn fetch_tenant_changes(
