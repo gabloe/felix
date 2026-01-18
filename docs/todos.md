@@ -21,7 +21,7 @@ durability, clustering, or advanced observability.
 ## Wire protocol v1 (`felix-wire`)
 - [X] Versioned frame header (magic/version/flags/len)
 - [ ] Add message type in header (type field) for non-JSON parsing
-- [X] Message types: `Publish`, `Subscribe`, `Event`, `Ok`, `Error`
+- [X] Message types: `Publish`, `Subscribe`, `Event`, `CachePut`, `CacheGet`, `CacheValue`, `Ok`, `Error`
 - [X] Encode/decode message payloads with frames
 - [X] Define v1 wire spec in `docs/protocol.md`
 - [X] Add test vectors in `crates/felix-wire/tests/vectors/`
@@ -37,7 +37,7 @@ durability, clustering, or advanced observability.
 - [ ] Backpressure defaults (caps per connection/subscription)
 
 ## Broker core (`felix-broker`)
-- [X] In-memory stream registry (create-on-first-publish)
+- [X] In-memory stream registry (explicit registration)
 - [X] Fanout to N subscribers
 - [X] Cursor model (tail-only is fine for MVP)
 - [X] Append-only in-memory log per stream (ring buffer)
@@ -70,7 +70,7 @@ durability, clustering, or advanced observability.
 - [ ] Design sharding/replication/quorum to move beyond single-node; align with the RAFT control-plane draft and work through the details
 
 ## Data scalability with sharding
-- [X] Steams should be defined with shard count
+- [X] Streams should be defined with shard count
 - [ ] Caches should be defined with shard count
 - [ ] Ops should be directed to the correct shard leader
 - [ ] Leader election should be managed
