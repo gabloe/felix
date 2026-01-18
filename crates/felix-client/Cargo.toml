@@ -8,5 +8,5 @@ rust-version.workspace = true
 [dependencies]
 bytes = { workspace = true }
 tokio = { workspace = true }
-felix-broker = { path = "../felix-broker" }
-felix-storage = { path = "../felix-storage" }
+felix-broker = { path = "../felix-broker", version = "0.1.0" }
+felix-storage = { path = "../felix-storage", version = "0.1.0" }

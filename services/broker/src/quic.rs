@@ -5,6 +5,7 @@ use felix_transport::{QuicConnection, QuicServer};
 use felix_wire::{Frame, FrameHeader, Message};
 use quinn::{ReadExactError, RecvStream, SendStream};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 
 pub async fn serve(server: Arc<QuicServer>, broker: Arc<Broker>) -> Result<()> {
@@ -76,7 +77,27 @@ async fn handle_stream(
                 }
             }
         }
-        Message::Event { .. } | Message::Ok => {
+        Message::CachePut { key, value, ttl_ms } => {
+            let ttl = ttl_ms.map(Duration::from_millis);
+            broker
+                .cache()
+                .put(key, Bytes::from(value), ttl)
+                .await;
+            write_message(&mut send, Message::Ok).await?;
+            send.finish()?;
+            let _ = send.stopped().await;
+        }
+        Message::CacheGet { key } => {
+            let value = broker.cache().get(&key).await.map(|b| b.to_vec());
+            write_message(
+                &mut send,
+                Message::CacheValue { key, value },
+            )
+            .await?;
+            send.finish()?;
+            let _ = send.stopped().await;
+        }
+        Message::CacheValue { .. } | Message::Event { .. } | Message::Ok => {
             write_message(
                 &mut send,
                 Message::Error {
@@ -129,4 +150,89 @@ async fn read_frame(recv: &mut RecvStream) -> Result<Option<Frame>> {
 
 async fn write_frame(send: &mut SendStream, frame: Frame) -> Result<()> {
     send.write_all(&frame.encode()).await.context("write frame")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use felix_storage::EphemeralCache;
+    use felix_transport::{QuicClient, TransportConfig};
+    use quinn::ClientConfig;
+    use rcgen::generate_simple_self_signed;
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use rustls::RootCertStore;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn cache_put_get_round_trip() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        let (server_config, cert) = build_server_config()?;
+        let server = Arc::new(QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?);
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(serve(Arc::clone(&server), Arc::clone(&broker)));
+
+        let client = QuicClient::bind(
+            "0.0.0.0:0".parse()?,
+            build_client_config(cert)?,
+            TransportConfig::default(),
+        )?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let (mut send, mut recv) = connection.open_bi().await?;
+        write_message(
+            &mut send,
+            Message::CachePut {
+                key: "demo-key".to_string(),
+                value: b"cached".to_vec(),
+                ttl_ms: None,
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = read_message(&mut recv).await?;
+        assert_eq!(response, Some(Message::Ok));
+
+        let (mut send, mut recv) = connection.open_bi().await?;
+        write_message(
+            &mut send,
+            Message::CacheGet {
+                key: "demo-key".to_string(),
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = read_message(&mut recv).await?;
+        assert_eq!(
+            response,
+            Some(Message::CacheValue {
+                key: "demo-key".to_string(),
+                value: Some(b"cached".to_vec()),
+            })
+        );
+
+        drop(connection);
+        server_task.abort();
+        Ok(())
+    }
+
+    fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
+        let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_der = CertificateDer::from(cert.serialize_der()?);
+        let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+        let server_config =
+            quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
+                .context("build server config")?;
+        Ok((server_config, cert_der))
+    }
+
+    fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+        let mut roots = RootCertStore::empty();
+        roots.add(cert)?;
+        Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
+    }
 }
