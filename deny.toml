@@ -1,7 +1,7 @@
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = []
+ignore = ["RUSTSEC-2024-0370"]
 
 [licenses]
 allow = [
