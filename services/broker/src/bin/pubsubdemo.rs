@@ -7,8 +7,8 @@ use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::Message;
 use quinn::ClientConfig;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use tokio::time::Duration;
 
@@ -69,11 +69,7 @@ async fn main() -> Result<()> {
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await {
             Ok(Some((stream, payload))) => {
-                println!(
-                    "Event on {}: {}",
-                    stream,
-                    String::from_utf8_lossy(&payload)
-                );
+                println!("Event on {}: {}", stream, String::from_utf8_lossy(&payload));
             }
             Ok(None) => {
                 println!("Event stream closed early.");
@@ -117,8 +113,9 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = CertificateDer::from(cert.serialize_der()?);
     let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
-    let server_config = quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
-        .context("build server config")?;
+    let server_config =
+        quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
+            .context("build server config")?;
     Ok((server_config, cert_der))
 }
 

@@ -127,8 +127,14 @@ mod tests {
             .publish("orders", Bytes::from_static(b"fanout"))
             .await
             .expect("publish");
-        assert_eq!(sub_a.recv().await.expect("recv"), Bytes::from_static(b"fanout"));
-        assert_eq!(sub_b.recv().await.expect("recv"), Bytes::from_static(b"fanout"));
+        assert_eq!(
+            sub_a.recv().await.expect("recv"),
+            Bytes::from_static(b"fanout")
+        );
+        assert_eq!(
+            sub_b.recv().await.expect("recv"),
+            Bytes::from_static(b"fanout")
+        );
     }
 
     #[test]

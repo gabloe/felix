@@ -115,7 +115,9 @@ impl QuicServer {
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.endpoint.local_addr().context("read QUIC local address")
+        self.endpoint
+            .local_addr()
+            .context("read QUIC local address")
     }
 }
 
@@ -187,9 +189,7 @@ pub struct QuicConnection {
 impl QuicConnection {
     fn new(connection: Connection) -> Self {
         let info = ConnectionInfo {
-            id: ConnectionId(
-                u64::try_from(connection.stable_id()).expect("stable id fits u64"),
-            ),
+            id: ConnectionId(u64::try_from(connection.stable_id()).expect("stable id fits u64")),
             peer_addr: connection.remote_address(),
         };
         Self {
@@ -264,8 +264,8 @@ mod tests {
     use super::*;
     use anyhow::Context;
     use rcgen::generate_simple_self_signed;
-    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use rustls::RootCertStore;
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use std::sync::Arc;
 
     #[test]
@@ -319,11 +319,7 @@ mod tests {
             Result::<()>::Ok(())
         });
 
-        let client = QuicClient::bind(
-            "0.0.0.0:0".parse()?,
-            make_client_config(cert)?,
-            transport,
-        )?;
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
         let connection = client.connect(addr, "localhost").await?;
         assert_eq!(connection.info().peer_addr, addr);
         let (mut send, mut recv) = connection.open_bi().await?;
@@ -350,11 +346,7 @@ mod tests {
             Result::<Vec<u8>>::Ok(buf)
         });
 
-        let client = QuicClient::bind(
-            "0.0.0.0:0".parse()?,
-            make_client_config(cert)?,
-            transport,
-        )?;
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
         let connection = client.connect(addr, "localhost").await?;
         let mut send = connection.open_uni().await?;
         send.write_all(b"uni").await?;
