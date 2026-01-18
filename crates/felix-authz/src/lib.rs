@@ -1,4 +1,5 @@
-/// Authorization primitives for simple role-based checks.
+/// Authorization primitives for simple role-based checks. NOTE: This is a placeholder implementation and
+/// should be replaced with a more robust solution in the future.
 ///
 /// ```
 /// use felix_authz::{Permission, Policy, Role};
