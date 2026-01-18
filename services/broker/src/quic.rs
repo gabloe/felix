@@ -302,17 +302,74 @@ async fn handle_stream(
                 }
                 return Ok(());
             }
-            Message::CachePut { key, value, ttl_ms } => {
+            Message::CachePut {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                value,
+                ttl_ms,
+            } => {
+                if !broker.namespace_exists(&tenant_id, &namespace).await {
+                    write_message(
+                        &mut send,
+                        Message::Error {
+                            message: format!(
+                                "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                            ),
+                        },
+                    )
+                    .await?;
+                    send.finish()?;
+                    let _ = send.stopped().await;
+                    return Ok(());
+                }
                 let ttl = ttl_ms.map(Duration::from_millis);
-                broker.cache().put(key, Bytes::from(value), ttl).await;
+                broker
+                    .cache()
+                    .put(tenant_id, namespace, cache, key, Bytes::from(value), ttl)
+                    .await;
                 write_message(&mut send, Message::Ok).await?;
                 send.finish()?;
                 let _ = send.stopped().await;
                 return Ok(());
             }
-            Message::CacheGet { key } => {
-                let value = broker.cache().get(&key).await.map(|b| b.to_vec());
-                write_message(&mut send, Message::CacheValue { key, value }).await?;
+            Message::CacheGet {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+            } => {
+                if !broker.namespace_exists(&tenant_id, &namespace).await {
+                    write_message(
+                        &mut send,
+                        Message::Error {
+                            message: format!(
+                                "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                            ),
+                        },
+                    )
+                    .await?;
+                    send.finish()?;
+                    let _ = send.stopped().await;
+                    return Ok(());
+                }
+                let value = broker
+                    .cache()
+                    .get(&tenant_id, &namespace, &cache, &key)
+                    .await
+                    .map(|b| b.to_vec());
+                write_message(
+                    &mut send,
+                    Message::CacheValue {
+                        tenant_id,
+                        namespace,
+                        cache,
+                        key,
+                        value,
+                    },
+                )
+                .await?;
                 send.finish()?;
                 let _ = send.stopped().await;
                 return Ok(());
@@ -478,6 +535,9 @@ mod tests {
         write_message(
             &mut send,
             Message::CachePut {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                cache: "primary".to_string(),
                 key: "demo-key".to_string(),
                 value: b"cached".to_vec(),
                 ttl_ms: None,
@@ -492,6 +552,9 @@ mod tests {
         write_message(
             &mut send,
             Message::CacheGet {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                cache: "primary".to_string(),
                 key: "demo-key".to_string(),
             },
         )
@@ -501,6 +564,9 @@ mod tests {
         assert_eq!(
             response,
             Some(Message::CacheValue {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                cache: "primary".to_string(),
                 key: "demo-key".to_string(),
                 value: Some(b"cached".to_vec()),
             })
