@@ -490,6 +490,7 @@ dependencies = [
  "anyhow",
  "broker",
  "felix-broker",
+ "felix-client",
  "felix-storage",
  "felix-transport",
  "felix-wire",
