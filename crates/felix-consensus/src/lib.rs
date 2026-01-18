@@ -1,5 +1,4 @@
-// Consensus configuration values for a simple Raft setup.
-/// Consensus configuration values for a local Raft setup.
+/// Consensus configuration values for a simple local Raft setup.
 ///
 /// ```
 /// use felix_consensus::RaftConfig;
