@@ -16,10 +16,6 @@
   </a>
 </p>
 
-<p align="center">
-  <em>Sovereign-first, Kubernetes-native data backbone for real-time systems.</em>
-</p>
-
 Felix is in **early active development**. This README is intentionally brief while the design and
 implementation are still moving quickly.
 
