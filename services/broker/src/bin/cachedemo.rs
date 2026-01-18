@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         },
     )
     .await?;
-    println!("Cache put response: {:?}", put_response);
+    println!("Cache put response: {put_response:?}");
 
     let get_response = request(
         &connection,
@@ -98,9 +98,9 @@ fn format_cache_response(response: &Option<Message>) -> String {
                 key,
                 String::from_utf8_lossy(bytes)
             ),
-            None => format!("CacheValue {{ key: {:?}, value: None }}", key),
+            None => format!("CacheValue {{ key: {key:?}, value: None }}"),
         },
-        other => format!("{:?}", other),
+        other => format!("{other:?}"),
     }
 }
 
