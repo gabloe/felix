@@ -18,12 +18,15 @@ pub struct TransportConfig {
     pub max_streams: u16,
 }
 
+// Keep defaults large enough for most dev/test workloads.
+const DEFAULT_MAX_FRAME_BYTES : usize = 4 * 1024 * 1024;
+const DEFAULT_MAX_STREAMS : u16 = 1024;
+
 impl Default for TransportConfig {
     fn default() -> Self {
-        // Keep defaults large enough for most dev/test workloads.
         Self {
-            max_frame_bytes: 4 * 1024 * 1024,
-            max_streams: 1024,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_streams: DEFAULT_MAX_STREAMS,
         }
     }
 }
