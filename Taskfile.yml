@@ -4,7 +4,9 @@ tasks:
   fmt:
     cmds: ["cargo fmt --all"]
   lint:
-    cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
+    cmds:
+      - "cargo fmt -- --check"
+      - "cargo clippy --workspace --all-targets --all-features -- -D warnings"
   clippy:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:
