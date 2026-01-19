@@ -76,10 +76,10 @@ flowchart LR
         API --> SubU
 
         subgraph CCP["Cache conn pool (N)"]
-            subgraph SW["Stream workers per conn (M)<br/>(long-lived bi streams)"]
-                CacheS["Cache streams (bi)<br/>request_id request/response mux"]
-            end
-            API --> CacheS
+            SW["Stream workers (M)<br/>per connection"]
+            CacheS["Cache streams (bi)<br/>request_id request/response mux"]
+            API --> SW
+            SW --> CacheS
         end
     end
 
