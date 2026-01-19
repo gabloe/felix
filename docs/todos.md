@@ -61,7 +61,7 @@ durability, clustering, or advanced observability.
 - [X] Subscribers receive stream events over QUIC
 - [X] Cache `put/get` available over QUIC
 - [ ] Latency target: p999 <= 1 ms for small payloads on localhost baseline
-- [ ] Basic metrics exist and show throughput/latency
+- [X] Basic metrics exist and show throughput/latency
 - [X] Unit tests cover wire encode/decode and broker fanout behavior
 
 ## Post-MVP (explicitly out of scope for minimal MVP)
@@ -86,7 +86,7 @@ durability, clustering, or advanced observability.
 
 ## Performance optimization
 - [ ] Figure out how to handle backpressure
-- [ ] Measure P999 tail latency and throughput
+- [X] Measure P999 tail latency and throughput
 - [ ] Identify optimizations and minspec clustering for optimization
 
 ## Kubernetes deployment + scale units

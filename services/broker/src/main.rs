@@ -1,10 +1,9 @@
 // Broker service main entry point.
-mod config;
 mod controlplane;
 mod observability;
 
 use anyhow::{Context, Result};
-use broker::quic;
+use broker::{config, quic};
 use felix_broker::Broker;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -29,9 +28,9 @@ async fn main() -> Result<()> {
 
     let bind_addr = config.quic_bind;
     let server_config = build_server_config().context("build QUIC server config")?;
+    let transport = broker::transport::cache_transport_config(&config, TransportConfig::default());
     let quic_server = Arc::new(
-        QuicServer::bind(bind_addr, server_config, TransportConfig::default())
-            .context("bind QUIC listener")?,
+        QuicServer::bind(bind_addr, server_config, transport).context("bind QUIC listener")?,
     );
     tracing::info!(addr = %quic_server.local_addr()?, "quic listener started");
 
@@ -40,8 +39,9 @@ async fn main() -> Result<()> {
     let accept_task = {
         let quic_server = Arc::clone(&quic_server);
         let broker = Arc::clone(&broker);
+        let quic_config = config.clone();
         tokio::spawn(async move {
-            if let Err(err) = quic::serve(quic_server, broker).await {
+            if let Err(err) = quic::serve(quic_server, broker, quic_config).await {
                 tracing::warn!(error = %err, "quic accept loop exited");
             }
         })

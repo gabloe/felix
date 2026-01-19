@@ -13,6 +13,7 @@ felix-transport = { path = "../../crates/felix-transport", version = "0.1.0" }
 felix-wire = { path = "../../crates/felix-wire", version = "0.1.0" }
 felix-storage = { path = "../../crates/felix-storage", version = "0.1.0" }
 bytes = { workspace = true }
+futures = "0.3"
 axum = "0.7"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"

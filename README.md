@@ -19,6 +19,84 @@
 Felix is in **early active development**. This README is intentionally brief while the design and
 implementation are still moving quickly.
 
+## System Overview
+
+Felix is a low-latency, QUIC-based pub/sub and cache system designed for high fanout,
+high throughput, and predictable tail latency when properly tuned.
+
+At its core, Felix uses a framed protocol (felix-wire) over QUIC streams to unify
+event streaming (publish/subscribe) and request/response caching (put/get with TTL),
+with explicit control over multiplexing, batching, and flow control.
+
+Core components
+- `felix-wire`: framed protocol for all clients and brokers (JSON control + binary fast paths).
+- `felix-transport`: QUIC abstraction layer (client/server, pools, stream lifecycle).
+- `felix-broker`: pub/sub logic, cache storage, stream registry, fanout.
+- `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
+- `services/broker`: runnable broker node, demos, and benchmark harnesses.
+
+Pub/sub data flow (happy path)
+- Client opens a bidirectional control stream to publish/subscribe and receive acks.
+- Broker validates scope, enqueues publish jobs, and fans out to subscribers.
+- Each subscription has a dedicated unidirectional event stream for delivery.
+- Events are sent as single frames or binary batches with count/time-bounded batching.
+
+Cache data flow (current architecture)
+- Client maintains a cache connection pool with long-lived stream workers.
+- Cache requests carry a `request_id` and are multiplexed over these streams.
+- Broker processes request frames in a read loop and replies on the same stream.
+- This avoids per-request stream setup costs and improves tail latency under concurrency.
+
+Performance knobs
+- Event delivery: `FELIX_EVENT_CONN_POOL`, `FELIX_EVENT_*_WINDOW`,
+  `FELIX_EVENT_BATCH_MAX_DELAY_US`.
+- Cache delivery: `FELIX_CACHE_CONN_POOL`, `FELIX_CACHE_STREAMS_PER_CONN`,
+  `FELIX_CACHE_*_WINDOW`.
+- Publishing: `FELIX_PUBLISH_CHUNK_BYTES`.
+- Instrumentation: `FELIX_DISABLE_TIMINGS`.
+
+Use cases
+- Real-time streaming with high fanout and tunable latency/throughput trade-offs.
+- Event pipelines with batch publishing and batch delivery for efficient fanout.
+- Low-latency caching over QUIC with predictable tail latency under load.
+
+```mermaid
+flowchart LR
+    subgraph C["Client (felix-client)"]
+        API["Publish / Subscribe / Cache APIs"]
+
+        subgraph EVC["Event connections (pooled)"]
+            Ctrl["Control stream (bi)<br/>(per conn: pub/sub, acks, control)"]
+            API --> Ctrl
+        end
+
+        subgraph SUBS["Subscriptions"]
+            SubU["Per-subscription event stream (uni)<br/>(broker → client)"]
+        end
+        API --> SubU
+
+        subgraph CCP["Cache conn pool (N)"]
+            subgraph SW["Stream workers per conn (M)<br/>(long-lived bi streams)"]
+                CacheS["Cache streams (bi)<br/>request_id request/response mux"]
+            end
+            API --> CacheS
+        end
+    end
+
+    subgraph B["Broker (services/broker + felix-broker)"]
+        Ingress["QUIC accept + stream registry<br/>felix-wire framing + stream-type routing"]
+        PS["Pub/Sub core<br/>enqueue + batching + fanout"]
+        Cache["Cache core<br/>lookup/insert + TTL"]
+
+        Ingress --> PS
+        Ingress --> Cache
+    end
+
+    Ctrl <--> Ingress
+    Ingress --> SubU
+    CacheS <--> Ingress
+```
+
 ## Current Focus
 
 - Fanout, backpressure, and isolation as core product behavior
@@ -33,6 +111,7 @@ implementation are still moving quickly.
 - `docs/control-plane.md`
 - `docs/semantics.md`
 - `docs/todos.md`
+- `services/broker/README.md` (performance profiles + tuning)
 - Defining a stable wire envelope and internal data model
 - Measuring latency/backpressure behavior early to keep p99/p999 predictable
 
