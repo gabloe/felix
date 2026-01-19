@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub const MAGIC: u32 = 0x464C5831;
 pub const VERSION: u16 = 1;
 pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
+pub const FLAG_BINARY_EVENT_BATCH: u16 = 0x0002;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -171,6 +172,14 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<u64>,
+    },
+    Subscribed {
+        subscription_id: u64,
+    },
+    EventStreamHello {
+        subscription_id: u64,
     },
     Event {
         tenant_id: String,
@@ -179,13 +188,22 @@ pub enum Message {
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
     },
+    EventBatch {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        #[serde(with = "base64_vec")]
+        payloads: Vec<Vec<u8>>,
+    },
     CachePut {
         tenant_id: String,
         namespace: String,
         cache: String,
         key: String,
-        #[serde(with = "base64_bytes")]
-        value: Vec<u8>,
+        #[serde(with = "base64_bytes_bytes")]
+        value: Bytes,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
         ttl_ms: Option<u64>,
     },
     CacheGet {
@@ -193,14 +211,21 @@ pub enum Message {
         namespace: String,
         cache: String,
         key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
     },
     CacheValue {
         tenant_id: String,
         namespace: String,
         cache: String,
         key: String,
-        #[serde(with = "base64_option")]
-        value: Option<Vec<u8>>,
+        #[serde(with = "base64_option_bytes")]
+        value: Option<Bytes>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+    },
+    CacheOk {
+        request_id: u64,
     },
     Ok,
     Error {
@@ -250,12 +275,36 @@ mod base64_bytes {
     }
 }
 
-mod base64_option {
+mod base64_bytes_bytes {
+    use super::*;
+    use serde::de::Error;
+
+    pub fn serialize<S>(value: &Bytes, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Bytes, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(D::Error::custom)?;
+        Ok(Bytes::from(decoded))
+    }
+}
+
+mod base64_option_bytes {
     use super::*;
     use serde::de::Error;
 
     pub fn serialize<S>(
-        value: &Option<Vec<u8>>,
+        value: &Option<Bytes>,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error>
     where
@@ -270,7 +319,7 @@ mod base64_option {
         }
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Option<Vec<u8>>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Option<Bytes>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -278,7 +327,7 @@ mod base64_option {
         match encoded {
             Some(value) => base64::engine::general_purpose::STANDARD
                 .decode(value.as_bytes())
-                .map(Some)
+                .map(|decoded| Some(Bytes::from(decoded)))
                 .map_err(D::Error::custom),
             None => Ok(None),
         }
@@ -358,6 +407,48 @@ pub mod binary {
         Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze())
     }
 
+    pub fn encode_publish_batch_bytes(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<Bytes> {
+        let tenant_bytes = tenant_id.as_bytes();
+        let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let namespace_bytes = namespace.as_bytes();
+        let namespace_len =
+            u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let stream_bytes = stream.as_bytes();
+        let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let mut payload_len =
+            2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len = payload_len
+                .checked_add(4 + len as usize)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if payload_len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+        let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+        let header = FrameHeader::new(FLAG_BINARY_PUBLISH_BATCH, payload_len as u32);
+        header.encode(&mut buf);
+        buf.put_u16(tenant_len);
+        buf.extend_from_slice(tenant_bytes);
+        buf.put_u16(namespace_len);
+        buf.extend_from_slice(namespace_bytes);
+        buf.put_u16(stream_len);
+        buf.extend_from_slice(stream_bytes);
+        buf.put_u32(payloads.len() as u32);
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            buf.put_u32(len);
+            buf.extend_from_slice(payload);
+        }
+        Ok(buf.freeze())
+    }
+
     pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
         let mut buf = frame.payload.clone();
         if buf.remaining() < 2 {
@@ -401,6 +492,61 @@ pub mod binary {
             tenant_id,
             namespace,
             stream,
+            payloads,
+        })
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EventBatch {
+        pub subscription_id: u64,
+        pub payloads: Vec<Bytes>,
+    }
+
+    pub fn encode_event_batch_bytes(subscription_id: u64, payloads: &[Bytes]) -> Result<Bytes> {
+        let mut payload_len = 8usize + 4;
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len = payload_len
+                .checked_add(4 + len as usize)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if payload_len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+        let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+        let header = FrameHeader::new(FLAG_BINARY_EVENT_BATCH, payload_len as u32);
+        header.encode(&mut buf);
+        buf.put_u64(subscription_id);
+        buf.put_u32(payloads.len() as u32);
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            buf.put_u32(len);
+            buf.extend_from_slice(payload.as_ref());
+        }
+        Ok(buf.freeze())
+    }
+
+    pub fn decode_event_batch(frame: &Frame) -> Result<EventBatch> {
+        let mut buf = frame.payload.clone();
+        if buf.remaining() < 12 {
+            return Err(Error::Incomplete);
+        }
+        let subscription_id = buf.get_u64();
+        let count = buf.get_u32() as usize;
+        let mut payloads = Vec::with_capacity(count);
+        for _ in 0..count {
+            if buf.remaining() < 4 {
+                return Err(Error::Incomplete);
+            }
+            let len = buf.get_u32() as usize;
+            if buf.remaining() < len {
+                return Err(Error::Incomplete);
+            }
+            let bytes = buf.copy_to_bytes(len);
+            payloads.push(bytes);
+        }
+        Ok(EventBatch {
+            subscription_id,
             payloads,
         })
     }
@@ -461,6 +607,17 @@ mod tests {
         buf.extend_from_slice(b"hi");
         let err = Frame::decode(buf.freeze()).expect_err("incomplete payload");
         assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn binary_event_batch_round_trip() {
+        let payloads = vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")];
+        let encoded = binary::encode_event_batch_bytes(7, &payloads).expect("encode");
+        let frame = Frame::decode(encoded).expect("decode");
+        assert_eq!(frame.header.flags, FLAG_BINARY_EVENT_BATCH);
+        let decoded = binary::decode_event_batch(&frame).expect("decode batch");
+        assert_eq!(decoded.subscription_id, 7);
+        assert_eq!(decoded.payloads, payloads);
     }
 
     #[test]

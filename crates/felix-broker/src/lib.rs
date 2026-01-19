@@ -5,7 +5,10 @@ use bytes::Bytes;
 use felix_storage::EphemeralCache;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::{RwLock, broadcast};
+
+pub mod timings;
 
 pub type Result<T> = std::result::Result<T, BrokerError>;
 
@@ -275,6 +278,18 @@ impl Broker {
         stream: &str,
         payload: Bytes,
     ) -> Result<usize> {
+        let payloads = [payload];
+        self.publish_batch(tenant_id, namespace, stream, &payloads)
+            .await
+    }
+
+    pub async fn publish_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Bytes],
+    ) -> Result<usize> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
@@ -285,6 +300,8 @@ impl Broker {
         }
         // Fan-out to current subscribers.
         // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
+        let sample = timings::should_sample();
+        let lookup_start = sample.then(Instant::now);
         let stream_state = {
             let guard = self.topics.read().await;
             guard
@@ -296,8 +313,31 @@ impl Broker {
             namespace: namespace.to_string(),
             stream: stream.to_string(),
         })?;
-        stream_state.append(payload.clone(), self.log_capacity);
-        Ok(stream_state.sender.send(payload).unwrap_or(0))
+        if let Some(start) = lookup_start {
+            let lookup_ns = start.elapsed().as_nanos() as u64;
+            timings::record_lookup_ns(lookup_ns);
+            metrics::histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
+        }
+        let append_start = sample.then(Instant::now);
+        for payload in payloads {
+            stream_state.append(payload.clone(), self.log_capacity);
+        }
+        if let Some(start) = append_start {
+            let append_ns = start.elapsed().as_nanos() as u64;
+            timings::record_append_ns(append_ns);
+            metrics::histogram!("broker_publish_append_ns").record(append_ns as f64);
+        }
+        let send_start = sample.then(Instant::now);
+        let mut sent = 0usize;
+        for payload in payloads {
+            sent += stream_state.sender.send(payload.clone()).unwrap_or(0);
+        }
+        if let Some(start) = send_start {
+            let send_ns = start.elapsed().as_nanos() as u64;
+            timings::record_send_ns(send_ns);
+            metrics::histogram!("broker_publish_send_ns").record(send_ns as f64);
+        }
+        Ok(sent)
     }
 
     pub async fn subscribe(

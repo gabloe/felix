@@ -42,17 +42,18 @@ async fn main() -> Result<()> {
     let addr = server.local_addr()?;
 
     // Start the broker with QUIC transport in a background task to accept client connections.
-    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker));
+    let config = broker::config::BrokerConfig::from_env()?;
+    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker, config));
 
     println!("Step 2/6: connecting QUIC client.");
     let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
 
     println!("Step 3/6: opening a subscription stream.");
     let mut subscription = client.subscribe("t1", "default", "demo-topic").await?;
-    println!("Subscribe response: Ok");
+    println!("Subscribe response: Subscribed");
 
     println!("Step 4/6: publishing two messages on the same stream.");
-    let mut publisher = client.publisher().await?;
+    let publisher = client.publisher().await?;
     publisher
         .publish(
             "t1",
@@ -79,7 +80,7 @@ async fn main() -> Result<()> {
                 println!(
                     "Event on {}: {}",
                     event.stream,
-                    String::from_utf8_lossy(&event.payload)
+                    String::from_utf8_lossy(event.payload.as_ref())
                 );
             }
             Ok(Ok(None)) => {

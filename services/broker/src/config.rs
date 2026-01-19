@@ -10,7 +10,22 @@ pub struct BrokerConfig {
     pub metrics_bind: SocketAddr,
     pub controlplane_url: Option<String>,
     pub controlplane_sync_interval_ms: u64,
+    pub ack_on_commit: bool,
+    pub disable_timings: bool,
+    pub cache_conn_recv_window: u64,
+    pub cache_stream_recv_window: u64,
+    pub cache_send_window: u64,
+    pub event_batch_max_events: usize,
+    pub event_batch_max_bytes: usize,
+    pub event_batch_max_delay_us: u64,
+    pub fanout_batch_size: usize,
 }
+
+const DEFAULT_EVENT_BATCH_MAX_DELAY_US: u64 = 250;
+const DEFAULT_DISABLE_TIMINGS: bool = false;
+const DEFAULT_CACHE_CONN_RECV_WINDOW: u64 = 256 * 1024 * 1024;
+const DEFAULT_CACHE_STREAM_RECV_WINDOW: u64 = 64 * 1024 * 1024;
+const DEFAULT_CACHE_SEND_WINDOW: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -18,6 +33,16 @@ struct BrokerConfigOverride {
     metrics_bind: Option<String>,
     controlplane_url: Option<String>,
     controlplane_sync_interval_ms: Option<u64>,
+    ack_on_commit: Option<bool>,
+    disable_timings: Option<bool>,
+    cache_conn_recv_window: Option<u64>,
+    cache_stream_recv_window: Option<u64>,
+    cache_send_window: Option<u64>,
+    event_batch_max_events: Option<usize>,
+    event_batch_max_bytes: Option<usize>,
+    event_batch_flush_us: Option<u64>,
+    event_batch_max_delay_us: Option<u64>,
+    fanout_batch_size: Option<usize>,
 }
 
 impl BrokerConfig {
@@ -35,11 +60,67 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
+        let ack_on_commit = std::env::var("FELIX_ACK_ON_COMMIT")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let disable_timings = std::env::var("FELIX_DISABLE_TIMINGS")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(DEFAULT_DISABLE_TIMINGS);
+        let cache_conn_recv_window = std::env::var("FELIX_CACHE_CONN_RECV_WINDOW")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_CACHE_CONN_RECV_WINDOW);
+        let cache_stream_recv_window = std::env::var("FELIX_CACHE_STREAM_RECV_WINDOW")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_CACHE_STREAM_RECV_WINDOW);
+        let cache_send_window = std::env::var("FELIX_CACHE_SEND_WINDOW")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_CACHE_SEND_WINDOW);
+        let event_batch_max_events = std::env::var("FELIX_EVENT_BATCH_MAX_EVENTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(64);
+        let event_batch_max_bytes = std::env::var("FELIX_EVENT_BATCH_MAX_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(256 * 1024);
+        let event_batch_max_delay_us = std::env::var("FELIX_EVENT_BATCH_MAX_DELAY_US")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .or_else(|| {
+                std::env::var("FELIX_EVENT_BATCH_FLUSH_US")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+            .unwrap_or(DEFAULT_EVENT_BATCH_MAX_DELAY_US);
+        let fanout_batch_size = std::env::var("FELIX_FANOUT_BATCH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(64);
         Ok(Self {
             quic_bind,
             metrics_bind,
             controlplane_url,
             controlplane_sync_interval_ms,
+            ack_on_commit,
+            disable_timings,
+            cache_conn_recv_window,
+            cache_stream_recv_window,
+            cache_send_window,
+            event_batch_max_events,
+            event_batch_max_bytes,
+            event_batch_max_delay_us,
+            fanout_batch_size,
         })
     }
 
@@ -61,6 +142,47 @@ impl BrokerConfig {
             }
             if let Some(value) = override_cfg.controlplane_sync_interval_ms {
                 config.controlplane_sync_interval_ms = value;
+            }
+            if let Some(value) = override_cfg.ack_on_commit {
+                config.ack_on_commit = value;
+            }
+            if let Some(value) = override_cfg.disable_timings {
+                config.disable_timings = value;
+            }
+            if let Some(value) = override_cfg.cache_conn_recv_window
+                && value > 0
+            {
+                config.cache_conn_recv_window = value;
+            }
+            if let Some(value) = override_cfg.cache_stream_recv_window
+                && value > 0
+            {
+                config.cache_stream_recv_window = value;
+            }
+            if let Some(value) = override_cfg.cache_send_window
+                && value > 0
+            {
+                config.cache_send_window = value;
+            }
+            if let Some(value) = override_cfg.event_batch_max_events
+                && value > 0
+            {
+                config.event_batch_max_events = value;
+            }
+            if let Some(value) = override_cfg.event_batch_max_bytes
+                && value > 0
+            {
+                config.event_batch_max_bytes = value;
+            }
+            if let Some(value) = override_cfg.event_batch_max_delay_us {
+                config.event_batch_max_delay_us = value;
+            } else if let Some(value) = override_cfg.event_batch_flush_us {
+                config.event_batch_max_delay_us = value;
+            }
+            if let Some(value) = override_cfg.fanout_batch_size
+                && value > 0
+            {
+                config.fanout_batch_size = value;
             }
         }
         Ok(config)

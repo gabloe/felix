@@ -9,4 +9,5 @@ rust-version.workspace = true
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+metrics = "0.23"
 felix-storage = { path = "../felix-storage", version = "0.1.0" }

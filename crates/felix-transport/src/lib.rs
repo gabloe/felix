@@ -16,17 +16,26 @@ use std::sync::Arc;
 pub struct TransportConfig {
     pub max_frame_bytes: usize,
     pub max_streams: u16,
+    pub receive_window: u64,
+    pub stream_receive_window: u64,
+    pub send_window: u64,
 }
 
 // Keep defaults large enough for most dev/test workloads.
 const DEFAULT_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_MAX_STREAMS: u16 = 1024;
+const DEFAULT_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
+const DEFAULT_STREAM_RECEIVE_WINDOW: u64 = 16 * 1024 * 1024;
+const DEFAULT_SEND_WINDOW: u64 = 64 * 1024 * 1024;
 
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_streams: DEFAULT_MAX_STREAMS,
+            receive_window: DEFAULT_RECEIVE_WINDOW,
+            stream_receive_window: DEFAULT_STREAM_RECEIVE_WINDOW,
+            send_window: DEFAULT_SEND_WINDOW,
         }
     }
 }
@@ -37,6 +46,12 @@ impl TransportConfig {
         let streams = quinn::VarInt::from_u32(self.max_streams as u32);
         config.max_concurrent_bidi_streams(streams);
         config.max_concurrent_uni_streams(streams);
+        let stream_window =
+            quinn::VarInt::from_u64(self.stream_receive_window).expect("stream receive window");
+        let receive_window = quinn::VarInt::from_u64(self.receive_window).expect("receive window");
+        config.stream_receive_window(stream_window);
+        config.receive_window(receive_window);
+        config.send_window(self.send_window);
         config
     }
 }
@@ -183,7 +198,7 @@ impl QuicClient {
 ///     Ok(())
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QuicConnection {
     inner: Connection,
     info: ConnectionInfo,
