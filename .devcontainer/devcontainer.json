@@ -23,7 +23,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "rustup toolchain install 1.92.0 && rustup default 1.92.0",
+	"postCreateCommand": "rustup toolchain install 1.92.0 && rustup default 1.92.0 && bash scripts/setup-githooks.sh",
 
 	// Configure tool-specific properties.
 	// "customizations": {},
