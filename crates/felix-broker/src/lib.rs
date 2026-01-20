@@ -134,7 +134,7 @@ impl StreamState {
     }
 
     fn snapshot_from(&self, from_seq: u64) -> (u64, Vec<Bytes>) {
-        self.snapshot_range(0, from_seq)
+        self.snapshot_range(from_seq, u64::MAX)
     }
 
     fn tail_seq(&self) -> u64 {

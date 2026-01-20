@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 ///
 /// ```
 /// use bytes::Bytes;
-/// use felix_storage::EphemeralCache;
+/// use felix_storage::*;
 ///
 /// let cache = EphemeralCache::new();
 /// let rt = tokio::runtime::Runtime::new().expect("rt");

@@ -23,7 +23,7 @@ pub mod timings;
 /// use felix_storage::EphemeralCache;
 /// use std::sync::Arc;
 ///
-/// let broker = Arc::new(Broker::new(EphemeralCache::new()));
+/// let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
 /// let client = InProcessClient::new(broker.clone());
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
