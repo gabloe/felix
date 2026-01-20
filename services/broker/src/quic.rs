@@ -91,11 +91,7 @@ async fn enqueue_publish(
 // Adjust queue depth gauges safely when send fails or work completes.
 fn decrement_depth(depth: &Arc<std::sync::atomic::AtomicUsize>, gauge: &'static str) {
     if let Ok(prev) = depth.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-        if value == 0 {
-            None
-        } else {
-            Some(value - 1)
-        }
+        if value == 0 { None } else { Some(value - 1) }
     }) {
         metrics::gauge!(gauge).set((prev - 1) as f64);
     }
