@@ -162,6 +162,111 @@ Felix is opinionated by design.
 
 ---
 
+## Planned Multinode Architecture
+
+The current MVP is single-node. The intended multinode design adds explicit control-plane
+coordination, shard placement, and a QUIC data plane that scales horizontally.
+
+```mermaid
+flowchart TB
+  %% ---------- Clients ----------
+  subgraph Clients["Clients"]
+    C1["Producers<br/>(felix-client)"]
+    C2["Consumers<br/>(felix-client)"]
+    C3["Cache clients<br/>(felix-client)"]
+  end
+
+  %% ---------- Kubernetes / Edge ----------
+  subgraph K8s["Kubernetes Cluster"]
+    Ingress["Ingress / LB<br/>(L4 for QUIC)"]
+    DNS["Service discovery<br/>(K8s Service / DNS)"]
+  end
+
+  C1 --> Ingress
+  C2 --> Ingress
+  C3 --> Ingress
+
+  %% ---------- Data Plane ----------
+  subgraph DP["Data Plane (Broker Nodes)"]
+    direction LR
+    B1["Broker Pod A<br/>QUIC data-plane"]
+    B2["Broker Pod B<br/>QUIC data-plane"]
+    B3["Broker Pod C<br/>QUIC data-plane"]
+
+    subgraph Shards["Partitioning / Locality"]
+      R1["Shard/Range 0..n"]
+      R2["Shard/Range n..m"]
+    end
+
+    B1 --- Shards
+    B2 --- Shards
+    B3 --- Shards
+  end
+
+  Ingress --> DP
+  DNS --- DP
+
+  %% ---------- Control Plane ----------
+  subgraph CP["Control Plane (Metadata + Routing)"]
+    direction LR
+    CP1["controlplane-0"]
+    CP2["controlplane-1"]
+    CP3["controlplane-2"]
+
+    subgraph Raft["RAFT quorum"]
+      direction LR
+      CP1 <--> CP2
+      CP2 <--> CP3
+      CP1 <--> CP3
+    end
+
+    Meta["Metadata store<br/>(topics, tenants, ACLs,<br/>shards, placements)"]
+    Raft --> Meta
+  end
+
+  %% ---------- Storage ----------
+  subgraph Storage["Storage (evolves over time)"]
+    direction LR
+    CacheStore["Cache store<br/>(in-memory + TTL)"]
+    LogStore["Durable log (future)<br/>(WAL/segments)"]
+    Snapshots["Snapshots / compaction (future)"]
+    LogStore --> Snapshots
+  end
+
+  %% ---------- Wiring ----------
+  DP <--> CP
+  DP --> CacheStore
+  DP --> LogStore
+
+  %% ---------- Semantics ----------
+  classDef ctrl fill:#f3f0ff,stroke:#6b5bd2,stroke-width:1px;
+  classDef data fill:#f0fbff,stroke:#2f7aa8,stroke-width:1px;
+  classDef store fill:#f7fff0,stroke:#4c8a2b,stroke-width:1px;
+
+  class CP1,CP2,CP3,Meta ctrl;
+  class B1,B2,B3 data;
+  class CacheStore,LogStore,Snapshots store;
+```
+
+## Cross-Broker Delivery
+
+If publishes can enter any broker and forward to the shard owner, the flow looks like:
+
+```mermaid
+sequenceDiagram
+  participant Client as Producer
+  participant B0 as Broker (ingress)
+  participant CP as Control Plane (RAFT)
+  participant Bp as Broker (owner)
+  participant S as Subscribers
+
+  Client->>B0: Publish(topic, batch)
+  B0->>CP: Lookup placement(topic/shard)
+  CP-->>B0: owner = Bp
+  B0->>Bp: Forward publish (internal QUIC)
+  Bp->>S: Fanout (batched events on uni streams)
+```
+
 ## Status
 
 This document reflects the **intended architecture**. Implementation will proceed incrementally,
