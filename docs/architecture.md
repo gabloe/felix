@@ -207,7 +207,7 @@ flowchart TB
   DNS --- DP
 
   %% ---------- Control Plane ----------
-  subgraph CP["Control Plane (Metadata + Routing)"]
+  subgraph CP["Control Plane"]
     direction LR
     CP1["controlplane-0"]
     CP2["controlplane-1"]
