@@ -1046,7 +1046,14 @@ async fn handle_stream(
                 let lookup_start = sample.then(Instant::now);
                 broker
                     .cache()
-                    .put(tenant_id, namespace, cache, key, value, ttl)
+                    .put(
+                        tenant_id.as_str(),
+                        namespace.as_str(),
+                        cache.as_str(),
+                        key.as_str(),
+                        value,
+                        ttl,
+                    )
                     .await;
                 if let Some(start) = lookup_start {
                     let lookup_ns = start.elapsed().as_nanos() as u64;
@@ -1416,7 +1423,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_put_get_round_trip() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
         broker
@@ -1491,7 +1498,7 @@ mod tests {
 
     #[tokio::test]
     async fn publish_rejects_unknown_stream() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         let (server_config, cert) = build_server_config()?;
         let server = Arc::new(QuicServer::bind(
             "127.0.0.1:0".parse()?,

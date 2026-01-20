@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
 
     // Create the broker with an ephemeral in-memory cache.
     println!("Step 1/6: booting in-process broker + QUIC server.");
-    let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
 
     // Seed tenant/namespace so scoped streams are accepted.
     broker.register_tenant("t1").await?;

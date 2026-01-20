@@ -2,11 +2,11 @@
 // The broker enforces tenant/namespace/stream existence via local registries
 // that are kept in sync by the control plane watcher.
 use bytes::Bytes;
-use felix_storage::EphemeralCache;
+use felix_storage::StorageApi;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
- use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast};
 
 pub mod timings;
 
@@ -67,6 +67,9 @@ struct LogState {
 
 impl StreamState {
     fn new(topic_capacity: usize) -> Self {
+        // We throw away the receiver because you should subscribe to the
+        // sender. You can see this in the subscribe and subscribe_with_cursor
+        // functions.
         let (sender, _) = broadcast::channel(topic_capacity);
         Self {
             sender,
@@ -78,8 +81,30 @@ impl StreamState {
     }
 
     fn append(&self, payload: Bytes, log_capacity: usize) -> u64 {
-        let mut state = self.log_state.lock().expect("log lock");
+        let mut validate_data = false;
+        let mut state = self.log_state.lock().unwrap_or_else(|poisoned| {
+            #[cfg(debug_assertions)]
+            println!("The lock was poisoned, attempting to fix data corruption.");
+            validate_data = true;
+            poisoned.into_inner()
+        });
+
         let seq = state.next_seq;
+
+        // TODO : Figure out if this is enough, or even correct.
+        // Can only validate the data if we have some.
+        if validate_data && !state.log.is_empty() {
+            let top_seq = state.log.back().unwrap().seq;
+            if top_seq < seq {
+                // We updated the next_seq before the push, we could leave it but, it would leave
+                // a potential gap if we ever flush to persistent storage.
+                state.next_seq -= 1;
+            } else if top_seq > seq {
+                // This seems impossible to me.
+                panic!("seq {seq} is less than the current items seq {top_seq}")
+            }
+        }
+
         state.next_seq += 1;
         state.log.push_back(LogEntry { seq, payload });
         while state.log.len() > log_capacity {
@@ -88,20 +113,28 @@ impl StreamState {
         seq
     }
 
-    fn snapshot_from(&self, from_seq: u64) -> (u64, Vec<Bytes>) {
+    fn snapshot_range(&self, from_seq: u64, to_seq: u64) -> (u64, Vec<Bytes>) {
         let state = self.log_state.lock().expect("log lock");
+
+        // We return this to let the caller know if they need to indicate
+        // they are requesting entries which are too far back in time.
         let oldest = state
             .log
             .front()
             .map(|entry| entry.seq)
             .unwrap_or(state.next_seq);
+
         let backlog = state
             .log
             .iter()
-            .filter(|entry| entry.seq >= from_seq)
+            .filter(|entry| entry.seq >= from_seq && entry.seq <= to_seq)
             .map(|entry| entry.payload.clone())
             .collect();
         (oldest, backlog)
+    }
+
+    fn snapshot_from(&self, from_seq: u64) -> (u64, Vec<Bytes>) {
+        self.snapshot_range(0, from_seq)
     }
 
     fn tail_seq(&self) -> u64 {
@@ -117,7 +150,7 @@ impl StreamState {
 /// use felix_broker::Broker;
 /// use felix_storage::EphemeralCache;
 ///
-/// let broker = Broker::new(EphemeralCache::new());
+/// let broker = Broker::new(EphemeralCache::new().into());
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
 ///     broker
@@ -157,12 +190,14 @@ pub struct Broker {
     // Map of namespace key -> active marker.
     namespaces: RwLock<HashMap<NamespaceKey, ()>>,
     // Ephemeral cache used by demos and simple workflows.
-    cache: EphemeralCache,
+    cache: Box<dyn StorageApi + Send>,
     // Broadcast channel capacity for each topic.
     topic_capacity: usize,
     // Per-topic in-memory log capacity.
     log_capacity: usize,
 }
+
+unsafe impl Send for Broker {}
 
 #[derive(Debug, Clone)]
 pub struct StreamMetadata {
@@ -241,7 +276,7 @@ impl Default for StreamMetadata {
 
 impl Broker {
     // Start with an empty topic table and default capacity.
-    pub fn new(cache: EphemeralCache) -> Self {
+    pub fn new(cache: Box<dyn StorageApi + Send>) -> Self {
         Self {
             topics: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
@@ -377,6 +412,7 @@ impl Broker {
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
 
         let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
+        // TODO: Should we really return an error? Would this not just be all entries?
         if cursor.next_seq < oldest {
             return Err(BrokerError::CursorTooOld {
                 oldest,
@@ -386,9 +422,9 @@ impl Broker {
         Ok((backlog, stream_state.sender.subscribe()))
     }
 
-    pub fn cache(&self) -> &EphemeralCache {
+    pub fn cache(&self) -> &(dyn StorageApi + Send) {
         // Expose the cache for demos and integrations.
-        &self.cache
+        self.cache.as_ref()
     }
 
     pub async fn register_stream(
@@ -643,11 +679,12 @@ impl Broker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use felix_storage::EphemeralCache;
 
     #[tokio::test]
     async fn publish_delivers_to_subscriber() {
         // Basic pub/sub flow with a single subscriber.
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
@@ -671,7 +708,7 @@ mod tests {
 
     #[tokio::test]
     async fn publish_without_subscribers_returns_zero() {
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
@@ -690,7 +727,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_delivers_in_order_to_single_subscriber() {
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
@@ -718,7 +755,7 @@ mod tests {
 
     #[tokio::test]
     async fn lagging_subscriber_drops_messages() {
-        let broker = Broker::new(EphemeralCache::new())
+        let broker = Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(1)
             .expect("capacity");
         broker.register_tenant("t1").await.expect("tenant");
@@ -750,7 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_subscribers_receive_payload() {
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
@@ -784,8 +821,10 @@ mod tests {
 
     #[tokio::test]
     async fn cursor_replays_log_then_streams_new_events() {
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
+
         broker.register_tenant("t1").await.expect("tenant");
+
         broker
             .register_namespace("t1", "default")
             .await
@@ -826,7 +865,7 @@ mod tests {
 
     #[test]
     fn zero_capacity_is_rejected() {
-        let broker = Broker::new(EphemeralCache::new());
+        let broker = Broker::new(EphemeralCache::new().into());
         let err = broker.with_topic_capacity(0).expect_err("capacity");
         assert!(matches!(err, BrokerError::CapacityTooLarge));
     }

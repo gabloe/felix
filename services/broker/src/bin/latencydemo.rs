@@ -270,7 +270,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
 
     let total_events = config.warmup + config.total;
     let broker = Arc::new(
-        Broker::new(EphemeralCache::new())
+        Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(total_events.saturating_add(1))?
             .with_log_capacity(total_events.saturating_add(1))?,
     );
