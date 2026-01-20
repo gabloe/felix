@@ -90,15 +90,14 @@ async fn enqueue_publish(
 
 // Adjust queue depth gauges safely when send fails or work completes.
 fn decrement_depth(depth: &Arc<std::sync::atomic::AtomicUsize>, gauge: &'static str) {
-    let mut current = depth.load(Ordering::Relaxed);
-    while current > 0 {
-        match depth.compare_exchange(current, current - 1, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => {
-                metrics::gauge!(gauge).set((current - 1) as f64);
-                return;
-            }
-            Err(next) => current = next,
+    if let Ok(prev) = depth.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        if value == 0 {
+            None
+        } else {
+            Some(value - 1)
         }
+    }) {
+        metrics::gauge!(gauge).set((prev - 1) as f64);
     }
 }
 
@@ -230,9 +229,7 @@ async fn handle_stream(
     // Publish worker: drains the queue and persists to the broker.
     let _reader_job = tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
-            queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
-            metrics::gauge!("felix_broker_ingress_queue_depth")
-                .set(queue_depth_worker.load(Ordering::Relaxed) as f64);
+            decrement_depth(&queue_depth_worker, "felix_broker_ingress_queue_depth");
             let result = broker_for_worker
                 .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
                 .await
@@ -1240,9 +1237,7 @@ async fn handle_uni_stream(
     // Publish worker: best-effort fire-and-forget writes.
     tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
-            queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
-            metrics::gauge!("felix_broker_ingress_queue_depth")
-                .set(queue_depth_worker.load(Ordering::Relaxed) as f64);
+            decrement_depth(&queue_depth_worker, "felix_broker_ingress_queue_depth");
             let _ = broker_for_worker
                 .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
                 .await;
