@@ -651,6 +651,35 @@ mod tests {
     }
 
     #[test]
+    fn binary_event_batch_rejects_incomplete_payload() {
+        let frame = Frame::new(FLAG_BINARY_EVENT_BATCH, Bytes::from_static(b"short"))
+            .expect("frame");
+        let err = binary::decode_event_batch(&frame).expect_err("incomplete");
+        assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn binary_publish_batch_round_trip() {
+        let payloads = vec![b"one".to_vec(), b"two".to_vec()];
+        let frame = binary::encode_publish_batch("t1", "default", "orders", &payloads)
+            .expect("encode");
+        assert_eq!(frame.header.flags, FLAG_BINARY_PUBLISH_BATCH);
+        let decoded = binary::decode_publish_batch(&frame).expect("decode");
+        assert_eq!(decoded.tenant_id, "t1");
+        assert_eq!(decoded.namespace, "default");
+        assert_eq!(decoded.stream, "orders");
+        assert_eq!(decoded.payloads, payloads);
+    }
+
+    #[test]
+    fn binary_publish_batch_rejects_incomplete_payload() {
+        let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, Bytes::from_static(b"\x00"))
+            .expect("frame");
+        let err = binary::decode_publish_batch(&frame).expect_err("incomplete");
+        assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
     fn message_round_trip() {
         let message = Message::Publish {
             tenant_id: "t1".to_string(),

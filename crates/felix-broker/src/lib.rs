@@ -877,4 +877,40 @@ mod tests {
         let err = broker.with_topic_capacity(0).expect_err("capacity");
         assert!(matches!(err, BrokerError::CapacityTooLarge));
     }
+
+    #[tokio::test]
+    async fn existence_checks_reflect_registrations() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        assert!(!broker.namespace_exists("t1", "default").await);
+        assert!(!broker.cache_exists("t1", "default", "primary").await);
+        assert!(!broker.stream_exists("t1", "default", "orders").await);
+
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_cache("t1", "default", "primary", CacheMetadata)
+            .await
+            .expect("cache");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("stream");
+
+        assert!(broker.namespace_exists("t1", "default").await);
+        assert!(broker.cache_exists("t1", "default", "primary").await);
+        assert!(broker.stream_exists("t1", "default", "orders").await);
+    }
+
+    #[tokio::test]
+    async fn register_namespace_requires_tenant() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let err = broker
+            .register_namespace("missing", "default")
+            .await
+            .expect_err("tenant");
+        assert!(matches!(err, BrokerError::TenantNotFound(_)));
+    }
 }
