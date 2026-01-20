@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-
 const PUBLISH_QUEUE_DEPTH: usize = 1024;
 const ACK_QUEUE_DEPTH: usize = 256;
 const STREAM_CACHE_TTL: Duration = Duration::from_secs(2);
@@ -88,12 +87,7 @@ async fn enqueue_publish(
 fn decrement_depth(depth: &Arc<std::sync::atomic::AtomicUsize>, gauge: &'static str) {
     let mut current = depth.load(Ordering::Relaxed);
     while current > 0 {
-        match depth.compare_exchange(
-            current,
-            current - 1,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
+        match depth.compare_exchange(current, current - 1, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 metrics::gauge!(gauge).set((current - 1) as f64);
                 return;
@@ -354,7 +348,7 @@ async fn handle_stream(
                 .map(Bytes::from)
                 .collect::<Vec<_>>();
             let fanout_start = sample.then(Instant::now);
-            let r  = enqueue_publish(
+            let r = enqueue_publish(
                 &publish_tx,
                 &queue_depth,
                 PublishJob {
@@ -1313,7 +1307,7 @@ async fn handle_uni_stream(
                     },
                     EnqueuePolicy::Drop,
                 )
-                    .await;
+                .await;
 
                 if emit_send_telemetry(r) {
                     break;
@@ -1352,7 +1346,8 @@ async fn handle_uni_stream(
                         response: None,
                     },
                     EnqueuePolicy::Drop,
-                ).await;
+                )
+                .await;
 
                 if emit_send_telemetry(r) {
                     break;
@@ -1578,23 +1573,18 @@ mod tests {
     }
 }
 
-
 fn emit_send_telemetry(result: Result<bool>) -> bool {
-    match result
-    {
+    match result {
         Ok(true) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "success")
-                .increment(1);
+            metrics::counter!("felix_publish_requests_total", "result" => "success").increment(1);
             false
         }
         Ok(false) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "dropped")
-                .increment(1);
+            metrics::counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
             false
         }
         Err(err) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "error")
-                .increment(1);
+            metrics::counter!("felix_publish_requests_total", "result" => "error").increment(1);
             tracing::warn!(error = %err, "publish enqueue failed");
             true
         }

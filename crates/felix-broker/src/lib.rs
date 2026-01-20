@@ -6,7 +6,7 @@ use felix_storage::EphemeralCache;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{RwLock, broadcast};
+ use tokio::sync::{RwLock, broadcast};
 
 pub mod timings;
 
@@ -290,7 +290,8 @@ impl Broker {
         stream: &str,
         payloads: &[Bytes],
     ) -> Result<usize> {
-        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        self.assert_stream_exists(tenant_id, namespace, stream)
+            .await?;
 
         // Fan-out to current subscribers.
         // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
@@ -336,7 +337,8 @@ impl Broker {
         stream: &str,
     ) -> Result<broadcast::Receiver<Bytes>> {
         // Fast-path guard: reject unknown scopes before opening a receiver.
-        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        self.assert_stream_exists(tenant_id, namespace, stream)
+            .await?;
 
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
         Ok(stream_state.sender.subscribe())
@@ -350,7 +352,8 @@ impl Broker {
         stream: &str,
     ) -> Result<Cursor> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
-        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        self.assert_stream_exists(tenant_id, namespace, stream)
+            .await?;
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
 
         Ok(Cursor {
@@ -358,6 +361,8 @@ impl Broker {
         })
     }
 
+    /// Allows us to subscribe from a previous point in time. If that point in time
+    /// is too far back we return an error.
     pub async fn subscribe_with_cursor(
         &self,
         tenant_id: &str,
@@ -366,7 +371,9 @@ impl Broker {
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
-        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        self.assert_stream_exists(tenant_id, namespace, stream)
+            .await?;
+
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
 
         let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
@@ -452,7 +459,8 @@ impl Broker {
             return Err(BrokerError::TenantNotFound(tenant_id.to_string()));
         }
         let namespace_key = NamespaceKey::new(tenant_id, namespace);
-        self.assert_namespace_exists(tenant_id, namespace, namespace_key).await?;
+        self.assert_namespace_exists(tenant_id, namespace, namespace_key)
+            .await?;
         let key = CacheKey::new(tenant_id, namespace, cache);
         Ok(self.caches.write().await.remove(&key).is_some())
     }
@@ -469,7 +477,8 @@ impl Broker {
         }
         let namespace_key = NamespaceKey::new(tenant_id, namespace);
         // Fast-path guard: reject unknown namespace.
-        self.assert_namespace_exists(tenant_id, namespace, namespace_key).await?;
+        self.assert_namespace_exists(tenant_id, namespace, namespace_key)
+            .await?;
         let key = StreamKey::new(tenant_id, namespace, stream);
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
@@ -576,7 +585,12 @@ impl Broker {
         Ok(guard.remove(&key).is_some())
     }
 
-    async fn get_stream_state(&self, tenant_id: &str, namespace: &str, stream: &str) -> std::result::Result<Arc<StreamState>, BrokerError> {
+    async fn get_stream_state(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> std::result::Result<Arc<StreamState>, BrokerError> {
         let guard = self.topics.read().await;
         guard
             .get(&StreamKey::new(tenant_id, namespace, stream))
@@ -589,7 +603,12 @@ impl Broker {
     }
 
     /// It is up to the caller to check for the error or not.
-    async fn assert_stream_exists(&self, tenant_id: &str, namespace: &str, stream: &str) -> Result<()> {
+    async fn assert_stream_exists(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<()> {
         if !self.stream_exists(tenant_id, namespace, stream).await {
             return Err(BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -598,11 +617,16 @@ impl Broker {
             });
         }
 
-     Ok(())
+        Ok(())
     }
 
     /// It is up to the caller to check for the error or not.
-    async fn assert_namespace_exists(&self, tenant_id: &str, namespace: &str, namespace_key: NamespaceKey) -> Result<()> {
+    async fn assert_namespace_exists(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        namespace_key: NamespaceKey,
+    ) -> Result<()> {
         if !self.namespaces.read().await.contains_key(&namespace_key) {
             return Err(BrokerError::NamespaceNotFound {
                 tenant_id: tenant_id.to_string(),
