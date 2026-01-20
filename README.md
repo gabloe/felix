@@ -1,9 +1,12 @@
 <p align="center">
-  <img src="docs/assets/logo.PNG" alt="Felix logo" width="360" />
+  <img src="https://raw.githubusercontent.com/gabloe/felix/main/docs/assets/logo.PNG" alt="Felix logo" width="360" />
 </p>
 <p align="center">
   <a href="https://github.com/gabloe/felix/actions/workflows/ci.yml">
     <img src="https://github.com/gabloe/felix/actions/workflows/ci.yml/badge.svg" alt="CI status" />
+  </a>
+  <a href="https://github.com/gabloe/felix/actions/workflows/coverage.yml">
+    <img src="https://raw.githubusercontent.com/gabloe/felix/main/.github/badges/coverage.svg" alt="Coverage" />
   </a>
   <a href="https://github.com/gabloe/felix/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0" />
