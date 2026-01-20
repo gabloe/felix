@@ -13,6 +13,10 @@ tasks:
     cmds: ["cargo test --workspace"]
   build:
     cmds: ["cargo build --workspace"]
+  clean:
+    cmds: ["cargo clean"]
+  clean-all:
+    cmds: ["rm -rf target"]
   deny:
     cmds: ["cargo install cargo-deny --version 0.19.0 --locked", "cargo-deny check"]
   demo:
