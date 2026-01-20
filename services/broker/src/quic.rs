@@ -51,7 +51,7 @@ async fn enqueue_publish(
 ) -> Result<bool> {
     match publish_tx.try_send(job) {
         Ok(()) => {
-            let depth = queue_depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let depth = queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::gauge!("felix_broker_ingress_queue_depth").set(depth as f64);
             Ok(true)
         }
@@ -72,7 +72,7 @@ async fn enqueue_publish(
                         .send(job)
                         .await
                         .map_err(|_| anyhow!("publish queue closed"))?;
-                    let depth = queue_depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    let depth = queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
                     metrics::gauge!("felix_broker_ingress_queue_depth").set(depth as f64);
                     Ok(true)
                 }
@@ -83,13 +83,13 @@ async fn enqueue_publish(
 }
 
 fn decrement_depth(depth: &Arc<std::sync::atomic::AtomicUsize>, gauge: &'static str) {
-    let mut current = depth.load(std::sync::atomic::Ordering::Relaxed);
+    let mut current = depth.load(Ordering::Relaxed);
     while current > 0 {
         match depth.compare_exchange(
             current,
             current - 1,
-            std::sync::atomic::Ordering::Relaxed,
-            std::sync::atomic::Ordering::Relaxed,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
         ) {
             Ok(_) => {
                 metrics::gauge!(gauge).set((current - 1) as f64);
@@ -106,7 +106,7 @@ async fn send_outgoing(
     gauge: &'static str,
     message: Outgoing,
 ) -> bool {
-    let next = depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let next = depth.fetch_add(1, Ordering::Relaxed) + 1;
     metrics::gauge!(gauge).set(next as f64);
     if tx.send(message).await.is_err() {
         decrement_depth(depth, gauge);
@@ -218,11 +218,12 @@ async fn handle_stream(
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let queue_depth_worker = Arc::clone(&queue_depth);
     let mut stream_cache = HashMap::new();
-    tokio::spawn(async move {
+
+    let _reader_job = tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
-            queue_depth_worker.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
             metrics::gauge!("felix_broker_ingress_queue_depth")
-                .set(queue_depth_worker.load(std::sync::atomic::Ordering::Relaxed) as f64);
+                .set(queue_depth_worker.load(Ordering::Relaxed) as f64);
             let result = broker_for_worker
                 .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
                 .await
@@ -233,8 +234,9 @@ async fn handle_stream(
             }
         }
     });
+
     let out_ack_depth_worker = Arc::clone(&out_ack_depth);
-    tokio::spawn(async move {
+    let _writer_job = tokio::spawn(async move {
         let mut ack_done = false;
         let mut last_cache = false;
         while !ack_done {
@@ -1212,9 +1214,9 @@ async fn handle_uni_stream(
     let mut stream_cache = HashMap::new();
     tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
-            queue_depth_worker.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
             metrics::gauge!("felix_broker_ingress_queue_depth")
-                .set(queue_depth_worker.load(std::sync::atomic::Ordering::Relaxed) as f64);
+                .set(queue_depth_worker.load(Ordering::Relaxed) as f64);
             let _ = broker_for_worker
                 .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
                 .await;
@@ -1445,7 +1447,7 @@ mod tests {
         )?);
         let addr = server.local_addr()?;
 
-        let config = crate::config::BrokerConfig::from_env()?;
+        let config = BrokerConfig::from_env()?;
         let server_task = tokio::spawn(serve(Arc::clone(&server), Arc::clone(&broker), config));
 
         let client = QuicClient::bind(
@@ -1515,7 +1517,7 @@ mod tests {
         )?);
         let addr = server.local_addr()?;
 
-        let config = crate::config::BrokerConfig::from_env()?;
+        let config = BrokerConfig::from_env()?;
         let server_task = tokio::spawn(serve(Arc::clone(&server), Arc::clone(&broker), config));
 
         let client = QuicClient::bind(
