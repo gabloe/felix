@@ -60,6 +60,8 @@ Use cases
 - Event pipelines with batch publishing and batch delivery for efficient fanout.
 - Low-latency caching over QUIC with predictable tail latency under load.
 
+The diagram below reflects the single-node in-process MVP.
+
 ```mermaid
 flowchart LR
     subgraph C["Client (felix-client)"]
