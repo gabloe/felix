@@ -237,4 +237,4 @@ Detailed plans live in `docs/`.
 
 Apache 2.0
 
-Copyright (c) 2025 Gabriel Loewen
+Copyright (c) 2026 Felix Authors
