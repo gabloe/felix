@@ -1,5 +1,16 @@
 // QUIC transport adapter for the broker.
 // Decodes felix-wire frames, enforces stream scope, and fans out events to subscribers.
+/*
+QUIC transport protocol overview:
+- Bidirectional streams are the control plane: clients send Publish/PublishBatch, Subscribe,
+  and Cache requests, and the broker returns acks/responses on the same stream.
+- Subscribe on the control stream causes the broker to open a uni stream for event delivery;
+  that uni stream starts with EventStreamHello and then carries Event/EventBatch frames.
+- Client-initiated uni streams are publish-only (no acks); they accept Publish/PublishBatch
+  and are treated as fire-and-forget ingress.
+- Frames use felix-wire; high-throughput paths may carry binary batch frames to avoid JSON
+  encode/decode overhead.
+*/
 use crate::config::BrokerConfig;
 use crate::timings;
 use anyhow::{Context, Result, anyhow};
@@ -212,7 +223,8 @@ async fn handle_stream(
     mut send: SendStream,
     mut recv: RecvStream,
 ) -> Result<()> {
-    // Bi-directional stream: reads requests and writes responses/acks.
+    // Bi-directional stream: carries control-plane requests and their acks/responses.
+    // Payload fanout to subscribers happens on separate uni streams opened per subscription.
     let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(PUBLISH_QUEUE_DEPTH);
     // Single-writer response path: enqueue Outgoing messages, one task serializes writes.
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel::<Outgoing>(ACK_QUEUE_DEPTH);
@@ -310,7 +322,7 @@ async fn handle_stream(
         }
         let _ = send.stopped().await;
     });
-    // Read loop: decode frames, route to publish/cache/subscription handlers.
+    // Read loop: decode control-plane frames and enqueue work; acks flow back on this stream.
     loop {
         let sample = timings::should_sample();
         let read_start = sample.then(Instant::now);
@@ -379,6 +391,11 @@ async fn handle_stream(
             continue;
         }
         let decode_start = sample.then(Instant::now);
+        // Control-plane protocol: decode one frame into a typed Message, then route below.
+        // Publish vs PublishBatch determines whether we ingest one payload or a batch and
+        // which ack mode we honor (none, per-message, per-batch). If ack_on_commit is set,
+        // we delay the ack until the publish worker completes (server-side policy, not a
+        // distinct wire AckMode).
         let message = Message::decode(frame).context("decode message")?;
         let decode_ns = decode_start.map(|start| start.elapsed().as_nanos() as u64);
         if let Some(decode_ns) = decode_ns {
@@ -393,7 +410,11 @@ async fn handle_stream(
                 payload,
                 ack,
             } => {
-                // Per-message publish path with optional ack.
+                // Publish protocol (control stream):
+                // - Client sends Publish { payload, ack }.
+                // - Broker enqueues payload (fanout path) and responds:
+                //   - AckMode::None -> no response.
+                //   - AckMode::PerMessage -> Ok/Error after enqueue, or delayed by ack_on_commit.
                 let start = Instant::now();
                 let (response_tx, response_rx) = oneshot::channel();
                 let payload_len = payload.len();
@@ -559,7 +580,11 @@ async fn handle_stream(
                 payloads,
                 ack,
             } => {
-                // Batch publish trades latency for throughput, returns a single ack.
+                // PublishBatch protocol (control stream):
+                // - Client sends PublishBatch { payloads, ack }.
+                // - Broker enqueues all payloads as one unit and responds:
+                //   - AckMode::None -> no response.
+                //   - AckMode::PerBatch -> single Ok/Error after enqueue, or delayed by ack_on_commit.
                 let span = tracing::trace_span!(
                     "publish_batch",
                     tenant_id = %tenant_id,
@@ -729,7 +754,7 @@ async fn handle_stream(
                 stream,
                 subscription_id,
             } => {
-                // Subscribe keeps the control stream for acks and uses a uni stream for events.
+                // Subscribe is control-plane: ack/metadata stay on this stream, events go to a new uni stream.
                 let span = tracing::trace_span!(
                     "subscribe",
                     tenant_id = %tenant_id,
@@ -795,6 +820,7 @@ async fn handle_stream(
                     Outgoing::Message(Message::Subscribed { subscription_id }),
                 )
                 .await;
+                // First write a hello on the uni stream so the client can bind subscription_id -> stream.
                 if let Err(err) = write_message(
                     &mut event_send,
                     Message::EventStreamHello { subscription_id },
@@ -1224,7 +1250,7 @@ async fn handle_uni_stream(
     _config: BrokerConfig,
     mut recv: RecvStream,
 ) -> Result<()> {
-    // Uni-directional streams are publish-only; no responses are sent.
+    // Uni-directional streams are payload-only: fire-and-forget publishes with no acks/responses.
     let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(PUBLISH_QUEUE_DEPTH);
     let broker_for_worker = Arc::clone(&broker);
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1239,7 +1265,7 @@ async fn handle_uni_stream(
                 .await;
         }
     });
-    // Read loop: accept publish messages only.
+    // Read loop: accept publish payloads only; control/ack traffic never appears here.
     loop {
         let frame = match read_frame(&mut recv).await? {
             Some(frame) => frame,
@@ -1296,6 +1322,8 @@ async fn handle_uni_stream(
             }
             continue;
         }
+        // Publish-only protocol: decode one frame into a typed Message, then route below.
+        // Only Publish/PublishBatch are honored on uni streams; no acks are sent.
         let message = Message::decode(frame).context("decode message")?;
         match message {
             Message::Publish {
