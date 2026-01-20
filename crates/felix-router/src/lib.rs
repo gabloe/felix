@@ -89,4 +89,11 @@ mod tests {
         router.allow_bridge(source, dest);
         assert!(!router.can_route(dest, source));
     }
+
+    #[test]
+    fn local_region_accessor_returns_seed() {
+        let region = RegionId::new();
+        let router = RegionRouter::new(region);
+        assert_eq!(router.local_region(), region);
+    }
 }
