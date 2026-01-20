@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let metrics_handle = observability::init_observability("felix-broker");
 
     // Start an in-process broker with an ephemeral cache backend. TODO: support other storage backends via config.
-    let broker = Broker::new(EphemeralCache::new());
+    let broker = Broker::new(EphemeralCache::new().into());
     tracing::info!("broker started");
 
     let config = config::BrokerConfig::from_env_or_yaml()?;

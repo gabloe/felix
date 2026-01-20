@@ -17,7 +17,7 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("== Felix Conformance Runner ==");
-    let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker

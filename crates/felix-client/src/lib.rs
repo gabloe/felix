@@ -1077,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn in_process_publish_and_subscribe() {
         // Smoke-test the in-process path without any network transport.
-        let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")
@@ -1102,7 +1102,7 @@ mod tests {
 
     #[tokio::test]
     async fn clients_share_broker_state() {
-        let broker = Arc::new(Broker::new(EphemeralCache::new()));
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         broker.register_tenant("t1").await.expect("tenant");
         broker
             .register_namespace("t1", "default")

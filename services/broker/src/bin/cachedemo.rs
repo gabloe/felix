@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     println!("Goal: benchmark cache Put/Get over QUIC (not pub/sub).");
 
     println!("Step 1/4: booting in-process broker + QUIC server.");
-    let broker = Arc::new(Broker::new(EphemeralCache::new()));
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
