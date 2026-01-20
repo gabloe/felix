@@ -1441,6 +1441,24 @@ async fn write_frame_bytes(send: &mut SendStream, bytes: Bytes) -> Result<()> {
     send.write_all(&bytes).await.context("write frame")
 }
 
+fn emit_send_telemetry(result: Result<bool>) -> bool {
+    match result {
+        Ok(true) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "success").increment(1);
+            false
+        }
+        Ok(false) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            false
+        }
+        Err(err) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            tracing::warn!(error = %err, "publish enqueue failed");
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1608,23 +1626,5 @@ mod tests {
         let mut roots = RootCertStore::empty();
         roots.add(cert)?;
         Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
-    }
-}
-
-fn emit_send_telemetry(result: Result<bool>) -> bool {
-    match result {
-        Ok(true) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "success").increment(1);
-            false
-        }
-        Ok(false) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
-            false
-        }
-        Err(err) => {
-            metrics::counter!("felix_publish_requests_total", "result" => "error").increment(1);
-            tracing::warn!(error = %err, "publish enqueue failed");
-            true
-        }
     }
 }
