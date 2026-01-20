@@ -290,45 +290,34 @@ impl Broker {
         stream: &str,
         payloads: &[Bytes],
     ) -> Result<usize> {
-        // Fast-path guard: reject unknown scopes before touching the stream map.
-        if !self.stream_exists(tenant_id, namespace, stream).await {
-            return Err(BrokerError::StreamNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-            });
-        }
+        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+
         // Fan-out to current subscribers.
         // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
         let sample = timings::should_sample();
         let lookup_start = sample.then(Instant::now);
-        let stream_state = {
-            let guard = self.topics.read().await;
-            guard
-                .get(&StreamKey::new(tenant_id, namespace, stream))
-                .cloned()
-        }
-        .ok_or_else(|| BrokerError::StreamNotFound {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-        })?;
+        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
+
         if let Some(start) = lookup_start {
             let lookup_ns = start.elapsed().as_nanos() as u64;
             timings::record_lookup_ns(lookup_ns);
             metrics::histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
         }
+
         let append_start = sample.then(Instant::now);
         for payload in payloads {
             stream_state.append(payload.clone(), self.log_capacity);
         }
+
         if let Some(start) = append_start {
             let append_ns = start.elapsed().as_nanos() as u64;
             timings::record_append_ns(append_ns);
             metrics::histogram!("broker_publish_append_ns").record(append_ns as f64);
         }
+
         let send_start = sample.then(Instant::now);
         let mut sent = 0usize;
+
         for payload in payloads {
             sent += stream_state.sender.send(payload.clone()).unwrap_or(0);
         }
@@ -347,24 +336,9 @@ impl Broker {
         stream: &str,
     ) -> Result<broadcast::Receiver<Bytes>> {
         // Fast-path guard: reject unknown scopes before opening a receiver.
-        if !self.stream_exists(tenant_id, namespace, stream).await {
-            return Err(BrokerError::StreamNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-            });
-        }
-        let stream_state = {
-            let guard = self.topics.read().await;
-            guard
-                .get(&StreamKey::new(tenant_id, namespace, stream))
-                .cloned()
-        }
-        .ok_or_else(|| BrokerError::StreamNotFound {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-        })?;
+        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+
+        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
         Ok(stream_state.sender.subscribe())
     }
 
@@ -376,24 +350,9 @@ impl Broker {
         stream: &str,
     ) -> Result<Cursor> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
-        if !self.stream_exists(tenant_id, namespace, stream).await {
-            return Err(BrokerError::StreamNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-            });
-        }
-        let stream_state = {
-            let guard = self.topics.read().await;
-            guard
-                .get(&StreamKey::new(tenant_id, namespace, stream))
-                .cloned()
-        }
-        .ok_or_else(|| BrokerError::StreamNotFound {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-        })?;
+        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
+
         Ok(Cursor {
             next_seq: stream_state.tail_seq(),
         })
@@ -407,24 +366,9 @@ impl Broker {
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
-        if !self.stream_exists(tenant_id, namespace, stream).await {
-            return Err(BrokerError::StreamNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-            });
-        }
-        let stream_state = {
-            let guard = self.topics.read().await;
-            guard
-                .get(&StreamKey::new(tenant_id, namespace, stream))
-                .cloned()
-        }
-        .ok_or_else(|| BrokerError::StreamNotFound {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-        })?;
+        self.assert_stream_exists(tenant_id, namespace, stream).await?;
+        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
+
         let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
         if cursor.next_seq < oldest {
             return Err(BrokerError::CursorTooOld {
@@ -508,12 +452,7 @@ impl Broker {
             return Err(BrokerError::TenantNotFound(tenant_id.to_string()));
         }
         let namespace_key = NamespaceKey::new(tenant_id, namespace);
-        if !self.namespaces.read().await.contains_key(&namespace_key) {
-            return Err(BrokerError::NamespaceNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-            });
-        }
+        self.assert_namespace_exists(tenant_id, namespace, namespace_key).await?;
         let key = CacheKey::new(tenant_id, namespace, cache);
         Ok(self.caches.write().await.remove(&key).is_some())
     }
@@ -530,12 +469,7 @@ impl Broker {
         }
         let namespace_key = NamespaceKey::new(tenant_id, namespace);
         // Fast-path guard: reject unknown namespace.
-        if !self.namespaces.read().await.contains_key(&namespace_key) {
-            return Err(BrokerError::NamespaceNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-            });
-        }
+        self.assert_namespace_exists(tenant_id, namespace, namespace_key).await?;
         let key = StreamKey::new(tenant_id, namespace, stream);
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
@@ -640,6 +574,43 @@ impl Broker {
             return Ok(false);
         }
         Ok(guard.remove(&key).is_some())
+    }
+
+    async fn get_stream_state(&self, tenant_id: &str, namespace: &str, stream: &str) -> std::result::Result<Arc<StreamState>, BrokerError> {
+        let guard = self.topics.read().await;
+        guard
+            .get(&StreamKey::new(tenant_id, namespace, stream))
+            .cloned()
+            .ok_or_else(|| BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            })
+    }
+
+    /// It is up to the caller to check for the error or not.
+    async fn assert_stream_exists(&self, tenant_id: &str, namespace: &str, stream: &str) -> Result<()> {
+        if !self.stream_exists(tenant_id, namespace, stream).await {
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
+        }
+
+     Ok(())
+    }
+
+    /// It is up to the caller to check for the error or not.
+    async fn assert_namespace_exists(&self, tenant_id: &str, namespace: &str, namespace_key: NamespaceKey) -> Result<()> {
+        if !self.namespaces.read().await.contains_key(&namespace_key) {
+            return Err(BrokerError::NamespaceNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     // get_or_create_topic removed; stream creation handled inline for cursor/log support.
