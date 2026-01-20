@@ -238,14 +238,6 @@ flowchart TB
   DP --> CacheStore
   DP --> LogStore
 
-  %% ---------- Semantics ----------
-  classDef ctrl fill:#f3f0ff,stroke:#6b5bd2,stroke-width:1px;
-  classDef data fill:#f0fbff,stroke:#2f7aa8,stroke-width:1px;
-  classDef store fill:#f7fff0,stroke:#4c8a2b,stroke-width:1px;
-
-  class CP1,CP2,CP3,Meta ctrl;
-  class B1,B2,B3 data;
-  class CacheStore,LogStore,Snapshots store;
 ```
 
 ## Cross-Broker Delivery
