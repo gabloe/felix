@@ -1,9 +1,6 @@
-# Felix
-
 <p align="center">
   <img src="docs/assets/logo.PNG" alt="Felix logo" width="220" />
 </p>
-
 <p align="center">
   <a href="https://github.com/gabloe/felix/actions/workflows/ci.yml">
     <img src="https://github.com/gabloe/felix/actions/workflows/ci.yml/badge.svg" alt="CI status" />
@@ -15,6 +12,8 @@
     <img src="https://img.shields.io/badge/rust-1.92.0-blue" alt="Rust 1.92.0" />
   </a>
 </p>
+
+---
 
 Felix is in **early active development**. This README is intentionally brief while the design and
 implementation are still moving quickly.

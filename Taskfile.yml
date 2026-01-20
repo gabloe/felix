@@ -11,6 +11,8 @@ tasks:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:
     cmds: ["cargo test --workspace"]
+  coverage:
+    cmds: ["cargo llvm-cov"]
   build:
     cmds: ["cargo build --workspace"]
   clean:
