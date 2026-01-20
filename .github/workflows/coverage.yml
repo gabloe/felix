@@ -6,7 +6,13 @@ on:
       - main
     paths-ignore:
       - "**/coverage.svg"
+      - "docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "**/coverage.svg"
+      - "docs/**"
+      - "**/*.md"
 
 jobs:
   coverage:
