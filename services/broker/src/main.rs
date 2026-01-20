@@ -21,6 +21,7 @@ async fn main() -> Result<()> {
     tracing::info!("broker started");
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
+    // Expose Prometheus metrics on the configured bind address.
     tokio::spawn(observability::serve_metrics(
         metrics_handle,
         config.metrics_bind,
@@ -47,8 +48,7 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Start control plane sync task if configured. This periodically syncs metadata from the control plane to keep
-    // the broker up to date with tenants, namespaces, and streams.
+    // Start control plane sync task if configured to keep scope metadata fresh.
     if let Some(base_url) = config.controlplane_url.clone() {
         let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
@@ -75,6 +75,7 @@ async fn main() -> Result<()> {
 }
 
 fn build_server_config() -> Result<ServerConfig> {
+    // Dev-only self-signed TLS config for QUIC endpoints.
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = CertificateDer::from(cert.serialize_der()?);
     let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());

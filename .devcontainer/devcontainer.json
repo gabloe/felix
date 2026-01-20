@@ -19,11 +19,18 @@
 		"ghcr.io/audacioustux/devcontainers/taskfile:1": {}
 	},
 
+	// Note: Docker Desktop blocks setting kernel.perf_event_paranoid via --sysctl; adjust on the host if needed for perf.
+	// Enable perf profiling tools (samply) inside the container.
+	"runArgs": [
+		"--cap-add=SYS_PTRACE",
+		"--security-opt=seccomp=unconfined"
+	],
+
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "rustup toolchain install 1.92.0 && rustup default 1.92.0 && bash scripts/setup-githooks.sh",
+	"postCreateCommand": "rustup toolchain install 1.92.0 && rustup default 1.92.0 && sudo apt update && sudo apt install -y linux-perf && cargo install flamegraph samply cargo-samply && bash scripts/setup-githooks.sh",
 
 	// Configure tool-specific properties.
 	// "customizations": {},

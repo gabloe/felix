@@ -6,18 +6,31 @@ use std::net::SocketAddr;
 // Broker service configuration sourced from environment variables.
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
+    // QUIC listener bind address.
     pub quic_bind: SocketAddr,
+    // Metrics HTTP listener bind address.
     pub metrics_bind: SocketAddr,
+    // Optional control-plane base URL.
     pub controlplane_url: Option<String>,
+    // Poll interval for control-plane changes.
     pub controlplane_sync_interval_ms: u64,
+    // If true, publish acks are sent after commit.
     pub ack_on_commit: bool,
+    // Disable timing collection for lower overhead.
     pub disable_timings: bool,
+    // Cache connection flow-control window.
     pub cache_conn_recv_window: u64,
+    // Cache stream flow-control window.
     pub cache_stream_recv_window: u64,
+    // Cache connection send window.
     pub cache_send_window: u64,
+    // Max events per batched subscription frame.
     pub event_batch_max_events: usize,
+    // Max bytes per batched subscription frame.
     pub event_batch_max_bytes: usize,
+    // Max delay before flushing a subscription batch.
     pub event_batch_max_delay_us: u64,
+    // Fanout batch size for subscription sending.
     pub fanout_batch_size: usize,
 }
 
@@ -47,6 +60,7 @@ struct BrokerConfigOverride {
 
 impl BrokerConfig {
     pub fn from_env() -> Result<Self> {
+        // Environment variables provide defaults for local development.
         let metrics_bind = std::env::var("FELIX_BROKER_METRICS_BIND")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()
@@ -56,6 +70,7 @@ impl BrokerConfig {
             .parse()
             .with_context(|| "parse FELIX_QUIC_BIND")?;
         let controlplane_url = std::env::var("FELIX_CP_URL").ok();
+        // Poll every 2s by default.
         let controlplane_sync_interval_ms = std::env::var("FELIX_CP_SYNC_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -101,6 +116,7 @@ impl BrokerConfig {
                     .ok()
                     .and_then(|value| value.parse::<u64>().ok())
             })
+            // Legacy env var fallback: FELIX_EVENT_BATCH_FLUSH_US.
             .unwrap_or(DEFAULT_EVENT_BATCH_MAX_DELAY_US);
         let fanout_batch_size = std::env::var("FELIX_FANOUT_BATCH")
             .ok()
@@ -127,6 +143,7 @@ impl BrokerConfig {
     pub fn from_env_or_yaml() -> Result<Self> {
         let mut config = Self::from_env()?;
         if let Ok(path) = std::env::var("FELIX_BROKER_CONFIG") {
+            // YAML overrides allow ops-friendly config files.
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("read FELIX_BROKER_CONFIG: {path}"))?;
             let override_cfg: BrokerConfigOverride =

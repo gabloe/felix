@@ -21,9 +21,11 @@ use utoipa::{OpenApi, ToSchema};
 
 #[derive(Clone, Debug)]
 struct AppState {
+    // Static identity + feature flags.
     region: Region,
     api_version: String,
     features: FeatureFlags,
+    // In-memory registries and change logs (polled by brokers).
     tenants: Arc<RwLock<HashMap<String, Tenant>>>,
     namespaces: Arc<RwLock<HashMap<NamespaceKey, Namespace>>>,
     tenant_changes: Arc<RwLock<TenantChangeLog>>,
@@ -130,6 +132,7 @@ struct TenantChangeLog {
 
 impl TenantChangeLog {
     fn record(&mut self, op: TenantChangeOp, tenant_id: String, tenant: Option<Tenant>) -> u64 {
+        // Append and cap the rolling change window.
         let seq = self.next_seq;
         self.next_seq += 1;
         self.items.push_back(TenantChange {
@@ -191,6 +194,7 @@ impl NamespaceChangeLog {
         key: NamespaceKey,
         namespace: Option<Namespace>,
     ) -> u64 {
+        // Append and cap the rolling change window.
         let seq = self.next_seq;
         self.next_seq += 1;
         self.items.push_back(NamespaceChange {
@@ -294,6 +298,7 @@ struct CacheChangeLog {
 
 impl CacheChangeLog {
     fn record(&mut self, op: CacheChangeOp, key: CacheKey, cache: Option<Cache>) -> u64 {
+        // Append and cap the rolling change window.
         let seq = self.next_seq;
         self.next_seq += 1;
         self.items.push_back(CacheChange {
@@ -370,6 +375,7 @@ struct StreamChangeLog {
 
 impl StreamChangeLog {
     fn record(&mut self, op: StreamChangeOp, key: StreamKey, stream: Option<Stream>) -> u64 {
+        // Append and cap the rolling change window.
         let seq = self.next_seq;
         self.next_seq += 1;
         self.items.push_back(StreamChange {
@@ -632,6 +638,7 @@ async fn delete_tenant(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
+    // Delete tenant plus all nested namespaces, streams, and caches.
     let mut tenants = state.tenants.write().await;
     if tenants.remove(&tenant_id).is_none() {
         return Err(ApiError {
@@ -712,6 +719,7 @@ async fn delete_tenant(
     )
 )]
 async fn tenant_snapshot(State(state): State<AppState>) -> Json<TenantSnapshotResponse> {
+    // Full snapshot used by brokers on cold start.
     let guard = state.tenants.read().await;
     let items = guard.values().cloned().collect::<Vec<_>>();
     let next_seq = state.tenant_changes.read().await.next_seq;
@@ -733,6 +741,7 @@ async fn tenant_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Json<TenantChangesResponse> {
+    // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
@@ -913,6 +922,7 @@ async fn delete_namespace(
     )
 )]
 async fn namespace_snapshot(State(state): State<AppState>) -> Json<NamespaceSnapshotResponse> {
+    // Full snapshot used by brokers on cold start.
     let guard = state.namespaces.read().await;
     let items = guard.values().cloned().collect::<Vec<_>>();
     let next_seq = state.namespace_changes.read().await.next_seq;
@@ -934,6 +944,7 @@ async fn namespace_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Json<NamespaceChangesResponse> {
+    // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
@@ -960,6 +971,7 @@ async fn namespace_changes(
     )
 )]
 async fn stream_snapshot(State(state): State<AppState>) -> Json<StreamSnapshotResponse> {
+    // Full snapshot used by brokers on cold start.
     let guard = state.streams.read().await;
     let items = guard.values().cloned().collect::<Vec<_>>();
     let next_seq = state.stream_changes.read().await.next_seq;
@@ -981,6 +993,7 @@ async fn stream_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Json<StreamChangesResponse> {
+    // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
@@ -1007,6 +1020,7 @@ async fn stream_changes(
     )
 )]
 async fn cache_snapshot(State(state): State<AppState>) -> Json<CacheSnapshotResponse> {
+    // Full snapshot used by brokers on cold start.
     let guard = state.caches.read().await;
     let items = guard.values().cloned().collect::<Vec<_>>();
     let next_seq = state.cache_changes.read().await.next_seq;
@@ -1028,6 +1042,7 @@ async fn cache_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> Json<CacheChangesResponse> {
+    // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
@@ -1267,6 +1282,7 @@ async fn create_cache(
     State(state): State<AppState>,
     Json(body): Json<CacheCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Cache is scoped to tenant + namespace.
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
     let key = CacheKey {
         tenant_id: tenant_id.clone(),
@@ -1525,6 +1541,7 @@ async fn main() -> Result<(), std::io::Error> {
     let metrics_handle = observability::init_observability("felix-controlplane");
 
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
+    // Initialize in-memory registries for a single-region dev setup.
     let state = default_state_with_region_id(config.region_id.clone());
     tokio::spawn(observability::serve_metrics(
         metrics_handle,
@@ -1536,6 +1553,7 @@ async fn main() -> Result<(), std::io::Error> {
     let addr = config.bind_addr;
     tracing::info!(%addr, "control plane listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Serve the HTTP API (Axum + OpenAPI docs).
     axum::serve(listener, app.into_make_service()).await
 }
 

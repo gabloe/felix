@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAGIC: u32 = 0x464C5831;
 pub const VERSION: u16 = 1;
+// Flags describe how to interpret the frame payload.
 pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
 pub const FLAG_BINARY_EVENT_BATCH: u16 = 0x0002;
 
@@ -150,6 +151,7 @@ impl Frame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
+    // Publish a single payload to a stream.
     Publish {
         tenant_id: String,
         namespace: String,
@@ -159,6 +161,7 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
+    // Publish a batch of payloads in a single request.
     PublishBatch {
         tenant_id: String,
         namespace: String,
@@ -168,6 +171,7 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
+    // Subscribe to a stream; server responds with Subscribed.
     Subscribe {
         tenant_id: String,
         namespace: String,
@@ -175,12 +179,15 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         subscription_id: Option<u64>,
     },
+    // Subscription confirmation with server-assigned ID.
     Subscribed {
         subscription_id: u64,
     },
+    // First message on the event stream for a subscription.
     EventStreamHello {
         subscription_id: u64,
     },
+    // Single event delivered to a subscriber.
     Event {
         tenant_id: String,
         namespace: String,
@@ -188,6 +195,7 @@ pub enum Message {
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
     },
+    // JSON event batch (binary batch uses FLAG_BINARY_EVENT_BATCH).
     EventBatch {
         tenant_id: String,
         namespace: String,
@@ -195,6 +203,7 @@ pub enum Message {
         #[serde(with = "base64_vec")]
         payloads: Vec<Vec<u8>>,
     },
+    // Cache set operation; may include TTL and request id.
     CachePut {
         tenant_id: String,
         namespace: String,
@@ -206,6 +215,7 @@ pub enum Message {
         request_id: Option<u64>,
         ttl_ms: Option<u64>,
     },
+    // Cache get operation; request id is echoed in responses.
     CacheGet {
         tenant_id: String,
         namespace: String,
@@ -214,6 +224,7 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
+    // Cache read response (value is optional for misses).
     CacheValue {
         tenant_id: String,
         namespace: String,
@@ -224,10 +235,13 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
+    // Cache write response with request id.
     CacheOk {
         request_id: u64,
     },
+    // Generic success response.
     Ok,
+    // Error response with human-readable message.
     Error {
         message: String,
     },
@@ -243,6 +257,7 @@ pub enum AckMode {
 
 impl Message {
     pub fn encode(&self) -> Result<Frame> {
+        // JSON-encode into a framed payload.
         let payload = serde_json::to_vec(self).map_err(Error::Serialize)?;
         Frame::new(0, Bytes::from(payload))
     }
@@ -256,6 +271,7 @@ mod base64_bytes {
     use super::*;
     use serde::de::Error;
 
+    // Encode Vec<u8> as base64 string for JSON payloads.
     pub fn serialize<S>(value: &Vec<u8>, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -264,6 +280,7 @@ mod base64_bytes {
         serializer.serialize_str(&encoded)
     }
 
+    // Decode base64 string into Vec<u8>.
     pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -279,6 +296,7 @@ mod base64_bytes_bytes {
     use super::*;
     use serde::de::Error;
 
+    // Encode Bytes as base64 string for JSON payloads.
     pub fn serialize<S>(value: &Bytes, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -287,6 +305,7 @@ mod base64_bytes_bytes {
         serializer.serialize_str(&encoded)
     }
 
+    // Decode base64 string into Bytes.
     pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Bytes, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -303,6 +322,7 @@ mod base64_option_bytes {
     use super::*;
     use serde::de::Error;
 
+    // Encode Option<Bytes> as nullable base64 string.
     pub fn serialize<S>(
         value: &Option<Bytes>,
         serializer: S,
@@ -319,6 +339,7 @@ mod base64_option_bytes {
         }
     }
 
+    // Decode optional base64 string into Option<Bytes>.
     pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Option<Bytes>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -338,6 +359,7 @@ mod base64_vec {
     use super::*;
     use serde::de::Error;
 
+    // Encode Vec<Vec<u8>> as base64 array.
     pub fn serialize<S>(values: &[Vec<u8>], serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -349,6 +371,7 @@ mod base64_vec {
         encoded.serialize(serializer)
     }
 
+    // Decode base64 array into Vec<Vec<u8>>.
     pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<Vec<u8>>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -370,6 +393,7 @@ pub mod binary {
     use bytes::BufMut;
     use serde::de::Error as SerdeError;
 
+    // Parsed representation of a binary publish batch frame.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PublishBatch {
         pub tenant_id: String,
@@ -378,6 +402,7 @@ pub mod binary {
         pub payloads: Vec<Vec<u8>>,
     }
 
+    // Encode a publish batch into a binary frame (payload only).
     pub fn encode_publish_batch(
         tenant_id: &str,
         namespace: &str,
@@ -407,6 +432,7 @@ pub mod binary {
         Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze())
     }
 
+    // Encode a full binary publish frame, including header and payload.
     pub fn encode_publish_batch_bytes(
         tenant_id: &str,
         namespace: &str,
@@ -449,6 +475,7 @@ pub mod binary {
         Ok(buf.freeze())
     }
 
+    // Decode a binary publish batch frame into its structured form.
     pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
         let mut buf = frame.payload.clone();
         if buf.remaining() < 2 {
@@ -496,12 +523,14 @@ pub mod binary {
         })
     }
 
+    // Parsed representation of a binary event batch frame.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct EventBatch {
         pub subscription_id: u64,
         pub payloads: Vec<Bytes>,
     }
 
+    // Encode binary event batch into a full framed payload.
     pub fn encode_event_batch_bytes(subscription_id: u64, payloads: &[Bytes]) -> Result<Bytes> {
         let mut payload_len = 8usize + 4;
         for payload in payloads {
@@ -526,6 +555,7 @@ pub mod binary {
         Ok(buf.freeze())
     }
 
+    // Decode binary event batch frame into its structured form.
     pub fn decode_event_batch(frame: &Frame) -> Result<EventBatch> {
         let mut buf = frame.payload.clone();
         if buf.remaining() < 12 {

@@ -55,13 +55,17 @@ struct LogEntry {
 
 #[derive(Debug)]
 struct StreamState {
+    // Broadcast channel for live subscribers.
     sender: broadcast::Sender<Bytes>,
+    // In-memory log for cursor-based replay.
     log_state: Mutex<LogState>,
 }
 
 #[derive(Debug)]
 struct LogState {
+    // Bounded log; oldest entries are dropped as new ones arrive.
     log: VecDeque<LogEntry>,
+    // Next sequence number to assign.
     next_seq: u64,
 }
 
@@ -107,6 +111,7 @@ impl StreamState {
 
         state.next_seq += 1;
         state.log.push_back(LogEntry { seq, payload });
+        // Keep only the newest entries up to the configured capacity.
         while state.log.len() > log_capacity {
             state.log.pop_front();
         }
@@ -139,6 +144,7 @@ impl StreamState {
 
     fn tail_seq(&self) -> u64 {
         let state = self.log_state.lock().expect("log lock");
+        // The cursor tail points to the next sequence to be published.
         state.next_seq
     }
 }
@@ -341,6 +347,7 @@ impl Broker {
         }
 
         let append_start = sample.then(Instant::now);
+        // Append to the in-memory log first so cursors can replay.
         for payload in payloads {
             stream_state.append(payload.clone(), self.log_capacity);
         }
@@ -353,7 +360,7 @@ impl Broker {
 
         let send_start = sample.then(Instant::now);
         let mut sent = 0usize;
-
+        // Broadcast to current subscribers; lagging receivers may drop.
         for payload in payloads {
             sent += stream_state.sender.send(payload.clone()).unwrap_or(0);
         }
@@ -419,6 +426,7 @@ impl Broker {
                 requested: cursor.next_seq,
             });
         }
+        // Return backlog for replay plus a live subscription for new events.
         Ok((backlog, stream_state.sender.subscribe()))
     }
 
