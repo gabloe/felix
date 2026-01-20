@@ -18,6 +18,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
+
 const PUBLISH_QUEUE_DEPTH: usize = 1024;
 const ACK_QUEUE_DEPTH: usize = 256;
 const STREAM_CACHE_TTL: Duration = Duration::from_secs(2);
@@ -43,6 +44,8 @@ enum EnqueuePolicy {
     Wait,
 }
 
+/// This will publish the job to the channel and handle the result. There is no real
+/// logic in this file.
 async fn enqueue_publish(
     publish_tx: &mpsc::Sender<PublishJob>,
     queue_depth: &Arc<std::sync::atomic::AtomicUsize>,
@@ -164,7 +167,7 @@ async fn handle_connection(
     config: BrokerConfig,
 ) -> Result<()> {
     loop {
-        // Accept both bi-directional control streams and uni-directional publish streams.
+        // Accept both bidirectional control streams and uni-directional publish streams.
         tokio::select! {
             result = connection.accept_bi() => {
                 let (send, recv) = match result {
@@ -351,7 +354,7 @@ async fn handle_stream(
                 .map(Bytes::from)
                 .collect::<Vec<_>>();
             let fanout_start = sample.then(Instant::now);
-            match enqueue_publish(
+            let r  = enqueue_publish(
                 &publish_tx,
                 &queue_depth,
                 PublishJob {
@@ -363,19 +366,10 @@ async fn handle_stream(
                 },
                 EnqueuePolicy::Drop,
             )
-            .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    metrics::counter!("felix_publish_requests_total", "result" => "dropped")
-                        .increment(1);
-                }
-                Err(err) => {
-                    metrics::counter!("felix_publish_requests_total", "result" => "error")
-                        .increment(1);
-                    tracing::warn!(error = %err, "publish enqueue failed");
-                }
-            }
+            .await;
+
+            emit_send_telemetry(r);
+
             if let Some(start) = fanout_start {
                 let fanout_ns = start.elapsed().as_nanos() as u64;
                 timings::record_fanout_ns(fanout_ns);
@@ -459,7 +453,10 @@ async fn handle_stream(
                 );
                 let _enter = span.enter();
                 match enqueue_result {
-                    Ok(true) => {}
+                    Ok(true) => {
+                        metrics::counter!("felix_publish_requests_total", "result" => "success")
+                            .increment(1);
+                    }
                     Ok(false) => {
                         metrics::counter!("felix_publish_requests_total", "result" => "dropped")
                             .increment(1);
@@ -622,7 +619,10 @@ async fn handle_stream(
                     metrics::histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
                 }
                 match enqueue_result {
-                    Ok(true) => {}
+                    Ok(true) => {
+                        metrics::counter!("felix_publish_requests_total", "result" => "success")
+                            .increment(1);
+                    }
                     Ok(false) => {
                         metrics::counter!("felix_publish_requests_total", "result" => "dropped")
                             .increment(1);
@@ -1262,7 +1262,10 @@ async fn handle_uni_stream(
             )
             .await
             {
-                Ok(true) => {}
+                Ok(true) => {
+                    metrics::counter!("felix_publish_requests_total", "result" => "success")
+                        .increment(1);
+                }
                 Ok(false) => {
                     metrics::counter!("felix_publish_requests_total", "result" => "dropped")
                         .increment(1);
@@ -1297,7 +1300,8 @@ async fn handle_uni_stream(
                         .increment(1);
                     continue;
                 }
-                match enqueue_publish(
+
+                let r = enqueue_publish(
                     &publish_tx,
                     &queue_depth,
                     PublishJob {
@@ -1309,18 +1313,10 @@ async fn handle_uni_stream(
                     },
                     EnqueuePolicy::Drop,
                 )
-                .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        metrics::counter!("felix_publish_requests_total", "result" => "dropped")
-                            .increment(1);
-                    }
-                    Err(_) => {
-                        metrics::counter!("felix_publish_requests_total", "result" => "error")
-                            .increment(1);
-                        break;
-                    }
+                    .await;
+
+                if emit_send_telemetry(r) {
+                    break;
                 }
             }
             Message::PublishBatch {
@@ -1344,7 +1340,8 @@ async fn handle_uni_stream(
                     continue;
                 }
                 let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
-                match enqueue_publish(
+
+                let r = enqueue_publish(
                     &publish_tx,
                     &queue_depth,
                     PublishJob {
@@ -1355,19 +1352,10 @@ async fn handle_uni_stream(
                         response: None,
                     },
                     EnqueuePolicy::Drop,
-                )
-                .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        metrics::counter!("felix_publish_requests_total", "result" => "dropped")
-                            .increment(1);
-                    }
-                    Err(_) => {
-                        metrics::counter!("felix_publish_requests_total", "result" => "error")
-                            .increment(1);
-                        break;
-                    }
+                ).await;
+
+                if emit_send_telemetry(r) {
+                    break;
                 }
             }
             _ => {
@@ -1587,5 +1575,28 @@ mod tests {
         let mut roots = RootCertStore::empty();
         roots.add(cert)?;
         Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
+    }
+}
+
+
+fn emit_send_telemetry(result: Result<bool>) -> bool {
+    match result
+    {
+        Ok(true) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "success")
+                .increment(1);
+            false
+        }
+        Ok(false) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "dropped")
+                .increment(1);
+            false
+        }
+        Err(err) => {
+            metrics::counter!("felix_publish_requests_total", "result" => "error")
+                .increment(1);
+            tracing::warn!(error = %err, "publish enqueue failed");
+            true
+        }
     }
 }
