@@ -90,11 +90,16 @@ impl InProcessClient {
 
 /// Network client that speaks felix-wire over QUIC.
 pub struct Client {
+    // Control stream handles publish requests.
     _control_client: QuicClient,
+    // Cache streams are pooled separately for lower latency round trips.
     _cache_client: QuicClient,
+    // Event streams are pooled for subscriptions.
     _event_client: QuicClient,
     control_connection: QuicConnection,
+    // Per-stream cache workers (single writer per stream).
     cache_workers: Vec<CacheWorker>,
+    // Connection pool for subscription event streams.
     event_connections: Vec<QuicConnection>,
     subscription_counter: AtomicU64,
     cache_request_counter: AtomicU64,
@@ -123,6 +128,7 @@ impl Client {
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("bind addr");
         let control_client = QuicClient::bind(bind_addr, client_config.clone(), transport.clone())?;
         let control_connection = control_client.connect(addr, server_name).await?;
+        // Cache connections are pooled to avoid head-of-line blocking.
         let cache_pool_size = std::env::var("FELIX_CACHE_CONN_POOL")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -135,6 +141,7 @@ impl Client {
             let connection = cache_client.connect(addr, server_name).await?;
             cache_connections.push(connection);
         }
+        // Each cache connection runs multiple independent bi-directional streams.
         let cache_streams_per_conn = std::env::var("FELIX_CACHE_STREAMS_PER_CONN")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -160,6 +167,7 @@ impl Client {
                 cache_workers.push(CacheWorker { tx, conn_index });
             }
         }
+        // Event connections are reserved for subscription streams.
         let event_pool_size = std::env::var("FELIX_EVENT_CONN_POOL")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -215,6 +223,7 @@ impl Client {
         namespace: &str,
         stream: &str,
     ) -> Result<Subscription> {
+        // Round-robin subscriptions across the event connection pool.
         let requested_id = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
         let connection_index = requested_id as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
@@ -247,6 +256,7 @@ impl Client {
         let tenant_id = Arc::<str>::from(tenant_id);
         let namespace = Arc::<str>::from(namespace);
         let stream = Arc::<str>::from(stream);
+        // Validate the first event stream message when using subscription IDs.
         if subscription_id.is_some()
             && let Some(first) = read_message(&mut recv).await?
         {
@@ -301,6 +311,7 @@ impl Client {
         value: Bytes,
         ttl_ms: Option<u64>,
     ) -> Result<()> {
+        // Cache ops are delegated to a pool of single-writer cache workers.
         let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
         let message = Message::CachePut {
             tenant_id: tenant_id.to_string(),
@@ -333,6 +344,7 @@ impl Client {
         cache: &str,
         key: &str,
     ) -> Result<Option<Bytes>> {
+        // Cache ops are delegated to a pool of single-writer cache workers.
         let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
         let message = Message::CacheGet {
             tenant_id: tenant_id.to_string(),
@@ -357,6 +369,7 @@ impl Client {
     }
 
     fn cache_worker(&self) -> &CacheWorker {
+        // Round-robin between cache workers and update per-connection metrics.
         let index =
             self.cache_worker_rr.fetch_add(1, Ordering::Relaxed) % self.cache_workers.len().max(1);
         let conn_index = self.cache_workers[index].conn_index;
@@ -401,6 +414,7 @@ async fn run_cache_worker(
     mut rx: mpsc::Receiver<CacheRequest>,
     cache_conn_counts: Arc<Vec<AtomicUsize>>,
 ) {
+    // Single writer for a cache stream; handles sequential request/response pairs.
     let sample = timings::should_sample();
     if sample {
         let open_ns = 0;
@@ -450,6 +464,7 @@ async fn cache_round_trip(
     sample: bool,
     request_id: u64,
 ) -> Result<Option<Bytes>> {
+    // Encode -> write -> read -> decode in one stream round trip.
     let encode_start = sample.then(Instant::now);
     let frame = message.encode().context("encode message")?;
     if let Some(start) = encode_start {
@@ -548,6 +563,7 @@ impl Publisher {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
+        // Enqueue publish on the single-writer publisher task.
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .tx
@@ -575,6 +591,7 @@ impl Publisher {
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
     ) -> Result<()> {
+        // Batch publish uses the same queue/writer as single messages.
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .tx
@@ -659,6 +676,7 @@ async fn run_publisher_writer(
     mut rx: mpsc::Receiver<PublishRequest>,
     chunk_bytes: usize,
 ) -> Result<()> {
+    // Single writer: serialize publish requests over one bi-directional stream.
     while let Some(request) = rx.recv().await {
         match request {
             PublishRequest::Message {
@@ -787,6 +805,7 @@ async fn finish_publisher_stream(send: &mut SendStream, recv: &mut RecvStream) -
 }
 
 async fn maybe_wait_for_ack(recv: &mut RecvStream, ack: AckMode) -> Result<()> {
+    // AckMode::None is fire-and-forget; otherwise wait for Ok.
     if ack == AckMode::None {
         return Ok(());
     }
@@ -830,6 +849,7 @@ pub struct Event {
 
 impl Subscription {
     pub async fn next_event(&mut self) -> Result<Option<Event>> {
+        // Read from a cached batch first, then from the QUIC stream.
         if let Some(payload) = self.next_from_batch() {
             return Ok(Some(self.event_from_payload(payload)));
         }
@@ -880,6 +900,7 @@ impl Subscription {
     }
 
     fn store_batch(&mut self, batch: Vec<Bytes>) -> Option<Event> {
+        // Store a new batch and return the first event immediately.
         if batch.is_empty() {
             return None;
         }
@@ -917,6 +938,7 @@ impl Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
+        // Update connection-level subscription counts for metrics.
         let counter = &self.event_conn_counts[self.event_conn_index];
         let mut current = counter.load(Ordering::Relaxed);
         while current > 0 {

@@ -14,10 +14,15 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
+    // Max payload size enforced by higher layers.
     pub max_frame_bytes: usize,
+    // Max concurrent streams per connection.
     pub max_streams: u16,
+    // Connection-level flow control window.
     pub receive_window: u64,
+    // Per-stream receive window.
     pub stream_receive_window: u64,
+    // Connection-level send window.
     pub send_window: u64,
 }
 
@@ -42,6 +47,7 @@ impl Default for TransportConfig {
 
 impl TransportConfig {
     fn quinn_transport_config(&self) -> quinn::TransportConfig {
+        // Translate Felix defaults into Quinn transport settings.
         let mut config = quinn::TransportConfig::default();
         let streams = quinn::VarInt::from_u32(self.max_streams as u32);
         config.max_concurrent_bidi_streams(streams);
@@ -104,6 +110,7 @@ pub struct ConnectionInfo {
 #[derive(Debug)]
 pub struct QuicServer {
     endpoint: Endpoint,
+    // Retain for debugging/metrics; Quinn owns the active config.
     _transport: TransportConfig,
 }
 
@@ -113,6 +120,7 @@ impl QuicServer {
         mut server_config: ServerConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
+        // Apply transport defaults before binding the endpoint.
         let quinn_transport = transport.quinn_transport_config();
         server_config.transport_config(Arc::new(quinn_transport));
         let endpoint = Endpoint::server(server_config, addr).context("bind QUIC server")?;
@@ -123,6 +131,7 @@ impl QuicServer {
     }
 
     pub async fn accept(&self) -> Result<QuicConnection> {
+        // Block until a client connects and finishes the handshake.
         let connecting = self
             .endpoint
             .accept()
@@ -158,6 +167,7 @@ impl QuicServer {
 #[derive(Debug)]
 pub struct QuicClient {
     endpoint: Endpoint,
+    // Retain for debugging/metrics; Quinn owns the active config.
     _transport: TransportConfig,
 }
 
@@ -167,6 +177,7 @@ impl QuicClient {
         mut client_config: ClientConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
+        // Apply transport defaults before binding the endpoint.
         let quinn_transport = transport.quinn_transport_config();
         client_config.transport_config(Arc::new(quinn_transport));
         let mut endpoint = Endpoint::client(addr).context("bind QUIC client")?;
@@ -178,6 +189,7 @@ impl QuicClient {
     }
 
     pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<QuicConnection> {
+        // Initiate and await a QUIC handshake.
         let connecting = self
             .endpoint
             .connect(addr, server_name)
@@ -201,11 +213,13 @@ impl QuicClient {
 #[derive(Debug, Clone)]
 pub struct QuicConnection {
     inner: Connection,
+    // Stable id and peer metadata for tracing.
     info: ConnectionInfo,
 }
 
 impl QuicConnection {
     fn new(connection: Connection) -> Self {
+        // Quinn exposes a stable connection id for logging.
         let info = ConnectionInfo {
             id: ConnectionId(u64::try_from(connection.stable_id()).expect("stable id fits u64")),
             peer_addr: connection.remote_address(),

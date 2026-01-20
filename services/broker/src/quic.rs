@@ -23,6 +23,7 @@ const ACK_QUEUE_DEPTH: usize = 256;
 const STREAM_CACHE_TTL: Duration = Duration::from_secs(2);
 static SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
 
+// Work item for the publish worker; response is only used for per-message acks.
 struct PublishJob {
     tenant_id: String,
     namespace: String,
@@ -31,12 +32,14 @@ struct PublishJob {
     response: Option<oneshot::Sender<Result<()>>>,
 }
 
+// Outbound responses pushed onto the ack/write task.
 enum Outgoing {
     Message(Message),
     CacheMessage(Message),
     Finish,
 }
 
+// What to do when the publish queue is full.
 enum EnqueuePolicy {
     Drop,
     Fail,
@@ -51,6 +54,7 @@ async fn enqueue_publish(
     job: PublishJob,
     policy: EnqueuePolicy,
 ) -> Result<bool> {
+    // Best-effort enqueue with metrics and optional backpressure/err.
     match publish_tx.try_send(job) {
         Ok(()) => {
             let depth = queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
@@ -84,6 +88,7 @@ async fn enqueue_publish(
     }
 }
 
+// Adjust queue depth gauges safely when send fails or work completes.
 fn decrement_depth(depth: &Arc<std::sync::atomic::AtomicUsize>, gauge: &'static str) {
     let mut current = depth.load(Ordering::Relaxed);
     while current > 0 {
@@ -103,6 +108,7 @@ async fn send_outgoing(
     gauge: &'static str,
     message: Outgoing,
 ) -> bool {
+    // Queue a response for the ack writer and track queue depth.
     let next = depth.fetch_add(1, Ordering::Relaxed) + 1;
     metrics::gauge!(gauge).set(next as f64);
     if tx.send(message).await.is_err() {
@@ -112,6 +118,7 @@ async fn send_outgoing(
     true
 }
 
+// Build a stable cache key without allocations per component.
 fn stream_cache_key(tenant_id: &str, namespace: &str, stream: &str) -> String {
     format!("{tenant_id}\0{namespace}\0{stream}")
 }
@@ -123,6 +130,7 @@ async fn stream_exists_cached(
     namespace: &str,
     stream: &str,
 ) -> bool {
+    // Short-lived cache to avoid repeated stream lookups on hot paths.
     let key = stream_cache_key(tenant_id, namespace, stream);
     if let Some((exists, expires)) = cache.get(&key)
         && *expires > Instant::now()
@@ -139,6 +147,7 @@ pub async fn serve(
     broker: Arc<Broker>,
     config: BrokerConfig,
 ) -> Result<()> {
+    // Main accept loop: spawn a task per incoming QUIC connection.
     if config.disable_timings {
         timings::set_enabled(false);
         broker_publish_timings::set_enabled(false);
@@ -160,6 +169,7 @@ async fn handle_connection(
     connection: QuicConnection,
     config: BrokerConfig,
 ) -> Result<()> {
+    // One QUIC connection can multiplex multiple streams.
     loop {
         // Accept both bidirectional control streams and uni-directional publish streams.
         tokio::select! {
@@ -207,7 +217,9 @@ async fn handle_stream(
     mut send: SendStream,
     mut recv: RecvStream,
 ) -> Result<()> {
+    // Bi-directional stream: reads requests and writes responses/acks.
     let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(PUBLISH_QUEUE_DEPTH);
+    // Single-writer response path: enqueue Outgoing messages, one task serializes writes.
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel::<Outgoing>(ACK_QUEUE_DEPTH);
     let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ack_on_commit = config.ack_on_commit;
@@ -215,7 +227,7 @@ async fn handle_stream(
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let queue_depth_worker = Arc::clone(&queue_depth);
     let mut stream_cache = HashMap::new();
-
+    // Publish worker: drains the queue and persists to the broker.
     let _reader_job = tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
             queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
@@ -233,7 +245,8 @@ async fn handle_stream(
     });
 
     let out_ack_depth_worker = Arc::clone(&out_ack_depth);
-    let _writer_job = tokio::spawn(async move {
+    // Single writer drains the queue to keep QUIC writes ordered and non-overlapping.
+    tokio::spawn(async move {
         let mut ack_done = false;
         let mut last_cache = false;
         while !ack_done {
@@ -304,6 +317,7 @@ async fn handle_stream(
         }
         let _ = send.stopped().await;
     });
+    // Read loop: decode frames, route to publish/cache/subscription handlers.
     loop {
         let sample = timings::should_sample();
         let read_start = sample.then(Instant::now);
@@ -391,6 +405,7 @@ async fn handle_stream(
                 let (response_tx, response_rx) = oneshot::channel();
                 let payload_len = payload.len();
                 let enqueue_start = sample.then(Instant::now);
+                // Ack mode determines if we wait for broker commit or reply immediately.
                 let ack_mode = ack.unwrap_or(felix_wire::AckMode::PerMessage);
                 if !stream_exists_cached(
                     &broker,
@@ -480,6 +495,7 @@ async fn handle_stream(
                     continue;
                 }
                 if !ack_on_commit {
+                    // Fire-and-forget ack after enqueue when configured.
                     let _ = send_outgoing(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -496,6 +512,7 @@ async fn handle_stream(
                 }
                 let out_tx = out_ack_tx.clone();
                 let out_ack_depth = Arc::clone(&out_ack_depth);
+                // Wait for broker publish result before acknowledging.
                 tokio::spawn(async move {
                     match response_rx.await {
                         Ok(Ok(())) => {
@@ -646,6 +663,7 @@ async fn handle_stream(
                     continue;
                 }
                 if !ack_on_commit {
+                    // Batch ack can be sent once enqueued if commit acks are disabled.
                     let _ = send_outgoing(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -662,6 +680,7 @@ async fn handle_stream(
                 }
                 let out_tx = out_ack_tx.clone();
                 let out_ack_depth = Arc::clone(&out_ack_depth);
+                // Wait for broker publish result before acknowledging.
                 tokio::spawn(async move {
                     match response_rx.await {
                         Ok(Ok(())) => {
@@ -800,6 +819,7 @@ async fn handle_stream(
                 let mut pending: Option<Bytes> = None;
 
                 if batch_size <= 1 {
+                    // Single-event mode: write each event as it arrives.
                     loop {
                         match receiver.recv().await {
                             Ok(payload) => {
@@ -844,6 +864,7 @@ async fn handle_stream(
                     return Ok(());
                 }
 
+                // Batch mode: coalesce events by count, size, or deadline.
                 loop {
                     let sample = timings::should_sample();
                     let queue_start = sample.then(Instant::now);
@@ -1012,6 +1033,7 @@ async fn handle_stream(
                 request_id,
                 ttl_ms,
             } => {
+                // Cache ops can be single-response (request_id set) or stream-terminating.
                 if let Some(read_ns) = read_ns {
                     timings::record_cache_read_ns(read_ns);
                 }
@@ -1092,6 +1114,7 @@ async fn handle_stream(
                 key,
                 request_id,
             } => {
+                // Cache gets return CacheValue and optionally finish the stream.
                 if let Some(read_ns) = read_ns {
                     timings::record_cache_read_ns(read_ns);
                 }
@@ -1208,11 +1231,13 @@ async fn handle_uni_stream(
     _config: BrokerConfig,
     mut recv: RecvStream,
 ) -> Result<()> {
+    // Uni-directional streams are publish-only; no responses are sent.
     let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(PUBLISH_QUEUE_DEPTH);
     let broker_for_worker = Arc::clone(&broker);
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let queue_depth_worker = Arc::clone(&queue_depth);
     let mut stream_cache = HashMap::new();
+    // Publish worker: best-effort fire-and-forget writes.
     tokio::spawn(async move {
         while let Some(job) = publish_rx.recv().await {
             queue_depth_worker.fetch_sub(1, Ordering::Relaxed);
@@ -1223,6 +1248,7 @@ async fn handle_uni_stream(
                 .await;
         }
     });
+    // Read loop: accept publish messages only.
     loop {
         let frame = match read_frame(&mut recv).await? {
             Some(frame) => frame,
@@ -1368,6 +1394,7 @@ async fn handle_uni_stream(
     Ok(())
 }
 
+// Helper for tests and small control flows.
 pub async fn read_message(recv: &mut RecvStream) -> Result<Option<Message>> {
     let frame = match read_frame(recv).await? {
         Some(frame) => frame,
@@ -1376,11 +1403,13 @@ pub async fn read_message(recv: &mut RecvStream) -> Result<Option<Message>> {
     Message::decode(frame).map(Some).context("decode message")
 }
 
+// Helper to encode + write a single message.
 pub async fn write_message(send: &mut SendStream, message: Message) -> Result<()> {
     let frame = message.encode().context("encode message")?;
     write_frame(send, frame).await
 }
 
+// Low-level frame reader for QUIC streams.
 async fn read_frame(recv: &mut RecvStream) -> Result<Option<Frame>> {
     let mut header_bytes = [0u8; FrameHeader::LEN];
     match recv.read_exact(&mut header_bytes).await {
@@ -1402,10 +1431,12 @@ async fn read_frame(recv: &mut RecvStream) -> Result<Option<Frame>> {
     }))
 }
 
+// Low-level frame writer for QUIC streams.
 async fn write_frame(send: &mut SendStream, frame: Frame) -> Result<()> {
     send.write_all(&frame.encode()).await.context("write frame")
 }
 
+// Write raw pre-encoded bytes (used for cached responses).
 async fn write_frame_bytes(send: &mut SendStream, bytes: Bytes) -> Result<()> {
     send.write_all(&bytes).await.context("write frame")
 }
