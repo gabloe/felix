@@ -84,6 +84,17 @@ durability, clustering, or advanced observability.
 - [ ] Define requirements for tiered storage (hot/cold path, LCU?)
 - [ ] Implement tiered storage primitives (durability funneled down to K8s FS mounts?)
 
+### Durable storage sketch
+- Split durable storage into **Index** and **Data** files: Index holds metadata (key + pointer/status), data file holds payload bytes.
+- Keep keys (index entries) in memory as a write-through cache; writes first grow the data file, mark the index entry “in use,” then write payload bytes so that the system never reports data as durable until bytes hit disk.
+- The append-only data file with in-memory index mimics a simple log (LSM-style without levels) and gives us a predictable replay order for fanout and replication.
+
+### Open questions
+1. Do we need checksums/hashes to detect silent data corruption during reads or after reboots?
+2. How should data file segmentation and garbage collection work to honor per-segment size caps?  What is a sane segment cap? 512MB?
+3. What is the delete policy? Should we retain the last *N* versions per key for rollbacks, or can we drop them immediately?
+4. What crash recovery guarantees do we need? We can’t mark an entry as committed until the payload bytes are actually persisted.
+
 ## Performance optimization
 - [ ] Figure out how to handle backpressure
 - [X] Measure P999 tail latency and throughput
