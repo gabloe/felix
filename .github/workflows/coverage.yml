@@ -1,9 +1,12 @@
 name: Coverage
 
 on:
-  pull_request:
   push:
-    branches: ["main"]
+    branches:
+      - main
+    paths-ignore:
+      - "**/coverage.svg"
+  pull_request:
 
 jobs:
   coverage:
@@ -24,8 +27,8 @@ jobs:
         uses: ImBIOS/lcov-coverage-badge@v1
         with:
           file: ./lcov.info
-          access_token: ${{ secrets.GITHUB_TOKEN }}
-          output: .github/badges/coverage.svg
+      - name: Move coverage badge
+        run: mv coverage.svg .github/badges/coverage.svg
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
