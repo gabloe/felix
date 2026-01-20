@@ -1,7 +1,7 @@
 # Felix
 
 <p align="center">
-  <img src="docs/assets/logo.png" alt="Felix logo" width="220" />
+  <img src="docs/assets/logo.PNG" alt="Felix logo" width="220" />
 </p>
 
 <p align="center">
