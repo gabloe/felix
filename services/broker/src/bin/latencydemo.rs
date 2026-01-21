@@ -13,6 +13,7 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
@@ -36,27 +37,52 @@ struct DemoResult {
     binary: bool,
     received: usize,
     dropped: usize,
+    delivered_total: usize,
     p50: Duration,
     p99: Duration,
     p999: Duration,
     throughput: f64,
     effective_throughput: f64,
+    delivered_throughput: f64,
+    delivered_per_sub_throughput: f64,
 }
 
+#[cfg(feature = "telemetry")]
 #[derive(Clone, Copy, Debug)]
 struct TimingSummary {
+    client_pub_enqueue_wait_p50: Option<Duration>,
+    client_pub_enqueue_wait_p99: Option<Duration>,
+    client_pub_enqueue_wait_p999: Option<Duration>,
     client_encode_p50: Option<Duration>,
     client_encode_p99: Option<Duration>,
+    client_binary_encode_p50: Option<Duration>,
+    client_binary_encode_p99: Option<Duration>,
+    client_binary_encode_p999: Option<Duration>,
+    client_text_encode_p50: Option<Duration>,
+    client_text_encode_p99: Option<Duration>,
+    client_text_encode_p999: Option<Duration>,
+    client_text_batch_build_p50: Option<Duration>,
+    client_text_batch_build_p99: Option<Duration>,
+    client_text_batch_build_p999: Option<Duration>,
     client_write_p50: Option<Duration>,
     client_write_p99: Option<Duration>,
     client_send_await_p50: Option<Duration>,
     client_send_await_p99: Option<Duration>,
+    client_send_await_p999: Option<Duration>,
     client_sub_read_p50: Option<Duration>,
     client_sub_read_p99: Option<Duration>,
+    client_sub_read_await_p50: Option<Duration>,
+    client_sub_read_await_p99: Option<Duration>,
     client_sub_decode_p50: Option<Duration>,
     client_sub_decode_p99: Option<Duration>,
     client_sub_dispatch_p50: Option<Duration>,
     client_sub_dispatch_p99: Option<Duration>,
+    client_sub_consumer_gap_p50: Option<Duration>,
+    client_sub_consumer_gap_p99: Option<Duration>,
+    client_sub_consumer_gap_p999: Option<Duration>,
+    client_e2e_latency_p50: Option<Duration>,
+    client_e2e_latency_p99: Option<Duration>,
+    client_e2e_latency_p999: Option<Duration>,
     client_ack_read_p50: Option<Duration>,
     client_ack_read_p99: Option<Duration>,
     client_ack_decode_p50: Option<Duration>,
@@ -73,6 +99,9 @@ struct TimingSummary {
     broker_sub_queue_wait_p99: Option<Duration>,
     broker_sub_write_p50: Option<Duration>,
     broker_sub_write_p99: Option<Duration>,
+    broker_sub_delivery_p50: Option<Duration>,
+    broker_sub_delivery_p99: Option<Duration>,
+    broker_sub_delivery_p999: Option<Duration>,
     broker_publish_lookup_p50: Option<Duration>,
     broker_publish_lookup_p99: Option<Duration>,
     broker_publish_append_p50: Option<Duration>,
@@ -80,6 +109,10 @@ struct TimingSummary {
     broker_publish_send_p50: Option<Duration>,
     broker_publish_send_p99: Option<Duration>,
 }
+
+#[cfg(not(feature = "telemetry"))]
+#[derive(Clone, Copy, Debug, Default)]
+struct TimingSummary;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -274,11 +307,20 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             .with_topic_capacity(total_events.saturating_add(1))?
             .with_log_capacity(total_events.saturating_add(1))?,
     );
+    let event_queue_depth = total_events.max(1024);
+    unsafe {
+        std::env::set_var("FELIX_EVENT_QUEUE_DEPTH", event_queue_depth.to_string());
+    }
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
         .register_stream("t1", "default", "latency", StreamMetadata::default())
         .await?;
+    #[cfg(feature = "telemetry")]
+    {
+        broker::quic::reset_frame_counters();
+        felix_client::reset_frame_counters();
+    }
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -295,11 +337,19 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
 
     let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
 
-    let (primary_sub, drain_tasks) =
-        setup_subscribers(&client, config.fanout, total_events).await?;
+    let delivered_total = Arc::new(AtomicUsize::new(0));
+    let (primary_sub, drain_tasks) = setup_subscribers(
+        &client,
+        config.fanout,
+        total_events,
+        config.warmup,
+        Arc::clone(&delivered_total),
+    )
+    .await?;
 
     let (warmup_tx, warmup_rx) = oneshot::channel();
     let idle_timeout = Duration::from_millis(config.idle_ms);
+    let delivered_for_primary = Arc::clone(&delivered_total);
     let recv_task = tokio::spawn(async move {
         let mut results = Vec::with_capacity(config.total);
         let mut seen = 0usize;
@@ -331,6 +381,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                     }
                     let elapsed = decode_latency(event.payload.as_ref());
                     results.push(elapsed);
+                    delivered_for_primary.fetch_add(1, Ordering::Relaxed);
                     if let Some(start) = dispatch_start {
                         let dispatch_ns = start.elapsed().as_nanos() as u64;
                         client_timings::record_sub_dispatch_ns(dispatch_ns);
@@ -370,8 +421,13 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let mut latencies = recv_task.await.expect("join");
     let elapsed = start.elapsed();
     publisher.finish().await?;
-    for task in drain_tasks {
-        task.abort();
+    for mut task in drain_tasks {
+        tokio::select! {
+            _ = &mut task => {}
+            _ = tokio::time::sleep(idle_timeout) => {
+                task.abort();
+            }
+        }
     }
     server_task.abort();
 
@@ -389,6 +445,10 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     } else {
         None
     };
+    let delivered_total = delivered_total.load(Ordering::Relaxed);
+    let delivered_throughput = delivered_total as f64 / elapsed.as_secs_f64();
+    let delivered_per_sub_throughput =
+        (delivered_total as f64 / config.fanout.max(1) as f64) / elapsed.as_secs_f64();
     Ok((
         DemoResult {
             total: config.total,
@@ -398,11 +458,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             binary: config.binary,
             received,
             dropped: config.total.saturating_sub(received),
+            delivered_total,
             p50: percentile(&latencies, 0.50),
             p99: percentile(&latencies, 0.99),
             p999: percentile(&latencies, 0.999),
             throughput: config.total as f64 / elapsed.as_secs_f64(),
             effective_throughput: received as f64 / elapsed.as_secs_f64(),
+            delivered_throughput,
+            delivered_per_sub_throughput,
         },
         summary,
     ))
@@ -412,6 +475,8 @@ async fn setup_subscribers(
     client: &Client,
     fanout: usize,
     total_events: usize,
+    warmup: usize,
+    delivered_total: Arc<AtomicUsize>,
 ) -> Result<(Subscription, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
     let mut primary_sub = None;
@@ -422,13 +487,19 @@ async fn setup_subscribers(
         } else {
             let mut sub = sub;
             let idle_timeout = Duration::from_millis(2000);
+            let delivered = Arc::clone(&delivered_total);
             drain_tasks.push(tokio::spawn(async move {
                 let mut remaining = total_events;
+                let mut seen = 0usize;
                 while remaining > 0 {
                     let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
                     match next {
                         Ok(Ok(Some(_))) => {
                             remaining -= 1;
+                            if seen >= warmup {
+                                delivered.fetch_add(1, Ordering::Relaxed);
+                            }
+                            seen += 1;
                         }
                         Ok(Ok(None)) => break,
                         Ok(Err(_)) => break,
@@ -516,6 +587,7 @@ fn print_result(result: &DemoResult) {
         result.batch_size,
         result.binary
     );
+    println!("  delivered total = {}", result.delivered_total);
     println!("  p50  = {}", format_duration(result.p50));
     println!("  p99  = {}", format_duration(result.p99));
     println!("  p999 = {}", format_duration(result.p999));
@@ -524,26 +596,56 @@ fn print_result(result: &DemoResult) {
         "  effective throughput = {:.2} msg/s",
         result.effective_throughput
     );
+    println!(
+        "  delivered throughput = {:.2} msg/s",
+        result.delivered_throughput
+    );
+    println!(
+        "  delivered per-sub throughput = {:.2} msg/s",
+        result.delivered_per_sub_throughput
+    );
 }
 
+#[cfg(feature = "telemetry")]
 fn print_timing_summary(summary: Option<TimingSummary>) {
     let Some(summary) = summary else {
         return;
     };
     println!(
-        "  timings: client_encode p50={} p99={} client_write p50={} p99={} client_send_await p50={} p99={} client_sub_read p50={} p99={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_write p50={} p99={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_send p50={} p99={}",
+        "  timings: client_pub_enqueue_wait p50={} p99={} p999={} client_encode p50={} p99={} client_binary_encode p50={} p99={} p999={} client_text_encode p50={} p99={} p999={} client_text_batch_build p50={} p99={} p999={} client_write p50={} p99={} client_send_await p50={} p99={} p999={} client_sub_read p50={} p99={} client_sub_read_await p50={} p99={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_sub_consumer_gap p50={} p99={} p999={} client_e2e_latency p50={} p99={} p999={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_write p50={} p99={} broker_sub_delivery p50={} p99={} p999={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_send p50={} p99={}",
+        format_optional_duration(summary.client_pub_enqueue_wait_p50),
+        format_optional_duration(summary.client_pub_enqueue_wait_p99),
+        format_optional_duration(summary.client_pub_enqueue_wait_p999),
         format_optional_duration(summary.client_encode_p50),
         format_optional_duration(summary.client_encode_p99),
+        format_optional_duration(summary.client_binary_encode_p50),
+        format_optional_duration(summary.client_binary_encode_p99),
+        format_optional_duration(summary.client_binary_encode_p999),
+        format_optional_duration(summary.client_text_encode_p50),
+        format_optional_duration(summary.client_text_encode_p99),
+        format_optional_duration(summary.client_text_encode_p999),
+        format_optional_duration(summary.client_text_batch_build_p50),
+        format_optional_duration(summary.client_text_batch_build_p99),
+        format_optional_duration(summary.client_text_batch_build_p999),
         format_optional_duration(summary.client_write_p50),
         format_optional_duration(summary.client_write_p99),
         format_optional_duration(summary.client_send_await_p50),
         format_optional_duration(summary.client_send_await_p99),
+        format_optional_duration(summary.client_send_await_p999),
         format_optional_duration(summary.client_sub_read_p50),
         format_optional_duration(summary.client_sub_read_p99),
+        format_optional_duration(summary.client_sub_read_await_p50),
+        format_optional_duration(summary.client_sub_read_await_p99),
         format_optional_duration(summary.client_sub_decode_p50),
         format_optional_duration(summary.client_sub_decode_p99),
         format_optional_duration(summary.client_sub_dispatch_p50),
         format_optional_duration(summary.client_sub_dispatch_p99),
+        format_optional_duration(summary.client_sub_consumer_gap_p50),
+        format_optional_duration(summary.client_sub_consumer_gap_p99),
+        format_optional_duration(summary.client_sub_consumer_gap_p999),
+        format_optional_duration(summary.client_e2e_latency_p50),
+        format_optional_duration(summary.client_e2e_latency_p99),
+        format_optional_duration(summary.client_e2e_latency_p999),
         format_optional_duration(summary.client_ack_read_p50),
         format_optional_duration(summary.client_ack_read_p99),
         format_optional_duration(summary.client_ack_decode_p50),
@@ -560,6 +662,9 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         format_optional_duration(summary.broker_sub_queue_wait_p99),
         format_optional_duration(summary.broker_sub_write_p50),
         format_optional_duration(summary.broker_sub_write_p99),
+        format_optional_duration(summary.broker_sub_delivery_p50),
+        format_optional_duration(summary.broker_sub_delivery_p99),
+        format_optional_duration(summary.broker_sub_delivery_p999),
         format_optional_duration(summary.broker_publish_lookup_p50),
         format_optional_duration(summary.broker_publish_lookup_p99),
         format_optional_duration(summary.broker_publish_append_p50),
@@ -569,22 +674,170 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
     );
 }
 
+#[cfg(not(feature = "telemetry"))]
+fn print_timing_summary(_summary: Option<TimingSummary>) {}
+
+#[cfg(feature = "telemetry")]
+fn print_frame_counters() -> (
+    felix_client::FrameCountersSnapshot,
+    broker::quic::FrameCountersSnapshot,
+) {
+    let broker = broker::quic::frame_counters_snapshot();
+    let client = felix_client::frame_counters_snapshot();
+    println!(
+        "  frame_counters: client frames_in_ok={} frames_in_err={} frames_out_ok={} bytes_in={} bytes_out={} pub_out_ok={} pub_out_err={} pub_items_out_ok={} pub_items_out_err={} pub_batches_out_ok={} pub_batches_out_err={} sub_in_ok={} sub_items_in_ok={} sub_batches_in_ok={} ack_in_ok={} ack_items_in_ok={} binary_encode_reallocs={} text_encode_reallocs={}",
+        client.frames_in_ok,
+        client.frames_in_err,
+        client.frames_out_ok,
+        client.bytes_in,
+        client.bytes_out,
+        client.pub_frames_out_ok,
+        client.pub_frames_out_err,
+        client.pub_items_out_ok,
+        client.pub_items_out_err,
+        client.pub_batches_out_ok,
+        client.pub_batches_out_err,
+        client.sub_frames_in_ok,
+        client.sub_items_in_ok,
+        client.sub_batches_in_ok,
+        client.ack_frames_in_ok,
+        client.ack_items_in_ok,
+        client.binary_encode_reallocs,
+        client.text_encode_reallocs
+    );
+    println!(
+        "  frame_counters: broker frames_in_ok={} frames_in_err={} frames_out_ok={} bytes_in={} bytes_out={} pub_in_ok={} pub_in_err={} pub_items_in_ok={} pub_items_in_err={} pub_batches_in_ok={} pub_batches_in_err={} ack_out_ok={} ack_items_out_ok={} sub_out_ok={} sub_items_out_ok={} sub_batches_out_ok={}",
+        broker.frames_in_ok,
+        broker.frames_in_err,
+        broker.frames_out_ok,
+        broker.bytes_in,
+        broker.bytes_out,
+        broker.pub_frames_in_ok,
+        broker.pub_frames_in_err,
+        broker.pub_items_in_ok,
+        broker.pub_items_in_err,
+        broker.pub_batches_in_ok,
+        broker.pub_batches_in_err,
+        broker.ack_frames_out_ok,
+        broker.ack_items_out_ok,
+        broker.sub_frames_out_ok,
+        broker.sub_items_out_ok,
+        broker.sub_batches_out_ok
+    );
+    (client, broker)
+}
+
+#[cfg(not(feature = "telemetry"))]
+fn print_frame_counters() -> (
+    felix_client::FrameCountersSnapshot,
+    broker::quic::FrameCountersSnapshot,
+) {
+    println!("  frame_counters: telemetry disabled");
+    (
+        felix_client::frame_counters_snapshot(),
+        broker::quic::frame_counters_snapshot(),
+    )
+}
+
+#[cfg(feature = "telemetry")]
+fn print_sanity_checks(
+    config: &DemoConfig,
+    result: &DemoResult,
+    client: &felix_client::FrameCountersSnapshot,
+    broker: &broker::quic::FrameCountersSnapshot,
+) {
+    let expected_items = config.warmup + config.total;
+    let expected_batches = if config.batch_size == 0 {
+        0
+    } else {
+        let warmup_batches = config.warmup.div_ceil(config.batch_size);
+        let measure_batches = config.total.div_ceil(config.batch_size);
+        warmup_batches + measure_batches
+    };
+    let expected_delivered = config.total * config.fanout;
+    let use_ack = config.batch_size <= 1 && !config.binary;
+    if client.pub_items_out_ok != expected_items as u64 {
+        println!(
+            "  sanity: pub_items_out_ok mismatch expected={} actual={}",
+            expected_items, client.pub_items_out_ok
+        );
+    }
+    if client.pub_batches_out_ok != expected_batches as u64 {
+        println!(
+            "  sanity: pub_batches_out_ok mismatch expected={} actual={}",
+            expected_batches, client.pub_batches_out_ok
+        );
+    }
+    if broker.pub_items_in_ok != client.pub_items_out_ok {
+        println!(
+            "  sanity: broker pub_items_in_ok mismatch client={} broker={}",
+            client.pub_items_out_ok, broker.pub_items_in_ok
+        );
+    }
+    if broker.pub_batches_in_ok != client.pub_batches_out_ok {
+        println!(
+            "  sanity: broker pub_batches_in_ok mismatch client={} broker={}",
+            client.pub_batches_out_ok, broker.pub_batches_in_ok
+        );
+    }
+    if result.delivered_total != expected_delivered {
+        println!(
+            "  sanity: delivered_total mismatch expected={} actual={}",
+            expected_delivered, result.delivered_total
+        );
+    }
+    if use_ack {
+        if client.ack_items_in_ok == 0 {
+            println!("  sanity: ack_items_in_ok expected > 0 (acks enabled)");
+        }
+    } else if client.ack_items_in_ok > 0 {
+        println!(
+            "  sanity: ack_items_in_ok expected 0 (acks disabled) actual={}",
+            client.ack_items_in_ok
+        );
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+fn print_sanity_checks(
+    _config: &DemoConfig,
+    _result: &DemoResult,
+    _client: &felix_client::FrameCountersSnapshot,
+    _broker: &broker::quic::FrameCountersSnapshot,
+) {
+}
+
+#[cfg(feature = "telemetry")]
 fn build_timing_summary(
     client_samples: Option<client_timings::ClientTimingSamples>,
     broker_samples: Option<broker_timings::BrokerTimingSamples>,
     broker_publish_samples: Option<broker_publish_timings::BrokerPublishSamples>,
 ) -> TimingSummary {
     let (
+        mut client_pub_enqueue_wait,
         mut client_encode,
+        mut client_binary_encode,
+        mut client_text_encode,
+        mut client_text_batch_build,
         mut client_write,
         mut client_send_await,
         mut client_sub_read,
+        mut client_sub_read_await,
         mut client_sub_decode,
         mut client_sub_dispatch,
+        mut client_sub_consumer_gap,
+        mut client_e2e_latency,
         mut client_ack_read,
         mut client_ack_decode,
     ) = client_samples.unwrap_or_else(|| {
         (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -602,8 +855,10 @@ fn build_timing_summary(
         mut broker_quic_write,
         mut broker_sub_queue,
         mut broker_sub_write,
+        mut broker_sub_delivery,
     ) = broker_samples.unwrap_or_else(|| {
         (
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -615,18 +870,39 @@ fn build_timing_summary(
     let (mut broker_publish_lookup, mut broker_publish_append, mut broker_publish_send) =
         broker_publish_samples.unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
     TimingSummary {
+        client_pub_enqueue_wait_p50: percentile_ns(&mut client_pub_enqueue_wait, 0.50),
+        client_pub_enqueue_wait_p99: percentile_ns(&mut client_pub_enqueue_wait, 0.99),
+        client_pub_enqueue_wait_p999: percentile_ns(&mut client_pub_enqueue_wait, 0.999),
         client_encode_p50: percentile_ns(&mut client_encode, 0.50),
         client_encode_p99: percentile_ns(&mut client_encode, 0.99),
+        client_binary_encode_p50: percentile_ns(&mut client_binary_encode, 0.50),
+        client_binary_encode_p99: percentile_ns(&mut client_binary_encode, 0.99),
+        client_binary_encode_p999: percentile_ns(&mut client_binary_encode, 0.999),
+        client_text_encode_p50: percentile_ns(&mut client_text_encode, 0.50),
+        client_text_encode_p99: percentile_ns(&mut client_text_encode, 0.99),
+        client_text_encode_p999: percentile_ns(&mut client_text_encode, 0.999),
+        client_text_batch_build_p50: percentile_ns(&mut client_text_batch_build, 0.50),
+        client_text_batch_build_p99: percentile_ns(&mut client_text_batch_build, 0.99),
+        client_text_batch_build_p999: percentile_ns(&mut client_text_batch_build, 0.999),
         client_write_p50: percentile_ns(&mut client_write, 0.50),
         client_write_p99: percentile_ns(&mut client_write, 0.99),
         client_send_await_p50: percentile_ns(&mut client_send_await, 0.50),
         client_send_await_p99: percentile_ns(&mut client_send_await, 0.99),
+        client_send_await_p999: percentile_ns(&mut client_send_await, 0.999),
         client_sub_read_p50: percentile_ns(&mut client_sub_read, 0.50),
         client_sub_read_p99: percentile_ns(&mut client_sub_read, 0.99),
+        client_sub_read_await_p50: percentile_ns(&mut client_sub_read_await, 0.50),
+        client_sub_read_await_p99: percentile_ns(&mut client_sub_read_await, 0.99),
         client_sub_decode_p50: percentile_ns(&mut client_sub_decode, 0.50),
         client_sub_decode_p99: percentile_ns(&mut client_sub_decode, 0.99),
         client_sub_dispatch_p50: percentile_ns(&mut client_sub_dispatch, 0.50),
         client_sub_dispatch_p99: percentile_ns(&mut client_sub_dispatch, 0.99),
+        client_sub_consumer_gap_p50: percentile_ns(&mut client_sub_consumer_gap, 0.50),
+        client_sub_consumer_gap_p99: percentile_ns(&mut client_sub_consumer_gap, 0.99),
+        client_sub_consumer_gap_p999: percentile_ns(&mut client_sub_consumer_gap, 0.999),
+        client_e2e_latency_p50: percentile_ns(&mut client_e2e_latency, 0.50),
+        client_e2e_latency_p99: percentile_ns(&mut client_e2e_latency, 0.99),
+        client_e2e_latency_p999: percentile_ns(&mut client_e2e_latency, 0.999),
         client_ack_read_p50: percentile_ns(&mut client_ack_read, 0.50),
         client_ack_read_p99: percentile_ns(&mut client_ack_read, 0.99),
         client_ack_decode_p50: percentile_ns(&mut client_ack_decode, 0.50),
@@ -643,6 +919,9 @@ fn build_timing_summary(
         broker_sub_queue_wait_p99: percentile_ns(&mut broker_sub_queue, 0.99),
         broker_sub_write_p50: percentile_ns(&mut broker_sub_write, 0.50),
         broker_sub_write_p99: percentile_ns(&mut broker_sub_write, 0.99),
+        broker_sub_delivery_p50: percentile_ns(&mut broker_sub_delivery, 0.50),
+        broker_sub_delivery_p99: percentile_ns(&mut broker_sub_delivery, 0.99),
+        broker_sub_delivery_p999: percentile_ns(&mut broker_sub_delivery, 0.999),
         broker_publish_lookup_p50: percentile_ns(&mut broker_publish_lookup, 0.50),
         broker_publish_lookup_p99: percentile_ns(&mut broker_publish_lookup, 0.99),
         broker_publish_append_p50: percentile_ns(&mut broker_publish_append, 0.50),
@@ -650,6 +929,15 @@ fn build_timing_summary(
         broker_publish_send_p50: percentile_ns(&mut broker_publish_send, 0.50),
         broker_publish_send_p99: percentile_ns(&mut broker_publish_send, 0.99),
     }
+}
+
+#[cfg(not(feature = "telemetry"))]
+fn build_timing_summary(
+    _client_samples: Option<client_timings::ClientTimingSamples>,
+    _broker_samples: Option<broker_timings::BrokerTimingSamples>,
+    _broker_publish_samples: Option<broker_publish_timings::BrokerPublishSamples>,
+) -> TimingSummary {
+    TimingSummary::default()
 }
 
 fn expectation_note(config: DemoConfig) -> String {
@@ -676,6 +964,8 @@ async fn run_all(base: DemoConfig) -> Result<()> {
             let (result, summary) = run_case(case).await?;
             print_result(&result);
             print_timing_summary(summary);
+            let (client_counters, broker_counters) = print_frame_counters();
+            print_sanity_checks(&case, &result, &client_counters, &broker_counters);
         }
     }
 
@@ -695,6 +985,8 @@ async fn run_all(base: DemoConfig) -> Result<()> {
                 let (result, summary) = run_case(case).await?;
                 print_result(&result);
                 print_timing_summary(summary);
+                let (client_counters, broker_counters) = print_frame_counters();
+                print_sanity_checks(&case, &result, &client_counters, &broker_counters);
             }
         }
     }
@@ -759,6 +1051,7 @@ fn percentile(values: &[Duration], p: f64) -> Duration {
     values[idx]
 }
 
+#[cfg(feature = "telemetry")]
 fn percentile_ns(values: &mut [u64], p: f64) -> Option<Duration> {
     if values.is_empty() {
         return None;
@@ -768,6 +1061,7 @@ fn percentile_ns(values: &mut [u64], p: f64) -> Option<Duration> {
     Some(Duration::from_nanos(values[idx]))
 }
 
+#[cfg(feature = "telemetry")]
 fn format_optional_duration(duration: Option<Duration>) -> String {
     duration
         .map(format_duration)

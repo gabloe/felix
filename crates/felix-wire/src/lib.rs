@@ -56,6 +56,14 @@ impl FrameHeader {
         buf.extend_from_slice(&self.length.to_be_bytes());
     }
 
+    pub fn encode_into(&self, buf: &mut [u8; Self::LEN]) {
+        // Always encode in network byte order for portability.
+        buf[0..4].copy_from_slice(&self.magic.to_be_bytes());
+        buf[4..6].copy_from_slice(&self.version.to_be_bytes());
+        buf[6..8].copy_from_slice(&self.flags.to_be_bytes());
+        buf[8..12].copy_from_slice(&self.length.to_be_bytes());
+    }
+
     pub fn decode(mut buf: Bytes) -> Result<Self> {
         // Validate header before we trust the length.
         if buf.remaining() < Self::LEN {
@@ -142,6 +150,7 @@ impl Frame {
 ///     namespace: "default".to_string(),
 ///     stream: "updates".to_string(),
 ///     payload: b"hello".to_vec(),
+///     request_id: None,
 ///     ack: None,
 /// };
 /// let frame = message.encode().expect("encode");
@@ -159,6 +168,8 @@ pub enum Message {
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
     // Publish a batch of payloads in a single request.
@@ -168,6 +179,8 @@ pub enum Message {
         stream: String,
         #[serde(with = "base64_vec")]
         payloads: Vec<Vec<u8>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
@@ -239,9 +252,18 @@ pub enum Message {
     CacheOk {
         request_id: u64,
     },
+    // Publish ack with request id.
+    PublishOk {
+        request_id: u64,
+    },
+    // Publish error with request id.
+    PublishError {
+        request_id: u64,
+        message: String,
+    },
     // Generic success response.
     Ok,
-    // Error response with human-readable message.
+    // Protocol-level error for invalid requests or unexpected message types.
     Error {
         message: String,
     },
@@ -388,6 +410,222 @@ mod base64_vec {
     }
 }
 
+pub mod text {
+    use super::*;
+    use bytes::BufMut;
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct EncodeStats {
+        pub reallocs: u64,
+    }
+
+    const PUBLISH_BATCH_PREFIX: &str = "{\"type\":\"publish_batch\",\"tenant_id\":\"";
+    const PUBLISH_BATCH_NAMESPACE: &str = "\",\"namespace\":\"";
+    const PUBLISH_BATCH_STREAM: &str = "\",\"stream\":\"";
+    const PUBLISH_BATCH_PAYLOADS: &str = "\",\"payloads\":[";
+    const REQUEST_ID_PREFIX: &str = "\",\"request_id\":";
+    const ACK_PREFIX: &str = ",\"ack\":\"";
+
+    pub fn publish_batch_json_len(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+        request_id: Option<u64>,
+        ack: Option<AckMode>,
+    ) -> Result<usize> {
+        let mut len = 0usize;
+        len = len
+            .checked_add(PUBLISH_BATCH_PREFIX.len())
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(escaped_len(tenant_id))
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(PUBLISH_BATCH_NAMESPACE.len())
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(escaped_len(namespace))
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(PUBLISH_BATCH_STREAM.len())
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(escaped_len(stream))
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(PUBLISH_BATCH_PAYLOADS.len())
+            .ok_or(Error::FrameTooLarge)?;
+        for (idx, payload) in payloads.iter().enumerate() {
+            let encoded_len = base64_len(payload.len())?;
+            let item_len = 2usize
+                .checked_add(encoded_len)
+                .and_then(|v| if idx == 0 { Some(v) } else { v.checked_add(1) })
+                .ok_or(Error::FrameTooLarge)?;
+            len = len.checked_add(item_len).ok_or(Error::FrameTooLarge)?;
+        }
+        len = len.checked_add(1).ok_or(Error::FrameTooLarge)?; // closing ]
+        if let Some(request_id) = request_id {
+            len = len
+                .checked_add(REQUEST_ID_PREFIX.len())
+                .ok_or(Error::FrameTooLarge)?;
+            len = len
+                .checked_add(decimal_len(request_id))
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if let Some(ack) = ack {
+            let ack_str = ack_str(ack);
+            len = len
+                .checked_add(ACK_PREFIX.len())
+                .ok_or(Error::FrameTooLarge)?;
+            len = len
+                .checked_add(ack_str.len() + 1)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        len = len.checked_add(1).ok_or(Error::FrameTooLarge)?; // closing }
+        if len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+        Ok(len)
+    }
+
+    pub fn write_publish_batch_json(
+        buf: &mut BytesMut,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+        request_id: Option<u64>,
+        ack: Option<AckMode>,
+    ) -> Result<EncodeStats> {
+        let mut stats = EncodeStats::default();
+        let mut cap = buf.capacity();
+        let check_realloc = |buf: &BytesMut, stats: &mut EncodeStats, cap: &mut usize| {
+            let next = buf.capacity();
+            if next != *cap {
+                stats.reallocs += 1;
+                *cap = next;
+            }
+        };
+
+        buf.extend_from_slice(PUBLISH_BATCH_PREFIX.as_bytes());
+        check_realloc(buf, &mut stats, &mut cap);
+        write_json_str(buf, tenant_id);
+        check_realloc(buf, &mut stats, &mut cap);
+        buf.extend_from_slice(PUBLISH_BATCH_NAMESPACE.as_bytes());
+        write_json_str(buf, namespace);
+        buf.extend_from_slice(PUBLISH_BATCH_STREAM.as_bytes());
+        write_json_str(buf, stream);
+        buf.extend_from_slice(PUBLISH_BATCH_PAYLOADS.as_bytes());
+        for (idx, payload) in payloads.iter().enumerate() {
+            if idx > 0 {
+                buf.put_u8(b',');
+            }
+            buf.put_u8(b'"');
+            let encoded_len = base64_len(payload.len())?;
+            let start = buf.len();
+            buf.resize(start + encoded_len, 0);
+            let written = base64::engine::general_purpose::STANDARD
+                .encode_slice(payload, &mut buf[start..])
+                .expect("base64 encode slice");
+            debug_assert_eq!(written, encoded_len);
+            buf.put_u8(b'"');
+            check_realloc(buf, &mut stats, &mut cap);
+        }
+        buf.put_u8(b']');
+        if let Some(request_id) = request_id {
+            buf.extend_from_slice(REQUEST_ID_PREFIX.as_bytes());
+            write_decimal(buf, request_id);
+        }
+        if let Some(ack) = ack {
+            buf.extend_from_slice(ACK_PREFIX.as_bytes());
+            buf.extend_from_slice(ack_str(ack).as_bytes());
+            buf.put_u8(b'"');
+        }
+        buf.put_u8(b'}');
+        check_realloc(buf, &mut stats, &mut cap);
+        Ok(stats)
+    }
+
+    fn ack_str(ack: AckMode) -> &'static str {
+        match ack {
+            AckMode::None => "none",
+            AckMode::PerMessage => "per_message",
+            AckMode::PerBatch => "per_batch",
+        }
+    }
+
+    fn escaped_len(value: &str) -> usize {
+        value.bytes().fold(0usize, |len, byte| {
+            len + match byte {
+                b'"' | b'\\' | b'\n' | b'\r' | b'\t' => 2,
+                0x00..=0x1F => 6,
+                _ => 1,
+            }
+        })
+    }
+
+    fn write_json_str(buf: &mut BytesMut, value: &str) {
+        for byte in value.bytes() {
+            match byte {
+                b'"' => buf.extend_from_slice(b"\\\""),
+                b'\\' => buf.extend_from_slice(b"\\\\"),
+                b'\n' => buf.extend_from_slice(b"\\n"),
+                b'\r' => buf.extend_from_slice(b"\\r"),
+                b'\t' => buf.extend_from_slice(b"\\t"),
+                0x00..=0x1F => {
+                    buf.extend_from_slice(b"\\u00");
+                    let hi = byte >> 4;
+                    let lo = byte & 0x0F;
+                    buf.put_u8(hex_digit(hi));
+                    buf.put_u8(hex_digit(lo));
+                }
+                _ => buf.put_u8(byte),
+            }
+        }
+    }
+
+    fn hex_digit(value: u8) -> u8 {
+        match value {
+            0..=9 => b'0' + value,
+            10..=15 => b'a' + (value - 10),
+            _ => b'0',
+        }
+    }
+
+    fn base64_len(len: usize) -> Result<usize> {
+        let chunks = len.checked_add(2).ok_or(Error::FrameTooLarge)? / 3;
+        chunks.checked_mul(4).ok_or(Error::FrameTooLarge)
+    }
+
+    fn decimal_len(mut value: u64) -> usize {
+        if value == 0 {
+            return 1;
+        }
+        let mut len = 0usize;
+        while value > 0 {
+            value /= 10;
+            len += 1;
+        }
+        len
+    }
+
+    fn write_decimal(buf: &mut BytesMut, mut value: u64) {
+        let mut scratch = [0u8; 20];
+        let mut idx = scratch.len();
+        if value == 0 {
+            buf.put_u8(b'0');
+            return;
+        }
+        while value > 0 {
+            idx -= 1;
+            scratch[idx] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        buf.extend_from_slice(&scratch[idx..]);
+    }
+}
+
 pub mod binary {
     use super::*;
     use bytes::BufMut;
@@ -432,6 +670,11 @@ pub mod binary {
         Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze())
     }
 
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct EncodeStats {
+        pub reallocs: u64,
+    }
+
     // Encode a full binary publish frame, including header and payload.
     pub fn encode_publish_batch_bytes(
         tenant_id: &str,
@@ -439,6 +682,18 @@ pub mod binary {
         stream: &str,
         payloads: &[Vec<u8>],
     ) -> Result<Bytes> {
+        let (bytes, _stats) =
+            encode_publish_batch_bytes_with_stats(tenant_id, namespace, stream, payloads)?;
+        Ok(bytes)
+    }
+
+    // Encode a full binary publish frame, including header and payload, and return stats.
+    pub fn encode_publish_batch_bytes_with_stats(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<(Bytes, EncodeStats)> {
         let tenant_bytes = tenant_id.as_bytes();
         let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
         let namespace_bytes = namespace.as_bytes();
@@ -458,6 +713,8 @@ pub mod binary {
             return Err(Error::FrameTooLarge);
         }
         let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+        let mut reallocs = 0u64;
+        let mut cap = buf.capacity();
         let header = FrameHeader::new(FLAG_BINARY_PUBLISH_BATCH, payload_len as u32);
         header.encode(&mut buf);
         buf.put_u16(tenant_len);
@@ -471,8 +728,13 @@ pub mod binary {
             let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
             buf.put_u32(len);
             buf.extend_from_slice(payload);
+            let next_cap = buf.capacity();
+            if next_cap != cap {
+                reallocs += 1;
+                cap = next_cap;
+            }
         }
-        Ok(buf.freeze())
+        Ok((buf.freeze(), EncodeStats { reallocs }))
     }
 
     // Decode a binary publish batch frame into its structured form.
@@ -686,6 +948,7 @@ mod tests {
             namespace: "default".to_string(),
             stream: "topic".to_string(),
             payload: b"payload".to_vec(),
+            request_id: None,
             ack: None,
         };
         let frame = message.encode().expect("encode");

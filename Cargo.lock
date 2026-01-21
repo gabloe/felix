@@ -197,6 +197,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "bytes",
  "felix-broker",
  "felix-client",
@@ -474,6 +475,8 @@ dependencies = [
  "felix-wire",
  "metrics",
  "quinn",
+ "rcgen",
+ "rustls",
  "tokio",
 ]
 

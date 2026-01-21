@@ -55,7 +55,20 @@ Performance knobs
 - Cache delivery: `FELIX_CACHE_CONN_POOL`, `FELIX_CACHE_STREAMS_PER_CONN`,
   `FELIX_CACHE_*_WINDOW`.
 - Publishing: `FELIX_PUBLISH_CHUNK_BYTES`.
-- Instrumentation: `FELIX_DISABLE_TIMINGS`.
+- Instrumentation: build with `--features telemetry` to enable per-stage
+  timings and frame counters. Default builds compile telemetry out
+  (`cfg(feature = "telemetry")`, no runtime branches when disabled) to avoid
+  instrumentation overhead on hot paths.
+- Telemetry overhead is workload-dependent. Example (`latencydemo`,
+  localhost, payload=4096B, fanout=1, batch=64, 10 runs): medians were similar
+  with and without telemetry, but tail latency showed higher variance. Text:
+  p999 median 5.15ms (min/max 3.27/8.89) vs 4.82ms (3.24/12.47);
+  throughput 160.6k (141.6k/167.2k) vs 160.1k (137.9k/166.0k). Binary:
+  p999 median 3.65ms (2.34/5.69) vs 3.40ms (2.57/9.03);
+  throughput 207.0k (188.6k/228.2k) vs 208.2k (171.9k/227.4).
+  Validate on your workload; fanout/payload/batching can amplify tail effects.
+  In other scenarios (e.g., high fanout + binary batching), telemetry can
+  materially impact throughput/latency; see benchmarks/ for additional results.
 
 Use cases
 - Real-time streaming with high fanout and tunable latency/throughput trade-offs.
