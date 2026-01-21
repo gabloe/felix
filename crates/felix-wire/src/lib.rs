@@ -142,6 +142,7 @@ impl Frame {
 ///     namespace: "default".to_string(),
 ///     stream: "updates".to_string(),
 ///     payload: b"hello".to_vec(),
+///     request_id: None,
 ///     ack: None,
 /// };
 /// let frame = message.encode().expect("encode");
@@ -159,6 +160,8 @@ pub enum Message {
         #[serde(with = "base64_bytes")]
         payload: Vec<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
     // Publish a batch of payloads in a single request.
@@ -168,6 +171,8 @@ pub enum Message {
         stream: String,
         #[serde(with = "base64_vec")]
         payloads: Vec<Vec<u8>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
@@ -239,9 +244,18 @@ pub enum Message {
     CacheOk {
         request_id: u64,
     },
+    // Publish ack with request id.
+    PublishOk {
+        request_id: u64,
+    },
+    // Publish error with request id.
+    PublishError {
+        request_id: u64,
+        message: String,
+    },
     // Generic success response.
     Ok,
-    // Error response with human-readable message.
+    // Protocol-level error for invalid requests or unexpected message types.
     Error {
         message: String,
     },
@@ -686,6 +700,7 @@ mod tests {
             namespace: "default".to_string(),
             stream: "topic".to_string(),
             payload: b"payload".to_vec(),
+            request_id: None,
             ack: None,
         };
         let frame = message.encode().expect("encode");

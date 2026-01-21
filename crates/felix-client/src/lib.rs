@@ -213,6 +213,7 @@ impl Client {
             inner: Arc::new(PublisherInner {
                 tx,
                 handle: tokio::sync::Mutex::new(Some(handle)),
+                request_counter: AtomicU64::new(1),
             }),
         })
     }
@@ -523,12 +524,14 @@ pub struct Publisher {
 struct PublisherInner {
     tx: mpsc::Sender<PublishRequest>,
     handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
+    request_counter: AtomicU64,
 }
 
 enum PublishRequest {
     Message {
         message: Message,
         ack: AckMode,
+        request_id: Option<u64>,
         response: oneshot::Sender<Result<()>>,
     },
     BinaryBytes {
@@ -565,6 +568,11 @@ impl Publisher {
     ) -> Result<()> {
         // Enqueue publish on the single-writer publisher task.
         let (response_tx, response_rx) = oneshot::channel();
+        let request_id = if ack == AckMode::None {
+            None
+        } else {
+            Some(self.inner.request_counter.fetch_add(1, Ordering::Relaxed))
+        };
         self.inner
             .tx
             .send(PublishRequest::Message {
@@ -573,9 +581,11 @@ impl Publisher {
                     namespace: namespace.to_string(),
                     stream: stream.to_string(),
                     payload,
+                    request_id,
                     ack: Some(ack),
                 },
                 ack,
+                request_id,
                 response: response_tx,
             })
             .await
@@ -593,6 +603,11 @@ impl Publisher {
     ) -> Result<()> {
         // Batch publish uses the same queue/writer as single messages.
         let (response_tx, response_rx) = oneshot::channel();
+        let request_id = if ack == AckMode::None {
+            None
+        } else {
+            Some(self.inner.request_counter.fetch_add(1, Ordering::Relaxed))
+        };
         self.inner
             .tx
             .send(PublishRequest::Message {
@@ -601,9 +616,11 @@ impl Publisher {
                     namespace: namespace.to_string(),
                     stream: stream.to_string(),
                     payloads,
+                    request_id,
                     ack: Some(ack),
                 },
                 ack,
+                request_id,
                 response: response_tx,
             })
             .await
@@ -682,6 +699,7 @@ async fn run_publisher_writer(
             PublishRequest::Message {
                 message,
                 ack,
+                request_id,
                 response,
             } => {
                 let sample = timings::should_sample();
@@ -707,7 +725,7 @@ async fn run_publisher_writer(
                     metrics::histogram!("felix_client_write_ns").record(write_ns as f64);
                 }
                 let result = match write_result {
-                    Ok(()) => maybe_wait_for_ack(&mut recv, ack).await,
+                    Ok(()) => maybe_wait_for_ack(&mut recv, ack, request_id).await,
                     Err(err) => Err(err),
                 };
                 match result {
@@ -804,16 +822,26 @@ async fn finish_publisher_stream(send: &mut SendStream, recv: &mut RecvStream) -
     Ok(())
 }
 
-async fn maybe_wait_for_ack(recv: &mut RecvStream, ack: AckMode) -> Result<()> {
-    // AckMode::None is fire-and-forget; otherwise wait for Ok.
+async fn maybe_wait_for_ack(
+    recv: &mut RecvStream,
+    ack: AckMode,
+    request_id: Option<u64>,
+) -> Result<()> {
+    // AckMode::None is fire-and-forget; otherwise wait for PublishOk/PublishError.
     if ack == AckMode::None {
         return Ok(());
     }
+    let request_id =
+        request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
     let response = read_ack_message_with_timing(recv).await?;
-    if response != Some(Message::Ok) {
-        return Err(anyhow::anyhow!("publish failed: {response:?}"));
+    match response {
+        Some(Message::PublishOk { request_id: ack_id }) if ack_id == request_id => Ok(()),
+        Some(Message::PublishError {
+            request_id: ack_id,
+            message,
+        }) if ack_id == request_id => Err(anyhow::anyhow!("publish failed: {message}")),
+        other => Err(anyhow::anyhow!("publish failed: {other:?}")),
     }
-    Ok(())
 }
 
 async fn drain_publish_queue(rx: &mut mpsc::Receiver<PublishRequest>, message: &str) {

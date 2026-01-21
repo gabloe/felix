@@ -16,6 +16,10 @@ pub struct BrokerConfig {
     pub controlplane_sync_interval_ms: u64,
     // If true, publish acks are sent after commit.
     pub ack_on_commit: bool,
+    // Max frame size accepted on QUIC streams.
+    pub max_frame_bytes: usize,
+    // Max time to wait when backpressuring publish enqueue.
+    pub publish_queue_wait_timeout_ms: u64,
     // Disable timing collection for lower overhead.
     pub disable_timings: bool,
     // Cache connection flow-control window.
@@ -39,6 +43,8 @@ const DEFAULT_DISABLE_TIMINGS: bool = false;
 const DEFAULT_CACHE_CONN_RECV_WINDOW: u64 = 256 * 1024 * 1024;
 const DEFAULT_CACHE_STREAM_RECV_WINDOW: u64 = 64 * 1024 * 1024;
 const DEFAULT_CACHE_SEND_WINDOW: u64 = 256 * 1024 * 1024;
+const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -47,6 +53,8 @@ struct BrokerConfigOverride {
     controlplane_url: Option<String>,
     controlplane_sync_interval_ms: Option<u64>,
     ack_on_commit: Option<bool>,
+    max_frame_bytes: Option<usize>,
+    publish_queue_wait_timeout_ms: Option<u64>,
     disable_timings: Option<bool>,
     cache_conn_recv_window: Option<u64>,
     cache_stream_recv_window: Option<u64>,
@@ -79,6 +87,16 @@ impl BrokerConfig {
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
+        let max_frame_bytes = std::env::var("FELIX_MAX_FRAME_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_FRAME_BYTES);
+        let publish_queue_wait_timeout_ms = std::env::var("FELIX_PUBLISH_QUEUE_WAIT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS);
         let disable_timings = std::env::var("FELIX_DISABLE_TIMINGS")
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -129,6 +147,8 @@ impl BrokerConfig {
             controlplane_url,
             controlplane_sync_interval_ms,
             ack_on_commit,
+            max_frame_bytes,
+            publish_queue_wait_timeout_ms,
             disable_timings,
             cache_conn_recv_window,
             cache_stream_recv_window,
@@ -162,6 +182,12 @@ impl BrokerConfig {
             }
             if let Some(value) = override_cfg.ack_on_commit {
                 config.ack_on_commit = value;
+            }
+            if let Some(value) = override_cfg.max_frame_bytes {
+                config.max_frame_bytes = value;
+            }
+            if let Some(value) = override_cfg.publish_queue_wait_timeout_ms {
+                config.publish_queue_wait_timeout_ms = value;
             }
             if let Some(value) = override_cfg.disable_timings {
                 config.disable_timings = value;
