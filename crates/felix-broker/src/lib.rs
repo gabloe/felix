@@ -12,6 +12,53 @@ pub mod timings;
 
 pub type Result<T> = std::result::Result<T, BrokerError>;
 
+#[cfg(feature = "telemetry")]
+macro_rules! t_histogram {
+    ($($tt:tt)*) => {
+        metrics::histogram!($($tt)*)
+    };
+}
+
+#[cfg(not(feature = "telemetry"))]
+macro_rules! t_histogram {
+    ($($tt:tt)*) => {
+        NoopHistogram
+    };
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[derive(Copy, Clone)]
+struct NoopHistogram;
+
+#[cfg(not(feature = "telemetry"))]
+impl NoopHistogram {
+    fn record(&self, _value: f64) {}
+}
+
+#[cfg(feature = "telemetry")]
+#[inline]
+fn t_should_sample() -> bool {
+    timings::should_sample()
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn t_should_sample() -> bool {
+    false
+}
+
+#[cfg(feature = "telemetry")]
+#[inline]
+fn t_now_if(sample: bool) -> Option<Instant> {
+    sample.then(Instant::now)
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn t_now_if(_sample: bool) -> Option<Instant> {
+    None
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum BrokerError {
     #[error("topic capacity too large")]
@@ -336,17 +383,17 @@ impl Broker {
 
         // Fan-out to current subscribers.
         // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
-        let sample = timings::should_sample();
-        let lookup_start = sample.then(Instant::now);
+        let sample = t_should_sample();
+        let lookup_start = t_now_if(sample);
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
 
         if let Some(start) = lookup_start {
             let lookup_ns = start.elapsed().as_nanos() as u64;
             timings::record_lookup_ns(lookup_ns);
-            metrics::histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
+            t_histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
         }
 
-        let append_start = sample.then(Instant::now);
+        let append_start = t_now_if(sample);
         // Append to the in-memory log first so cursors can replay.
         for payload in payloads {
             stream_state.append(payload.clone(), self.log_capacity);
@@ -355,10 +402,10 @@ impl Broker {
         if let Some(start) = append_start {
             let append_ns = start.elapsed().as_nanos() as u64;
             timings::record_append_ns(append_ns);
-            metrics::histogram!("broker_publish_append_ns").record(append_ns as f64);
+            t_histogram!("broker_publish_append_ns").record(append_ns as f64);
         }
 
-        let send_start = sample.then(Instant::now);
+        let send_start = t_now_if(sample);
         let mut sent = 0usize;
         // Broadcast to current subscribers; lagging receivers may drop.
         for payload in payloads {
@@ -367,7 +414,7 @@ impl Broker {
         if let Some(start) = send_start {
             let send_ns = start.elapsed().as_nanos() as u64;
             timings::record_send_ns(send_ns);
-            metrics::histogram!("broker_publish_send_ns").record(send_ns as f64);
+            t_histogram!("broker_publish_send_ns").record(send_ns as f64);
         }
         Ok(sent)
     }

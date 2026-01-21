@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use broker::quic;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use felix_broker::{Broker, CacheMetadata};
 use felix_client::Client;
 use felix_storage::EphemeralCache;
@@ -12,7 +12,10 @@ use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+const MAX_TEST_FRAME_BYTES: usize = 64 * 1024;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -61,6 +64,7 @@ async fn main() -> Result<()> {
 async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> {
     println!("Running pub/sub checks...");
     let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
+    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
@@ -72,7 +76,8 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
     )
     .await?;
     sub_send.finish()?;
-    let response = quic::read_message(&mut sub_recv).await?;
+    let response =
+        quic::read_message_limited(&mut sub_recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
     let expected_id = match response {
         Some(Message::Subscribed { subscription_id }) => Some(subscription_id),
         Some(Message::Ok) => None,
@@ -111,7 +116,10 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
 }
 
 async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -> Result<()> {
+    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let (mut send, mut recv) = connection.open_bi().await?;
+    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
     quic::write_message(
         &mut send,
         Message::Publish {
@@ -119,13 +127,15 @@ async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -
             namespace: "default".to_string(),
             stream: "conformance".to_string(),
             payload: payload.to_vec(),
-            ack: None,
+            request_id: Some(request_id),
+            ack: Some(AckMode::PerMessage),
         },
     )
     .await?;
     send.finish()?;
-    let response = quic::read_message(&mut recv).await?;
-    if response != Some(Message::Ok) {
+    let response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    if response != Some(Message::PublishOk { request_id }) {
         return Err(anyhow!("publish failed: {response:?}"));
     }
     Ok(())
@@ -134,6 +144,7 @@ async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -
 async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
     println!("Running cache checks...");
     let (mut send, mut recv) = connection.open_bi().await?;
+    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
     quic::write_message(
         &mut send,
         Message::CachePut {
@@ -148,7 +159,8 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
     )
     .await?;
     send.finish()?;
-    let response = quic::read_message(&mut recv).await?;
+    let response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
     if response != Some(Message::Ok) {
         return Err(anyhow!("cache put failed: {response:?}"));
     }
@@ -228,6 +240,7 @@ async fn cache_get(
     key: &str,
 ) -> Result<Option<Bytes>> {
     let (mut send, mut recv) = connection.open_bi().await?;
+    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
     quic::write_message(
         &mut send,
         Message::CacheGet {
@@ -240,7 +253,8 @@ async fn cache_get(
     )
     .await?;
     send.finish()?;
-    let response = quic::read_message(&mut recv).await?;
+    let response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
     match response {
         Some(Message::CacheValue { value, .. }) => Ok(value),
         other => Err(anyhow!("unexpected cache response: {other:?}")),
