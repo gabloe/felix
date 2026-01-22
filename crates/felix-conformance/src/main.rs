@@ -2,11 +2,11 @@ use anyhow::{Context, Result, anyhow};
 use broker::quic;
 use bytes::{Bytes, BytesMut};
 use felix_broker::{Broker, CacheMetadata};
-use felix_client::Client;
+use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::{AckMode, FLAG_BINARY_EVENT_BATCH, Frame, FrameHeader, Message};
-use quinn::{ClientConfig, ReadExactError, RecvStream};
+use quinn::{ClientConfig as QuinnClientConfig, ReadExactError, RecvStream};
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
 
     let client = QuicClient::bind(
         "0.0.0.0:0".parse()?,
-        build_client_config(cert.clone())?,
+        build_quinn_client_config(cert.clone())?,
         TransportConfig::default(),
     )?;
     let connection = client.connect(addr, "localhost").await?;
@@ -271,10 +271,16 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
     Ok((server_config, cert_der))
 }
 
-fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+fn build_quinn_client_config(cert: CertificateDer<'static>) -> Result<QuinnClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(cert)?;
-    Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
+    let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
+    Ok(quinn)
+}
+
+fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+    let quinn = build_quinn_client_config(cert)?;
+    ClientConfig::from_env_or_yaml(quinn, None)
 }
 
 async fn read_frame(recv: &mut RecvStream) -> Result<Option<Frame>> {

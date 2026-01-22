@@ -7,7 +7,9 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use quinn::{RecvStream, SendStream};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
@@ -1038,7 +1040,7 @@ mod tests {
     use bytes::Bytes;
     use felix_storage::EphemeralCache;
     use felix_transport::{QuicClient, QuicServer, TransportConfig};
-    use quinn::ClientConfig;
+    use quinn::ClientConfig as QuinnClientConfig;
     use rcgen::generate_simple_self_signed;
     use rustls::RootCertStore;
     use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -1072,7 +1074,7 @@ mod tests {
 
         let client = QuicClient::bind(
             "0.0.0.0:0".parse()?,
-            build_client_config(cert)?,
+            build_quinn_client_config(cert)?,
             TransportConfig::default(),
         )?;
         let connection = client.connect(addr, "localhost").await?;
@@ -1158,7 +1160,7 @@ mod tests {
 
         let client = QuicClient::bind(
             "0.0.0.0:0".parse()?,
-            build_client_config(cert)?,
+            build_quinn_client_config(cert)?,
             TransportConfig::default(),
         )?;
         let connection = client.connect(addr, "localhost").await?;
@@ -1252,7 +1254,7 @@ mod tests {
 
         let client = QuicClient::bind(
             "0.0.0.0:0".parse()?,
-            build_client_config(cert)?,
+            build_quinn_client_config(cert)?,
             TransportConfig::default(),
         )?;
         let connection = client.connect(addr, "localhost").await?;
@@ -1378,9 +1380,15 @@ mod tests {
         Ok((server_config, cert_der))
     }
 
-    fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+    fn build_quinn_client_config(cert: CertificateDer<'static>) -> Result<QuinnClientConfig> {
         let mut roots = RootCertStore::empty();
         roots.add(cert)?;
-        Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
+        let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
+        Ok(quinn)
+    }
+
+    fn build_client_config(cert: CertificateDer<'static>) -> Result<felix_client::ClientConfig> {
+        let quinn = build_quinn_client_config(cert)?;
+        felix_client::ClientConfig::from_env_or_yaml(quinn, None)
     }
 }

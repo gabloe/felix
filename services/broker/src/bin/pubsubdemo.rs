@@ -3,11 +3,11 @@
 use anyhow::{Context, Result};
 use broker::quic;
 use felix_broker::{Broker, StreamMetadata};
-use felix_client::Client;
+use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use felix_wire::AckMode;
-use quinn::ClientConfig;
+use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -116,5 +116,6 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
 fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(cert)?;
-    Ok(ClientConfig::with_root_certificates(Arc::new(roots))?)
+    let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
+    ClientConfig::from_env_or_yaml(quinn, None)
 }

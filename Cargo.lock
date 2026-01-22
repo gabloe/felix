@@ -477,6 +477,8 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "serde",
+ "serde_yaml",
  "tokio",
 ]
 

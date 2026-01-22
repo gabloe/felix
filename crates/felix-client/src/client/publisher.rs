@@ -1,0 +1,626 @@
+// Publisher worker pool and single-writer stream logic.
+use anyhow::{Context, Result};
+use bytes::{Bytes, BytesMut};
+use felix_wire::{AckMode, FrameHeader, Message};
+use quinn::{RecvStream, SendStream};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use tokio::sync::{mpsc, oneshot};
+
+#[cfg(feature = "telemetry")]
+use crate::counters::frame_counters;
+#[cfg(feature = "telemetry")]
+use crate::timings;
+use crate::wire::{
+    bench_embed_ts_enabled, maybe_append_publish_ts, maybe_append_publish_ts_batch,
+    maybe_wait_for_ack, write_frame_parts,
+};
+
+use super::sharding::PublishSharding;
+
+#[derive(Clone)]
+pub struct Publisher {
+    pub(crate) inner: Arc<PublisherInner>,
+}
+
+pub(crate) struct PublisherInner {
+    pub(crate) workers: Arc<Vec<PublishWorker>>,
+    pub(crate) sharding: PublishSharding,
+    pub(crate) rr: AtomicUsize,
+}
+
+pub(crate) struct PublishWorker {
+    pub(crate) tx: mpsc::Sender<PublishRequest>,
+    pub(crate) handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
+    pub(crate) request_counter: AtomicU64,
+}
+
+pub(crate) enum PublishRequest {
+    Message {
+        message: Message,
+        ack: AckMode,
+        request_id: Option<u64>,
+        response: oneshot::Sender<Result<()>>,
+    },
+    BinaryBytes {
+        bytes: Bytes,
+        item_count: usize,
+        sample: bool,
+        response: oneshot::Sender<Result<()>>,
+    },
+    Finish {
+        response: oneshot::Sender<Result<()>>,
+    },
+}
+
+impl Publisher {
+    fn select_worker(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<&PublishWorker> {
+        let workers = &self.inner.workers;
+        if workers.is_empty() {
+            return Err(anyhow::anyhow!("publish pool is empty"));
+        }
+        let index = match self.inner.sharding {
+            PublishSharding::RoundRobin => {
+                self.inner.rr.fetch_add(1, Ordering::Relaxed) % workers.len()
+            }
+            PublishSharding::HashStream => {
+                let mut hasher = DefaultHasher::new();
+                tenant_id.hash(&mut hasher);
+                namespace.hash(&mut hasher);
+                stream.hash(&mut hasher);
+                (hasher.finish() as usize) % workers.len()
+            }
+        };
+        Ok(&workers[index])
+    }
+
+    pub async fn publish(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payload = maybe_append_publish_ts(payload);
+        // Enqueue publish on the single-writer publisher task.
+        let (response_tx, response_rx) = oneshot::channel();
+        let request_id = if ack == AckMode::None {
+            None
+        } else {
+            Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
+        };
+        #[cfg(feature = "telemetry")]
+        let sample = crate::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::Message {
+                message: Message::Publish {
+                    tenant_id: tenant_id.to_string(),
+                    namespace: namespace.to_string(),
+                    stream: stream.to_string(),
+                    payload,
+                    request_id,
+                    ack: Some(ack),
+                },
+                ack,
+                request_id,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue publish")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        response_rx.await.context("publish response dropped")?
+    }
+
+    pub async fn publish_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payloads = maybe_append_publish_ts_batch(payloads);
+        // Batch publish uses the same queue/writer as single messages.
+        let (response_tx, response_rx) = oneshot::channel();
+        let request_id = if ack == AckMode::None {
+            None
+        } else {
+            Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
+        };
+        #[cfg(feature = "telemetry")]
+        let sample = crate::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::Message {
+                message: Message::PublishBatch {
+                    tenant_id: tenant_id.to_string(),
+                    namespace: namespace.to_string(),
+                    stream: stream.to_string(),
+                    payloads,
+                    request_id,
+                    ack: Some(ack),
+                },
+                ack,
+                request_id,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue publish batch")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        response_rx
+            .await
+            .context("publish batch response dropped")?
+    }
+
+    pub async fn publish_batch_binary(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payloads_with_ts;
+        let payloads = if bench_embed_ts_enabled() {
+            payloads_with_ts = payloads
+                .iter()
+                .map(|payload| maybe_append_publish_ts(payload.clone()))
+                .collect::<Vec<_>>();
+            &payloads_with_ts
+        } else {
+            payloads
+        };
+        #[cfg(feature = "telemetry")]
+        let sample = crate::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let start = crate::t_now_if(sample);
+        let (bytes, stats) = felix_wire::binary::encode_publish_batch_bytes_with_stats(
+            tenant_id, namespace, stream, payloads,
+        )?;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = stats;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = start {
+            let encode_ns = start.elapsed().as_nanos() as u64;
+            timings::record_encode_ns(encode_ns);
+            timings::record_binary_encode_ns(encode_ns);
+            t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+        }
+        #[cfg(feature = "telemetry")]
+        if stats.reallocs > 0 {
+            let counters = frame_counters();
+            counters
+                .binary_encode_reallocs
+                .fetch_add(stats.reallocs, Ordering::Relaxed);
+        }
+        let (response_tx, response_rx) = oneshot::channel();
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::BinaryBytes {
+                bytes,
+                item_count: payloads.len(),
+                sample,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue binary batch")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        response_rx.await.context("binary batch response dropped")?
+    }
+
+    pub async fn finish(&self) -> Result<()> {
+        let mut handles = Vec::new();
+        for worker in self.inner.workers.iter() {
+            let handle = {
+                let mut guard = worker.handle.lock().await;
+                guard.take()
+            };
+            if let Some(handle) = handle {
+                let (response_tx, response_rx) = oneshot::channel();
+                if worker
+                    .tx
+                    .send(PublishRequest::Finish {
+                        response: response_tx,
+                    })
+                    .await
+                    .is_ok()
+                {
+                    response_rx
+                        .await
+                        .context("publisher finish response dropped")??;
+                }
+                handles.push(handle);
+            }
+        }
+        for handle in handles {
+            handle.await.context("publisher writer task")??;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) async fn run_publisher_writer(
+    mut send: SendStream,
+    mut recv: RecvStream,
+    mut rx: mpsc::Receiver<PublishRequest>,
+    _chunk_bytes: usize,
+) -> Result<()> {
+    // Single writer: serialize publish requests over one bi-directional stream.
+    let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
+    while let Some(request) = rx.recv().await {
+        match request {
+            PublishRequest::Message {
+                message,
+                ack,
+                request_id,
+                response,
+            } => match message {
+                Message::PublishBatch {
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payloads,
+                    request_id: msg_request_id,
+                    ack: msg_ack,
+                } => {
+                    #[cfg(feature = "telemetry")]
+                    let sample = crate::t_should_sample();
+                    #[cfg(not(feature = "telemetry"))]
+                    let sample = false;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = sample;
+                    let json_len = felix_wire::text::publish_batch_json_len(
+                        &tenant_id,
+                        &namespace,
+                        &stream,
+                        &payloads,
+                        msg_request_id,
+                        msg_ack,
+                    )?;
+                    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + json_len);
+                    buf.resize(FrameHeader::LEN, 0);
+                    #[cfg(feature = "telemetry")]
+                    let encode_start = crate::t_now_if(sample);
+                    let stats = felix_wire::text::write_publish_batch_json(
+                        &mut buf,
+                        &tenant_id,
+                        &namespace,
+                        &stream,
+                        &payloads,
+                        msg_request_id,
+                        msg_ack,
+                    )?;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = stats;
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = encode_start {
+                        let encode_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_encode_ns(encode_ns);
+                        timings::record_text_encode_ns(encode_ns);
+                        t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    if stats.reallocs > 0 {
+                        let counters = frame_counters();
+                        counters
+                            .text_encode_reallocs
+                            .fetch_add(stats.reallocs, Ordering::Relaxed);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    let build_start = crate::t_now_if(sample);
+                    let payload_len = buf.len() - FrameHeader::LEN;
+                    let header = FrameHeader::new(0, payload_len as u32);
+                    let mut header_bytes = [0u8; FrameHeader::LEN];
+                    header.encode_into(&mut header_bytes);
+                    buf[..FrameHeader::LEN].copy_from_slice(&header_bytes);
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = build_start {
+                        let build_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_text_batch_build_ns(build_ns);
+                        t_histogram!("client_text_batch_build_ns").record(build_ns as f64);
+                    }
+                    let bytes = buf.freeze();
+                    #[cfg(feature = "telemetry")]
+                    let write_start = crate::t_now_if(sample);
+                    #[cfg(feature = "telemetry")]
+                    let await_start = crate::t_now_if(sample);
+                    let write_result = send
+                        .write_all(&bytes)
+                        .await
+                        .context("write publish batch frame");
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = await_start {
+                        let await_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_send_await_ns(await_ns);
+                        t_histogram!("client_send_await_ns").record(await_ns as f64);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = write_start {
+                        let write_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_write_ns(write_ns);
+                        t_histogram!("felix_client_write_ns").record(write_ns as f64);
+                    }
+                    let result = match write_result {
+                        Ok(()) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .bytes_out
+                                    .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                            }
+                            maybe_wait_for_ack(&mut recv, ack, request_id, &mut ack_scratch).await
+                        }
+                        Err(err) => Err(err),
+                    };
+                    let item_count = payloads.len() as u64;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = item_count;
+                    match result {
+                        Ok(()) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .pub_items_out_ok
+                                    .fetch_add(item_count, Ordering::Relaxed);
+                            }
+                            let _ = response.send(Ok(()));
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                                counters.pub_batches_out_err.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .pub_items_out_err
+                                    .fetch_add(item_count, Ordering::Relaxed);
+                            }
+                            let message = err.to_string();
+                            let _ = response.send(Err(err));
+                            drain_publish_queue(&mut rx, &message).await;
+                            return Err(anyhow::anyhow!(message));
+                        }
+                    }
+                }
+                other => {
+                    #[cfg(feature = "telemetry")]
+                    let sample = crate::t_should_sample();
+                    #[cfg(feature = "telemetry")]
+                    let encode_start = crate::t_now_if(sample);
+                    let frame = match other.encode().context("encode message") {
+                        Ok(frame) => frame,
+                        Err(err) => {
+                            let _ = response.send(Err(err));
+                            continue;
+                        }
+                    };
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = encode_start {
+                        let encode_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_encode_ns(encode_ns);
+                        t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    let write_start = crate::t_now_if(sample);
+                    let write_result = write_frame_parts(&mut send, &frame).await;
+                    #[cfg(feature = "telemetry")]
+                    if let Some(start) = write_start {
+                        let write_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_write_ns(write_ns);
+                        t_histogram!("felix_client_write_ns").record(write_ns as f64);
+                    }
+                    let result = match write_result {
+                        Ok(()) => {
+                            maybe_wait_for_ack(&mut recv, ack, request_id, &mut ack_scratch).await
+                        }
+                        Err(err) => Err(err),
+                    };
+                    let (batch_count, item_count) = match &other {
+                        Message::Publish { .. } => (1u64, 1u64),
+                        Message::PublishBatch { payloads, .. } => (1u64, payloads.len() as u64),
+                        _ => (0u64, 0u64),
+                    };
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = (batch_count, item_count);
+                    match result {
+                        Ok(()) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                if batch_count > 0 {
+                                    counters
+                                        .pub_batches_out_ok
+                                        .fetch_add(batch_count, Ordering::Relaxed);
+                                    counters
+                                        .pub_items_out_ok
+                                        .fetch_add(item_count, Ordering::Relaxed);
+                                }
+                            }
+                            let _ = response.send(Ok(()));
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                                if batch_count > 0 {
+                                    counters
+                                        .pub_batches_out_err
+                                        .fetch_add(batch_count, Ordering::Relaxed);
+                                    counters
+                                        .pub_items_out_err
+                                        .fetch_add(item_count, Ordering::Relaxed);
+                                }
+                            }
+                            let message = err.to_string();
+                            let _ = response.send(Err(err));
+                            drain_publish_queue(&mut rx, &message).await;
+                            return Err(anyhow::anyhow!(message));
+                        }
+                    }
+                }
+            },
+            PublishRequest::BinaryBytes {
+                bytes,
+                item_count,
+                sample,
+                response,
+            } => {
+                #[cfg(not(feature = "telemetry"))]
+                let _ = (item_count, sample);
+                #[cfg(feature = "telemetry")]
+                let write_start = crate::t_now_if(sample);
+                #[cfg(feature = "telemetry")]
+                let chunk_start = crate::t_now_if(sample);
+                let result = send
+                    .write_all(&bytes)
+                    .await
+                    .context("write binary batch frame");
+                #[cfg(feature = "telemetry")]
+                if let Some(start) = chunk_start {
+                    let await_ns = start.elapsed().as_nanos() as u64;
+                    timings::record_send_await_ns(await_ns);
+                    t_histogram!("client_send_await_ns").record(await_ns as f64);
+                }
+                #[cfg(feature = "telemetry")]
+                if let Some(start) = write_start {
+                    let write_ns = start.elapsed().as_nanos() as u64;
+                    timings::record_write_ns(write_ns);
+                    t_histogram!("felix_client_write_ns").record(write_ns as f64);
+                }
+                match result {
+                    Ok(()) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_ok
+                                .fetch_add(item_count as u64, Ordering::Relaxed);
+                            counters.frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .bytes_out
+                                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        }
+                        let _ = response.send(Ok(()));
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                            counters.pub_batches_out_err.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_err
+                                .fetch_add(item_count as u64, Ordering::Relaxed);
+                        }
+                        let message = err.to_string();
+                        let _ = response.send(Err(err));
+                        drain_publish_queue(&mut rx, &message).await;
+                        return Err(anyhow::anyhow!(message));
+                    }
+                }
+            }
+            PublishRequest::Finish { response } => {
+                let result = finish_publisher_stream(&mut send, &mut recv).await;
+                match result {
+                    Ok(()) => {
+                        let _ = response.send(Ok(()));
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        let _ = response.send(Err(err));
+                        return Err(anyhow::anyhow!(message));
+                    }
+                }
+            }
+        }
+    }
+    finish_publisher_stream(&mut send, &mut recv).await
+}
+
+pub(crate) async fn finish_publisher_stream(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+) -> Result<()> {
+    send.finish()?;
+    let mut buf = [0u8; 8192];
+    loop {
+        match recv.read(&mut buf).await {
+            Ok(Some(_)) => continue,
+            Ok(None) => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn drain_publish_queue(rx: &mut mpsc::Receiver<PublishRequest>, message: &str) {
+    while let Some(request) = rx.recv().await {
+        match request {
+            PublishRequest::Message { response, .. }
+            | PublishRequest::BinaryBytes { response, .. }
+            | PublishRequest::Finish { response } => {
+                let _ = response.send(Err(anyhow::anyhow!(message.to_string())));
+            }
+        }
+    }
+}
