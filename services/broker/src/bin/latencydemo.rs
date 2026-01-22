@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct DemoConfig {
     warmup: usize,
     total: usize,
@@ -26,11 +26,16 @@ struct DemoConfig {
     batch_size: usize,
     binary: bool,
     idle_ms: u64,
+    pub_conns: usize,
+    pub_streams_per_conn: usize,
+    pub_sharding: Option<String>,
+    pub_stream_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct DemoResult {
-    total: usize,
+    publish_total: usize,
+    sample_total: usize,
     payload_bytes: usize,
     fanout: usize,
     batch_size: usize,
@@ -125,7 +130,7 @@ async fn main() -> Result<()> {
     } else if matrix {
         for payload in payloads {
             for fanout in &fanouts {
-                let mut case = config;
+                let mut case = config.clone();
                 case.payload_bytes = payload;
                 case.fanout = *fanout;
                 let (result, summary) = run_case(case).await?;
@@ -150,6 +155,10 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
     let mut batch_size = 1;
     let mut binary = false;
     let mut idle_ms = 2000;
+    let mut pub_conns = 4;
+    let mut pub_streams_per_conn = 2;
+    let mut pub_sharding = None;
+    let mut pub_stream_count = 1;
     let mut matrix = false;
     let mut all = true;
     let mut all_set = false;
@@ -162,6 +171,10 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
     let mut batch_set = false;
     let mut idle_set = false;
     let mut binary_set = false;
+    let mut pub_conns_set = false;
+    let mut pub_streams_set = false;
+    let mut pub_sharding_set = false;
+    let mut pub_stream_count_set = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -213,6 +226,30 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
                     idle_set = true;
                 }
             }
+            "--pub-conns" => {
+                if let Some(value) = args.next() {
+                    pub_conns = value.parse().unwrap_or(pub_conns);
+                    pub_conns_set = true;
+                }
+            }
+            "--pub-streams-per-conn" => {
+                if let Some(value) = args.next() {
+                    pub_streams_per_conn = value.parse().unwrap_or(pub_streams_per_conn);
+                    pub_streams_set = true;
+                }
+            }
+            "--pub-sharding" => {
+                if let Some(value) = args.next() {
+                    pub_sharding = Some(value);
+                    pub_sharding_set = true;
+                }
+            }
+            "--pub-stream-count" => {
+                if let Some(value) = args.next() {
+                    pub_stream_count = value.parse().unwrap_or(pub_stream_count);
+                    pub_stream_count_set = true;
+                }
+            }
             "--payloads" => {
                 payloads = args.next();
             }
@@ -237,7 +274,11 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
             || fanout_set
             || batch_set
             || idle_set
-            || binary_set)
+            || binary_set
+            || pub_conns_set
+            || pub_streams_set
+            || pub_sharding_set
+            || pub_stream_count_set)
     {
         all = false;
     }
@@ -260,6 +301,10 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
             batch_size,
             binary,
             idle_ms,
+            pub_conns,
+            pub_streams_per_conn,
+            pub_sharding,
+            pub_stream_count,
         },
         matrix,
         payloads,
@@ -271,17 +316,30 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
 async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummary>)> {
     unsafe {
         std::env::set_var("FELIX_FANOUT_BATCH", config.batch_size.to_string());
+        std::env::set_var("FELIX_PUB_CONN_POOL", config.pub_conns.to_string());
+        std::env::set_var(
+            "FELIX_PUB_STREAMS_PER_CONN",
+            config.pub_streams_per_conn.to_string(),
+        );
+        if let Some(ref sharding) = config.pub_sharding {
+            std::env::set_var("FELIX_PUB_SHARDING", sharding);
+        } else {
+            std::env::set_var("FELIX_PUB_SHARDING", "hash_stream");
+        }
     }
     println!(
-        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | binary {}",
+        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | binary {} | pub conns {} | pub streams/conn {} | pub stream count {}",
         config.warmup,
         config.total,
         config.payload_bytes,
         config.fanout,
         config.batch_size,
-        config.binary
+        config.binary,
+        config.pub_conns,
+        config.pub_streams_per_conn,
+        config.pub_stream_count
     );
-    println!("{}", expectation_note(config));
+    println!("{}", expectation_note(&config));
     let use_ack = config.batch_size <= 1 && !config.binary;
     let disable_timings = std::env::var("FELIX_DISABLE_TIMINGS")
         .ok()
@@ -313,9 +371,16 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
-    broker
-        .register_stream("t1", "default", "latency", StreamMetadata::default())
-        .await?;
+    for stream_index in 0..config.pub_stream_count.max(1) {
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                stream_name(stream_index, config.pub_stream_count).as_str(),
+                StreamMetadata::default(),
+            )
+            .await?;
+    }
     #[cfg(feature = "telemetry")]
     {
         broker::quic::reset_frame_counters();
@@ -343,6 +408,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.fanout,
         total_events,
         config.warmup,
+        config.pub_stream_count,
         Arc::clone(&delivered_total),
     )
     .await?;
@@ -350,17 +416,19 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let (warmup_tx, warmup_rx) = oneshot::channel();
     let idle_timeout = Duration::from_millis(config.idle_ms);
     let delivered_for_primary = Arc::clone(&delivered_total);
+    let primary_total = per_stream_events(config.total, config.pub_stream_count.max(1), 0);
+    let primary_warmup = per_stream_events(config.warmup, config.pub_stream_count.max(1), 0);
     let recv_task = tokio::spawn(async move {
-        let mut results = Vec::with_capacity(config.total);
+        let mut results = Vec::with_capacity(primary_total);
         let mut seen = 0usize;
         let mut warmup_tx = Some(warmup_tx);
-        if config.warmup == 0
+        if primary_warmup == 0
             && let Some(tx) = warmup_tx.take()
         {
             let _ = tx.send(());
         }
         let mut sub = primary_sub;
-        while results.len() < config.total {
+        while results.len() < primary_total {
             let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
             let event = match next {
                 Ok(result) => result,
@@ -370,9 +438,9 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                 Ok(Some(event)) => {
                     let sample = client_timings::should_sample();
                     let dispatch_start = sample.then(Instant::now);
-                    if seen < config.warmup {
+                    if seen < primary_warmup {
                         seen += 1;
-                        if seen == config.warmup
+                        if seen == primary_warmup
                             && let Some(tx) = warmup_tx.take()
                         {
                             let _ = tx.send(());
@@ -403,6 +471,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.batch_size,
         config.binary,
         use_ack,
+        config.pub_stream_count,
     )
     .await?;
     let _ = warmup_rx.await;
@@ -415,6 +484,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.batch_size,
         config.binary,
         use_ack,
+        config.pub_stream_count,
     )
     .await?;
 
@@ -451,13 +521,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         (delivered_total as f64 / config.fanout.max(1) as f64) / elapsed.as_secs_f64();
     Ok((
         DemoResult {
-            total: config.total,
+            publish_total: config.total,
+            sample_total: primary_total,
             payload_bytes: config.payload_bytes,
             fanout: config.fanout,
             batch_size: config.batch_size,
             binary: config.binary,
             received,
-            dropped: config.total.saturating_sub(received),
+            dropped: primary_total.saturating_sub(received),
             delivered_total,
             p50: percentile(&latencies, 0.50),
             p99: percentile(&latencies, 0.99),
@@ -476,37 +547,44 @@ async fn setup_subscribers(
     fanout: usize,
     total_events: usize,
     warmup: usize,
+    stream_count: usize,
     delivered_total: Arc<AtomicUsize>,
 ) -> Result<(Subscription, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
     let mut primary_sub = None;
-    for _ in 0..fanout {
-        let sub = client.subscribe("t1", "default", "latency").await?;
-        if primary_sub.is_none() {
-            primary_sub = Some(sub);
-        } else {
-            let mut sub = sub;
-            let idle_timeout = Duration::from_millis(2000);
-            let delivered = Arc::clone(&delivered_total);
-            drain_tasks.push(tokio::spawn(async move {
-                let mut remaining = total_events;
-                let mut seen = 0usize;
-                while remaining > 0 {
-                    let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
-                    match next {
-                        Ok(Ok(Some(_))) => {
-                            remaining -= 1;
-                            if seen >= warmup {
-                                delivered.fetch_add(1, Ordering::Relaxed);
+    let stream_count = stream_count.max(1);
+    for stream_index in 0..stream_count {
+        let per_stream_total = per_stream_events(total_events, stream_count, stream_index);
+        let per_stream_warmup = per_stream_events(warmup, stream_count, stream_index);
+        for _ in 0..fanout {
+            let stream = stream_name(stream_index, stream_count);
+            let sub = client.subscribe("t1", "default", stream.as_str()).await?;
+            if primary_sub.is_none() {
+                primary_sub = Some(sub);
+            } else {
+                let mut sub = sub;
+                let idle_timeout = Duration::from_millis(2000);
+                let delivered = Arc::clone(&delivered_total);
+                drain_tasks.push(tokio::spawn(async move {
+                    let mut remaining = per_stream_total;
+                    let mut seen = 0usize;
+                    while remaining > 0 {
+                        let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
+                        match next {
+                            Ok(Ok(Some(_))) => {
+                                remaining -= 1;
+                                if seen >= per_stream_warmup {
+                                    delivered.fetch_add(1, Ordering::Relaxed);
+                                }
+                                seen += 1;
                             }
-                            seen += 1;
+                            Ok(Ok(None)) => break,
+                            Ok(Err(_)) => break,
+                            Err(_) => break,
                         }
-                        Ok(Ok(None)) => break,
-                        Ok(Err(_)) => break,
-                        Err(_) => break,
                     }
-                }
-            }));
+                }));
+            }
         }
     }
     Ok((primary_sub.expect("primary subscriber"), drain_tasks))
@@ -519,11 +597,23 @@ async fn publish_batches(
     batch_size: usize,
     binary: bool,
     use_ack: bool,
+    stream_count: usize,
 ) -> Result<()> {
     let mut remaining = total;
+    let mut stream_index = 0usize;
     while remaining > 0 {
         let count = remaining.min(batch_size);
-        publish_batch(publisher, payload_bytes, count, binary, use_ack).await?;
+        publish_batch(
+            publisher,
+            payload_bytes,
+            count,
+            binary,
+            use_ack,
+            stream_index,
+            stream_count,
+        )
+        .await?;
+        stream_index = stream_index.wrapping_add(1);
         remaining -= count;
     }
     Ok(())
@@ -535,13 +625,16 @@ async fn publish_batch(
     batch_size: usize,
     binary: bool,
     use_ack: bool,
+    stream_index: usize,
+    stream_count: usize,
 ) -> Result<()> {
+    let stream = stream_name(stream_index, stream_count);
     let payloads = (0..batch_size)
         .map(|_| encode_payload(payload_bytes))
         .collect::<Vec<_>>();
     if binary {
         return publisher
-            .publish_batch_binary("t1", "default", "latency", &payloads)
+            .publish_batch_binary("t1", "default", stream.as_str(), &payloads)
             .await;
     }
     if batch_size == 1 {
@@ -549,7 +642,7 @@ async fn publish_batch(
             .publish(
                 "t1",
                 "default",
-                "latency",
+                stream.as_str(),
                 payloads[0].clone(),
                 if use_ack {
                     AckMode::PerMessage
@@ -563,7 +656,7 @@ async fn publish_batch(
             .publish_batch(
                 "t1",
                 "default",
-                "latency",
+                stream.as_str(),
                 payloads,
                 if use_ack {
                     AckMode::PerBatch
@@ -576,10 +669,25 @@ async fn publish_batch(
     Ok(())
 }
 
+fn stream_name(index: usize, stream_count: usize) -> String {
+    if stream_count <= 1 {
+        return "latency".to_string();
+    }
+    let index = index % stream_count;
+    format!("latency-{index}")
+}
+
+fn per_stream_events(total: usize, stream_count: usize, stream_index: usize) -> usize {
+    let base = total / stream_count;
+    let extra = total % stream_count;
+    base + usize::from(stream_index < extra)
+}
+
 fn print_result(result: &DemoResult) {
     println!(
-        "Results (n = {}, received {}, dropped {}) payload={}B fanout={} batch={} binary={}:",
-        result.total,
+        "Results (publish n = {}, sampled {}, received {}, dropped {}) payload={}B fanout={} batch={} binary={}:",
+        result.publish_total,
+        result.sample_total,
         result.received,
         result.dropped,
         result.payload_bytes,
@@ -937,10 +1045,10 @@ fn build_timing_summary(
     _broker_samples: Option<broker_timings::BrokerTimingSamples>,
     _broker_publish_samples: Option<broker_publish_timings::BrokerPublishSamples>,
 ) -> TimingSummary {
-    TimingSummary::default()
+    TimingSummary
 }
 
-fn expectation_note(config: DemoConfig) -> String {
+fn expectation_note(config: &DemoConfig) -> String {
     if config.batch_size <= 1 && !config.binary {
         "Expectation: latency-focused run; p999 <= 1 ms on localhost if not saturated.".to_string()
     } else {
@@ -954,14 +1062,14 @@ async fn run_all(base: DemoConfig) -> Result<()> {
     let latency_fanouts = [1, 10];
     for payload in latency_payloads {
         for fanout in latency_fanouts {
-            let mut case = base;
+            let mut case = base.clone();
             case.payload_bytes = payload;
             case.fanout = fanout;
             case.batch_size = 1;
             case.binary = base.binary;
             case.warmup = 200;
             case.total = 2000;
-            let (result, summary) = run_case(case).await?;
+            let (result, summary) = run_case(case.clone()).await?;
             print_result(&result);
             print_timing_summary(summary);
             let (client_counters, broker_counters) = print_frame_counters();
@@ -975,14 +1083,14 @@ async fn run_all(base: DemoConfig) -> Result<()> {
     for payload in throughput_payloads {
         for fanout in throughput_fanouts {
             for &binary in binaries {
-                let mut case = base;
+                let mut case = base.clone();
                 case.payload_bytes = payload;
                 case.fanout = fanout;
                 case.batch_size = 64;
                 case.binary = binary;
                 case.warmup = 200;
                 case.total = 5000;
-                let (result, summary) = run_case(case).await?;
+                let (result, summary) = run_case(case.clone()).await?;
                 print_result(&result);
                 print_timing_summary(summary);
                 let (client_counters, broker_counters) = print_frame_counters();
@@ -990,6 +1098,25 @@ async fn run_all(base: DemoConfig) -> Result<()> {
             }
         }
     }
+    let mut baseline = base.clone();
+    baseline.payload_bytes = 256;
+    baseline.fanout = 1;
+    baseline.batch_size = 64;
+    baseline.binary = base.binary;
+    baseline.warmup = 200;
+    baseline.total = 5000;
+    baseline.pub_conns = 1;
+    baseline.pub_streams_per_conn = 1;
+    let (result, summary) = run_case(baseline.clone()).await?;
+    print_result(&result);
+    print_timing_summary(summary);
+
+    let mut scaled = baseline;
+    scaled.pub_conns = 4;
+    scaled.pub_streams_per_conn = 2;
+    let (result, summary) = run_case(scaled).await?;
+    print_result(&result);
+    print_timing_summary(summary);
     Ok(())
 }
 

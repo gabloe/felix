@@ -26,6 +26,8 @@ use felix_transport::{QuicClient, QuicConnection, TransportConfig};
 use felix_wire::{AckMode, Frame, FrameHeader, Message};
 use quinn::{ReadExactError, RecvStream, SendStream};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 #[cfg(feature = "telemetry")]
@@ -262,15 +264,16 @@ impl InProcessClient {
 pub struct Client {
     // We keep three QUIC clients primarily to allow different transport tuning knobs per workload.
 
-    // Control stream handles publish requests.
-    _control_client: QuicClient,
+    // Publish streams are pooled for higher throughput.
+    _publish_client: QuicClient,
     // Cache streams are pooled separately for lower latency round trips.
     _cache_client: QuicClient,
     // Event streams are pooled for subscriptions.
     _event_client: QuicClient,
 
-    // Long-lived connection used to open publisher control streams.
-    control_connection: QuicConnection,
+    // Publish worker pool: multiple streams across multiple connections.
+    publish_workers: Arc<Vec<PublishWorker>>,
+    publish_sharding: PublishSharding,
 
     // Per-stream cache workers: each owns exactly one bi-directional QUIC stream and
     // serializes cache round-trips (encode -> write -> read -> decode).
@@ -313,8 +316,45 @@ impl Client {
         transport: TransportConfig,
     ) -> Result<Self> {
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("bind addr");
-        let control_client = QuicClient::bind(bind_addr, client_config.clone(), transport.clone())?;
-        let control_connection = control_client.connect(addr, server_name).await?;
+        let publish_client = QuicClient::bind(bind_addr, client_config.clone(), transport.clone())?;
+        let publish_pool_size = std::env::var("FELIX_PUB_CONN_POOL")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_CONN_POOL);
+        let publish_streams_per_conn = std::env::var("FELIX_PUB_STREAMS_PER_CONN")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_STREAMS_PER_CONN);
+        if publish_pool_size == 0 || publish_streams_per_conn == 0 {
+            return Err(anyhow::anyhow!("publish pool misconfigured"));
+        }
+        let publish_chunk_bytes = std::env::var("FELIX_PUBLISH_CHUNK_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUBLISH_CHUNK_BYTES);
+        let mut publish_connections = Vec::with_capacity(publish_pool_size);
+        for _ in 0..publish_pool_size {
+            let connection = publish_client.connect(addr, server_name).await?;
+            publish_connections.push(connection);
+        }
+        let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
+        for connection in &publish_connections {
+            for _ in 0..publish_streams_per_conn {
+                let (send, recv) = connection.open_bi().await?;
+                let (tx, rx) = mpsc::channel(PUBLISH_QUEUE_DEPTH);
+                let handle =
+                    tokio::spawn(run_publisher_writer(send, recv, rx, publish_chunk_bytes));
+                publish_workers.push(PublishWorker {
+                    tx,
+                    handle: tokio::sync::Mutex::new(Some(handle)),
+                    request_counter: AtomicU64::new(1),
+                });
+            }
+        }
+        let publish_sharding = PublishSharding::from_env().unwrap_or(PublishSharding::HashStream);
         // Cache connections are pooled to avoid head-of-line blocking.
         // DESIGN NOTE:
         // We pool *connections* and then open multiple *streams per connection*.
@@ -383,10 +423,11 @@ impl Client {
             event_conn_counts.push(AtomicUsize::new(0));
         }
         Ok(Self {
-            _control_client: control_client,
+            _publish_client: publish_client,
             _cache_client: cache_client,
             _event_client: event_client,
-            control_connection,
+            publish_workers: Arc::new(publish_workers),
+            publish_sharding,
             cache_workers,
             event_connections,
             subscription_counter: AtomicU64::new(1),
@@ -400,19 +441,11 @@ impl Client {
     }
 
     pub async fn publisher(&self) -> Result<Publisher> {
-        let (send, recv) = self.control_connection.open_bi().await?;
-        let (tx, rx) = mpsc::channel(PUBLISH_QUEUE_DEPTH);
-        let chunk_bytes = std::env::var("FELIX_PUBLISH_CHUNK_BYTES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_PUBLISH_CHUNK_BYTES);
-        let handle = tokio::spawn(run_publisher_writer(send, recv, rx, chunk_bytes));
         Ok(Publisher {
             inner: Arc::new(PublisherInner {
-                tx,
-                handle: tokio::sync::Mutex::new(Some(handle)),
-                request_counter: AtomicU64::new(1),
+                workers: Arc::clone(&self.publish_workers),
+                sharding: self.publish_sharding,
+                rr: AtomicUsize::new(0),
             }),
         })
     }
@@ -592,6 +625,29 @@ impl Client {
 struct CacheWorker {
     tx: mpsc::Sender<CacheRequest>,
     conn_index: usize,
+}
+
+struct PublishWorker {
+    tx: mpsc::Sender<PublishRequest>,
+    handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
+    request_counter: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PublishSharding {
+    RoundRobin,
+    HashStream,
+}
+
+impl PublishSharding {
+    fn from_env() -> Option<Self> {
+        let value = std::env::var("FELIX_PUB_SHARDING").ok()?;
+        match value.as_str() {
+            "rr" => Some(Self::RoundRobin),
+            "hash_stream" => Some(Self::HashStream),
+            _ => None,
+        }
+    }
 }
 
 enum EventRouterCommand {
@@ -870,9 +926,9 @@ pub struct Publisher {
 }
 
 struct PublisherInner {
-    tx: mpsc::Sender<PublishRequest>,
-    handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
-    request_counter: AtomicU64,
+    workers: Arc<Vec<PublishWorker>>,
+    sharding: PublishSharding,
+    rr: AtomicUsize,
 }
 
 enum PublishRequest {
@@ -897,6 +953,8 @@ const PUBLISH_QUEUE_DEPTH: usize = 1024;
 const CACHE_WORKER_QUEUE_DEPTH: usize = 1024;
 const EVENT_ROUTER_QUEUE_DEPTH: usize = 1024;
 const DEFAULT_PUBLISH_CHUNK_BYTES: usize = 16 * 1024;
+const DEFAULT_PUB_CONN_POOL: usize = 4;
+const DEFAULT_PUB_STREAMS_PER_CONN: usize = 2;
 const DEFAULT_EVENT_CONN_POOL: usize = 8;
 const DEFAULT_CACHE_CONN_POOL: usize = 8;
 const DEFAULT_CACHE_STREAMS_PER_CONN: usize = 4;
@@ -935,6 +993,31 @@ const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 const DEFAULT_EVENT_ROUTER_MAX_PENDING: usize = 16 * 1024;
 
 impl Publisher {
+    fn select_worker(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<&PublishWorker> {
+        let workers = &self.inner.workers;
+        if workers.is_empty() {
+            return Err(anyhow::anyhow!("publish pool is empty"));
+        }
+        let index = match self.inner.sharding {
+            PublishSharding::RoundRobin => {
+                self.inner.rr.fetch_add(1, Ordering::Relaxed) % workers.len()
+            }
+            PublishSharding::HashStream => {
+                let mut hasher = DefaultHasher::new();
+                tenant_id.hash(&mut hasher);
+                namespace.hash(&mut hasher);
+                stream.hash(&mut hasher);
+                (hasher.finish() as usize) % workers.len()
+            }
+        };
+        Ok(&workers[index])
+    }
+
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -943,13 +1026,14 @@ impl Publisher {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payload = maybe_append_publish_ts(payload);
         // Enqueue publish on the single-writer publisher task.
         let (response_tx, response_rx) = oneshot::channel();
         let request_id = if ack == AckMode::None {
             None
         } else {
-            Some(self.inner.request_counter.fetch_add(1, Ordering::Relaxed))
+            Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
         };
         #[cfg(feature = "telemetry")]
         let sample = t_should_sample();
@@ -965,7 +1049,7 @@ impl Publisher {
         let _ = sample;
         #[cfg(feature = "telemetry")]
         let enqueue_start = t_now_if(sample);
-        self.inner
+        worker
             .tx
             .send(PublishRequest::Message {
                 message: Message::Publish {
@@ -999,13 +1083,14 @@ impl Publisher {
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
     ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads = maybe_append_publish_ts_batch(payloads);
         // Batch publish uses the same queue/writer as single messages.
         let (response_tx, response_rx) = oneshot::channel();
         let request_id = if ack == AckMode::None {
             None
         } else {
-            Some(self.inner.request_counter.fetch_add(1, Ordering::Relaxed))
+            Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
         };
         #[cfg(feature = "telemetry")]
         let sample = t_should_sample();
@@ -1015,7 +1100,7 @@ impl Publisher {
         let _ = sample;
         #[cfg(feature = "telemetry")]
         let enqueue_start = t_now_if(sample);
-        self.inner
+        worker
             .tx
             .send(PublishRequest::Message {
                 message: Message::PublishBatch {
@@ -1050,6 +1135,7 @@ impl Publisher {
         stream: &str,
         payloads: &[Vec<u8>],
     ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads_with_ts;
         let payloads = if bench_embed_ts_enabled() {
             payloads_with_ts = payloads
@@ -1090,7 +1176,7 @@ impl Publisher {
         let (response_tx, response_rx) = oneshot::channel();
         #[cfg(feature = "telemetry")]
         let enqueue_start = t_now_if(sample);
-        self.inner
+        worker
             .tx
             .send(PublishRequest::BinaryBytes {
                 bytes,
@@ -1110,29 +1196,32 @@ impl Publisher {
     }
 
     pub async fn finish(&self) -> Result<()> {
-        let handle = {
-            let mut guard = self.inner.handle.lock().await;
-            guard.take()
-        };
-        if handle.is_none() {
-            return Ok(());
+        let mut handles = Vec::new();
+        for worker in self.inner.workers.iter() {
+            let handle = {
+                let mut guard = worker.handle.lock().await;
+                guard.take()
+            };
+            if let Some(handle) = handle {
+                let (response_tx, response_rx) = oneshot::channel();
+                if worker
+                    .tx
+                    .send(PublishRequest::Finish {
+                        response: response_tx,
+                    })
+                    .await
+                    .is_ok()
+                {
+                    response_rx
+                        .await
+                        .context("publisher finish response dropped")??;
+                }
+                handles.push(handle);
+            }
         }
-        let handle = handle.expect("handle checked");
-        let (response_tx, response_rx) = oneshot::channel();
-        if self
-            .inner
-            .tx
-            .send(PublishRequest::Finish {
-                response: response_tx,
-            })
-            .await
-            .is_ok()
-        {
-            response_rx
-                .await
-                .context("publisher finish response dropped")??;
+        for handle in handles {
+            handle.await.context("publisher writer task")??;
         }
-        handle.await.context("publisher writer task")??;
         Ok(())
     }
 }
@@ -2286,6 +2375,8 @@ mod tests {
     #[tokio::test]
     async fn cache_worker_exits_on_stream_error() -> Result<()> {
         unsafe {
+            std::env::set_var("FELIX_PUB_CONN_POOL", "1");
+            std::env::set_var("FELIX_PUB_STREAMS_PER_CONN", "1");
             std::env::set_var("FELIX_CACHE_CONN_POOL", "1");
             std::env::set_var("FELIX_CACHE_STREAMS_PER_CONN", "1");
             std::env::set_var("FELIX_EVENT_CONN_POOL", "1");

@@ -1,0 +1,113 @@
+use anyhow::{Context, Result, anyhow};
+use bytes::{Bytes, BytesMut};
+use felix_wire::{Frame, FrameHeader, Message};
+use quinn::{ReadExactError, RecvStream, SendStream};
+
+#[cfg(feature = "telemetry")]
+use super::telemetry;
+
+// Helper for tests and small control flows with an explicit frame cap.
+pub async fn read_message_limited(
+    recv: &mut RecvStream,
+    max_frame_bytes: usize,
+    frame_scratch: &mut BytesMut,
+) -> Result<Option<Message>> {
+    let frame = match read_frame_limited_into(recv, max_frame_bytes, frame_scratch).await? {
+        Some(frame) => frame,
+        None => return Ok(None),
+    };
+    Message::decode(frame).map(Some).context("decode message")
+}
+
+// Helper to encode + write a single message.
+pub async fn write_message(send: &mut SendStream, message: Message) -> Result<()> {
+    let frame = message.encode().context("encode message")?;
+    write_frame(send, &frame).await
+}
+
+// Low-level frame reader with a max payload cap.
+pub async fn read_frame_limited_into(
+    recv: &mut RecvStream,
+    max_payload_bytes: usize,
+    scratch: &mut BytesMut,
+) -> Result<Option<Frame>> {
+    let mut header_bytes = [0u8; FrameHeader::LEN];
+    match recv.read_exact(&mut header_bytes).await {
+        Ok(()) => {}
+        Err(ReadExactError::FinishedEarly(_)) => return Ok(None),
+        Err(ReadExactError::ReadError(err)) => return Err(err.into()),
+    }
+
+    let header = FrameHeader::decode(Bytes::copy_from_slice(&header_bytes))
+        .context("decode frame header")?;
+    let length = usize::try_from(header.length).context("frame length")?;
+    if length > max_payload_bytes {
+        return Err(anyhow!(
+            "frame length {length} exceeds max_payload_bytes {max_payload_bytes}"
+        ));
+    }
+    scratch.clear();
+    scratch.resize(length, 0u8);
+    recv.read_exact(&mut scratch[..])
+        .await
+        .context("read frame payload")?;
+    let frame = Frame {
+        header,
+        payload: scratch.split().freeze(),
+    };
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = telemetry::frame_counters();
+        counters
+            .frames_in_ok
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bytes = (FrameHeader::LEN + frame.payload.len()) as u64;
+        counters
+            .bytes_in
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(Some(frame))
+}
+
+// Low-level frame writer for QUIC streams.
+pub async fn write_frame(send: &mut SendStream, frame: &Frame) -> Result<()> {
+    let mut header_bytes = [0u8; FrameHeader::LEN];
+    frame.header.encode_into(&mut header_bytes);
+    send.write_all(&header_bytes)
+        .await
+        .context("write frame header")?;
+    send.write_all(&frame.payload)
+        .await
+        .context("write frame payload")?;
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = telemetry::frame_counters();
+        counters
+            .frames_out_ok
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bytes = (FrameHeader::LEN + frame.payload.len()) as u64;
+        counters
+            .bytes_out
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+// Write raw pre-encoded bytes (used for cached responses).
+pub async fn write_frame_bytes(send: &mut SendStream, bytes: Bytes) -> Result<()> {
+    send.write_all(&bytes)
+        .await
+        .context("write frame")
+        .map(|_| {
+            #[cfg(feature = "telemetry")]
+            {
+                let counters = telemetry::frame_counters();
+                counters
+                    .frames_out_ok
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                counters
+                    .bytes_out
+                    .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        })
+}

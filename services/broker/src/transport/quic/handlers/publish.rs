@@ -1,0 +1,1387 @@
+use anyhow::{Context, Result, anyhow};
+use bytes::Bytes;
+use felix_broker::Broker;
+use felix_wire::{Frame, Message};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
+
+use crate::timings;
+
+use crate::transport::quic::errors::AckEnqueueError;
+use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
+use crate::transport::quic::{
+    ACK_ENQUEUE_TIMEOUT, ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
+    GLOBAL_INGRESS_DEPTH, STREAM_CACHE_TTL,
+};
+
+// Work item for the publish worker; response is only used for per-message acks.
+pub(crate) struct PublishJob {
+    pub(crate) tenant_id: String,
+    pub(crate) namespace: String,
+    pub(crate) stream: String,
+    pub(crate) payloads: Vec<Bytes>,
+    pub(crate) response: Option<oneshot::Sender<Result<()>>>,
+}
+
+// Outbound responses pushed onto the ack/write task.
+pub(crate) enum Outgoing {
+    Message(Message),
+    CacheMessage(Message),
+}
+
+// What to do when the publish queue is full.
+pub(crate) enum EnqueuePolicy {
+    Drop,
+    Fail,
+    Wait,
+}
+
+pub(crate) enum AckWaiterResult {
+    Publish {
+        request_id: u64,
+        payload_len: u64,
+        start: crate::transport::quic::telemetry::TelemetryInstant,
+        response: Result<Result<()>, oneshot::error::RecvError>,
+    },
+    PublishTimeout {
+        request_id: u64,
+        start: crate::transport::quic::telemetry::TelemetryInstant,
+    },
+    PublishBatch {
+        request_id: u64,
+        payload_bytes: Vec<usize>,
+        response: Result<Result<()>, oneshot::error::RecvError>,
+    },
+    PublishBatchTimeout {
+        request_id: u64,
+        payload_bytes: Vec<usize>,
+    },
+}
+
+pub(crate) enum AckWaiterMessage {
+    Publish {
+        request_id: u64,
+        payload_len: u64,
+        start: crate::transport::quic::telemetry::TelemetryInstant,
+        response_rx: oneshot::Receiver<Result<()>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    },
+    PublishBatch {
+        request_id: u64,
+        payload_bytes: Vec<usize>,
+        response_rx: oneshot::Receiver<Result<()>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct PublishContext {
+    pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
+    pub(crate) worker_count: usize,
+    pub(crate) depth: Arc<AtomicUsize>,
+    pub(crate) wait_timeout: Duration,
+}
+
+pub(crate) struct AckTimeoutState {
+    window_start: Instant,
+    count: u32,
+}
+
+impl AckTimeoutState {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self {
+            window_start: now,
+            count: 0,
+        }
+    }
+
+    pub(crate) fn reset(&mut self, now: Instant) {
+        self.window_start = now;
+        self.count = 0;
+    }
+
+    pub(crate) fn register_timeout(&mut self, now: Instant) -> u32 {
+        if now.duration_since(self.window_start) > ACK_TIMEOUT_WINDOW {
+            self.window_start = now;
+            self.count = 1;
+        } else {
+            self.count = self.count.saturating_add(1);
+        }
+        self.count
+    }
+}
+
+pub(crate) fn publish_worker_index(
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    worker_count: usize,
+) -> usize {
+    if worker_count == 0 {
+        return 0;
+    }
+    let mut hasher = DefaultHasher::new();
+    tenant_id.hash(&mut hasher);
+    namespace.hash(&mut hasher);
+    stream.hash(&mut hasher);
+    (hasher.finish() as usize) % worker_count
+}
+
+// Publish queue helper with explicit backpressure and timeout semantics.
+pub(crate) async fn enqueue_publish(
+    publish_ctx: &PublishContext,
+    job: PublishJob,
+    policy: EnqueuePolicy,
+) -> Result<bool> {
+    let worker_index = publish_worker_index(
+        &job.tenant_id,
+        &job.namespace,
+        &job.stream,
+        publish_ctx.worker_count,
+    );
+    let worker = publish_ctx
+        .workers
+        .get(worker_index)
+        .ok_or_else(|| anyhow!("publish worker index out of range"))?;
+    // We use try_send first to keep the fast path allocation-free and to make overload observable
+    // (Full vs Closed). Only the Wait policy performs an async send with a timeout.
+    // IMPORTANT: Any code path that successfully enqueues MUST increment depth counters exactly once.
+    // Best-effort enqueue with metrics and optional backpressure/err.
+    match worker.try_send(job) {
+        Ok(()) => {
+            let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;
+            let global = GLOBAL_INGRESS_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+            t_gauge!("felix_broker_ingress_queue_depth").set(global as f64);
+            Ok(true)
+        }
+        Err(mpsc::error::TrySendError::Full(job)) => {
+            t_counter!("felix_broker_ingress_queue_full_total").increment(1);
+            match policy {
+                EnqueuePolicy::Drop => {
+                    t_counter!("felix_broker_ingress_dropped_total").increment(1);
+                    Ok(false)
+                }
+                EnqueuePolicy::Fail => {
+                    t_counter!("felix_broker_ingress_rejected_total").increment(1);
+                    Err(anyhow!("publish queue full"))
+                }
+                EnqueuePolicy::Wait => {
+                    // Acked publishes with ack_on_commit use Wait; otherwise we Fail/Drop.
+                    t_counter!("felix_broker_ingress_waited_total").increment(1);
+                    let send_result =
+                        tokio::time::timeout(publish_ctx.wait_timeout, worker.send(job))
+                            .await
+                            .map_err(|_| anyhow!("publish enqueue timed out"))?;
+                    send_result.map_err(|_| anyhow!("publish queue closed"))?;
+                    let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;
+                    let global = GLOBAL_INGRESS_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+                    t_gauge!("felix_broker_ingress_queue_depth").set(global as f64);
+                    Ok(true)
+                }
+            }
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(anyhow!("publish queue closed")),
+    }
+}
+
+// Adjust queue depth gauges safely when send fails or work completes.
+pub(crate) fn decrement_depth(
+    depth: &Arc<AtomicUsize>,
+    global: &AtomicUsize,
+    gauge: &'static str,
+) -> Option<(usize, usize)> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = gauge;
+    // Depth tracking is intentionally best-effort: we avoid panicking on underflow and tolerate drift.
+    // Drift can occur if a task exits unexpectedly or if multiple teardown paths reset counters.
+    // We record drift metrics and rely on `reset_local_depth_only` to reconcile on teardown.
+    if let Ok(prev) = depth.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        if value == 0 { None } else { Some(value - 1) }
+    }) {
+        let cur = prev.saturating_sub(1);
+        let updated = match global.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            if value == 0 { None } else { Some(value - 1) }
+        }) {
+            Ok(value) => value - 1,
+            Err(_) => {
+                t_counter!("felix_queue_depth_drift_total", "queue" => gauge).increment(1);
+                global.load(Ordering::Relaxed)
+            }
+        };
+        t_gauge!(gauge).set(updated as f64);
+        return Some((prev, cur));
+    }
+    None
+}
+
+pub(crate) fn reset_local_depth_only(
+    depth: &Arc<AtomicUsize>,
+    global: &AtomicUsize,
+    gauge: &'static str,
+) {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = gauge;
+    let remaining = depth.swap(0, Ordering::Relaxed);
+    if remaining == 0 {
+        return;
+    }
+    let mut prev = global.load(Ordering::Relaxed);
+    loop {
+        let next = prev.saturating_sub(remaining);
+        match global.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => {
+                t_gauge!(gauge).set(next as f64);
+                break;
+            }
+            Err(updated) => prev = updated,
+        }
+    }
+}
+
+pub(crate) async fn send_outgoing_critical(
+    tx: &mpsc::Sender<Outgoing>,
+    depth: &Arc<AtomicUsize>,
+    gauge: &'static str,
+    throttle_tx: &watch::Sender<bool>,
+    message: Outgoing,
+) -> std::result::Result<(), AckEnqueueError> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = gauge;
+    // "Critical" means: if we cannot enqueue within a short bound, we prefer to cancel/close the
+    // control stream rather than allow an acked request to wait forever.
+    // This is used for acks/responses where the client is very likely waiting.
+    // Critical enqueue with timeout; cancel the stream if it cannot be queued.
+    let send_result = tokio::time::timeout(ACK_ENQUEUE_TIMEOUT, tx.send(message)).await;
+    match send_result {
+        Ok(Ok(())) => {
+            let prev = depth.fetch_add(1, Ordering::Relaxed);
+            let cur = prev + 1;
+            let global = GLOBAL_ACK_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+            t_gauge!(gauge).set(global as f64);
+            if prev < ACK_HI_WATER && cur >= ACK_HI_WATER {
+                let _ = throttle_tx.send(true);
+            }
+            Ok(())
+        }
+        Ok(Err(_)) => Err(AckEnqueueError::Closed),
+        Err(_) => {
+            t_counter!("felix_broker_out_ack_timeout_total").increment(1);
+            Err(AckEnqueueError::Timeout)
+        }
+    }
+}
+
+pub(crate) async fn send_outgoing_best_effort(
+    tx: &mpsc::Sender<Outgoing>,
+    depth: &Arc<AtomicUsize>,
+    gauge: &'static str,
+    throttle_tx: &watch::Sender<bool>,
+    message: Outgoing,
+) -> std::result::Result<(), AckEnqueueError> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = gauge;
+    // Best-effort is used when the server is already overloaded and we are shedding load.
+    // NOTE: Dropping an ack/error for a request that asked for an ack can strand the client until
+    // it times out. If this becomes problematic, switch these paths to `send_outgoing_critical`
+    // or close the stream when enqueue fails.
+    // Best-effort enqueue; fail fast if the ack queue is full to avoid deadlocks.
+    match tx.try_send(message) {
+        Ok(()) => {
+            let prev = depth.fetch_add(1, Ordering::Relaxed);
+            let cur = prev + 1;
+            let global = GLOBAL_ACK_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+            t_gauge!(gauge).set(global as f64);
+            if prev < ACK_HI_WATER && cur >= ACK_HI_WATER {
+                let _ = throttle_tx.send(true);
+            }
+            Ok(())
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            t_counter!("felix_broker_out_ack_full_total").increment(1);
+            Err(AckEnqueueError::Full)
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(AckEnqueueError::Closed),
+    }
+}
+
+pub(crate) async fn handle_ack_enqueue_result(
+    result: std::result::Result<(), AckEnqueueError>,
+    state: &Arc<Mutex<AckTimeoutState>>,
+    throttle_tx: &watch::Sender<bool>,
+    cancel_tx: &watch::Sender<bool>,
+) -> Result<()> {
+    match result {
+        Ok(()) => {
+            let mut guard = state.lock().await;
+            guard.reset(Instant::now());
+            Ok(())
+        }
+        Err(AckEnqueueError::Timeout) => {
+            let _ = throttle_tx.send(true);
+            let now = Instant::now();
+            let mut guard = state.lock().await;
+            let count = guard.register_timeout(now);
+            if count >= ACK_TIMEOUT_THRESHOLD {
+                crate::transport::quic::errors::record_ack_enqueue_failure_metrics(
+                    "ack_queue_timeout",
+                );
+                let _ = cancel_tx.send(true);
+                return Err(anyhow!(
+                    "closing control stream: ack enqueue timeout streak"
+                ));
+            }
+            Ok(())
+        }
+        Err(AckEnqueueError::Full) => Err(anyhow!("ack queue full")),
+        Err(AckEnqueueError::Closed) => {
+            crate::transport::quic::errors::record_ack_enqueue_failure_metrics("ack_queue_closed");
+            let _ = throttle_tx.send(false);
+            let _ = cancel_tx.send(true);
+            Err(anyhow!("closing control stream: ack_queue_closed"))
+        }
+    }
+}
+
+pub(crate) async fn handle_binary_publish_batch_control(
+    broker: &Broker,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    publish_ctx: &PublishContext,
+    frame: &Frame,
+    sample: bool,
+) -> Result<()> {
+    let decode_start = t_now_if(sample);
+    let batch = match felix_wire::binary::decode_publish_batch(frame)
+        .context("decode binary publish batch")
+    {
+        Ok(batch) => batch,
+        Err(err) => {
+            #[cfg(feature = "telemetry")]
+            {
+                let counters = crate::transport::quic::telemetry::frame_counters();
+                counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_batches_in_err.fetch_add(1, Ordering::Relaxed);
+            }
+            log_decode_error("binary_publish_batch", &err, frame);
+            return Err(err);
+        }
+    };
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters
+            .pub_items_in_ok
+            .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+    }
+    if let Some(start) = decode_start {
+        let decode_ns = start.elapsed().as_nanos() as u64;
+        timings::record_decode_ns(decode_ns);
+        t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
+    }
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &batch.tenant_id,
+        &batch.namespace,
+        &batch.stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        return Ok(());
+    }
+    let span = tracing::info_span!(
+        "publish_batch_binary",
+        tenant_id = %batch.tenant_id,
+        namespace = %batch.namespace,
+        stream = %batch.stream,
+        count = batch.payloads.len()
+    );
+    let _enter = span.enter();
+    let payloads = batch
+        .payloads
+        .into_iter()
+        .map(Bytes::from)
+        .collect::<Vec<_>>();
+    let fanout_start = t_now_if(sample);
+    let r = enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id: batch.tenant_id,
+            namespace: batch.namespace,
+            stream: batch.stream,
+            payloads,
+            response: None,
+        },
+        EnqueuePolicy::Drop,
+    )
+    .await;
+    match r {
+        Ok(true) => {
+            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        }
+        Err(err) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            tracing::warn!(error = %err, "publish enqueue failed");
+        }
+    }
+
+    if let Some(start) = fanout_start {
+        let fanout_ns = start.elapsed().as_nanos() as u64;
+        timings::record_fanout_ns(fanout_ns);
+        t_histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_publish_message(
+    broker: &Broker,
+    publish_ctx: &PublishContext,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    throttled: bool,
+    ack_on_commit: bool,
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<AtomicUsize>,
+    ack_throttle_tx: &watch::Sender<bool>,
+    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &watch::Sender<bool>,
+    ack_waiters: &Arc<Semaphore>,
+    ack_waiter_tx: &mpsc::Sender<AckWaiterMessage>,
+    ack_wait_timeout: Duration,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    payload: Vec<u8>,
+    request_id: Option<u64>,
+    ack: Option<felix_wire::AckMode>,
+    sample: bool,
+) -> Result<()> {
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_items_in_ok.fetch_add(1, Ordering::Relaxed);
+    }
+    if throttled {
+        // Overload shed path:
+        // - We intentionally skip broker work.
+        // - We attempt to return a PublishError / Error if an ack was requested.
+        // - If the outbound queue is full, we currently may drop this error ack.
+        //   This can strand clients waiting for an ack. Consider switching these
+        //   sends to critical enqueue or closing the stream when full.
+        let ack_mode = ack.unwrap_or(felix_wire::AckMode::PerMessage);
+        if ack_mode != felix_wire::AckMode::None {
+            if let Some(request_id) = request_id {
+                let result = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::PublishError {
+                        request_id,
+                        message: "server overloaded".to_string(),
+                    }),
+                )
+                .await;
+                if !matches!(result, Err(AckEnqueueError::Full)) {
+                    handle_ack_enqueue_result(
+                        result,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+            } else {
+                let result = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::Error {
+                        message: "server overloaded".to_string(),
+                    }),
+                )
+                .await;
+                if !matches!(result, Err(AckEnqueueError::Full)) {
+                    handle_ack_enqueue_result(
+                        result,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+            }
+        }
+        t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        return Ok(());
+    }
+    // Publish protocol (control stream):
+    // - Client sends Publish { payload, request_id?, ack }.
+    // - Broker enqueues payload (fanout path) and responds:
+    //   - AckMode::None -> no response.
+    //   - AckMode::PerMessage -> PublishOk/PublishError with request_id (acks may be out of order).
+    // - request_id is required for any acked publish.
+    let start = crate::transport::quic::telemetry::t_instant_now();
+    t_consume_instant(start);
+    let payload_len = payload.len();
+    let enqueue_start = t_now_if(sample);
+    // Ack mode determines if we wait for broker commit or reply immediately.
+    let ack_mode = ack.unwrap_or(felix_wire::AckMode::PerMessage);
+    // Protocol invariant: any acked publish must include request_id, because acks
+    // may be out-of-order and request_id is the only correlator.
+    if ack_mode != felix_wire::AckMode::None && request_id.is_none() {
+        handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::Error {
+                    message: "missing request_id for acked publish".to_string(),
+                }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
+        return Ok(());
+    }
+    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && ack_on_commit {
+        let (response_tx, response_rx) = oneshot::channel();
+        (Some(response_tx), Some(response_rx))
+    } else {
+        (None, None)
+    };
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &tenant_id,
+        &namespace,
+        &stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        if ack_mode != felix_wire::AckMode::None {
+            let request_id = request_id.expect("request id checked");
+            handle_ack_enqueue_result(
+                send_outgoing_critical(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::PublishError {
+                        request_id,
+                        message: format!(
+                            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
+                        ),
+                    }),
+                )
+                .await,
+                ack_timeout_state,
+                ack_throttle_tx,
+                cancel_tx,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+    let enqueue_result = enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id: tenant_id.clone(),
+            namespace: namespace.clone(),
+            stream: stream.clone(),
+            payloads: vec![Bytes::from(payload)],
+            response: response_tx,
+        },
+        if ack_mode == felix_wire::AckMode::None {
+            EnqueuePolicy::Drop
+        } else if ack_on_commit {
+            EnqueuePolicy::Wait
+        } else {
+            EnqueuePolicy::Fail
+        },
+    )
+    .await;
+    if let Some(start) = enqueue_start {
+        let enqueue_ns = start.elapsed().as_nanos() as u64;
+        timings::record_fanout_ns(enqueue_ns);
+        t_histogram!("felix_broker_ingress_enqueue_ns").record(enqueue_ns as f64);
+    }
+    let span = tracing::trace_span!(
+        "publish",
+        tenant_id = %tenant_id,
+        namespace = %namespace,
+        stream = %stream
+    );
+    let _enter = span.enter();
+    match enqueue_result {
+        Ok(true) => {
+            if ack_mode == felix_wire::AckMode::None {
+                t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            }
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            if ack_mode != felix_wire::AckMode::None {
+                let request_id = request_id.expect("request id checked");
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        out_ack_tx,
+                        out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        ack_throttle_tx,
+                        Outgoing::Message(Message::PublishError {
+                            request_id,
+                            message: "ingress overloaded".to_string(),
+                        }),
+                    )
+                    .await,
+                    ack_timeout_state,
+                    ack_throttle_tx,
+                    cancel_tx,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        Err(err) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            if ack_mode != felix_wire::AckMode::None {
+                let request_id = request_id.expect("request id checked");
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        out_ack_tx,
+                        out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        ack_throttle_tx,
+                        Outgoing::Message(Message::PublishError {
+                            request_id,
+                            message: err.to_string(),
+                        }),
+                    )
+                    .await,
+                    ack_timeout_state,
+                    ack_throttle_tx,
+                    cancel_tx,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+    }
+    if ack_mode == felix_wire::AckMode::None {
+        return Ok(());
+    }
+    if !ack_on_commit {
+        // Enqueue-ack mode:
+        // Ack means "accepted into the ingress queue", not "committed". This keeps
+        // latency low but can report success even if a later broker error occurs.
+        // Fire-and-forget ack after enqueue when configured.
+        let request_id = request_id.expect("request id checked");
+        handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishOk { request_id }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
+        t_counter!("felix_publish_requests_total", "result" => "ok").increment(1);
+        t_counter!("felix_publish_bytes_total").increment(payload_len as u64);
+        #[cfg(feature = "telemetry")]
+        {
+            t_histogram!("felix_publish_latency_ms", "mode" => "enqueue")
+                .record(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        return Ok(());
+    }
+    let request_id = request_id.expect("request id checked");
+    let response_rx = response_rx.expect("response rx available");
+    let payload_len_for_metrics = payload_len as u64;
+    // Commit-ack mode:
+    // We bound the number of in-flight commit acks. If exhausted, we fail fast.
+    // Correctness note: failing after enqueue means the publish may still commit;
+    // the client will see an error/overload even though the publish succeeded.
+    // If that is unacceptable, we must enforce admission *before* enqueue.
+    let permit = match Arc::clone(ack_waiters).try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
+            return Ok(());
+        }
+    };
+    let msg = AckWaiterMessage::Publish {
+        request_id,
+        payload_len: payload_len_for_metrics,
+        start,
+        response_rx,
+        permit,
+    };
+    match ack_waiter_tx.try_send(msg) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+            drop(match msg {
+                AckWaiterMessage::Publish { permit, .. }
+                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+            });
+            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            return Ok(());
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+            drop(match msg {
+                AckWaiterMessage::Publish { permit, .. }
+                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+            });
+            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            return Ok(());
+        }
+    }
+    let _ = ack_wait_timeout;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_publish_batch_message(
+    broker: &Broker,
+    publish_ctx: &PublishContext,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    throttled: bool,
+    ack_on_commit: bool,
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<AtomicUsize>,
+    ack_throttle_tx: &watch::Sender<bool>,
+    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &watch::Sender<bool>,
+    ack_waiters: &Arc<Semaphore>,
+    ack_waiter_tx: &mpsc::Sender<AckWaiterMessage>,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    payloads: Vec<Vec<u8>>,
+    request_id: Option<u64>,
+    ack: Option<felix_wire::AckMode>,
+    sample: bool,
+) -> Result<()> {
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters
+            .pub_items_in_ok
+            .fetch_add(payloads.len() as u64, Ordering::Relaxed);
+    }
+    if throttled {
+        // Overload shed path:
+        // - We intentionally skip broker work.
+        // - We attempt to return a PublishError / Error if an ack was requested.
+        // - If the outbound queue is full, we currently may drop this error ack.
+        //   This can strand clients waiting for an ack. Consider switching these
+        //   sends to critical enqueue or closing the stream when full.
+        let ack_mode = ack.unwrap_or(felix_wire::AckMode::PerBatch);
+        if ack_mode != felix_wire::AckMode::None {
+            if let Some(request_id) = request_id {
+                let result = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::PublishError {
+                        request_id,
+                        message: "server overloaded".to_string(),
+                    }),
+                )
+                .await;
+                if !matches!(result, Err(AckEnqueueError::Full)) {
+                    handle_ack_enqueue_result(
+                        result,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+            } else {
+                let result = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::Error {
+                        message: "server overloaded".to_string(),
+                    }),
+                )
+                .await;
+                if !matches!(result, Err(AckEnqueueError::Full)) {
+                    handle_ack_enqueue_result(
+                        result,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+            }
+        }
+        t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        return Ok(());
+    }
+    // PublishBatch protocol (control stream):
+    // - Client sends PublishBatch { payloads, request_id?, ack }.
+    // - Broker enqueues all payloads as one unit and responds:
+    //   - AckMode::None -> no response.
+    //   - AckMode::PerBatch -> PublishOk/PublishError with request_id (acks may be out of order).
+    // - request_id is required for any acked publish.
+    let span = tracing::trace_span!(
+        "publish_batch",
+        tenant_id = %tenant_id,
+        namespace = %namespace,
+        stream = %stream,
+        count = payloads.len()
+    );
+    let _enter = span.enter();
+    let ack_mode = ack.unwrap_or(felix_wire::AckMode::PerBatch);
+    // Protocol invariant: any acked publish must include request_id, because acks
+    // may be out-of-order and request_id is the only correlator.
+    if ack_mode != felix_wire::AckMode::None && request_id.is_none() {
+        handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::Error {
+                    message: "missing request_id for acked publish batch".to_string(),
+                }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
+        return Ok(());
+    }
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &tenant_id,
+        &namespace,
+        &stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        if ack_mode != felix_wire::AckMode::None {
+            let request_id = request_id.expect("request id checked");
+            handle_ack_enqueue_result(
+                send_outgoing_critical(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(Message::PublishError {
+                        request_id,
+                        message: format!(
+                            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
+                        ),
+                    }),
+                )
+                .await,
+                ack_timeout_state,
+                ack_throttle_tx,
+                cancel_tx,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+    let payload_bytes = payloads
+        .iter()
+        .map(|payload| payload.len())
+        .collect::<Vec<_>>();
+    let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
+    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && ack_on_commit {
+        let (response_tx, response_rx) = oneshot::channel();
+        (Some(response_tx), Some(response_rx))
+    } else {
+        (None, None)
+    };
+    let fanout_start = t_now_if(sample);
+    let enqueue_result = enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id: tenant_id.clone(),
+            namespace: namespace.clone(),
+            stream: stream.clone(),
+            payloads,
+            response: response_tx,
+        },
+        if ack_mode == felix_wire::AckMode::None {
+            EnqueuePolicy::Drop
+        } else if ack_on_commit {
+            EnqueuePolicy::Wait
+        } else {
+            EnqueuePolicy::Fail
+        },
+    )
+    .await;
+    if let Some(start) = fanout_start {
+        let fanout_ns = start.elapsed().as_nanos() as u64;
+        timings::record_fanout_ns(fanout_ns);
+        t_histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
+    }
+    match enqueue_result {
+        Ok(true) => {
+            if ack_mode == felix_wire::AckMode::None {
+                t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            }
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            if ack_mode != felix_wire::AckMode::None {
+                let request_id = request_id.expect("request id checked");
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        out_ack_tx,
+                        out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        ack_throttle_tx,
+                        Outgoing::Message(Message::PublishError {
+                            request_id,
+                            message: "ingress overloaded".to_string(),
+                        }),
+                    )
+                    .await,
+                    ack_timeout_state,
+                    ack_throttle_tx,
+                    cancel_tx,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        Err(err) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            if ack_mode != felix_wire::AckMode::None {
+                let request_id = request_id.expect("request id checked");
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        out_ack_tx,
+                        out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        ack_throttle_tx,
+                        Outgoing::Message(Message::PublishError {
+                            request_id,
+                            message: err.to_string(),
+                        }),
+                    )
+                    .await,
+                    ack_timeout_state,
+                    ack_throttle_tx,
+                    cancel_tx,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+    }
+    if ack_mode == felix_wire::AckMode::None {
+        return Ok(());
+    }
+    if !ack_on_commit {
+        // Enqueue-ack mode:
+        // Ack means "accepted into the ingress queue", not "committed". This keeps
+        // latency low but can report success even if a later broker error occurs.
+        // Batch ack can be sent once enqueued if commit acks are disabled.
+        let request_id = request_id.expect("request id checked");
+        handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishOk { request_id }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
+        t_counter!("felix_publish_requests_total", "result" => "ok").increment(1);
+        for bytes in &payload_bytes {
+            t_counter!("felix_publish_bytes_total").increment(*bytes as u64);
+        }
+        return Ok(());
+    }
+    let request_id = request_id.expect("request id checked");
+    let response_rx = response_rx.expect("response rx available");
+    let payload_bytes_for_metrics = payload_bytes;
+    // Commit-ack mode:
+    // We bound the number of in-flight commit acks. If exhausted, we fail fast.
+    // Correctness note: failing after enqueue means the publish may still commit;
+    // the client will see an error/overload even though the publish succeeded.
+    // If that is unacceptable, we must enforce admission *before* enqueue.
+    let permit = match Arc::clone(ack_waiters).try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
+            return Ok(());
+        }
+    };
+    let msg = AckWaiterMessage::PublishBatch {
+        request_id,
+        payload_bytes: payload_bytes_for_metrics,
+        response_rx,
+        permit,
+    };
+    match ack_waiter_tx.try_send(msg) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+            drop(match msg {
+                AckWaiterMessage::Publish { permit, .. }
+                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+            });
+            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            return Ok(());
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+            drop(match msg {
+                AckWaiterMessage::Publish { permit, .. }
+                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+            });
+            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+            let _ = send_outgoing_best_effort(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message: "server overloaded".to_string(),
+                }),
+            )
+            .await;
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn handle_binary_publish_batch_uni(
+    broker: &Broker,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    publish_ctx: &PublishContext,
+    frame: &Frame,
+) -> Result<bool> {
+    let batch = match felix_wire::binary::decode_publish_batch(frame)
+        .context("decode binary publish batch")
+    {
+        Ok(batch) => batch,
+        Err(err) => {
+            #[cfg(feature = "telemetry")]
+            {
+                let counters = crate::transport::quic::telemetry::frame_counters();
+                counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_batches_in_err.fetch_add(1, Ordering::Relaxed);
+            }
+            log_decode_error("uni_binary_publish_batch", &err, frame);
+            return Err(err);
+        }
+    };
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters
+            .pub_items_in_ok
+            .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+    }
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &batch.tenant_id,
+        &batch.namespace,
+        &batch.stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        return Ok(true);
+    }
+    let payloads = batch
+        .payloads
+        .into_iter()
+        .map(Bytes::from)
+        .collect::<Vec<_>>();
+    match enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id: batch.tenant_id,
+            namespace: batch.namespace,
+            stream: batch.stream,
+            payloads,
+            response: None,
+        },
+        EnqueuePolicy::Drop,
+    )
+    .await
+    {
+        Ok(true) => {
+            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        }
+        Err(_) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_publish_message_uni(
+    broker: &Broker,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    publish_ctx: &PublishContext,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    payload: Vec<u8>,
+) -> Result<bool> {
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_items_in_ok.fetch_add(1, Ordering::Relaxed);
+    }
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &tenant_id,
+        &namespace,
+        &stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        return Ok(true);
+    }
+
+    let r = enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id,
+            namespace,
+            stream,
+            payloads: vec![Bytes::from(payload)],
+            response: None,
+        },
+        EnqueuePolicy::Drop,
+    )
+    .await;
+    match r {
+        Ok(true) => {
+            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        }
+        Err(err) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            tracing::warn!(error = %err, "publish enqueue failed");
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_publish_batch_message_uni(
+    broker: &Broker,
+    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache_key: &mut String,
+    publish_ctx: &PublishContext,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    payloads: Vec<Vec<u8>>,
+) -> Result<bool> {
+    #[cfg(feature = "telemetry")]
+    {
+        let counters = crate::transport::quic::telemetry::frame_counters();
+        counters.pub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+        counters
+            .pub_items_in_ok
+            .fetch_add(payloads.len() as u64, Ordering::Relaxed);
+    }
+    if !stream_exists_cached(
+        broker,
+        stream_cache,
+        stream_cache_key,
+        &tenant_id,
+        &namespace,
+        &stream,
+    )
+    .await
+    {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        return Ok(true);
+    }
+    let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
+
+    let r = enqueue_publish(
+        publish_ctx,
+        PublishJob {
+            tenant_id,
+            namespace,
+            stream,
+            payloads,
+            response: None,
+        },
+        EnqueuePolicy::Drop,
+    )
+    .await;
+    match r {
+        Ok(true) => {
+            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+        }
+        Ok(false) => {
+            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        }
+        Err(err) => {
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            tracing::warn!(error = %err, "publish enqueue failed");
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) async fn stream_exists_cached(
+    broker: &Broker,
+    cache: &mut HashMap<String, (bool, Instant)>,
+    key_scratch: &mut String,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+) -> bool {
+    // Short-lived cache to avoid repeated stream lookups on hot paths.
+    key_scratch.clear();
+    let needed = tenant_id.len() + namespace.len() + stream.len() + 2;
+    if key_scratch.capacity() < needed {
+        key_scratch.reserve(needed - key_scratch.capacity());
+    }
+    key_scratch.push_str(tenant_id);
+    key_scratch.push('\0');
+    key_scratch.push_str(namespace);
+    key_scratch.push('\0');
+    key_scratch.push_str(stream);
+    if let Some((exists, expires)) = cache.get(key_scratch.as_str())
+        && *expires > Instant::now()
+    {
+        return *exists;
+    }
+    let exists = broker.stream_exists(tenant_id, namespace, stream).await;
+    cache.insert(
+        key_scratch.clone(),
+        (exists, Instant::now() + STREAM_CACHE_TTL),
+    );
+    exists
+}
