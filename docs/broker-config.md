@@ -97,7 +97,6 @@ A single connection with a single publish stream will bottleneck regardless of b
 
 ## Notes
 
-- `event_batch_flush_us` is a legacy alias for `event_batch_max_delay_us`.
 - All byte values are raw bytes; use powers of two for MiB values (e.g., 1048576 = 1 MiB).
 - Tune `pub_workers_per_conn` and `pub_queue_depth` together; deep queues trade latency for throughput.
 - Increasing `pub_workers_per_conn` only helps if publish load is spread across multiple streams or

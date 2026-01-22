@@ -86,7 +86,6 @@ struct BrokerConfigOverride {
     cache_send_window: Option<u64>,
     event_batch_max_events: Option<usize>,
     event_batch_max_bytes: Option<usize>,
-    event_batch_flush_us: Option<u64>,
     event_batch_max_delay_us: Option<u64>,
     fanout_batch_size: Option<usize>,
     pub_workers_per_conn: Option<usize>,
@@ -170,12 +169,6 @@ impl BrokerConfig {
         let event_batch_max_delay_us = std::env::var("FELIX_EVENT_BATCH_MAX_DELAY_US")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
-            .or_else(|| {
-                std::env::var("FELIX_EVENT_BATCH_FLUSH_US")
-                    .ok()
-                    .and_then(|value| value.parse::<u64>().ok())
-            })
-            // Legacy env var fallback: FELIX_EVENT_BATCH_FLUSH_US.
             .unwrap_or(DEFAULT_EVENT_BATCH_MAX_DELAY_US);
         let fanout_batch_size = std::env::var("FELIX_FANOUT_BATCH")
             .ok()
@@ -315,8 +308,6 @@ impl BrokerConfig {
                 config.event_batch_max_bytes = value;
             }
             if let Some(value) = override_cfg.event_batch_max_delay_us {
-                config.event_batch_max_delay_us = value;
-            } else if let Some(value) = override_cfg.event_batch_flush_us {
                 config.event_batch_max_delay_us = value;
             }
             if let Some(value) = override_cfg.fanout_batch_size
