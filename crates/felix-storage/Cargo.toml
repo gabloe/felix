@@ -9,6 +9,8 @@ rust-version.workspace = true
 bytes = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1.89"
+rkyv = {version = "0.8.14", features = ["bytecheck"]}
+anyhow = "1.0.100"
 
 [dev-dependencies]
 tokio = { workspace = true }

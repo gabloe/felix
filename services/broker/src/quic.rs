@@ -73,7 +73,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::{Mutex, Semaphore, broadcast, mpsc, oneshot, watch};
@@ -204,9 +204,8 @@ const EVENT_SINGLE_BINARY_MIN_BYTES_DEFAULT: usize = 512;
 const EVENT_SINGLE_BINARY_ENV: &str = "FELIX_BINARY_SINGLE_EVENT";
 const EVENT_SINGLE_BINARY_MIN_BYTES_ENV: &str = "FELIX_BINARY_SINGLE_EVENT_MIN_BYTES";
 static SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
-static GLOBAL_INGRESS_DEPTH: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-static GLOBAL_ACK_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static GLOBAL_INGRESS_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static GLOBAL_ACK_DEPTH: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "telemetry")]
 static DECODE_ERROR_LOGS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "telemetry")]
@@ -275,7 +274,7 @@ enum AckWaiterMessage {
 #[derive(Clone)]
 struct PublishContext {
     tx: mpsc::Sender<PublishJob>,
-    depth: Arc<std::sync::atomic::AtomicUsize>,
+    depth: Arc<AtomicUsize>,
     wait_timeout: Duration,
 }
 
@@ -453,8 +452,8 @@ async fn enqueue_publish(
 
 // Adjust queue depth gauges safely when send fails or work completes.
 fn decrement_depth(
-    depth: &Arc<std::sync::atomic::AtomicUsize>,
-    global: &std::sync::atomic::AtomicUsize,
+    depth: &Arc<AtomicUsize>,
+    global: &AtomicUsize,
     gauge: &'static str,
 ) -> Option<(usize, usize)> {
     #[cfg(not(feature = "telemetry"))]
@@ -483,7 +482,7 @@ fn decrement_depth(
 
 async fn send_outgoing_critical(
     tx: &mpsc::Sender<Outgoing>,
-    depth: &Arc<std::sync::atomic::AtomicUsize>,
+    depth: &Arc<AtomicUsize>,
     gauge: &'static str,
     throttle_tx: &watch::Sender<bool>,
     message: Outgoing,
@@ -516,7 +515,7 @@ async fn send_outgoing_critical(
 
 async fn send_outgoing_best_effort(
     tx: &mpsc::Sender<Outgoing>,
-    depth: &Arc<std::sync::atomic::AtomicUsize>,
+    depth: &Arc<AtomicUsize>,
     gauge: &'static str,
     throttle_tx: &watch::Sender<bool>,
     message: Outgoing,
@@ -642,11 +641,7 @@ fn record_ack_enqueue_failure(err: AckEnqueueError) -> anyhow::Error {
     anyhow!("closing control stream: {reason}")
 }
 
-fn reset_local_depth_only(
-    depth: &Arc<std::sync::atomic::AtomicUsize>,
-    global: &std::sync::atomic::AtomicUsize,
-    gauge: &'static str,
-) {
+fn reset_local_depth_only(depth: &Arc<AtomicUsize>, global: &AtomicUsize, gauge: &'static str) {
     #[cfg(not(feature = "telemetry"))]
     let _ = gauge;
     let remaining = depth.swap(0, Ordering::Relaxed);
@@ -727,7 +722,7 @@ async fn handle_connection(
 ) -> Result<()> {
     // One QUIC connection can multiplex multiple streams.
     let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(PUBLISH_QUEUE_DEPTH);
-    let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let queue_depth = Arc::new(AtomicUsize::new(0));
     let queue_depth_worker = Arc::clone(&queue_depth);
     let broker_for_worker = Arc::clone(&broker);
     // Per-connection publish worker:
@@ -845,7 +840,7 @@ async fn handle_stream(
     // are drained by a single writer task to avoid concurrent SendStream writes.
     // Single-writer response path: enqueue Outgoing messages, one task serializes writes.
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel::<Outgoing>(ACK_QUEUE_DEPTH);
-    let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let out_ack_depth = Arc::new(AtomicUsize::new(0));
     let ack_on_commit = config.ack_on_commit;
     let mut stream_cache = HashMap::new();
     let mut stream_cache_key = String::new();
@@ -1806,7 +1801,7 @@ async fn handle_stream(
                     };
                     match ack_waiter_tx.try_send(msg) {
                         Ok(()) => {}
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+                        Err(mpsc::error::TrySendError::Full(msg)) => {
                             drop(match msg {
                                 AckWaiterMessage::Publish { permit, .. }
                                 | AckWaiterMessage::PublishBatch { permit, .. } => permit,
@@ -1826,7 +1821,7 @@ async fn handle_stream(
                             .await;
                             continue;
                         }
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+                        Err(mpsc::error::TrySendError::Closed(msg)) => {
                             drop(match msg {
                                 AckWaiterMessage::Publish { permit, .. }
                                 | AckWaiterMessage::PublishBatch { permit, .. } => permit,
@@ -2161,7 +2156,7 @@ async fn handle_stream(
                     };
                     match ack_waiter_tx.try_send(msg) {
                         Ok(()) => {}
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+                        Err(mpsc::error::TrySendError::Full(msg)) => {
                             drop(match msg {
                                 AckWaiterMessage::Publish { permit, .. }
                                 | AckWaiterMessage::PublishBatch { permit, .. } => permit,
@@ -2181,7 +2176,7 @@ async fn handle_stream(
                             .await;
                             continue;
                         }
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+                        Err(mpsc::error::TrySendError::Closed(msg)) => {
                             drop(match msg {
                                 AckWaiterMessage::Publish { permit, .. }
                                 | AckWaiterMessage::PublishBatch { permit, .. } => permit,
@@ -2309,11 +2304,11 @@ async fn handle_stream(
                                     enqueue_at: t_instant_now(),
                                 }) {
                                     Ok(()) => {}
-                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
                                         t_counter!("felix_subscribe_dropped_total")
                                             .increment(1);
                                     }
-                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
                                         break;
                                     }
                                 },
@@ -2970,7 +2965,7 @@ struct EventMessageRef<'a> {
 mod base64_bytes_slice {
     use base64::Engine;
 
-    pub fn serialize<S>(value: &[u8], serializer: S) -> std::result::Result<S::Ok, S::Error>
+    pub fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -3154,8 +3149,8 @@ async fn run_event_writer(
                             break;
                         }
                     }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
                         closed = true;
                         flush_reason = "idle";
                         break;
