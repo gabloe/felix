@@ -94,6 +94,63 @@ Message payloads are JSON objects with a `type` discriminator.
 - CacheGet returns `cache_value` with `null` when missing/expired.
 - Backpressure: v1 is best-effort; subscribers may miss events if they fall behind.
 
+## Protocol Flows (v1)
+
+### 1) Publish/Subscribe flow (handshake + control + events)
+```mermaid
+sequenceDiagram
+    participant Pub as Publisher
+    participant SubA as Subscriber A
+    participant SubB as Subscriber B
+    participant B as Broker
+    participant Q as Broker queue
+    Note over Pub,B: QUIC connection + stream setup
+    Pub->>B: ClientHello (QUIC/TLS)
+    B-->>Pub: ServerHello + OK
+    Pub->>B: Open control stream (bi)
+    Pub->>B: publish / publish_batch
+    B->>Q: enqueue publish
+    alt ack = none
+        Note over Pub,B: No ok frame is sent
+    else ack = per_message|per_batch
+        B-->>Pub: ok
+    end
+    Note over SubA,B: QUIC connection + stream setup
+    SubA->>B: ClientHello (QUIC/TLS)
+    B-->>SubA: ServerHello + OK
+    SubA->>B: Open control stream (bi)
+    SubA->>B: subscribe
+    B-->>SubA: ok
+    B-->>SubA: Open event stream (uni)
+    Note over SubB,B: QUIC connection + stream setup
+    SubB->>B: ClientHello (QUIC/TLS)
+    B-->>SubB: ServerHello + OK
+    SubB->>B: Open control stream (bi)
+    SubB->>B: subscribe
+    B-->>SubB: ok
+    B-->>SubB: Open event stream (uni)
+    loop stream events
+        Q-->>B: dequeue publish
+        B-->>SubA: event
+        B-->>SubB: event
+    end
+```
+
+### 2) Client wants to put/get data to/from cache (handshake + request/response)
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Broker
+    Note over C,B: QUIC connection + stream setup
+    C->>B: ClientHello (QUIC/TLS)
+    B-->>C: ServerHello + OK
+    C->>B: Open cache stream (bi)
+    C->>B: cache_put (request_id)
+    B-->>C: ok (request_id)
+    C->>B: cache_get (request_id)
+    B-->>C: cache_value (request_id, value|null)
+```
+
 ## Binary PublishBatch (experimental)
 When `flags & 0x0001 != 0`, the frame payload is a binary publish batch:
 
