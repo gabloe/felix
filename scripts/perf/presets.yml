@@ -1,0 +1,62 @@
+{
+  "defaults": {
+    "trials": 5
+  },
+  "workload": {
+    "fanout": [1, 10],
+    "batch": [1, 64],
+    "payload_bytes": [0, 256, 1024, 4096],
+    "warmup": 2000,
+    "total": 20000,
+    "binary": true
+  },
+  "profiles": {
+    "balanced": {
+      "env": {
+        "FELIX_EVENT_CONN_POOL": "8",
+        "FELIX_EVENT_CONN_RECV_WINDOW": "268435456",
+        "FELIX_EVENT_STREAM_RECV_WINDOW": "67108864",
+        "FELIX_EVENT_SEND_WINDOW": "268435456",
+        "FELIX_EVENT_BATCH_MAX_DELAY_US": "250",
+        "FELIX_PUBLISH_CHUNK_BYTES": "16384",
+        "FELIX_CACHE_CONN_POOL": "8",
+        "FELIX_CACHE_STREAMS_PER_CONN": "4"
+      }
+    },
+    "high_memory": {
+      "env": {
+        "FELIX_EVENT_CONN_POOL": "8",
+        "FELIX_EVENT_CONN_RECV_WINDOW": "536870912",
+        "FELIX_EVENT_STREAM_RECV_WINDOW": "134217728",
+        "FELIX_EVENT_SEND_WINDOW": "536870912",
+        "FELIX_EVENT_BATCH_MAX_DELAY_US": "250",
+        "FELIX_PUBLISH_CHUNK_BYTES": "32768",
+        "FELIX_CACHE_CONN_POOL": "8",
+        "FELIX_CACHE_STREAMS_PER_CONN": "4"
+      }
+    }
+  },
+  "presets": {
+    "P1_hash": {
+      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "1", "--pub-sharding", "hash_stream"]
+    },
+    "P2_hash": {
+      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+    },
+    "P4_hash": {
+      "args": ["--pub-conns", "2", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+    },
+    "P8_hash": {
+      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+    },
+    "P8_rr": {
+      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "rr"]
+    },
+    "P8_rrN": {
+      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "rr", "--pub-stream-count", "8"]
+    }
+  },
+  "preset_order": ["P1_hash", "P2_hash", "P4_hash", "P8_hash", "P8_rr", "P8_rrN"]
+  ,
+  "chart_outlier_cap_percentile": 0.95
+}

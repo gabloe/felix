@@ -15,6 +15,8 @@ These profiles tune the event delivery path for different latency/throughput tra
 They are calibrated for localhost tests with fanout up to 10, batch=64, payload up to 4KB.
 
 Balanced (default / recommended starting profile)
+- `FELIX_PUB_CONN_POOL=4`
+- `FELIX_PUB_STREAMS_PER_CONN=2`
 - `FELIX_EVENT_CONN_POOL=8`
 - `FELIX_EVENT_CONN_RECV_WINDOW=268435456` (256 MiB)
 - `FELIX_EVENT_STREAM_RECV_WINDOW=67108864` (64 MiB)
@@ -26,12 +28,16 @@ Balanced (default / recommended starting profile)
 - `FELIX_DISABLE_TIMINGS=0`
 
 High-memory / burst-tolerant (memory-heavy)
+- `FELIX_PUB_CONN_POOL=4`
+- `FELIX_PUB_STREAMS_PER_CONN=2`
 - `FELIX_EVENT_CONN_POOL=8`
 - `FELIX_EVENT_CONN_RECV_WINDOW=536870912` (512 MiB)
 - `FELIX_EVENT_STREAM_RECV_WINDOW=134217728` (128 MiB)
 - `FELIX_EVENT_SEND_WINDOW=536870912` (512 MiB)
 - `FELIX_EVENT_BATCH_MAX_DELAY_US=250`
 - `FELIX_PUBLISH_CHUNK_BYTES=32768`
+- `FELIX_CACHE_CONN_POOL=8`
+- `FELIX_CACHE_STREAMS_PER_CONN=4`
 - `FELIX_DISABLE_TIMINGS=1`
 
 Notes
@@ -50,6 +56,8 @@ FELIX_EVENT_CONN_RECV_WINDOW=268435456
 FELIX_EVENT_STREAM_RECV_WINDOW=67108864
 FELIX_EVENT_SEND_WINDOW=268435456
 FELIX_EVENT_BATCH_MAX_DELAY_US=250
+FELIX_PUB_CONN_POOL=4
+FELIX_PUB_STREAMS_PER_CONN=2
 FELIX_PUBLISH_CHUNK_BYTES=16384
 FELIX_DISABLE_TIMINGS=1
 cargo run --release -p broker --bin latencydemo -- --binary --fanout 10 --batch 64 --payload 4096 --total 5000 --warmup 200
@@ -64,142 +72,74 @@ All charts are binary-only medians across 5 runs per profile.
 This benchmark matrix measures pub/sub event delivery (streaming), not cache.
 f1 = fanout 1, f10 = fanout 10.
 
+Reproducible latencydemo benchmarks
+- Matrix config lives in `scripts/perf/presets.yml`.
+- Run the full pipeline:
+```bash
+python3 scripts/perf/run_latency_matrix.py --trials 5
+python3 scripts/perf/normalize_and_aggregate.py
+python3 scripts/perf/make_charts.py
+python3 scripts/perf/render_markdown_snippets.py
+```
+- Or use the Taskfile target:
+```bash
+task perf:latency-matrix
+```
+
 Run it
 ```bash
 cargo run --release -p broker --bin latencydemo -- --all --binary
 ```
 
-Batch=1 (low batching): p50 latency
-```mermaid
-xychart-beta
-    title "Batch=1 p50 latency — Balanced f1"
-    x-axis ["0B","256B","1024B"]
-    y-axis "p50 (us)" 0 --> 70
-    bar [45,48,56]
-```
+Charts are clipped at p95 to keep outliers from dominating the axes.
 
-```mermaid
-xychart-beta
-    title "Batch=1 p50 latency — Balanced f10"
-    x-axis ["0B","256B","1024B"]
-    y-axis "p50 (us)" 0 --> 170
-    bar [94,107,158]
-```
+Batch=1 (low batching): balanced
 
-```mermaid
-xychart-beta
-    title "Batch=1 p50 latency — High-memory f1"
-    x-axis ["0B","256B","1024B"]
-    y-axis "p50 (us)" 0 --> 70
-    bar [46,48,57]
-```
+fanout=1
+![](/docs/assets/latencydemo/balanced/f1_b1_p50.png)
+![](/docs/assets/latencydemo/balanced/f1_b1_p99.png)
+![](/docs/assets/latencydemo/balanced/f1_b1_throughput.png)
 
-```mermaid
-xychart-beta
-    title "Batch=1 p50 latency — High-memory f10"
-    x-axis ["0B","256B","1024B"]
-    y-axis "p50 (us)" 0 --> 170
-    bar [97,108,158]
-```
+fanout=10
+![](/docs/assets/latencydemo/balanced/f10_b1_p50.png)
+![](/docs/assets/latencydemo/balanced/f10_b1_p99.png)
+![](/docs/assets/latencydemo/balanced/f10_b1_throughput.png)
 
-Batch=1 (low batching): throughput
-```mermaid
-xychart-beta
-    title "Batch=1 throughput — Balanced f1"
-    x-axis ["0B","256B","1024B"]
-    y-axis "k msg/s" 0 --> 50
-    bar [45.1,43.9,44.6]
-```
+Batch=1 (low batching): high-memory
 
-```mermaid
-xychart-beta
-    title "Batch=1 throughput — Balanced f10"
-    x-axis ["0B","256B","1024B"]
-    y-axis "k msg/s" 0 --> 45
-    bar [43.9,41.8,34.4]
-```
+fanout=1
+![](/docs/assets/latencydemo/high_memory/f1_b1_p50.png)
+![](/docs/assets/latencydemo/high_memory/f1_b1_p99.png)
+![](/docs/assets/latencydemo/high_memory/f1_b1_throughput.png)
 
-```mermaid
-xychart-beta
-    title "Batch=1 throughput — High-memory f1"
-    x-axis ["0B","256B","1024B"]
-    y-axis "k msg/s" 0 --> 50
-    bar [44.3,43.8,44.3]
-```
+fanout=10
+![](/docs/assets/latencydemo/high_memory/f10_b1_p50.png)
+![](/docs/assets/latencydemo/high_memory/f10_b1_p99.png)
+![](/docs/assets/latencydemo/high_memory/f10_b1_throughput.png)
 
-```mermaid
-xychart-beta
-    title "Batch=1 throughput — High-memory f10"
-    x-axis ["0B","256B","1024B"]
-    y-axis "k msg/s" 0 --> 45
-    bar [42.9,41.0,34.5]
-```
+Batch=64 (high batching): balanced
 
-Batch=64 (high batching): p50 latency
-```mermaid
-xychart-beta
-    title "Batch=64 p50 latency — Balanced f1"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "p50 (ms)" 0 --> 2
-    bar [0.072,1.072,1.536]
-```
+fanout=1
+![](/docs/assets/latencydemo/balanced/f1_b64_p50.png)
+![](/docs/assets/latencydemo/balanced/f1_b64_p99.png)
+![](/docs/assets/latencydemo/balanced/f1_b64_throughput.png)
 
-```mermaid
-xychart-beta
-    title "Batch=64 p50 latency — Balanced f10"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "p50 (ms)" 0 --> 45
-    bar [0.770,10.402,42.562]
-```
+fanout=10
+![](/docs/assets/latencydemo/balanced/f10_b64_p50.png)
+![](/docs/assets/latencydemo/balanced/f10_b64_p99.png)
+![](/docs/assets/latencydemo/balanced/f10_b64_throughput.png)
 
-```mermaid
-xychart-beta
-    title "Batch=64 p50 latency — High-memory f1"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "p50 (ms)" 0 --> 2
-    bar [0.072,1.450,1.640]
-```
+Batch=64 (high batching): high-memory
 
-```mermaid
-xychart-beta
-    title "Batch=64 p50 latency — High-memory f10"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "p50 (ms)" 0 --> 45
-    bar [0.471,11.735,40.890]
-```
+fanout=1
+![](/docs/assets/latencydemo/high_memory/f1_b64_p50.png)
+![](/docs/assets/latencydemo/high_memory/f1_b64_p99.png)
+![](/docs/assets/latencydemo/high_memory/f1_b64_throughput.png)
 
-Batch=64 (high batching): throughput
-```mermaid
-xychart-beta
-    title "Batch=64 throughput — Balanced f1"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "k msg/s" 0 --> 1300
-    bar [1264.1,560.8,202.2]
-```
-
-```mermaid
-xychart-beta
-    title "Batch=64 throughput — Balanced f10"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "k msg/s" 0 --> 800
-    bar [701.0,251.0,69.8]
-```
-
-```mermaid
-xychart-beta
-    title "Batch=64 throughput — High-memory f1"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "k msg/s" 0 --> 1300
-    bar [1267.2,515.0,206.6]
-```
-
-```mermaid
-xychart-beta
-    title "Batch=64 throughput — High-memory f10"
-    x-axis ["0B","1024B","4096B"]
-    y-axis "k msg/s" 0 --> 800
-    bar [698.3,249.4,69.8]
-```
+fanout=10
+![](/docs/assets/latencydemo/high_memory/f10_b64_p50.png)
+![](/docs/assets/latencydemo/high_memory/f10_b64_p99.png)
+![](/docs/assets/latencydemo/high_memory/f10_b64_throughput.png)
 
 ## Cache benchmark (localhost)
 

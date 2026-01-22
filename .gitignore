@@ -18,3 +18,5 @@ Thumbs.db
 *.log
 *.bak
 *.gz
+data/raw/stdout/
+data/raw/latencydemo_runs.jsonl

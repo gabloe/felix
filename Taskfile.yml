@@ -16,7 +16,9 @@ tasks:
   build:
     cmds: ["cargo build --workspace"]
   clean:
-    cmds: ["cargo clean"]
+    cmds:
+      - "cargo clean"
+      - "rm -rf data/raw/stdout data/raw/latencydemo_runs.jsonl"
   clean-all:
     cmds: ["rm -rf target"]
   deny:
@@ -29,5 +31,11 @@ tasks:
     cmds: ["cargo run -p broker --bin cachedemo"]
   demo-latency:
     cmds: ["cargo run -p broker --bin latencydemo"]
+  perf:latency-matrix:
+    cmds:
+      - "python3 scripts/perf/run_latency_matrix.py"
+      - "python3 scripts/perf/normalize_and_aggregate.py"
+      - "python3 scripts/perf/make_charts.py"
+      - "python3 scripts/perf/render_markdown_snippets.py"
   conformance:
     cmds: ["cargo run -p felix-conformance"]
