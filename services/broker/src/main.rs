@@ -5,6 +5,10 @@ mod observability;
 use anyhow::{Context, Result};
 use broker::{config, quic};
 use felix_broker::Broker;
+#[cfg(feature = "filesystem_storage")]
+use felix_storage::SimpleFileStorage;
+
+#[cfg(not(feature = "filesystem_storage"))]
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
@@ -16,6 +20,9 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     let metrics_handle = observability::init_observability("felix-broker");
 
+    #[cfg(feature = "filesystem_storage")]
+    let broker = Broker::new(SimpleFileStorage::new("./".into())?.into());
+    #[cfg(not(feature = "filesystem_storage"))]
     // Start an in-process broker with an ephemeral cache backend. TODO: support other storage backends via config.
     let broker = Broker::new(EphemeralCache::new().into());
     tracing::info!("broker started");

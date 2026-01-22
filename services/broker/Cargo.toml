@@ -36,3 +36,4 @@ tracing-opentelemetry = "0.25"
 [features]
 default = []
 telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
+filesystem_storage = []

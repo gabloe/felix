@@ -5,10 +5,10 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
-pub mod ephemeral_cache;
 pub mod log;
+pub mod storage_backends;
 pub mod tiered;
-pub use ephemeral_cache::EphemeralCache;
+pub use storage_backends::*;
 
 #[async_trait()]
 pub trait StorageApi: Debug + Send + Sync {

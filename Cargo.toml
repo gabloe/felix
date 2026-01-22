@@ -18,6 +18,10 @@ members = [
   "services/broker",
 ]
 
+[profile.profiler]
+inherits = "release"
+debug = true
+
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
