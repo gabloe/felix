@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 
 // Broker service configuration sourced from environment variables.
@@ -40,8 +41,19 @@ pub struct BrokerConfig {
     pub event_batch_max_delay_us: u64,
     // Fanout batch size for subscription sending.
     pub fanout_batch_size: usize,
+    // Publish worker count per QUIC connection.
+    pub pub_workers_per_conn: usize,
+    // Per-worker publish queue depth.
+    pub pub_queue_depth: usize,
+    // Subscription event queue depth.
+    pub event_queue_depth: usize,
+    // Use binary encoding for single events when enabled.
+    pub event_single_binary_enabled: bool,
+    // Min payload size to use binary encoding for single events.
+    pub event_single_binary_min_bytes: usize,
 }
 
+const DEFAULT_BROKER_CONFIG_PATH: &str = "/usr/local/felix/config.yml";
 const DEFAULT_EVENT_BATCH_MAX_DELAY_US: u64 = 250;
 const DEFAULT_DISABLE_TIMINGS: bool = false;
 const DEFAULT_CACHE_CONN_RECV_WINDOW: u64 = 256 * 1024 * 1024;
@@ -51,6 +63,11 @@ const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
+const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
+const DEFAULT_PUB_QUEUE_DEPTH: usize = 1024;
+const DEFAULT_EVENT_QUEUE_DEPTH: usize = 1024;
+const DEFAULT_EVENT_SINGLE_BINARY_ENABLED: bool = false;
+const DEFAULT_EVENT_SINGLE_BINARY_MIN_BYTES: usize = 512;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -72,6 +89,11 @@ struct BrokerConfigOverride {
     event_batch_flush_us: Option<u64>,
     event_batch_max_delay_us: Option<u64>,
     fanout_batch_size: Option<usize>,
+    pub_workers_per_conn: Option<usize>,
+    pub_queue_depth: Option<usize>,
+    event_queue_depth: Option<usize>,
+    event_single_binary_enabled: Option<bool>,
+    event_single_binary_min_bytes: Option<usize>,
 }
 
 impl BrokerConfig {
@@ -160,6 +182,30 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(64);
+        let pub_workers_per_conn = std::env::var("FELIX_BROKER_PUB_WORKERS_PER_CONN")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_WORKERS_PER_CONN);
+        let pub_queue_depth = std::env::var("FELIX_BROKER_PUB_QUEUE_DEPTH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_QUEUE_DEPTH);
+        let event_queue_depth = std::env::var("FELIX_EVENT_QUEUE_DEPTH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_EVENT_QUEUE_DEPTH);
+        let event_single_binary_enabled = std::env::var("FELIX_BINARY_SINGLE_EVENT")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "TRUE" | "YES"))
+            .unwrap_or(DEFAULT_EVENT_SINGLE_BINARY_ENABLED);
+        let event_single_binary_min_bytes = std::env::var("FELIX_BINARY_SINGLE_EVENT_MIN_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_EVENT_SINGLE_BINARY_MIN_BYTES);
         Ok(Self {
             quic_bind,
             metrics_bind,
@@ -178,15 +224,39 @@ impl BrokerConfig {
             event_batch_max_bytes,
             event_batch_max_delay_us,
             fanout_batch_size,
+            pub_workers_per_conn,
+            pub_queue_depth,
+            event_queue_depth,
+            event_single_binary_enabled,
+            event_single_binary_min_bytes,
         })
     }
 
     pub fn from_env_or_yaml() -> Result<Self> {
         let mut config = Self::from_env()?;
-        if let Ok(path) = std::env::var("FELIX_BROKER_CONFIG") {
+        let override_path = std::env::var("FELIX_BROKER_CONFIG").ok();
+        let config_path = override_path
+            .clone()
+            .unwrap_or_else(|| DEFAULT_BROKER_CONFIG_PATH.to_string());
+        let contents = match fs::read_to_string(&config_path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                if override_path.is_some() {
+                    return Err(err)
+                        .with_context(|| format!("read FELIX_BROKER_CONFIG: {config_path}"));
+                }
+                None
+            }
+            Err(err) => {
+                if override_path.is_some() {
+                    return Err(err)
+                        .with_context(|| format!("read FELIX_BROKER_CONFIG: {config_path}"));
+                }
+                return Err(err).with_context(|| format!("read broker config: {config_path}"));
+            }
+        };
+        if let Some(contents) = contents {
             // YAML overrides allow ops-friendly config files.
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("read FELIX_BROKER_CONFIG: {path}"))?;
             let override_cfg: BrokerConfigOverride =
                 serde_yaml::from_str(&contents).with_context(|| "parse broker config yaml")?;
             if let Some(value) = override_cfg.quic_bind {
@@ -253,6 +323,29 @@ impl BrokerConfig {
                 && value > 0
             {
                 config.fanout_batch_size = value;
+            }
+            if let Some(value) = override_cfg.pub_workers_per_conn
+                && value > 0
+            {
+                config.pub_workers_per_conn = value;
+            }
+            if let Some(value) = override_cfg.pub_queue_depth
+                && value > 0
+            {
+                config.pub_queue_depth = value;
+            }
+            if let Some(value) = override_cfg.event_queue_depth
+                && value > 0
+            {
+                config.event_queue_depth = value;
+            }
+            if let Some(value) = override_cfg.event_single_binary_enabled {
+                config.event_single_binary_enabled = value;
+            }
+            if let Some(value) = override_cfg.event_single_binary_min_bytes
+                && value > 0
+            {
+                config.event_single_binary_min_bytes = value;
             }
         }
         Ok(config)

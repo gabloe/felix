@@ -10,10 +10,10 @@ use tokio::sync::mpsc;
 use crate::config::BrokerConfig;
 use crate::timings;
 
+use super::GLOBAL_INGRESS_DEPTH;
 use super::handlers::publish::{
     PublishContext, PublishJob, decrement_depth, reset_local_depth_only,
 };
-use super::{GLOBAL_INGRESS_DEPTH, PUBLISH_QUEUE_DEPTH};
 
 use super::streams::{handle_stream, handle_uni_stream};
 
@@ -45,16 +45,8 @@ pub(crate) async fn handle_connection(
     config: BrokerConfig,
 ) -> Result<()> {
     // One QUIC connection can multiplex multiple streams.
-    let worker_count = std::env::var("FELIX_BROKER_PUB_WORKERS_PER_CONN")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(4);
-    let publish_queue_depth = std::env::var("FELIX_BROKER_PUB_QUEUE_DEPTH")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(PUBLISH_QUEUE_DEPTH);
+    let worker_count = config.pub_workers_per_conn.max(1);
+    let publish_queue_depth = config.pub_queue_depth.max(1);
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut worker_txs = Vec::with_capacity(worker_count);
     for _ in 0..worker_count {

@@ -13,12 +13,9 @@ use tokio::sync::{broadcast, mpsc};
 use crate::timings;
 
 use super::publish::{Outgoing, send_outgoing_critical};
+use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::{write_frame, write_frame_bytes, write_message};
 use crate::transport::quic::telemetry::{t_instant_now, t_now_if, t_should_sample};
-use crate::transport::quic::{
-    DEFAULT_EVENT_QUEUE_DEPTH, EVENT_SINGLE_BINARY_ENV, EVENT_SINGLE_BINARY_MIN_BYTES_DEFAULT,
-    EVENT_SINGLE_BINARY_MIN_BYTES_ENV, SUBSCRIPTION_ID,
-};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_subscribe_message(
@@ -117,11 +114,7 @@ pub(crate) async fn handle_subscribe_message(
         return Ok(true);
     }
 
-    let queue_depth = std::env::var("FELIX_EVENT_QUEUE_DEPTH")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_EVENT_QUEUE_DEPTH);
+    let queue_depth = config.event_queue_depth.max(1);
     let (event_tx, event_rx) = mpsc::channel(queue_depth);
     tokio::spawn(async move {
         loop {
@@ -153,13 +146,8 @@ pub(crate) async fn handle_subscribe_message(
 
     // Opt-in: allow using the existing binary EventBatch encoding even when batch_size==1,
     // to avoid payload.to_vec() in the hot path. Gated by env so we don't break older clients.
-    let binary_single_enabled = std::env::var(EVENT_SINGLE_BINARY_ENV)
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false);
-    let binary_single_min_bytes = std::env::var(EVENT_SINGLE_BINARY_MIN_BYTES_ENV)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(EVENT_SINGLE_BINARY_MIN_BYTES_DEFAULT);
+    let binary_single_enabled = config.event_single_binary_enabled;
+    let binary_single_min_bytes = config.event_single_binary_min_bytes.max(1);
 
     let tenant_id = Arc::<str>::from(tenant_id);
     let namespace = Arc::<str>::from(namespace);
