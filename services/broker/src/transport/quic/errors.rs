@@ -1,3 +1,4 @@
+// Error types and helpers for QUIC adapter enqueue failures.
 use crate::transport::quic::telemetry::t_counter;
 
 #[derive(Debug)]

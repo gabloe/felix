@@ -1,3 +1,4 @@
+// Subscribe path logic and event writer for subscription streams.
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::Broker;

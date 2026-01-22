@@ -1,3 +1,4 @@
+// Publish path logic: enqueueing, ack handling, and publish worker helpers.
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use felix_broker::Broker;

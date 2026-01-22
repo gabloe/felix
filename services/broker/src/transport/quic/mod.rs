@@ -1,3 +1,4 @@
+// Entry point and shared constants for the broker QUIC transport adapter.
 //! QUIC transport adapter for the broker.
 
 mod codec;
