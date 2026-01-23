@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let client = client.unwrap();
+    let _client = client.unwrap();
 
     // Note: The broker automatically accepts any tenant/namespace/stream on first use
     // in the current implementation. This init script is a placeholder for future
@@ -118,7 +118,9 @@ fn build_insecure_client_config() -> Result<QuinnClientConfig> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
         .with_no_client_auth();
-    Ok(QuinnClientConfig::new(Arc::new(crypto)))
+    Ok(QuinnClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?,
+    )))
 }
 
 fn build_client_config() -> Result<QuinnClientConfig> {
@@ -127,6 +129,7 @@ fn build_client_config() -> Result<QuinnClientConfig> {
 }
 
 // Dangerous: certificate verifier that accepts any certificate
+#[derive(Debug)]
 struct NoCertVerifier;
 
 impl rustls::client::danger::ServerCertVerifier for NoCertVerifier {

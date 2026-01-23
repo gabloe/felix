@@ -4,7 +4,7 @@ mod observability;
 
 use anyhow::{Context, Result};
 use broker::{config, quic};
-use felix_broker::{Broker, StreamMetadata};
+use felix_broker::Broker;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;

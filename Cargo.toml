@@ -16,6 +16,7 @@ members = [
   "services/controlplane",
   "services/agent",
   "services/broker",
+  "test-harness",
 ]
 
 [workspace.package]
