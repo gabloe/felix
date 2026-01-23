@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn storage_error_source() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let storage_err = StorageError::from(io_err);
         assert!(storage_err.source().is_some());
 
@@ -262,10 +262,7 @@ mod tests {
     #[tokio::test]
     async fn delete_nonexistent_key_returns_none() {
         let cache = EphemeralCache::new();
-        assert!(cache
-            .delete("t1", "ns", "c", "nonexistent")
-            .await
-            .is_none());
+        assert!(cache.delete("t1", "ns", "c", "nonexistent").await.is_none());
     }
 
     #[tokio::test]

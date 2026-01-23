@@ -128,7 +128,7 @@ impl NodeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ids::*, Error, LimitsConfig, NodeConfig};
+    use super::{Error, LimitsConfig, NodeConfig, ids::*};
     use std::str::FromStr;
     use uuid::Uuid;
 
@@ -161,10 +161,10 @@ mod tests {
     fn all_id_types_work() {
         let region = RegionId::new();
         let tenant = TenantId::new();
-        let namespace = NamespaceId::new();
-        let stream = StreamId::new();
-        let topic = TopicId::new();
-        let shard = ShardId::new();
+        let _namespace = NamespaceId::new();
+        let _stream = StreamId::new();
+        let _topic = TopicId::new();
+        let _shard = ShardId::new();
 
         // Test display
         assert!(!region.to_string().is_empty());
