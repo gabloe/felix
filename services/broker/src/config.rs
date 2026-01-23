@@ -346,10 +346,10 @@ impl BrokerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
     use tempfile::TempDir;
-    use serial_test::serial;
 
     // Helper to clear all Felix env vars
     fn clear_felix_env() {
@@ -603,7 +603,10 @@ fanout_batch_size: 0
 
         let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
         // Should keep env defaults when yaml has 0
-        assert_eq!(config.cache_conn_recv_window, DEFAULT_CACHE_CONN_RECV_WINDOW);
+        assert_eq!(
+            config.cache_conn_recv_window,
+            DEFAULT_CACHE_CONN_RECV_WINDOW
+        );
         assert_eq!(config.event_batch_max_events, 64);
         assert_eq!(config.fanout_batch_size, 64);
 

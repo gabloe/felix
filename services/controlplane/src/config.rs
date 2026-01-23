@@ -66,10 +66,10 @@ impl ControlPlaneConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
     use tempfile::TempDir;
-    use serial_test::serial;
 
     // Helper to clear all Felix env vars
     fn clear_felix_env() {

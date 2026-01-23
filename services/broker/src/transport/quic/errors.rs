@@ -38,8 +38,14 @@ mod tests {
     #[test]
     fn ack_enqueue_reason_returns_correct_strings() {
         assert_eq!(ack_enqueue_reason(&AckEnqueueError::Full), "ack_queue_full");
-        assert_eq!(ack_enqueue_reason(&AckEnqueueError::Closed), "ack_queue_closed");
-        assert_eq!(ack_enqueue_reason(&AckEnqueueError::Timeout), "ack_queue_timeout");
+        assert_eq!(
+            ack_enqueue_reason(&AckEnqueueError::Closed),
+            "ack_queue_closed"
+        );
+        assert_eq!(
+            ack_enqueue_reason(&AckEnqueueError::Timeout),
+            "ack_queue_timeout"
+        );
     }
 
     #[test]
