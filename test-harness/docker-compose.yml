@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # Felix broker service
+  broker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: felix-broker
+    ports:
+      - "5000:5000/udp"
+      - "8080:8080"
+    environment:
+      - FELIX_QUIC_BIND=0.0.0.0:5000
+      - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
+      - FELIX_DISABLE_TIMINGS=1
+      - RUST_LOG=info
+    networks:
+      - felix-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Broker initialization
+  init:
+    build:
+      context: ..
+      dockerfile: test-harness/Dockerfile
+    container_name: felix-init
+    depends_on:
+      broker:
+        condition: service_healthy
+    command: 
+      - init-broker
+      - --broker=broker:5000
+      - --tenant=test-tenant
+      - --namespace=default
+      - --stream=test-stream
+    environment:
+      - RUST_LOG=info
+    networks:
+      - felix-net
+
+  # Publishers (scale with docker-compose up --scale publisher=N)
+  publisher:
+    build:
+      context: ..
+      dockerfile: test-harness/Dockerfile
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command:
+      - publisher
+      - --broker=broker:5000
+      - --tenant=test-tenant
+      - --namespace=default
+      - --stream=test-stream
+      - --payload-size=1024
+      - --rate=100
+      - --count=0
+    environment:
+      - RUST_LOG=info
+    networks:
+      - felix-net
+    deploy:
+      replicas: 2
+
+  # Subscribers (scale with docker-compose up --scale subscriber=N)
+  subscriber:
+    build:
+      context: ..
+      dockerfile: test-harness/Dockerfile
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command:
+      - subscriber
+      - --broker=broker:5000
+      - --tenant=test-tenant
+      - --namespace=default
+      - --stream=test-stream
+      - --timeout=0
+    environment:
+      - RUST_LOG=info
+    networks:
+      - felix-net
+    deploy:
+      replicas: 2
+
+networks:
+  felix-net:
+    driver: bridge

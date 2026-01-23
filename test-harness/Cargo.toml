@@ -1,0 +1,27 @@
+[package]
+name = "felix-test-harness"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "publisher"
+path = "src/publisher.rs"
+
+[[bin]]
+name = "subscriber"
+path = "src/subscriber.rs"
+
+[[bin]]
+name = "init-broker"
+path = "src/init_broker.rs"
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1.43", features = ["full"] }
+felix-client = { path = "../crates/felix-client" }
+felix-wire = { path = "../crates/felix-wire" }
+rustls = { version = "0.23", features = ["ring"] }
+rcgen = "0.14"
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
