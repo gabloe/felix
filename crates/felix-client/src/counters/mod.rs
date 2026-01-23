@@ -138,3 +138,47 @@ pub fn reset_frame_counters() {
         counters.text_encode_reallocs.store(0, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_counters_snapshot_returns_values() {
+        let snapshot = frame_counters_snapshot();
+        // Just verify it returns a snapshot (all zeros in non-telemetry mode)
+        assert_eq!(snapshot.frames_in_ok, 0);
+        assert_eq!(snapshot.frames_in_err, 0);
+        assert_eq!(snapshot.frames_out_ok, 0);
+    }
+
+    #[test]
+    fn reset_frame_counters_does_not_panic() {
+        reset_frame_counters();
+        // Just ensure it doesn't panic
+    }
+
+    #[test]
+    fn frame_counters_snapshot_has_all_fields() {
+        let snapshot = frame_counters_snapshot();
+        // Verify all fields are accessible
+        let _ = snapshot.frames_in_ok;
+        let _ = snapshot.frames_in_err;
+        let _ = snapshot.frames_out_ok;
+        let _ = snapshot.bytes_in;
+        let _ = snapshot.bytes_out;
+        let _ = snapshot.pub_frames_out_ok;
+        let _ = snapshot.pub_frames_out_err;
+        let _ = snapshot.sub_frames_in_ok;
+        let _ = snapshot.ack_frames_in_ok;
+        let _ = snapshot.pub_items_out_ok;
+        let _ = snapshot.pub_items_out_err;
+        let _ = snapshot.pub_batches_out_ok;
+        let _ = snapshot.pub_batches_out_err;
+        let _ = snapshot.sub_items_in_ok;
+        let _ = snapshot.sub_batches_in_ok;
+        let _ = snapshot.ack_items_in_ok;
+        let _ = snapshot.binary_encode_reallocs;
+        let _ = snapshot.text_encode_reallocs;
+    }
+}

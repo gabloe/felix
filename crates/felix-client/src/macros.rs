@@ -107,3 +107,37 @@ pub(crate) fn t_now_if(sample: bool) -> Option<Instant> {
 pub(crate) fn t_now_if(_sample: bool) -> Option<Instant> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t_should_sample_returns_false() {
+        assert!(!t_should_sample());
+    }
+
+    #[test]
+    fn t_now_if_returns_none() {
+        assert!(t_now_if(true).is_none());
+        assert!(t_now_if(false).is_none());
+    }
+
+    #[test]
+    fn noop_counter_does_not_panic() {
+        let counter = NoopCounter;
+        counter.increment(100);
+    }
+
+    #[test]
+    fn noop_histogram_does_not_panic() {
+        let histogram = NoopHistogram;
+        histogram.record(100.0);
+    }
+
+    #[test]
+    fn noop_gauge_does_not_panic() {
+        let gauge = NoopGauge;
+        gauge.set(50.0);
+    }
+}

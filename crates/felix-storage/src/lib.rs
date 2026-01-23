@@ -109,6 +109,7 @@ impl CacheKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -199,6 +200,87 @@ mod tests {
                 None,
             )
             .await;
+        assert_eq!(cache.len().await, 1);
+    }
+
+    #[test]
+    fn cache_key_construction() {
+        let key = CacheKey::new("tenant1", "ns1", "cache1", "key1");
+        assert_eq!(key.tenant_id, "tenant1");
+        assert_eq!(key.namespace, "ns1");
+        assert_eq!(key.cache, "cache1");
+        assert_eq!(key.key, "key1");
+    }
+
+    #[test]
+    fn cache_key_equality() {
+        let key1 = CacheKey::new("t1", "ns", "c", "k");
+        let key2 = CacheKey::new("t1", "ns", "c", "k");
+        let key3 = CacheKey::new("t2", "ns", "c", "k");
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn storage_error_display() {
+        let err = StorageError::Unsupported("feature");
+        assert!(err.to_string().contains("feature"));
+
+        let err = StorageError::InvalidRange;
+        assert!(err.to_string().contains("invalid range"));
+
+        let err = StorageError::NotFound;
+        assert!(err.to_string().contains("not found"));
+
+        let err = StorageError::Corruption;
+        assert!(err.to_string().contains("corruption"));
+    }
+
+    #[test]
+    fn storage_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let storage_err = StorageError::from(io_err);
+        assert!(matches!(storage_err, StorageError::Io(_)));
+    }
+
+    #[test]
+    fn storage_error_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let storage_err = StorageError::from(io_err);
+        assert!(storage_err.source().is_some());
+
+        let storage_err = StorageError::NotFound;
+        assert!(storage_err.source().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_nonexistent_key_returns_none() {
+        let cache = EphemeralCache::new();
+        assert!(cache.get("t1", "ns", "c", "nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_key_returns_none() {
+        let cache = EphemeralCache::new();
+        assert!(cache
+            .delete("t1", "ns", "c", "nonexistent")
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn put_overwrites_existing_value() {
+        let cache = EphemeralCache::new();
+        cache
+            .put("t1", "ns", "c", "k", Bytes::from_static(b"v1"), None)
+            .await;
+        cache
+            .put("t1", "ns", "c", "k", Bytes::from_static(b"v2"), None)
+            .await;
+        assert_eq!(
+            cache.get("t1", "ns", "c", "k").await,
+            Some(Bytes::from_static(b"v2"))
+        );
         assert_eq!(cache.len().await, 1);
     }
 }
