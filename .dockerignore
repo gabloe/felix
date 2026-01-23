@@ -1,0 +1,24 @@
+# Exclude build artifacts and caches
+target/
+.git/
+.github/
+
+# Exclude test data
+data/
+
+# Exclude documentation assets
+docs/assets/
+
+# Exclude temp files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.iml
+
+# Exclude CI/build output
+coverage.svg
