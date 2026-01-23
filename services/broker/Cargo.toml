@@ -33,6 +33,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-opentelemetry = "0.25"
 
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"
+
 [features]
 default = []
 telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
