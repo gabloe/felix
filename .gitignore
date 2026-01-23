@@ -20,3 +20,4 @@ Thumbs.db
 *.gz
 data/raw/stdout/
 data/raw/latencydemo_runs.jsonl
+coverage.json
