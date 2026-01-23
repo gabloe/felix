@@ -14,6 +14,9 @@ services:
       - FELIX_QUIC_BIND=0.0.0.0:5000
       - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
       - FELIX_DISABLE_TIMINGS=1
+      - FELIX_TEST_TENANT=test-tenant
+      - FELIX_TEST_NAMESPACE=default
+      - FELIX_TEST_STREAM=test-stream
       - RUST_LOG=info
     networks:
       - felix-net
@@ -38,10 +41,13 @@ services:
       - --tenant=test-tenant
       - --namespace=default
       - --stream=test-stream
+      - --retry-attempts=10
+      - --retry-delay=1
     environment:
       - RUST_LOG=info
     networks:
       - felix-net
+    restart: "no"
 
   # Publishers (scale with docker-compose up --scale publisher=N)
   publisher:

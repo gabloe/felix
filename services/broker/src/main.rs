@@ -4,7 +4,7 @@ mod observability;
 
 use anyhow::{Context, Result};
 use broker::{config, quic};
-use felix_broker::Broker;
+use felix_broker::{Broker, StreamMetadata};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
@@ -19,6 +19,23 @@ async fn main() -> Result<()> {
     // Start an in-process broker with an ephemeral cache backend. TODO: support other storage backends via config.
     let broker = Broker::new(EphemeralCache::new().into());
     tracing::info!("broker started");
+    
+    // For testing: optionally pre-register a tenant/namespace/stream from environment variables
+    if let Ok(tenant) = std::env::var("FELIX_TEST_TENANT") {
+        let namespace = std::env::var("FELIX_TEST_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+        let stream = std::env::var("FELIX_TEST_STREAM").unwrap_or_else(|_| "test-stream".to_string());
+        
+        broker.register_tenant(&tenant).await.context("register test tenant")?;
+        broker.register_namespace(&tenant, &namespace).await.context("register test namespace")?;
+        broker.register_stream(&tenant, &namespace, &stream, Default::default()).await.context("register test stream")?;
+        
+        tracing::info!(
+            tenant = %tenant,
+            namespace = %namespace,
+            stream = %stream,
+            "pre-registered test tenant/namespace/stream"
+        );
+    }
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
     // Expose Prometheus metrics on the configured bind address.
