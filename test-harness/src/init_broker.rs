@@ -44,6 +44,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install default crypto provider for rustls
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -70,15 +75,17 @@ async fn main() -> Result<()> {
     let client_config = ClientConfig::from_env_or_yaml(quinn_config, None)?;
 
     // Parse broker address
-    let (host, port_str) = args.broker.split_once(':').context("invalid broker address")?;
-    let port: u16 = port_str.parse().context("invalid port")?;
-    let addr = format!("{}:{}", host, port);
+    let addr = args.broker.parse::<std::net::SocketAddr>()
+        .context("invalid broker address")?;
+    let host = args.broker.split(':')
+        .next()
+        .context("invalid broker address format")?;
 
     // Retry connection to broker
     let mut client = None;
     for attempt in 1..=args.retry_attempts {
         info!(attempt = attempt, "Attempting to connect to broker");
-        match Client::connect(addr.parse()?, host, client_config.clone()).await {
+        match Client::connect(addr, host, client_config.clone()).await {
             Ok(c) => {
                 client = Some(c);
                 info!("Connected to broker");
