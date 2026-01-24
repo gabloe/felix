@@ -93,6 +93,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "telemetry"))]
     fn should_sample_returns_false() {
         assert!(!should_sample());
     }
@@ -125,11 +126,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "telemetry"))]
     fn take_samples_returns_none() {
         assert!(take_samples().is_none());
     }
 
     #[test]
+    #[cfg(not(feature = "telemetry"))]
     fn take_cache_samples_returns_none() {
         assert!(take_cache_samples().is_none());
     }
