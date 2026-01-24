@@ -62,3 +62,148 @@ impl ControlPlaneConfig {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Helper to clear all Felix env vars
+    fn clear_felix_env() {
+        for (key, _) in env::vars() {
+            if key.starts_with("FELIX_") {
+                unsafe {
+                    env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_uses_defaults() {
+        clear_felix_env();
+        let config = ControlPlaneConfig::from_env().expect("from_env");
+        assert_eq!(config.bind_addr.to_string(), "0.0.0.0:8443");
+        assert_eq!(config.metrics_bind.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.region_id, "local");
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_env_vars() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CP_BIND", "127.0.0.1:9443");
+            env::set_var("FELIX_CP_METRICS_BIND", "127.0.0.1:9090");
+            env::set_var("FELIX_REGION_ID", "us-west-2");
+        }
+
+        let config = ControlPlaneConfig::from_env().expect("from_env");
+        assert_eq!(config.bind_addr.to_string(), "127.0.0.1:9443");
+        assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9090");
+        assert_eq!(config.region_id, "us-west-2");
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_rejects_invalid_socket_addr() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CP_BIND", "not-a-valid-address");
+        }
+        let result = ControlPlaneConfig::from_env();
+        assert!(result.is_err());
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_no_file_uses_defaults() {
+        clear_felix_env();
+        let config = ControlPlaneConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        assert_eq!(config.bind_addr.to_string(), "0.0.0.0:8443");
+        assert_eq!(config.region_id, "local");
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_file_not_found_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let nonexistent = tmpdir.path().join("nonexistent.yml");
+        unsafe {
+            env::set_var("FELIX_CP_CONFIG", nonexistent.to_str().unwrap());
+        }
+        let result = ControlPlaneConfig::from_env_or_yaml();
+        assert!(result.is_err());
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_overrides_with_valid_yaml() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(
+            &config_path,
+            r#"
+bind_addr: "127.0.0.1:7443"
+metrics_bind: "127.0.0.1:7070"
+region_id: "eu-central-1"
+"#,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let config = ControlPlaneConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        assert_eq!(config.bind_addr.to_string(), "127.0.0.1:7443");
+        assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:7070");
+        assert_eq!(config.region_id, "eu-central-1");
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_invalid_yaml_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("bad.yml");
+        fs::write(&config_path, "this is not: valid: yaml:").unwrap();
+        unsafe {
+            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let result = ControlPlaneConfig::from_env_or_yaml();
+        assert!(result.is_err());
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_invalid_socket_in_yaml_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(&config_path, "bind_addr: \"not-a-socket\"").unwrap();
+        unsafe {
+            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let result = ControlPlaneConfig::from_env_or_yaml();
+        assert!(result.is_err());
+
+        clear_felix_env();
+    }
+}

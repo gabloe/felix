@@ -25,3 +25,38 @@ mod telemetry {
 }
 
 pub use telemetry::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enable_collection_does_not_panic() {
+        enable_collection(10);
+    }
+
+    #[test]
+    fn set_enabled_does_not_panic() {
+        set_enabled(true);
+        set_enabled(false);
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn should_sample_returns_false() {
+        assert!(!should_sample());
+    }
+
+    #[test]
+    fn record_functions_do_not_panic() {
+        record_lookup_ns(100);
+        record_append_ns(200);
+        record_send_ns(300);
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn take_samples_returns_none() {
+        assert!(take_samples().is_none());
+    }
+}

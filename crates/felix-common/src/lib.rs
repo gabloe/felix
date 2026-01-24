@@ -128,8 +128,9 @@ impl NodeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, NodeConfig, ids::RegionId};
+    use super::{Error, LimitsConfig, NodeConfig, ids::*};
     use std::str::FromStr;
+    use uuid::Uuid;
 
     #[test]
     fn region_id_round_trip() {
@@ -154,5 +155,85 @@ mod tests {
         assert_eq!(config.data_dir, "/tmp/felix");
         assert!(config.limits.max_message_bytes > 0);
         assert!(config.limits.max_inflight > 0);
+    }
+
+    #[test]
+    fn all_id_types_work() {
+        let region = RegionId::new();
+        let tenant = TenantId::new();
+        let _namespace = NamespaceId::new();
+        let _stream = StreamId::new();
+        let _topic = TopicId::new();
+        let _shard = ShardId::new();
+
+        // Test display
+        assert!(!region.to_string().is_empty());
+        assert!(!tenant.to_string().is_empty());
+
+        // Test from_uuid
+        let uuid = Uuid::new_v4();
+        let region2 = RegionId::from_uuid(uuid);
+        assert_eq!(region2.as_uuid(), uuid);
+
+        // Test parse from string
+        let region_str = region.to_string();
+        let region3 = RegionId::from_str(&region_str).expect("parse");
+        assert_eq!(region, region3);
+
+        // Test default
+        let _ = TenantId::default();
+        let _ = NamespaceId::default();
+    }
+
+    #[test]
+    fn id_types_parse_valid_uuids() {
+        let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
+        let tenant = TenantId::from_str(uuid_str).expect("parse");
+        assert_eq!(tenant.to_string(), uuid_str);
+    }
+
+    #[test]
+    fn id_types_reject_invalid_uuids() {
+        let invalid = "not-valid";
+        assert!(TenantId::from_str(invalid).is_err());
+        assert!(NamespaceId::from_str(invalid).is_err());
+        assert!(StreamId::from_str(invalid).is_err());
+    }
+
+    #[test]
+    fn limits_config_default_values() {
+        let limits = LimitsConfig::default();
+        assert_eq!(limits.max_message_bytes, 1024 * 1024);
+        assert_eq!(limits.max_inflight, 10_000);
+    }
+
+    #[test]
+    fn limits_config_custom_values() {
+        let limits = LimitsConfig {
+            max_message_bytes: 2048,
+            max_inflight: 5000,
+        };
+        assert_eq!(limits.max_message_bytes, 2048);
+        assert_eq!(limits.max_inflight, 5000);
+    }
+
+    #[test]
+    fn node_config_preserves_limits() {
+        let region = RegionId::new();
+        let mut config = NodeConfig::new(region, "0.0.0.0:8000", "/data");
+        config.limits.max_message_bytes = 9999;
+        assert_eq!(config.limits.max_message_bytes, 9999);
+    }
+
+    #[test]
+    fn error_invalid_id_display() {
+        let err = Error::InvalidId("bad-id".to_string());
+        assert!(err.to_string().contains("bad-id"));
+    }
+
+    #[test]
+    fn error_config_display() {
+        let err = Error::Config("bad config".to_string());
+        assert!(err.to_string().contains("bad config"));
     }
 }

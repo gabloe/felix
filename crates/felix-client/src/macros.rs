@@ -107,3 +107,51 @@ pub(crate) fn t_now_if(sample: bool) -> Option<Instant> {
 pub(crate) fn t_now_if(_sample: bool) -> Option<Instant> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn t_should_sample_returns_false() {
+        assert!(!t_should_sample());
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn t_now_if_returns_none() {
+        assert!(t_now_if(true).is_none());
+        assert!(t_now_if(false).is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "telemetry")]
+    fn t_now_if_with_telemetry() {
+        // When telemetry is enabled, t_now_if(true) returns Some
+        assert!(t_now_if(true).is_some());
+        // and t_now_if(false) returns None
+        assert!(t_now_if(false).is_none());
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn noop_counter_does_not_panic() {
+        let counter = NoopCounter;
+        counter.increment(100);
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn noop_histogram_does_not_panic() {
+        let histogram = NoopHistogram;
+        histogram.record(100.0);
+    }
+
+    #[test]
+    #[cfg(not(feature = "telemetry"))]
+    fn noop_gauge_does_not_panic() {
+        let gauge = NoopGauge;
+        gauge.set(50.0);
+    }
+}

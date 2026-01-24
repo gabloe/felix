@@ -72,3 +72,33 @@ pub(crate) fn record_e2e_latency(payload: &Bytes) {
 
 #[cfg(not(feature = "telemetry"))]
 pub(crate) fn record_e2e_latency(_payload: &Bytes) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_embed_ts_enabled_returns_false() {
+        assert!(!bench_embed_ts_enabled());
+    }
+
+    #[test]
+    fn maybe_append_publish_ts_returns_unchanged() {
+        let payload = vec![1, 2, 3, 4];
+        let result = maybe_append_publish_ts(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn maybe_append_publish_ts_batch_returns_unchanged() {
+        let payloads = vec![vec![1, 2], vec![3, 4]];
+        let result = maybe_append_publish_ts_batch(payloads.clone());
+        assert_eq!(result, payloads);
+    }
+
+    #[test]
+    fn record_e2e_latency_does_not_panic() {
+        let payload = Bytes::from_static(b"test payload");
+        record_e2e_latency(&payload);
+    }
+}

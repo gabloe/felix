@@ -26,3 +26,9 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 
 [dev-dependencies]
 tower = "0.5"
+tempfile = "3"
+serial_test = "3"
+
+[lib]
+name = "controlplane"
+path = "src/lib.rs"

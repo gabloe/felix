@@ -342,3 +342,274 @@ impl BrokerConfig {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Helper to clear all Felix env vars
+    fn clear_felix_env() {
+        for (key, _) in env::vars() {
+            if key.starts_with("FELIX_") {
+                unsafe {
+                    env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_uses_defaults() {
+        clear_felix_env();
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.quic_bind.to_string(), "0.0.0.0:5000");
+        assert_eq!(config.metrics_bind.to_string(), "0.0.0.0:8080");
+        assert!(config.controlplane_url.is_none());
+        assert_eq!(config.controlplane_sync_interval_ms, 2000);
+        assert!(!config.ack_on_commit);
+        assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
+        assert_eq!(
+            config.publish_queue_wait_timeout_ms,
+            DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS
+        );
+        assert_eq!(config.ack_wait_timeout_ms, DEFAULT_ACK_WAIT_TIMEOUT_MS);
+        assert_eq!(config.disable_timings, DEFAULT_DISABLE_TIMINGS);
+        assert_eq!(
+            config.control_stream_drain_timeout_ms,
+            DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_env_vars() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_QUIC_BIND", "127.0.0.1:6000");
+            env::set_var("FELIX_BROKER_METRICS_BIND", "127.0.0.1:9000");
+            env::set_var("FELIX_CP_URL", "http://cp.example.com:8443");
+            env::set_var("FELIX_CP_SYNC_INTERVAL_MS", "5000");
+            env::set_var("FELIX_ACK_ON_COMMIT", "true");
+            env::set_var("FELIX_MAX_FRAME_BYTES", "32000000");
+            env::set_var("FELIX_PUBLISH_QUEUE_WAIT_MS", "3000");
+            env::set_var("FELIX_ACK_WAIT_TIMEOUT_MS", "4000");
+            env::set_var("FELIX_DISABLE_TIMINGS", "yes");
+            env::set_var("FELIX_CONTROL_STREAM_DRAIN_TIMEOUT_MS", "100");
+            env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "128");
+            env::set_var("FELIX_EVENT_BATCH_MAX_BYTES", "512000");
+            env::set_var("FELIX_FANOUT_BATCH", "256");
+            env::set_var("FELIX_BINARY_SINGLE_EVENT", "TRUE");
+            env::set_var("FELIX_BINARY_SINGLE_EVENT_MIN_BYTES", "1024");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.quic_bind.to_string(), "127.0.0.1:6000");
+        assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9000");
+        assert_eq!(
+            config.controlplane_url,
+            Some("http://cp.example.com:8443".to_string())
+        );
+        assert_eq!(config.controlplane_sync_interval_ms, 5000);
+        assert!(config.ack_on_commit);
+        assert_eq!(config.max_frame_bytes, 32000000);
+        assert_eq!(config.publish_queue_wait_timeout_ms, 3000);
+        assert_eq!(config.ack_wait_timeout_ms, 4000);
+        assert!(config.disable_timings);
+        assert_eq!(config.control_stream_drain_timeout_ms, 100);
+        assert_eq!(config.event_batch_max_events, 128);
+        assert_eq!(config.event_batch_max_bytes, 512000);
+        assert_eq!(config.fanout_batch_size, 256);
+        assert!(config.event_single_binary_enabled);
+        assert_eq!(config.event_single_binary_min_bytes, 1024);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_ack_on_commit_variations() {
+        clear_felix_env();
+        for val in &["1", "true", "yes"] {
+            unsafe {
+                env::set_var("FELIX_ACK_ON_COMMIT", val);
+            }
+            let config = BrokerConfig::from_env().expect("from_env");
+            assert!(config.ack_on_commit, "expected true for {}", val);
+        }
+        for val in &["0", "false", "no", "anything"] {
+            unsafe {
+                env::set_var("FELIX_ACK_ON_COMMIT", val);
+            }
+            let config = BrokerConfig::from_env().expect("from_env");
+            assert!(!config.ack_on_commit, "expected false for {}", val);
+        }
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_filters_zero_values() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_MAX_FRAME_BYTES", "0");
+            env::set_var("FELIX_PUBLISH_QUEUE_WAIT_MS", "0");
+            env::set_var("FELIX_FANOUT_BATCH", "0");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        // Should use defaults when 0 is provided
+        assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
+        assert_eq!(
+            config.publish_queue_wait_timeout_ms,
+            DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS
+        );
+        assert_eq!(config.fanout_batch_size, 64);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_rejects_invalid_socket_addr() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_QUIC_BIND", "not-a-valid-address");
+        }
+        let result = BrokerConfig::from_env();
+        assert!(result.is_err());
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_no_file_uses_defaults() {
+        clear_felix_env();
+        let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        assert_eq!(config.quic_bind.to_string(), "0.0.0.0:5000");
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_file_not_found_with_explicit_path_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let nonexistent = tmpdir.path().join("nonexistent.yml");
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", nonexistent.to_str().unwrap());
+        }
+        let result = BrokerConfig::from_env_or_yaml();
+        assert!(result.is_err());
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_overrides_with_valid_yaml() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(
+            &config_path,
+            r#"
+quic_bind: "127.0.0.1:5555"
+metrics_bind: "127.0.0.1:9999"
+controlplane_url: "http://test-cp:8443"
+controlplane_sync_interval_ms: 5000
+ack_on_commit: true
+max_frame_bytes: 32000000
+event_batch_max_events: 128
+event_single_binary_enabled: true
+"#,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        assert_eq!(config.quic_bind.to_string(), "127.0.0.1:5555");
+        assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9999");
+        assert_eq!(
+            config.controlplane_url,
+            Some("http://test-cp:8443".to_string())
+        );
+        assert_eq!(config.controlplane_sync_interval_ms, 5000);
+        assert!(config.ack_on_commit);
+        assert_eq!(config.max_frame_bytes, 32000000);
+        assert_eq!(config.event_batch_max_events, 128);
+        assert!(config.event_single_binary_enabled);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_invalid_yaml_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("bad.yml");
+        fs::write(&config_path, "this is not: valid: yaml:").unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let result = BrokerConfig::from_env_or_yaml();
+        assert!(result.is_err());
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_invalid_socket_in_yaml_fails() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(&config_path, "quic_bind: \"not-a-socket\"").unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let result = BrokerConfig::from_env_or_yaml();
+        assert!(result.is_err());
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_filters_zero_values_in_yaml() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(
+            &config_path,
+            r#"
+cache_conn_recv_window: 0
+event_batch_max_events: 0
+fanout_batch_size: 0
+"#,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        // Should keep env defaults when yaml has 0
+        assert_eq!(
+            config.cache_conn_recv_window,
+            DEFAULT_CACHE_CONN_RECV_WINDOW
+        );
+        assert_eq!(config.event_batch_max_events, 64);
+        assert_eq!(config.fanout_batch_size, 64);
+
+        clear_felix_env();
+    }
+}
