@@ -65,7 +65,8 @@ impl StorageApi for EphemeralCache {
         // Compute expiry once so reads only compare Instants.
         let expires_at = ttl.map(|ttl| Instant::now() + ttl);
         let entry = CacheEntry { value, expires_at };
-        let mut guard = self.inner.write().await;
+        let mut guard: tokio::sync::RwLockWriteGuard<'_, HashMap<CacheKey, CacheEntry>> =
+            self.inner.write().await;
         guard.insert(CacheKey::new(tenant_id, namespace, cache, key), entry);
         if let Some(max_entries) = self.max_entries
             && guard.len() > max_entries
@@ -79,7 +80,8 @@ impl StorageApi for EphemeralCache {
 
     async fn get(&self, tenant_id: &str, namespace: &str, cache: &str, key: &str) -> Option<Bytes> {
         // Take a write lock so we can evict expired entries.
-        let mut guard = self.inner.write().await;
+        let mut guard: tokio::sync::RwLockWriteGuard<'_, HashMap<CacheKey, CacheEntry>> =
+            self.inner.write().await;
         let scoped_key = CacheKey::new(tenant_id, namespace, cache, key);
         if let Some(entry) = guard.get(&scoped_key) {
             if let Some(expires_at) = entry.expires_at {
@@ -110,13 +112,15 @@ impl StorageApi for EphemeralCache {
     }
 
     async fn len(&self) -> usize {
-        // Only a read lock is needed for length.
-        self.inner.read().await.len()
+        let guard: tokio::sync::RwLockReadGuard<HashMap<CacheKey, CacheEntry>> =
+            self.inner.read().await;
+        guard.len()
     }
 
     async fn is_empty(&self) -> bool {
-        // Match len() with a direct emptiness check for callers.
-        self.inner.read().await.is_empty()
+        let guard: tokio::sync::RwLockReadGuard<HashMap<CacheKey, CacheEntry>> =
+            self.inner.read().await;
+        guard.is_empty()
     }
 }
 
