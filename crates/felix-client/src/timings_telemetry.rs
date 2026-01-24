@@ -382,3 +382,113 @@ pub fn take_cache_samples() -> Option<ClientCacheTimingSamples> {
         std::mem::take(&mut *validate),
     ))
 }
+
+#[cfg(test)]
+pub(crate) fn reset_collector_for_tests() {
+    // Safety: test-only helper to reset global state between tests.
+    unsafe {
+        let ptr = &COLLECTOR as *const OnceLock<TimingCollector> as *mut OnceLock<TimingCollector>;
+        let _ = (*ptr).take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn collector_none_paths() {
+        reset_collector_for_tests();
+        assert!(!should_sample());
+        set_enabled(true);
+        set_enabled(false);
+        record_encode_ns(1);
+        record_binary_encode_ns(2);
+        record_text_encode_ns(3);
+        record_text_batch_build_ns(4);
+        record_publish_enqueue_wait_ns(5);
+        record_write_ns(6);
+        record_send_await_ns(7);
+        record_sub_read_wait_ns(8);
+        record_sub_read_await_ns(9);
+        record_sub_decode_ns(10);
+        record_sub_dispatch_ns(11);
+        record_sub_consumer_gap_ns(12);
+        record_e2e_latency_ns(13);
+        record_ack_read_wait_ns(14);
+        record_ack_decode_ns(15);
+        record_cache_encode_ns(16);
+        record_cache_open_stream_ns(17);
+        record_cache_write_ns(18);
+        record_cache_finish_ns(19);
+        record_cache_read_wait_ns(20);
+        record_cache_read_drain_ns(21);
+        record_cache_decode_ns(22);
+        record_cache_validate_ns(23);
+        assert!(take_samples().is_none());
+        assert!(take_cache_samples().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn collector_records_and_samples() {
+        reset_collector_for_tests();
+        enable_collection(2);
+        assert!(should_sample());
+        assert!(!should_sample());
+        set_enabled(false);
+        assert!(!should_sample());
+        set_enabled(true);
+        assert!(should_sample());
+        record_encode_ns(100);
+        record_binary_encode_ns(200);
+        record_text_encode_ns(300);
+        record_text_batch_build_ns(400);
+        record_publish_enqueue_wait_ns(500);
+        record_write_ns(600);
+        record_send_await_ns(700);
+        record_sub_read_wait_ns(800);
+        record_sub_read_await_ns(900);
+        record_sub_decode_ns(1000);
+        record_sub_dispatch_ns(1100);
+        record_sub_consumer_gap_ns(1200);
+        record_e2e_latency_ns(1300);
+        record_ack_read_wait_ns(1400);
+        record_ack_decode_ns(1500);
+        record_cache_encode_ns(1600);
+        record_cache_open_stream_ns(1700);
+        record_cache_write_ns(1800);
+        record_cache_finish_ns(1900);
+        record_cache_read_wait_ns(2000);
+        record_cache_read_drain_ns(2100);
+        record_cache_decode_ns(2200);
+        record_cache_validate_ns(2300);
+        let samples = take_samples().expect("samples");
+        assert!(samples.0.contains(&500));
+        assert!(samples.1.contains(&100));
+        assert!(samples.2.contains(&200));
+        assert!(samples.3.contains(&300));
+        assert!(samples.4.contains(&400));
+        assert!(samples.5.contains(&600));
+        assert!(samples.6.contains(&700));
+        assert!(samples.7.contains(&800));
+        assert!(samples.8.contains(&900));
+        assert!(samples.9.contains(&1000));
+        assert!(samples.10.contains(&1100));
+        assert!(samples.11.contains(&1200));
+        assert!(samples.12.contains(&1300));
+        assert!(samples.13.contains(&1400));
+        assert!(samples.14.contains(&1500));
+        let cache_samples = take_cache_samples().expect("cache samples");
+        assert!(cache_samples.0.contains(&1600));
+        assert!(cache_samples.1.contains(&1700));
+        assert!(cache_samples.2.contains(&1800));
+        assert!(cache_samples.3.contains(&1900));
+        assert!(cache_samples.4.contains(&2000));
+        assert!(cache_samples.5.contains(&2100));
+        assert!(cache_samples.6.contains(&2200));
+        assert!(cache_samples.7.contains(&2300));
+    }
+}

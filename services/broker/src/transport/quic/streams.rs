@@ -1370,6 +1370,223 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn control_stream_rejects_unexpected_message() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let (server_config, cert) = build_server_config()?;
+        let server = Arc::new(QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?);
+        let addr = server.local_addr()?;
+
+        let config = BrokerConfig::from_env()?;
+        let max_frame_bytes = config.max_frame_bytes;
+        let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
+        let server_task = tokio::spawn(crate::transport::quic::serve(
+            Arc::clone(&server),
+            Arc::clone(&broker),
+            config,
+        ));
+
+        let client = QuicClient::bind(
+            "0.0.0.0:0".parse()?,
+            build_quinn_client_config(cert)?,
+            TransportConfig::default(),
+        )?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let (mut send, mut recv) = connection.open_bi().await?;
+        crate::transport::quic::write_message(&mut send, Message::Ok).await?;
+        send.finish()?;
+        let response = crate::transport::quic::read_message_limited(
+            &mut recv,
+            max_frame_bytes,
+            &mut frame_scratch,
+        )
+        .await?;
+        assert!(matches!(response, Some(Message::Error { .. }) | None));
+
+        drop(connection);
+        server_task.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        let (server_config, cert) = build_server_config()?;
+        let server = Arc::new(QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?);
+        let addr = server.local_addr()?;
+
+        let config = BrokerConfig::from_env()?;
+        let max_frame_bytes = config.max_frame_bytes;
+        let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
+        let server_task = tokio::spawn(crate::transport::quic::serve(
+            Arc::clone(&server),
+            Arc::clone(&broker),
+            config,
+        ));
+
+        let client = QuicClient::bind(
+            "0.0.0.0:0".parse()?,
+            build_quinn_client_config(cert)?,
+            TransportConfig::default(),
+        )?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let (mut send, mut recv) = connection.open_bi().await?;
+        crate::transport::quic::write_message(
+            &mut send,
+            Message::CachePut {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                cache: "missing".to_string(),
+                key: "demo-key".to_string(),
+                value: Bytes::from_static(b"cached"),
+                request_id: None,
+                ttl_ms: None,
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = crate::transport::quic::read_message_limited(
+            &mut recv,
+            max_frame_bytes,
+            &mut frame_scratch,
+        )
+        .await?;
+        assert!(matches!(response, Some(Message::Error { .. })));
+        let response = crate::transport::quic::read_message_limited(
+            &mut recv,
+            max_frame_bytes,
+            &mut frame_scratch,
+        )
+        .await?;
+        assert!(response.is_none());
+
+        drop(connection);
+        server_task.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        let (server_config, cert) = build_server_config()?;
+        let server = Arc::new(QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?);
+        let addr = server.local_addr()?;
+
+        let config = BrokerConfig::from_env()?;
+        let max_frame_bytes = config.max_frame_bytes;
+        let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
+        let server_task = tokio::spawn(crate::transport::quic::serve(
+            Arc::clone(&server),
+            Arc::clone(&broker),
+            config,
+        ));
+
+        let client = QuicClient::bind(
+            "0.0.0.0:0".parse()?,
+            build_quinn_client_config(cert)?,
+            TransportConfig::default(),
+        )?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let (mut send, mut recv) = connection.open_bi().await?;
+        crate::transport::quic::write_message(
+            &mut send,
+            Message::CacheGet {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                cache: "missing".to_string(),
+                key: "demo-key".to_string(),
+                request_id: None,
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = crate::transport::quic::read_message_limited(
+            &mut recv,
+            max_frame_bytes,
+            &mut frame_scratch,
+        )
+        .await?;
+        assert!(matches!(response, Some(Message::Error { .. })));
+        let response = crate::transport::quic::read_message_limited(
+            &mut recv,
+            max_frame_bytes,
+            &mut frame_scratch,
+        )
+        .await?;
+        assert!(response.is_none());
+
+        drop(connection);
+        server_task.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uni_stream_rejects_non_publish() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream("t1", "default", "updates", Default::default())
+            .await?;
+        let (server_config, cert) = build_server_config()?;
+        let server = Arc::new(QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?);
+        let addr = server.local_addr()?;
+
+        let config = BrokerConfig::from_env()?;
+        let server_task = tokio::spawn(crate::transport::quic::serve(
+            Arc::clone(&server),
+            Arc::clone(&broker),
+            config,
+        ));
+
+        let client = QuicClient::bind(
+            "0.0.0.0:0".parse()?,
+            build_quinn_client_config(cert)?,
+            TransportConfig::default(),
+        )?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let mut send = connection.open_uni().await?;
+        let frame = Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: "demo-key".to_string(),
+            request_id: None,
+        }
+        .encode()?;
+        let bytes = frame.encode();
+        send.write_all(&bytes).await?;
+        send.finish()?;
+
+        drop(connection);
+        server_task.abort();
+        Ok(())
+    }
+
     fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
         let cert = generate_simple_self_signed(vec!["localhost".into()])?;
         let cert_der = CertificateDer::from(cert.serialize_der()?);

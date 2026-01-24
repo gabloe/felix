@@ -305,6 +305,21 @@ pub(crate) fn runtime_config() -> &'static ClientRuntimeConfig {
     })
 }
 
+#[cfg(all(test, feature = "telemetry"))]
+pub(crate) fn reset_runtime_config_for_tests() {
+    // Safety: test-only helper to reset global state between tests.
+    unsafe {
+        let ptr = &CLIENT_RUNTIME_CONFIG as *const OnceLock<ClientRuntimeConfig>
+            as *mut OnceLock<ClientRuntimeConfig>;
+        let _ = (*ptr).take();
+    }
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+pub(crate) fn install_runtime_config_for_tests(config: ClientRuntimeConfig) {
+    let _ = CLIENT_RUNTIME_CONFIG.set(config);
+}
+
 pub(crate) fn event_transport_config(
     mut base: TransportConfig,
     config: &ClientConfig,

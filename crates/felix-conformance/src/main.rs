@@ -11,6 +11,8 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -78,11 +80,7 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
     sub_send.finish()?;
     let response =
         quic::read_message_limited(&mut sub_recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    let expected_id = match response {
-        Some(Message::Subscribed { subscription_id }) => Some(subscription_id),
-        Some(Message::Ok) => None,
-        other => return Err(anyhow!("subscribe failed: {other:?}")),
-    };
+    let expected_id = parse_subscribe_response(response)?;
     let mut event_recv = connection.accept_uni().await?;
 
     publish(connection, b"alpha").await?;
@@ -109,9 +107,7 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
         received.push(payload);
     }
 
-    if received != [b"alpha".to_vec(), b"beta".to_vec()] {
-        return Err(anyhow!("unexpected event order: {received:?}"));
-    }
+    ensure_event_order(&received)?;
     Ok(())
 }
 
@@ -135,9 +131,7 @@ async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -
     send.finish()?;
     let response =
         quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    if response != Some(Message::PublishOk { request_id }) {
-        return Err(anyhow!("publish failed: {response:?}"));
-    }
+    ensure_publish_ok(response, request_id)?;
     Ok(())
 }
 
@@ -161,20 +155,14 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
     send.finish()?;
     let response =
         quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    if response != Some(Message::Ok) {
-        return Err(anyhow!("cache put failed: {response:?}"));
-    }
+    ensure_ok_response(response, "cache put")?;
 
     let value = cache_get(connection, "conformance-key").await?;
-    if value != Some(Bytes::from_static(b"value")) {
-        return Err(anyhow!("cache get mismatch: {value:?}"));
-    }
+    ensure_cache_value(value.clone(), Bytes::from_static(b"value"), "cache get")?;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
     let expired = cache_get(connection, "conformance-key").await?;
-    if expired.is_some() {
-        return Err(anyhow!("cache entry should be expired"));
-    }
+    ensure_cache_expired(expired, "cache entry should be expired")?;
     Ok(())
 }
 
@@ -199,9 +187,7 @@ async fn run_client_pubsub(
         .next_event()
         .await?
         .ok_or_else(|| anyhow!("client subscription ended early"))?;
-    if event.payload != Bytes::from_static(b"client-alpha") {
-        return Err(anyhow!("client event mismatch: {:?}", event.payload));
-    }
+    ensure_client_event(&event.payload, Bytes::from_static(b"client-alpha"))?;
     publisher.finish().await?;
     Ok(())
 }
@@ -222,16 +208,16 @@ async fn run_client_cache(addr: std::net::SocketAddr, cert: CertificateDer<'stat
     let value = client
         .cache_get("t1", "default", "primary", "client-key")
         .await?;
-    if value != Some(Bytes::from_static(b"value")) {
-        return Err(anyhow!("client cache get mismatch: {value:?}"));
-    }
+    ensure_cache_value(
+        value.clone(),
+        Bytes::from_static(b"value"),
+        "client cache get",
+    )?;
     tokio::time::sleep(Duration::from_millis(150)).await;
     let expired = client
         .cache_get("t1", "default", "primary", "client-key")
         .await?;
-    if expired.is_some() {
-        return Err(anyhow!("client cache entry should be expired"));
-    }
+    ensure_cache_expired(expired, "client cache entry should be expired")?;
     Ok(())
 }
 
@@ -255,10 +241,7 @@ async fn cache_get(
     send.finish()?;
     let response =
         quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    match response {
-        Some(Message::CacheValue { value, .. }) => Ok(value),
-        other => Err(anyhow!("unexpected cache response: {other:?}")),
-    }
+    parse_cache_get_response(response)
 }
 
 fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
@@ -283,7 +266,23 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     ClientConfig::from_env_or_yaml(quinn, None)
 }
 
-async fn read_frame(recv: &mut RecvStream) -> Result<Option<Frame>> {
+trait FrameReader {
+    fn read_exact<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReadExactError>> + 'a>>;
+}
+
+impl FrameReader for RecvStream {
+    fn read_exact<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReadExactError>> + 'a>> {
+        Box::pin(RecvStream::read_exact(self, buf))
+    }
+}
+
+async fn read_frame<R: FrameReader + ?Sized>(recv: &mut R) -> Result<Option<Frame>> {
     let mut header_bytes = [0u8; FrameHeader::LEN];
     match recv.read_exact(&mut header_bytes).await {
         Ok(()) => {}
@@ -363,4 +362,331 @@ fn handle_event_frame(
         other => return Err(anyhow!("unexpected message: {other:?}")),
     }
     Ok(())
+}
+
+fn parse_subscribe_response(response: Option<Message>) -> Result<Option<u64>> {
+    match response {
+        Some(Message::Subscribed { subscription_id }) => Ok(Some(subscription_id)),
+        Some(Message::Ok) => Ok(None),
+        other => Err(anyhow!("subscribe failed: {other:?}")),
+    }
+}
+
+fn ensure_publish_ok(response: Option<Message>, request_id: u64) -> Result<()> {
+    if response != Some(Message::PublishOk { request_id }) {
+        return Err(anyhow!("publish failed: {response:?}"));
+    }
+    Ok(())
+}
+
+fn ensure_ok_response(response: Option<Message>, context: &str) -> Result<()> {
+    if response != Some(Message::Ok) {
+        return Err(anyhow!("{context} failed: {response:?}"));
+    }
+    Ok(())
+}
+
+fn parse_cache_get_response(response: Option<Message>) -> Result<Option<Bytes>> {
+    match response {
+        Some(Message::CacheValue { value, .. }) => Ok(value),
+        other => Err(anyhow!("unexpected cache response: {other:?}")),
+    }
+}
+
+fn ensure_event_order(received: &[Vec<u8>]) -> Result<()> {
+    if received != [b"alpha".to_vec(), b"beta".to_vec()] {
+        return Err(anyhow!("unexpected event order: {received:?}"));
+    }
+    Ok(())
+}
+
+fn ensure_cache_value(value: Option<Bytes>, expected: Bytes, context: &str) -> Result<()> {
+    if value != Some(expected) {
+        return Err(anyhow!("{context} mismatch: {value:?}"));
+    }
+    Ok(())
+}
+
+fn ensure_cache_expired(value: Option<Bytes>, context: &str) -> Result<()> {
+    if value.is_some() {
+        return Err(anyhow!("{context}"));
+    }
+    Ok(())
+}
+
+fn ensure_client_event(payload: &Bytes, expected: Bytes) -> Result<()> {
+    if payload != &expected {
+        return Err(anyhow!("client event mismatch: {:?}", payload));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use felix_wire::binary;
+
+    struct TestReader {
+        data: Vec<u8>,
+        pos: usize,
+        read_calls: usize,
+        error_on_call: Option<(usize, ReadExactError)>,
+    }
+
+    impl TestReader {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                pos: 0,
+                read_calls: 0,
+                error_on_call: None,
+            }
+        }
+
+        fn with_error_on_call(mut self, call: usize, error: ReadExactError) -> Self {
+            self.error_on_call = Some((call, error));
+            self
+        }
+    }
+
+    impl FrameReader for TestReader {
+        fn read_exact<'a>(
+            &'a mut self,
+            buf: &'a mut [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReadExactError>> + 'a>> {
+            Box::pin(async move {
+                self.read_calls += 1;
+                if let Some((call, err)) = &self.error_on_call
+                    && *call == self.read_calls
+                {
+                    return Err(err.clone());
+                }
+                let remaining = self.data.len().saturating_sub(self.pos);
+                if remaining < buf.len() {
+                    let read = remaining;
+                    if read > 0 {
+                        buf[..read].copy_from_slice(&self.data[self.pos..self.pos + read]);
+                        self.pos += read;
+                    }
+                    return Err(ReadExactError::FinishedEarly(read));
+                }
+                buf.copy_from_slice(&self.data[self.pos..self.pos + buf.len()]);
+                self.pos += buf.len();
+                Ok(())
+            })
+        }
+    }
+
+    fn encode_frame_bytes(flags: u16, payload: &[u8]) -> Vec<u8> {
+        let header = FrameHeader::new(flags, payload.len() as u32);
+        let mut header_bytes = [0u8; FrameHeader::LEN];
+        header.encode_into(&mut header_bytes);
+        let mut bytes = Vec::with_capacity(FrameHeader::LEN + payload.len());
+        bytes.extend_from_slice(&header_bytes);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn message_frame(message: Message) -> Frame {
+        message.encode().expect("encode message")
+    }
+
+    fn binary_event_frame(subscription_id: u64, payloads: &[Bytes]) -> Frame {
+        let bytes = binary::encode_event_batch_bytes(subscription_id, payloads)
+            .expect("encode binary batch");
+        Frame::decode(bytes).expect("decode frame")
+    }
+
+    #[test]
+    fn conformance_main_smoke() {
+        super::main().expect("conformance run");
+    }
+
+    #[test]
+    fn parse_subscribe_response_variants() {
+        assert_eq!(
+            parse_subscribe_response(Some(Message::Subscribed { subscription_id: 7 })).expect("ok"),
+            Some(7)
+        );
+        assert_eq!(
+            parse_subscribe_response(Some(Message::Ok)).expect("ok"),
+            None
+        );
+        assert!(
+            parse_subscribe_response(Some(Message::Error {
+                message: "nope".into()
+            }))
+            .is_err()
+        );
+        assert!(parse_subscribe_response(None).is_err());
+    }
+
+    #[test]
+    fn ensure_publish_ok_variants() {
+        ensure_publish_ok(Some(Message::PublishOk { request_id: 9 }), 9).expect("ok");
+        assert!(ensure_publish_ok(Some(Message::PublishOk { request_id: 8 }), 9).is_err());
+        assert!(
+            ensure_publish_ok(
+                Some(Message::Error {
+                    message: "no".into()
+                }),
+                9
+            )
+            .is_err()
+        );
+        assert!(ensure_publish_ok(None, 9).is_err());
+    }
+
+    #[test]
+    fn ensure_ok_response_variants() {
+        ensure_ok_response(Some(Message::Ok), "cache put").expect("ok");
+        assert!(
+            ensure_ok_response(
+                Some(Message::Error {
+                    message: "no".into()
+                }),
+                "cache put"
+            )
+            .is_err()
+        );
+        assert!(ensure_ok_response(None, "cache put").is_err());
+    }
+
+    #[test]
+    fn parse_cache_get_response_variants() {
+        let value = Bytes::from_static(b"value");
+        assert_eq!(
+            parse_cache_get_response(Some(Message::CacheValue {
+                tenant_id: "t1".into(),
+                namespace: "default".into(),
+                cache: "primary".into(),
+                key: "k".into(),
+                value: Some(value.clone()),
+                request_id: None
+            }))
+            .expect("ok"),
+            Some(value)
+        );
+        assert!(parse_cache_get_response(Some(Message::Ok)).is_err());
+        assert!(parse_cache_get_response(None).is_err());
+    }
+
+    #[test]
+    fn ensure_event_order_variants() {
+        ensure_event_order(&[b"alpha".to_vec(), b"beta".to_vec()]).expect("ok");
+        assert!(ensure_event_order(&[b"beta".to_vec(), b"alpha".to_vec()]).is_err());
+    }
+
+    #[test]
+    fn ensure_cache_value_variants() {
+        let expected = Bytes::from_static(b"value");
+        ensure_cache_value(Some(expected.clone()), expected.clone(), "cache get").expect("ok");
+        assert!(ensure_cache_value(None, expected.clone(), "cache get").is_err());
+        assert!(
+            ensure_cache_value(Some(Bytes::from_static(b"nope")), expected, "cache get").is_err()
+        );
+    }
+
+    #[test]
+    fn ensure_cache_expired_variants() {
+        ensure_cache_expired(None, "expired").expect("ok");
+        assert!(ensure_cache_expired(Some(Bytes::from_static(b"value")), "expired").is_err());
+    }
+
+    #[test]
+    fn ensure_client_event_variants() {
+        ensure_client_event(&Bytes::from_static(b"alpha"), Bytes::from_static(b"alpha"))
+            .expect("ok");
+        assert!(
+            ensure_client_event(&Bytes::from_static(b"alpha"), Bytes::from_static(b"beta"))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_frame_success_and_errors() {
+        let payload = b"hello";
+        let bytes = encode_frame_bytes(0, payload);
+        let mut reader = TestReader::new(bytes);
+        let frame = read_frame(&mut reader).await.expect("ok").expect("frame");
+        assert_eq!(frame.payload, Bytes::from_static(payload));
+
+        let mut early = TestReader::new(Vec::new());
+        assert!(read_frame(&mut early).await.expect("ok").is_none());
+
+        let mut error = TestReader::new(Vec::new())
+            .with_error_on_call(1, ReadExactError::ReadError(quinn::ReadError::ClosedStream));
+        assert!(read_frame(&mut error).await.is_err());
+
+        let bad_header = encode_frame_bytes(0, payload);
+        let mut bad_magic = TestReader::new(bad_header);
+        bad_magic.data[0] = 0x00;
+        assert!(read_frame(&mut bad_magic).await.is_err());
+
+        let mut payload_error = TestReader::new(encode_frame_bytes(0, payload))
+            .with_error_on_call(2, ReadExactError::ReadError(quinn::ReadError::ClosedStream));
+        assert!(read_frame(&mut payload_error).await.is_err());
+
+        let mut short_payload = TestReader::new(encode_frame_bytes(0, payload));
+        short_payload.data.truncate(FrameHeader::LEN + 2);
+        assert!(read_frame(&mut short_payload).await.is_err());
+    }
+
+    #[test]
+    fn handle_event_frame_binary_paths() {
+        let mut pending = VecDeque::new();
+        let frame = binary_event_frame(7, &[Bytes::from_static(b"one")]);
+        assert!(handle_event_frame(Some(7), frame.clone(), &mut pending, true).is_err());
+
+        let mut pending = VecDeque::new();
+        assert!(handle_event_frame(Some(8), frame.clone(), &mut pending, false).is_err());
+
+        let mut pending = VecDeque::new();
+        handle_event_frame(Some(7), frame, &mut pending, false).expect("ok");
+        assert_eq!(pending.pop_front(), Some(b"one".to_vec()));
+
+        let mut pending = VecDeque::new();
+        let bad = Frame {
+            header: FrameHeader::new(FLAG_BINARY_EVENT_BATCH, 2),
+            payload: Bytes::from_static(b"hi"),
+        };
+        assert!(handle_event_frame(None, bad, &mut pending, false).is_err());
+    }
+
+    #[test]
+    fn handle_event_frame_message_paths() {
+        let mut pending = VecDeque::new();
+        let hello = message_frame(Message::EventStreamHello { subscription_id: 9 });
+        assert!(handle_event_frame(Some(9), hello.clone(), &mut pending, false).is_err());
+        assert!(handle_event_frame(Some(8), hello.clone(), &mut pending, true).is_err());
+        assert!(handle_event_frame(None, hello.clone(), &mut pending, true).is_err());
+        handle_event_frame(Some(9), hello, &mut pending, true).expect("ok");
+
+        let mut pending = VecDeque::new();
+        let event = message_frame(Message::Event {
+            tenant_id: "t1".into(),
+            namespace: "default".into(),
+            stream: "conformance".into(),
+            payload: b"payload".to_vec(),
+        });
+        assert!(handle_event_frame(Some(1), event.clone(), &mut pending, true).is_err());
+        handle_event_frame(None, event, &mut pending, true).expect("ok");
+        assert_eq!(pending.pop_front(), Some(b"payload".to_vec()));
+
+        let mut pending = VecDeque::new();
+        let batch = message_frame(Message::EventBatch {
+            tenant_id: "t1".into(),
+            namespace: "default".into(),
+            stream: "conformance".into(),
+            payloads: vec![b"a".to_vec(), b"b".to_vec()],
+        });
+        assert!(handle_event_frame(Some(1), batch.clone(), &mut pending, true).is_err());
+        handle_event_frame(None, batch, &mut pending, false).expect("ok");
+        assert_eq!(pending.pop_front(), Some(b"a".to_vec()));
+        assert_eq!(pending.pop_front(), Some(b"b".to_vec()));
+
+        let mut pending = VecDeque::new();
+        let other = message_frame(Message::Ok);
+        assert!(handle_event_frame(None, other, &mut pending, false).is_err());
+    }
 }

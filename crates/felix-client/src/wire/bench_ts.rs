@@ -73,7 +73,7 @@ pub(crate) fn record_e2e_latency(payload: &Bytes) {
 #[cfg(not(feature = "telemetry"))]
 pub(crate) fn record_e2e_latency(_payload: &Bytes) {}
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "telemetry")))]
 mod tests {
     use super::*;
 
@@ -100,5 +100,81 @@ mod tests {
     fn record_e2e_latency_does_not_panic() {
         let payload = Bytes::from_static(b"test payload");
         record_e2e_latency(&payload);
+    }
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod telemetry_tests {
+    use super::*;
+    use serial_test::serial;
+
+    use crate::config::{
+        ClientRuntimeConfig, DEFAULT_EVENT_ROUTER_MAX_PENDING, DEFAULT_MAX_FRAME_BYTES,
+        install_runtime_config_for_tests, reset_runtime_config_for_tests,
+    };
+
+    fn install_bench_config(enabled: bool) {
+        reset_runtime_config_for_tests();
+        install_runtime_config_for_tests(ClientRuntimeConfig {
+            event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            bench_embed_ts: enabled,
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn bench_embed_ts_enabled_true() {
+        install_bench_config(true);
+        assert!(bench_embed_ts_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn maybe_append_publish_ts_appends() {
+        install_bench_config(true);
+        let payload = vec![1, 2, 3];
+        let result = maybe_append_publish_ts(payload.clone());
+        assert_eq!(&result[..payload.len()], payload.as_slice());
+        assert_eq!(result.len(), payload.len() + 8);
+        let _ts = u64::from_le_bytes(result[result.len() - 8..].try_into().expect("ts"));
+    }
+
+    #[test]
+    #[serial]
+    fn maybe_append_publish_ts_batch_appends() {
+        install_bench_config(true);
+        let payloads = vec![vec![1, 2], vec![3, 4, 5]];
+        let result = maybe_append_publish_ts_batch(payloads.clone());
+        assert_eq!(result.len(), payloads.len());
+        assert_eq!(result[0].len(), payloads[0].len() + 8);
+        assert_eq!(result[1].len(), payloads[1].len() + 8);
+    }
+
+    #[test]
+    #[serial]
+    fn record_e2e_latency_paths() {
+        install_bench_config(true);
+        crate::timings::enable_collection(1);
+        let payload = maybe_append_publish_ts(vec![9, 9]);
+        record_e2e_latency(&Bytes::from(payload));
+        let short = Bytes::from_static(b"short");
+        record_e2e_latency(&short);
+        let mut future = vec![0u8; 8];
+        future.copy_from_slice(&u64::MAX.to_le_bytes());
+        record_e2e_latency(&Bytes::from(future));
+
+        install_bench_config(false);
+        let disabled_payload = vec![1, 2, 3];
+        let disabled = Bytes::from_static(b"disabled");
+        assert_eq!(
+            maybe_append_publish_ts(disabled_payload.clone()),
+            disabled_payload
+        );
+        assert_eq!(
+            maybe_append_publish_ts_batch(vec![disabled_payload.clone()]),
+            vec![disabled_payload]
+        );
+        record_e2e_latency(&disabled);
     }
 }
