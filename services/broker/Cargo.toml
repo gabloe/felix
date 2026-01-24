@@ -40,3 +40,5 @@ serial_test = "3"
 [features]
 default = []
 telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
+
+[lints.rust]

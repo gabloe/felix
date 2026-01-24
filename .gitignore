@@ -21,3 +21,4 @@ Thumbs.db
 data/raw/stdout/
 data/raw/latencydemo_runs.jsonl
 coverage.json
+lcov.info

@@ -12,7 +12,7 @@ tasks:
   test:
     cmds: ["cargo test --workspace"]
   coverage:
-    cmds: ["cargo llvm-cov"]
+    cmds: ["cargo llvm-cov --ignore-filename-regex 'services/broker/src/bin/.*demo.*' --skip-functions --all-features --workspace"]
   build:
     cmds: ["cargo build --workspace"]
   clean:

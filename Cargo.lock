@@ -489,6 +489,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_yaml",
+ "serial_test",
  "tokio",
 ]
 

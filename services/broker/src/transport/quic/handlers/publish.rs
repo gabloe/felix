@@ -244,6 +244,233 @@ pub(crate) fn reset_local_depth_only(
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+    use tokio::sync::{mpsc, watch};
+
+    fn reset_global_ack_depth() {
+        GLOBAL_ACK_DEPTH.store(0, Ordering::Relaxed);
+    }
+
+    fn make_publish_context(
+        buffer: usize,
+    ) -> (
+        PublishContext,
+        mpsc::Receiver<PublishJob>,
+        mpsc::Sender<PublishJob>,
+    ) {
+        let (tx, rx) = mpsc::channel(buffer);
+        let context = PublishContext {
+            workers: Arc::new(vec![tx.clone()]),
+            worker_count: 1,
+            depth: Arc::new(AtomicUsize::new(0)),
+            wait_timeout: Duration::from_millis(100),
+        };
+        (context, rx, tx)
+    }
+
+    fn make_job() -> PublishJob {
+        PublishJob {
+            tenant_id: "tenant".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream".to_string(),
+            payloads: vec![Bytes::from_static(b"payload")],
+            response: None,
+        }
+    }
+
+    #[test]
+    fn publish_worker_index_is_deterministic() {
+        let first = publish_worker_index("tenant", "ns", "stream", 3);
+        let second = publish_worker_index("tenant", "ns", "stream", 3);
+        assert_eq!(first, second);
+        assert!(first < 3);
+    }
+
+    #[test]
+    fn ack_timeout_state_tracks_and_resets() {
+        let start = Instant::now();
+        let mut state = AckTimeoutState::new(start);
+        assert_eq!(state.register_timeout(start), 1);
+        assert_eq!(state.register_timeout(start + Duration::from_millis(10)), 2);
+        let later = start + ACK_TIMEOUT_WINDOW + Duration::from_millis(1);
+        assert_eq!(state.register_timeout(later), 1);
+        let reset_at = later + Duration::from_secs(1);
+        state.reset(reset_at);
+        assert_eq!(state.register_timeout(reset_at), 1);
+    }
+
+    #[test]
+    fn decrement_depth_returns_none_when_empty() {
+        let depth = Arc::new(AtomicUsize::new(0));
+        let global = AtomicUsize::new(0);
+        assert!(decrement_depth(&depth, &global, "test").is_none());
+    }
+
+    #[test]
+    fn decrement_depth_decreases_both_counters() {
+        let depth = Arc::new(AtomicUsize::new(2));
+        let global = AtomicUsize::new(3);
+        let result = decrement_depth(&depth, &global, "test");
+        assert!(result.is_some());
+        let (prev, cur) = result.unwrap();
+        assert_eq!(prev, 2);
+        assert_eq!(cur, 1);
+        assert_eq!(depth.load(Ordering::Relaxed), 1);
+        assert_eq!(global.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn reset_local_depth_only_conciles_global_counter() {
+        let depth = Arc::new(AtomicUsize::new(4));
+        let global = AtomicUsize::new(10);
+        reset_local_depth_only(&depth, &global, "test");
+        assert_eq!(depth.load(Ordering::Relaxed), 0);
+        assert_eq!(global.load(Ordering::Relaxed), 6);
+    }
+
+    #[tokio::test]
+    async fn enqueue_publish_drop_returns_false_when_full() {
+        let (ctx, _rx, tx) = make_publish_context(1);
+        tx.try_send(make_job()).unwrap();
+        let job = make_job();
+        let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop)
+            .await
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn enqueue_publish_fail_returns_error_when_full() {
+        let (ctx, _rx, tx) = make_publish_context(1);
+        tx.try_send(make_job()).unwrap();
+        let job = make_job();
+        let err = enqueue_publish(&ctx, job, EnqueuePolicy::Fail)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("publish queue full"));
+    }
+
+    #[tokio::test]
+    async fn enqueue_publish_wait_enqueues_when_receiver_ready() {
+        let (ctx, mut rx, tx) = make_publish_context(1);
+        tx.try_send(make_job()).unwrap();
+        let handle = tokio::spawn(async move {
+            let _ = rx.recv().await;
+            let _ = rx.recv().await;
+        });
+        let job = make_job();
+        let result = enqueue_publish(&ctx, job, EnqueuePolicy::Wait)
+            .await
+            .unwrap();
+        assert!(result);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_outgoing_critical_increments_depth() {
+        reset_global_ack_depth();
+        let depth = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::channel(1);
+        let (throttle_tx, throttle_rx) = watch::channel(false);
+        let handle = tokio::spawn(async move {
+            let _ = rx.recv().await;
+        });
+        let result = send_outgoing_critical(
+            &tx,
+            &depth,
+            "test",
+            &throttle_tx,
+            Outgoing::Message(Message::Error {
+                message: "e".to_string(),
+            }),
+        )
+        .await;
+        handle.await.unwrap();
+        assert!(result.is_ok());
+        assert_eq!(depth.load(Ordering::Relaxed), 1);
+        assert_eq!(GLOBAL_ACK_DEPTH.load(Ordering::Relaxed), 1);
+        assert!(!*throttle_rx.borrow());
+    }
+
+    #[tokio::test]
+    async fn send_outgoing_best_effort_reports_full() {
+        reset_global_ack_depth();
+        let depth = Arc::new(AtomicUsize::new(0));
+        let (tx, _rx) = mpsc::channel(1);
+        let (throttle_tx, _throttle_rx) = watch::channel(false);
+        let _ = tx
+            .send(Outgoing::Message(Message::Error {
+                message: "f".to_string(),
+            }))
+            .await;
+        let err = send_outgoing_best_effort(
+            &tx,
+            &depth,
+            "test",
+            &throttle_tx,
+            Outgoing::Message(Message::Error {
+                message: "overflow".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AckEnqueueError::Full));
+    }
+
+    #[tokio::test]
+    async fn handle_ack_enqueue_timeout_threshold_triggers_cancel() {
+        let state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+        let (throttle_tx, throttle_rx) = watch::channel(false);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        for _ in 0..(ACK_TIMEOUT_THRESHOLD - 1) {
+            assert!(
+                handle_ack_enqueue_result(
+                    Err(AckEnqueueError::Timeout),
+                    &state,
+                    &throttle_tx,
+                    &cancel_tx
+                )
+                .await
+                .is_ok()
+            );
+        }
+        let result = handle_ack_enqueue_result(
+            Err(AckEnqueueError::Timeout),
+            &state,
+            &throttle_tx,
+            &cancel_tx,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(*throttle_rx.borrow());
+        assert!(*cancel_rx.borrow());
+    }
+
+    #[tokio::test]
+    async fn handle_ack_enqueue_closed_shutdowns_stream() {
+        let state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+        let (throttle_tx, throttle_rx) = watch::channel(false);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let result = handle_ack_enqueue_result(
+            Err(AckEnqueueError::Closed),
+            &state,
+            &throttle_tx,
+            &cancel_tx,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!*throttle_rx.borrow());
+        assert!(*cancel_rx.borrow());
+    }
+}
+
 pub(crate) async fn send_outgoing_critical(
     tx: &mpsc::Sender<Outgoing>,
     depth: &Arc<AtomicUsize>,
