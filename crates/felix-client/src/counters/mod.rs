@@ -27,11 +27,6 @@ pub(crate) struct FrameCounters {
     pub(crate) text_encode_reallocs: AtomicU64,
 }
 
-#[cfg(not(feature = "telemetry"))]
-#[allow(dead_code)]
-#[derive(Default)]
-pub(crate) struct FrameCounters;
-
 #[derive(Debug, Clone)]
 pub struct FrameCountersSnapshot {
     pub frames_in_ok: u64,

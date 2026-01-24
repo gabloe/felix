@@ -148,11 +148,6 @@ pub(crate) struct FrameCounters {
     pub(crate) sub_batches_out_ok: AtomicU64,
 }
 
-#[cfg(not(feature = "telemetry"))]
-#[allow(dead_code)]
-#[derive(Default)]
-struct FrameCounters;
-
 #[derive(Debug, Clone)]
 pub struct FrameCountersSnapshot {
     pub frames_in_ok: u64,

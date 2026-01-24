@@ -5,6 +5,7 @@ use felix_wire::Message;
 use quinn::RecvStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "telemetry")]
 use std::time::Instant;
 
 #[cfg(feature = "telemetry")]
@@ -18,7 +19,7 @@ pub struct Subscription {
     pub(crate) frame_scratch: BytesMut,
     pub(crate) current_batch: Option<Vec<Bytes>>,
     pub(crate) current_index: usize,
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    #[cfg(feature = "telemetry")]
     pub(crate) last_poll: Option<Instant>,
     pub(crate) tenant_id: Arc<str>,
     pub(crate) namespace: Arc<str>,

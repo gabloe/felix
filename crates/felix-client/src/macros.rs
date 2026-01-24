@@ -54,7 +54,6 @@ macro_rules! t_gauge {
 }
 
 #[cfg(not(feature = "telemetry"))]
-#[allow(dead_code)]
 #[derive(Copy, Clone)]
 pub(crate) struct NoopCounter;
 
@@ -64,18 +63,17 @@ impl NoopCounter {
 }
 
 #[cfg(not(feature = "telemetry"))]
-#[allow(dead_code)]
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub(crate) struct NoopHistogram;
 
 #[cfg(not(feature = "telemetry"))]
+#[allow(dead_code)]
 impl NoopHistogram {
-    #[allow(dead_code)]
     pub(crate) fn record(&self, _value: f64) {}
 }
 
 #[cfg(not(feature = "telemetry"))]
-#[allow(dead_code)]
 #[derive(Copy, Clone)]
 pub(crate) struct NoopGauge;
 

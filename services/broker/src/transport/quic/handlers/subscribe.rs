@@ -15,7 +15,9 @@ use crate::timings;
 use super::publish::{Outgoing, send_outgoing_critical};
 use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::{write_frame, write_frame_bytes, write_message};
-use crate::transport::quic::telemetry::{t_instant_now, t_now_if, t_should_sample};
+#[cfg(feature = "telemetry")]
+use crate::transport::quic::telemetry::t_instant_now;
+use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_subscribe_message(
@@ -121,6 +123,7 @@ pub(crate) async fn handle_subscribe_message(
             match receiver.recv().await {
                 Ok(payload) => match event_tx.try_send(EventEnvelope {
                     payload,
+                    #[cfg(feature = "telemetry")]
                     enqueue_at: t_instant_now(),
                 }) {
                     Ok(()) => {}
@@ -188,7 +191,7 @@ pub(crate) struct EventWriterConfig {
 
 pub(crate) struct EventEnvelope {
     payload: Bytes,
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    #[cfg(feature = "telemetry")]
     enqueue_at: crate::transport::quic::telemetry::TelemetryInstant,
 }
 

@@ -70,7 +70,7 @@ pub struct ClientConfig {
 pub(crate) struct ClientRuntimeConfig {
     pub(crate) event_router_max_pending: usize,
     pub(crate) max_frame_bytes: usize,
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    #[cfg(feature = "telemetry")]
     pub(crate) bench_embed_ts: bool,
 }
 
@@ -199,6 +199,7 @@ impl ClientConfig {
         let _ = CLIENT_RUNTIME_CONFIG.set(ClientRuntimeConfig {
             event_router_max_pending: self.event_router_max_pending,
             max_frame_bytes: self.max_frame_bytes,
+            #[cfg(feature = "telemetry")]
             bench_embed_ts: self.bench_embed_ts,
         });
     }
@@ -299,6 +300,7 @@ pub(crate) fn runtime_config() -> &'static ClientRuntimeConfig {
     CLIENT_RUNTIME_CONFIG.get_or_init(|| ClientRuntimeConfig {
         event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
         max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+        #[cfg(feature = "telemetry")]
         bench_embed_ts: false,
     })
 }

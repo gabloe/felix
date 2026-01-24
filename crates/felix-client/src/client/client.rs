@@ -256,6 +256,7 @@ impl Client {
             frame_scratch: BytesMut::with_capacity(64 * 1024),
             current_batch: None,
             current_index: 0,
+            #[cfg(feature = "telemetry")]
             last_poll: None,
             tenant_id,
             namespace,

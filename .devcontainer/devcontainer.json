@@ -6,17 +6,21 @@
 	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
-	// "mounts": [
-	// 	{
-	// 		"source": "devcontainer-cargo-cache-${devcontainerId}",
-	// 		"target": "/usr/local/cargo",
-	// 		"type": "volume"
-	// 	}
-	// ]
+	"mounts": [
+		{
+	 		"source": "devcontainer-cargo-cache-${devcontainerId}",
+	 		"target": "/usr/local/cargo",
+	 		"type": "volume"
+	 	}
+	 ],
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		"ghcr.io/audacioustux/devcontainers/taskfile:1": {}
+	},
+
+	"containerEnv": {
+		"CARGO_TARGET_DIR": "/tmp/cargo-target"
 	},
 
 	// Note: Docker Desktop blocks setting kernel.perf_event_paranoid via --sysctl; adjust on the host if needed for perf.
