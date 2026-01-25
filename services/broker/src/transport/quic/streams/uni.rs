@@ -1,3 +1,4 @@
+// Uni-directional publish stream loop: receives publish-only traffic from clients.
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use felix_broker::Broker;
@@ -16,6 +17,7 @@ use crate::transport::quic::telemetry::t_counter;
 
 use super::frame_source::FrameSource;
 
+// Reads frames and forwards publish events to the broker without sending responses.
 pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
     source: &mut S,
     broker: Arc<Broker>,

@@ -1,3 +1,4 @@
+// Control stream handles bidirectional request/response traffic for publish, subscribe, and cache APIs.
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use felix_broker::Broker;
@@ -23,6 +24,7 @@ use crate::transport::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 use super::frame_source::FrameSource;
 
+// Main control-loop: read frames, decode messages, and dispatch to handlers.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     source: &mut S,

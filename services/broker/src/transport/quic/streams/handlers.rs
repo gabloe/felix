@@ -1,3 +1,4 @@
+// High-level stream handlers that wire the control/uni loops together.
 use anyhow::Result;
 use bytes::BytesMut;
 use felix_broker::Broker;
@@ -25,6 +26,7 @@ use super::writer::run_writer_loop;
 #[cfg(test)]
 use super::hooks::test_hooks;
 
+// Entry point for bi-directional control streams.
 pub(crate) async fn handle_stream(
     broker: Arc<Broker>,
     connection: felix_transport::QuicConnection,
@@ -149,6 +151,7 @@ pub(crate) async fn handle_stream(
     result.map(|_| ())
 }
 
+// Entry point for uni-directional publish streams.
 pub(crate) async fn handle_uni_stream(
     broker: Arc<Broker>,
     config: BrokerConfig,

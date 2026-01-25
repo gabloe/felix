@@ -1,3 +1,4 @@
+// Tests cover the control/uni loops, writer/ack waiter branches, and telemetry paths.
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_broker::Broker;

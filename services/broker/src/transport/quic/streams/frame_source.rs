@@ -1,3 +1,4 @@
+// FrameSource abstracts the "next frame" read so control/uni loops can be tested without QUIC sockets.
 use anyhow::Result;
 use bytes::BytesMut;
 use felix_wire::Frame;
@@ -7,6 +8,7 @@ use std::pin::Pin;
 
 use crate::transport::quic::codec::read_frame_limited_into;
 
+// Read one frame from an underlying transport. Returning None signals graceful stream close.
 pub(super) trait FrameSource {
     fn next_frame<'a>(
         &'a mut self,
@@ -15,6 +17,7 @@ pub(super) trait FrameSource {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Frame>>> + Send + 'a>>;
 }
 
+// Production implementation: read frames from a Quinn RecvStream with size limits enforced.
 impl FrameSource for RecvStream {
     fn next_frame<'a>(
         &'a mut self,
@@ -25,6 +28,7 @@ impl FrameSource for RecvStream {
     }
 }
 
+// Test helper: deterministic frame source backed by a queue.
 #[cfg(test)]
 pub(super) struct TestFrameSource {
     pub(super) frames: std::collections::VecDeque<Result<Option<Frame>>>,
@@ -50,6 +54,7 @@ impl FrameSource for TestFrameSource {
     }
 }
 
+// Test helper: returns None after a short delay to exercise timeout/cancel paths.
 #[cfg(test)]
 pub(super) struct DelayFrameSource {
     pub(super) delay: std::time::Duration,

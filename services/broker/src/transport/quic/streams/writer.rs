@@ -1,3 +1,4 @@
+// Writer loop owns the SendStream and serializes all outbound responses.
 use felix_wire::Message;
 use quinn::SendStream;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use super::hooks::{
     write_message_with_hook,
 };
 
+// Drains outgoing responses, updates depth counters, and handles shutdown on error.
 pub(super) async fn run_writer_loop(
     mut send: SendStream,
     mut out_ack_rx: mpsc::Receiver<Outgoing>,

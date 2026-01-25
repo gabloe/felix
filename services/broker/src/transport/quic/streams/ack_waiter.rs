@@ -1,3 +1,4 @@
+// Ack waiter loop decouples publish commit completion from the control stream read loop.
 use felix_wire::Message;
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use crate::transport::quic::handlers::publish::{
 use crate::transport::quic::telemetry::t_histogram;
 use crate::transport::quic::telemetry::{t_consume_instant, t_counter};
 
+// Waits on publish completion futures and emits ack responses in completion order.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_ack_waiter_loop(
     mut ack_waiter_rx: mpsc::Receiver<AckWaiterMessage>,

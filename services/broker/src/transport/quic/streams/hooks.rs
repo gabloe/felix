@@ -1,3 +1,4 @@
+// Test hooks allow forcing specific branches without mutating production logic.
 use anyhow::{Context, Result};
 use felix_wire::{Frame, Message};
 use quinn::SendStream;
@@ -5,6 +6,7 @@ use quinn::SendStream;
 use crate::transport::quic::codec::{write_frame, write_message};
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
 
+// Wrapper allows tests to inject a write failure.
 pub(super) async fn write_message_with_hook(send: &mut SendStream, message: Message) -> Result<()> {
     #[cfg(test)]
     if test_hooks::force_write_message_error() {
@@ -13,6 +15,7 @@ pub(super) async fn write_message_with_hook(send: &mut SendStream, message: Mess
     write_message(send, message).await
 }
 
+// Wrapper allows tests to inject a write failure for raw frames.
 pub(super) async fn write_frame_with_hook(send: &mut SendStream, frame: &Frame) -> Result<()> {
     #[cfg(test)]
     if test_hooks::force_write_frame_error() {
@@ -21,6 +24,7 @@ pub(super) async fn write_frame_with_hook(send: &mut SendStream, frame: &Frame) 
     write_frame(send, frame).await
 }
 
+// Wrapper allows tests to inject an encode failure before writing.
 pub(super) fn encode_cache_message_with_hook(message: Message) -> Result<Frame> {
     #[cfg(test)]
     if test_hooks::force_cache_encode_error() {
@@ -29,6 +33,7 @@ pub(super) fn encode_cache_message_with_hook(message: Message) -> Result<Frame> 
     message.encode().context("encode message")
 }
 
+// Ack throttle resets when queue crosses back under the low watermark (or tests force it).
 pub(super) fn should_reset_throttle(depth_update: Option<(usize, usize)>) -> bool {
     if let Some((prev, cur)) = depth_update
         && prev >= ACK_HI_WATER
@@ -43,6 +48,7 @@ pub(super) fn should_reset_throttle(depth_update: Option<(usize, usize)>) -> boo
     false
 }
 
+// Mutable test toggles for hard-to-reach error/timeout branches.
 #[cfg(test)]
 pub(super) mod test_hooks {
     use std::sync::atomic::{AtomicBool, Ordering};
