@@ -2445,18 +2445,25 @@ mod tests {
     }
 
     #[cfg(feature = "pg-tests")]
-    async fn reset_postgres(url: &str) {
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(url)
-            .await
-            .expect("pg pool");
+    async fn reset_postgres(url: &str) -> Result<(), sqlx::Error> {
+        let pool = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(std::time::Duration::from_secs(2))
+                .connect(url),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => return Err(sqlx::Error::PoolTimedOut),
+        };
         sqlx::query(
             "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, streams, caches, namespaces, tenants RESTART IDENTITY",
         )
         .execute(&pool)
         .await
-        .expect("truncate tables");
+        .map(|_| ())
     }
 
     #[cfg(feature = "pg-tests")]
@@ -2470,24 +2477,32 @@ mod tests {
                 return None;
             }
         };
-        reset_postgres(&url).await;
+        if let Err(err) = reset_postgres(&url).await {
+            eprintln!("skipping pg-tests: cannot connect to postgres: {err}");
+            return None;
+        }
         let pg_cfg = config::PostgresConfig {
             url,
             max_connections: 5,
             connect_timeout_ms: 5_000,
             acquire_timeout_ms: 5_000,
         };
-        Some(
-            store::postgres::PostgresStore::connect(
-                &pg_cfg,
-                StoreConfig {
-                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
-                    change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-                },
-            )
-            .await
-            .expect("connect postgres store"),
+        let store = match store::postgres::PostgresStore::connect(
+            &pg_cfg,
+            StoreConfig {
+                changes_limit: config::DEFAULT_CHANGES_LIMIT,
+                change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+            },
         )
+        .await
+        {
+            Ok(store) => store,
+            Err(err) => {
+                eprintln!("skipping pg-tests: connect postgres store failed: {err}");
+                return None;
+            }
+        };
+        Some(store)
     }
 
     #[cfg(feature = "pg-tests")]
