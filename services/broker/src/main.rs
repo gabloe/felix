@@ -175,11 +175,71 @@ fn build_server_config() -> Result<ServerConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, prev }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var(key).ok();
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(value) => unsafe {
+                    std::env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(self.key);
+                },
+            }
+        }
+    }
 
     // Basic sanity check that TLS config generation succeeds.
     #[test]
     fn build_server_config_smoke() -> Result<()> {
         let _config = build_server_config()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_with_shutdown_starts_and_stops() -> Result<()> {
+        let _g1 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
+        let _g2 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
+        let _g3 = EnvGuard::unset("FELIX_CP_URL");
+        let _g4 = EnvGuard::unset("FELIX_CONTROLPLANE_URL");
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            run_with_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        });
+
+        let _ = shutdown_tx.send(());
+        let result = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("shutdown timeout")?;
+        result?;
         Ok(())
     }
 }
