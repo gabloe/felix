@@ -1,9 +1,34 @@
-// Control plane HTTP API for metadata management.
-// Maintains in-memory registries for tenants, namespaces, streams, and caches, plus
-// change logs that brokers poll to keep their local caches up to date.
+// Felix Control Plane (HTTP)
+// --------------------------
+// This binary is the control-plane metadata service for Felix. It exposes a JSON/HTTP API
+// (Axum) for managing and discovering *configuration metadata* that brokers and clients
+// need in order to operate: tenants, namespaces, streams, and caches.
+//
+// Storage model (2026):
+// - Pluggable `ControlPlaneStore`: in-memory (default) or Postgres when
+//   FELIX_CONTROLPLANE_POSTGRES_URL / DATABASE_URL / storage.backend=postgres is set.
+// - Postgres uses canonical tables + append-only change tables with BIGSERIAL seq to keep
+//   `next_seq` durable and monotonic across restarts; migrations run at startup.
+// - Memory store preserves legacy dev behavior (HashMaps + VecDeque change logs) and resets
+//   on process restart.
+//
+// How brokers consume this API:
+// - Brokers treat the control plane as the *authoritative source* for metadata.
+// - On cold start (or when they fall behind), brokers call the `*/snapshot` endpoints to
+//   fetch the full current set of metadata for each resource type.
+// - During steady state, brokers poll the `*/changes?since=<seq>` endpoints to fetch an
+//   incremental change feed (rolling window) and keep local caches up to date.
+//
+// Change feed semantics:
+// - Per-resource monotonic `seq` cursor; durable in Postgres (BIGSERIAL), process-local in
+//   memory mode.
+// - Change feeds are rolling windows: DB retention (row limit) in Postgres; capped VecDeque
+//   in memory. Brokers that fall behind must resnapshot to catch up.
 mod config;
 mod observability;
+mod store;
 
+use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -12,28 +37,21 @@ use axum::{
     routing::get,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use store::{
+    ControlPlaneStore, StoreConfig, StoreError, memory::InMemoryStore, postgres::PostgresStore,
+};
 use tower_http::trace::TraceLayer;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use utoipa::{OpenApi, ToSchema};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct AppState {
-    // Static identity + feature flags.
     region: Region,
     api_version: String,
     features: FeatureFlags,
-    // In-memory registries and change logs (polled by brokers).
-    tenants: Arc<RwLock<HashMap<String, Tenant>>>,
-    namespaces: Arc<RwLock<HashMap<NamespaceKey, Namespace>>>,
-    tenant_changes: Arc<RwLock<TenantChangeLog>>,
-    namespace_changes: Arc<RwLock<NamespaceChangeLog>>,
-    streams: Arc<RwLock<HashMap<StreamKey, Stream>>>,
-    stream_changes: Arc<RwLock<StreamChangeLog>>,
-    caches: Arc<RwLock<HashMap<CacheKey, Cache>>>,
-    cache_changes: Arc<RwLock<CacheChangeLog>>,
+    store: Arc<dyn ControlPlaneStore + Send + Sync>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -62,19 +80,22 @@ struct Region {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct Tenant {
+pub(crate) struct Tenant {
     tenant_id: String,
     display_name: String,
 }
 
+// Stable identifier for a namespace, used as a HashMap key and as the identity
+// carried in change feed events. This is intentionally separate from `Namespace`
+// so we can use it in maps and logs even when the full object is absent (e.g. deletions).
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
-struct NamespaceKey {
+pub(crate) struct NamespaceKey {
     tenant_id: String,
     namespace: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct Namespace {
+pub(crate) struct Namespace {
     tenant_id: String,
     namespace: String,
     display_name: String,
@@ -104,7 +125,7 @@ struct TenantSnapshotResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct TenantChange {
+pub(crate) struct TenantChange {
     seq: u64,
     op: TenantChangeOp,
     tenant_id: String,
@@ -119,34 +140,9 @@ struct TenantChangesResponse {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 #[serde(rename_all = "camelCase")]
-enum TenantChangeOp {
+pub(crate) enum TenantChangeOp {
     Created,
     Deleted,
-}
-
-#[derive(Debug, Default)]
-struct TenantChangeLog {
-    next_seq: u64,
-    items: VecDeque<TenantChange>,
-}
-
-impl TenantChangeLog {
-    fn record(&mut self, op: TenantChangeOp, tenant_id: String, tenant: Option<Tenant>) -> u64 {
-        // Append and cap the rolling change window.
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.items.push_back(TenantChange {
-            seq,
-            op,
-            tenant_id,
-            tenant,
-        });
-        const MAX_CHANGES: usize = 1024;
-        while self.items.len() > MAX_CHANGES {
-            self.items.pop_front();
-        }
-        seq
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -161,7 +157,7 @@ struct NamespaceSnapshotResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct NamespaceChange {
+pub(crate) struct NamespaceChange {
     seq: u64,
     op: NamespaceChangeOp,
     key: NamespaceKey,
@@ -176,50 +172,33 @@ struct NamespaceChangesResponse {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 #[serde(rename_all = "camelCase")]
-enum NamespaceChangeOp {
+pub(crate) enum NamespaceChangeOp {
     Created,
     Deleted,
 }
 
-#[derive(Debug, Default)]
-struct NamespaceChangeLog {
-    next_seq: u64,
-    items: VecDeque<NamespaceChange>,
-}
-
-impl NamespaceChangeLog {
-    fn record(
-        &mut self,
-        op: NamespaceChangeOp,
-        key: NamespaceKey,
-        namespace: Option<Namespace>,
-    ) -> u64 {
-        // Append and cap the rolling change window.
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.items.push_back(NamespaceChange {
-            seq,
-            op,
-            key,
-            namespace,
-        });
-        const MAX_CHANGES: usize = 1024;
-        while self.items.len() > MAX_CHANGES {
-            self.items.pop_front();
-        }
-        seq
-    }
-}
-
+// Stable identifier for a stream, used as a HashMap key and in change feed events.
+// Keys are fully-qualified by tenant + namespace to avoid ambiguity.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
-struct StreamKey {
+pub(crate) struct StreamKey {
     tenant_id: String,
     namespace: String,
     stream: String,
 }
 
+// Stream metadata describes how brokers should treat a named stream/queue.
+// These fields are *control-plane intent*; the broker/data-plane may enforce
+// constraints and implement behavior based on them.
+//
+// - kind: logical model (stream vs queue vs cache-like stream semantics)
+// - shards: partitioning count (implementation-defined; may map to internal shards)
+// - retention: maximum age/size controls for durable/tiered retention (future)
+// - consistency: read/write consistency expectations (leader/quorum semantics; future)
+// - delivery: delivery guarantee intent (at-most-once vs at-least-once; future)
+// - durable: whether this stream is expected to be persisted durably (future)
+//   (in the current MVP, this mostly advertises intent rather than enforcing storage).
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct Stream {
+pub(crate) struct Stream {
     tenant_id: String,
     namespace: String,
     stream: String,
@@ -231,15 +210,17 @@ struct Stream {
     durable: bool,
 }
 
+// Stable identifier for a cache, used as a HashMap key and in change feed events.
+// Keys are fully-qualified by tenant + namespace to avoid ambiguity.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
+pub(crate) struct CacheKey {
     tenant_id: String,
     namespace: String,
     cache: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct Cache {
+pub(crate) struct Cache {
     tenant_id: String,
     namespace: String,
     cache: String,
@@ -247,13 +228,13 @@ struct Cache {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct CacheCreateRequest {
+pub(crate) struct CacheCreateRequest {
     cache: String,
     display_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct CachePatchRequest {
+pub(crate) struct CachePatchRequest {
     display_name: Option<String>,
 }
 
@@ -269,7 +250,7 @@ struct CacheSnapshotResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct CacheChange {
+pub(crate) struct CacheChange {
     seq: u64,
     op: CacheChangeOp,
     key: CacheKey,
@@ -284,35 +265,10 @@ struct CacheChangesResponse {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 #[serde(rename_all = "camelCase")]
-enum CacheChangeOp {
+pub(crate) enum CacheChangeOp {
     Created,
     Updated,
     Deleted,
-}
-
-#[derive(Debug, Default)]
-struct CacheChangeLog {
-    next_seq: u64,
-    items: VecDeque<CacheChange>,
-}
-
-impl CacheChangeLog {
-    fn record(&mut self, op: CacheChangeOp, key: CacheKey, cache: Option<Cache>) -> u64 {
-        // Append and cap the rolling change window.
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.items.push_back(CacheChange {
-            seq,
-            op,
-            key,
-            cache,
-        });
-        const MAX_CHANGES: usize = 1024;
-        while self.items.len() > MAX_CHANGES {
-            self.items.pop_front();
-        }
-        seq
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -338,7 +294,7 @@ struct StreamSnapshotResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct StreamChange {
+pub(crate) struct StreamChange {
     seq: u64,
     op: StreamChangeOp,
     key: StreamKey,
@@ -353,66 +309,41 @@ struct StreamChangesResponse {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 #[serde(rename_all = "camelCase")]
-enum StreamChangeOp {
+pub(crate) enum StreamChangeOp {
     Created,
     Updated,
     Deleted,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct StreamPatchRequest {
+pub(crate) struct StreamPatchRequest {
     retention: Option<RetentionPolicy>,
     consistency: Option<ConsistencyLevel>,
     delivery: Option<DeliveryGuarantee>,
     durable: Option<bool>,
 }
 
-#[derive(Debug, Default)]
-struct StreamChangeLog {
-    next_seq: u64,
-    items: VecDeque<StreamChange>,
-}
-
-impl StreamChangeLog {
-    fn record(&mut self, op: StreamChangeOp, key: StreamKey, stream: Option<Stream>) -> u64 {
-        // Append and cap the rolling change window.
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.items.push_back(StreamChange {
-            seq,
-            op,
-            key,
-            stream,
-        });
-        const MAX_CHANGES: usize = 1024;
-        while self.items.len() > MAX_CHANGES {
-            self.items.pop_front();
-        }
-        seq
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-struct RetentionPolicy {
+pub(crate) struct RetentionPolicy {
     max_age_seconds: Option<u64>,
     max_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-enum StreamKind {
+pub(crate) enum StreamKind {
     Stream,
     Queue,
     Cache,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-enum ConsistencyLevel {
+pub(crate) enum ConsistencyLevel {
     Leader,
     Quorum,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-enum DeliveryGuarantee {
+pub(crate) enum DeliveryGuarantee {
     AtMostOnce,
     AtLeastOnce,
 }
@@ -441,6 +372,42 @@ impl IntoResponse for ApiError {
     }
 }
 
+fn api_not_found(message: &str) -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_FOUND,
+        body: ErrorResponse {
+            code: "not_found".to_string(),
+            message: message.to_string(),
+            request_id: None,
+        },
+    }
+}
+
+fn api_conflict(code: &str, message: &str) -> ApiError {
+    ApiError {
+        status: StatusCode::CONFLICT,
+        body: ErrorResponse {
+            code: code.to_string(),
+            message: message.to_string(),
+            request_id: None,
+        },
+    }
+}
+
+fn api_internal(message: &str, err: &StoreError) -> ApiError {
+    tracing::error!(error = ?err, "controlplane storage error");
+    ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: ErrorResponse {
+            code: "internal".to_string(),
+            message: message.to_string(),
+            request_id: None,
+        },
+    }
+}
+
+// Cluster identity + capability discovery. Brokers/clients can use this to
+// learn region identity, API versioning, and feature flags.
 #[utoipa::path(
     get,
     path = "/v1/system/info",
@@ -457,6 +424,8 @@ async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
     })
 }
 
+// Basic liveness endpoint. Does not currently validate backend dependencies
+// because the MVP backend is purely in-memory.
 #[utoipa::path(
     get,
     path = "/v1/system/health",
@@ -465,12 +434,17 @@ async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
         (status = 200, description = "Control plane health", body = HealthStatus)
     )
 )]
-async fn system_health() -> Json<HealthStatus> {
-    Json(HealthStatus {
+async fn system_health(State(state): State<AppState>) -> Result<Json<HealthStatus>, ApiError> {
+    if let Err(err) = state.store.health_check().await {
+        return Err(api_internal("storage unavailable", &err));
+    }
+    Ok(Json(HealthStatus {
         status: "ok".to_string(),
-    })
+    }))
 }
 
+// Region listing for discovery. MVP is single-region and returns exactly one
+// region entry; multi-region control plane would expand this.
 #[utoipa::path(
     get,
     path = "/v1/regions",
@@ -485,6 +459,7 @@ async fn list_regions(State(state): State<AppState>) -> Json<ListRegionsResponse
     })
 }
 
+// Fetch a single region by id. In MVP, only the locally configured region exists.
 #[utoipa::path(
     get,
     path = "/v1/regions/{region_id}",
@@ -532,12 +507,11 @@ async fn list_streams(
     State(state): State<AppState>,
 ) -> Result<Json<StreamListResponse>, ApiError> {
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let guard = state.streams.read().await;
-    let items = guard
-        .values()
-        .filter(|stream| stream.tenant_id == tenant_id && stream.namespace == namespace)
-        .cloned()
-        .collect();
+    let items = state
+        .store
+        .list_streams(&tenant_id, &namespace)
+        .await
+        .map_err(|err| api_internal("failed to list streams", &err))?;
     Ok(Json(StreamListResponse { items }))
 }
 
@@ -559,12 +533,11 @@ async fn list_caches(
     State(state): State<AppState>,
 ) -> Result<Json<CacheListResponse>, ApiError> {
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let guard = state.caches.read().await;
-    let items = guard
-        .values()
-        .filter(|cache| cache.tenant_id == tenant_id && cache.namespace == namespace)
-        .cloned()
-        .collect();
+    let items = state
+        .store
+        .list_caches(&tenant_id, &namespace)
+        .await
+        .map_err(|err| api_internal("failed to list caches", &err))?;
     Ok(Json(CacheListResponse { items }))
 }
 
@@ -576,13 +549,17 @@ async fn list_caches(
         (status = 200, description = "List tenants", body = TenantListResponse)
     )
 )]
-async fn list_tenants(State(state): State<AppState>) -> Json<TenantListResponse> {
-    let guard = state.tenants.read().await;
-    Json(TenantListResponse {
-        items: guard.values().cloned().collect(),
-    })
+async fn list_tenants(State(state): State<AppState>) -> Result<Json<TenantListResponse>, ApiError> {
+    let items = state
+        .store
+        .list_tenants()
+        .await
+        .map_err(|err| api_internal("failed to list tenants", &err))?;
+    Ok(Json(TenantListResponse { items }))
 }
 
+// Create a tenant. This establishes the top-level scope for all other resources.
+// Emits a change log entry so brokers can refresh their local caches.
 #[utoipa::path(
     post,
     path = "/v1/tenants",
@@ -597,31 +574,21 @@ async fn create_tenant(
     State(state): State<AppState>,
     Json(body): Json<TenantCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Create a tenant and emit a change for broker cache refresh.
-    let mut guard = state.tenants.write().await;
-    if guard.contains_key(&body.tenant_id) {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            body: ErrorResponse {
-                code: "already_exists".to_string(),
-                message: "tenant already exists".to_string(),
-                request_id: None,
-            },
-        });
-    }
     let tenant = Tenant {
         tenant_id: body.tenant_id,
         display_name: body.display_name,
     };
-    guard.insert(tenant.tenant_id.clone(), tenant.clone());
-    state.tenant_changes.write().await.record(
-        TenantChangeOp::Created,
-        tenant.tenant_id.clone(),
-        Some(tenant.clone()),
-    );
-    Ok((StatusCode::CREATED, Json(tenant)))
+    match state.store.create_tenant(tenant.clone()).await {
+        Ok(_) => Ok((StatusCode::CREATED, Json(tenant))),
+        Err(StoreError::Conflict(_)) => {
+            Err(api_conflict("already_exists", "tenant already exists"))
+        }
+        Err(err) => Err(api_internal("failed to create tenant", &err)),
+    }
 }
 
+// Delete a tenant and cascade-delete all nested namespaces, streams, and caches.
+// Emits change events for each removed object type so brokers converge correctly.
 #[utoipa::path(
     delete,
     path = "/v1/tenants/{tenant_id}",
@@ -638,78 +605,16 @@ async fn delete_tenant(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    // Delete tenant plus all nested namespaces, streams, and caches.
-    let mut tenants = state.tenants.write().await;
-    if tenants.remove(&tenant_id).is_none() {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "tenant not found".to_string(),
-                request_id: None,
-            },
-        });
+    match state.store.delete_tenant(&tenant_id).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("tenant not found")),
+        Err(err) => Err(api_internal("failed to delete tenant", &err)),
     }
-    drop(tenants);
-
-    let mut namespaces = state.namespaces.write().await;
-    let namespace_keys = namespaces
-        .keys()
-        .filter(|key| key.tenant_id == tenant_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in &namespace_keys {
-        if let Some(namespace) = namespaces.remove(key) {
-            state.namespace_changes.write().await.record(
-                NamespaceChangeOp::Deleted,
-                key.clone(),
-                Some(namespace),
-            );
-        }
-    }
-    drop(namespaces);
-
-    let mut streams = state.streams.write().await;
-    let stream_keys = streams
-        .keys()
-        .filter(|key| key.tenant_id == tenant_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in &stream_keys {
-        if let Some(stream) = streams.remove(key) {
-            state.stream_changes.write().await.record(
-                StreamChangeOp::Deleted,
-                key.clone(),
-                Some(stream),
-            );
-        }
-    }
-    metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-
-    let mut caches = state.caches.write().await;
-    let cache_keys = caches
-        .keys()
-        .filter(|key| key.tenant_id == tenant_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in &cache_keys {
-        if let Some(cache) = caches.remove(key) {
-            state.cache_changes.write().await.record(
-                CacheChangeOp::Deleted,
-                key.clone(),
-                Some(cache),
-            );
-        }
-    }
-    metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-    state
-        .tenant_changes
-        .write()
-        .await
-        .record(TenantChangeOp::Deleted, tenant_id, None);
-    Ok(StatusCode::NO_CONTENT)
 }
 
+// Full snapshot endpoint for cold start / resync.
+// The snapshot is authoritative current state, and `next_seq` indicates where a
+// consumer should start polling incremental changes.
 #[utoipa::path(
     get,
     path = "/v1/tenants/snapshot",
@@ -718,14 +623,24 @@ async fn delete_tenant(
         (status = 200, description = "Full tenant snapshot", body = TenantSnapshotResponse)
     )
 )]
-async fn tenant_snapshot(State(state): State<AppState>) -> Json<TenantSnapshotResponse> {
-    // Full snapshot used by brokers on cold start.
-    let guard = state.tenants.read().await;
-    let items = guard.values().cloned().collect::<Vec<_>>();
-    let next_seq = state.tenant_changes.read().await.next_seq;
-    Json(TenantSnapshotResponse { items, next_seq })
+async fn tenant_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<TenantSnapshotResponse>, ApiError> {
+    let snapshot = state
+        .store
+        .tenant_snapshot()
+        .await
+        .map_err(|err| api_internal("failed to load tenant snapshot", &err))?;
+    Ok(Json(TenantSnapshotResponse {
+        items: snapshot.items,
+        next_seq: snapshot.next_seq,
+    }))
 }
 
+// Incremental change feed for steady-state polling.
+// Clients pass `since=<last_seen_seq>` and receive all changes with seq >= since,
+// along with `next_seq` which should be stored as the new cursor.
+// If the consumer falls behind beyond the rolling window, it must resync via snapshot.
 #[utoipa::path(
     get,
     path = "/v1/tenants/changes",
@@ -740,23 +655,21 @@ async fn tenant_snapshot(State(state): State<AppState>) -> Json<TenantSnapshotRe
 async fn tenant_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
-) -> Json<TenantChangesResponse> {
+) -> Result<Json<TenantChangesResponse>, ApiError> {
     // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
-    let guard = state.tenant_changes.read().await;
-    let items = guard
-        .items
-        .iter()
-        .filter(|item| item.seq >= since)
-        .cloned()
-        .collect();
-    Json(TenantChangesResponse {
-        items,
-        next_seq: guard.next_seq,
-    })
+    let changes = state
+        .store
+        .tenant_changes(since)
+        .await
+        .map_err(|err| api_internal("failed to load tenant changes", &err))?;
+    Ok(Json(TenantChangesResponse {
+        items: changes.items,
+        next_seq: changes.next_seq,
+    }))
 }
 
 #[utoipa::path(
@@ -776,16 +689,16 @@ async fn list_namespaces(
     State(state): State<AppState>,
 ) -> Result<Json<NamespaceListResponse>, ApiError> {
     ensure_tenant_exists(&state, &tenant_id).await?;
-    let guard = state.namespaces.read().await;
-    Ok(Json(NamespaceListResponse {
-        items: guard
-            .values()
-            .filter(|namespace| namespace.tenant_id == tenant_id)
-            .cloned()
-            .collect(),
-    }))
+    let items = state
+        .store
+        .list_namespaces(&tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to list namespaces", &err))?;
+    Ok(Json(NamespaceListResponse { items }))
 }
 
+// Create a namespace under an existing tenant. Namespaces are tenant-scoped.
+// Emits a change log entry for broker cache refresh.
 #[utoipa::path(
     post,
     path = "/v1/tenants/{tenant_id}/namespaces",
@@ -807,35 +720,23 @@ async fn create_namespace(
 ) -> Result<impl IntoResponse, ApiError> {
     // Require a valid tenant before allowing namespace creation.
     ensure_tenant_exists(&state, &tenant_id).await?;
-    let key = NamespaceKey {
-        tenant_id: tenant_id.clone(),
-        namespace: body.namespace.clone(),
-    };
-    let mut guard = state.namespaces.write().await;
-    if guard.contains_key(&key) {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            body: ErrorResponse {
-                code: "already_exists".to_string(),
-                message: "namespace already exists".to_string(),
-                request_id: None,
-            },
-        });
-    }
     let namespace = Namespace {
         tenant_id,
         namespace: body.namespace,
         display_name: body.display_name,
     };
-    guard.insert(key.clone(), namespace.clone());
-    state.namespace_changes.write().await.record(
-        NamespaceChangeOp::Created,
-        key,
-        Some(namespace.clone()),
-    );
-    Ok((StatusCode::CREATED, Json(namespace)))
+    match state.store.create_namespace(namespace.clone()).await {
+        Ok(ns) => Ok((StatusCode::CREATED, Json(ns))),
+        Err(StoreError::Conflict(_)) => {
+            Err(api_conflict("already_exists", "namespace already exists"))
+        }
+        Err(StoreError::NotFound(_)) => Err(api_not_found("tenant not found")),
+        Err(err) => Err(api_internal("failed to create namespace", &err)),
+    }
 }
 
+// Delete a namespace and cascade-delete streams/caches within it.
+// Emits change events so brokers can remove or invalidate local metadata.
 #[utoipa::path(
     delete,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}",
@@ -858,61 +759,16 @@ async fn delete_namespace(
         tenant_id: tenant_id.clone(),
         namespace: namespace.clone(),
     };
-    let mut namespaces = state.namespaces.write().await;
-    let removed = namespaces.remove(&key);
-    drop(namespaces);
-    if removed.is_none() {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "namespace not found".to_string(),
-                request_id: None,
-            },
-        });
+    match state.store.delete_namespace(&key).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("namespace not found")),
+        Err(err) => Err(api_internal("failed to delete namespace", &err)),
     }
-    state
-        .namespace_changes
-        .write()
-        .await
-        .record(NamespaceChangeOp::Deleted, key.clone(), None);
-
-    let mut streams = state.streams.write().await;
-    let stream_keys = streams
-        .keys()
-        .filter(|stream_key| stream_key.tenant_id == tenant_id && stream_key.namespace == namespace)
-        .cloned()
-        .collect::<Vec<_>>();
-    for stream_key in &stream_keys {
-        if let Some(stream) = streams.remove(stream_key) {
-            state.stream_changes.write().await.record(
-                StreamChangeOp::Deleted,
-                stream_key.clone(),
-                Some(stream),
-            );
-        }
-    }
-    metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-
-    let mut caches = state.caches.write().await;
-    let cache_keys = caches
-        .keys()
-        .filter(|cache_key| cache_key.tenant_id == tenant_id && cache_key.namespace == namespace)
-        .cloned()
-        .collect::<Vec<_>>();
-    for cache_key in &cache_keys {
-        if let Some(cache) = caches.remove(cache_key) {
-            state.cache_changes.write().await.record(
-                CacheChangeOp::Deleted,
-                cache_key.clone(),
-                Some(cache),
-            );
-        }
-    }
-    metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-    Ok(StatusCode::NO_CONTENT)
 }
 
+// Full snapshot endpoint for cold start / resync.
+// The snapshot is authoritative current state, and `next_seq` indicates where a
+// consumer should start polling incremental changes.
 #[utoipa::path(
     get,
     path = "/v1/namespaces/snapshot",
@@ -921,14 +777,24 @@ async fn delete_namespace(
         (status = 200, description = "Full namespace snapshot", body = NamespaceSnapshotResponse)
     )
 )]
-async fn namespace_snapshot(State(state): State<AppState>) -> Json<NamespaceSnapshotResponse> {
-    // Full snapshot used by brokers on cold start.
-    let guard = state.namespaces.read().await;
-    let items = guard.values().cloned().collect::<Vec<_>>();
-    let next_seq = state.namespace_changes.read().await.next_seq;
-    Json(NamespaceSnapshotResponse { items, next_seq })
+async fn namespace_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<NamespaceSnapshotResponse>, ApiError> {
+    let snapshot = state
+        .store
+        .namespace_snapshot()
+        .await
+        .map_err(|err| api_internal("failed to load namespace snapshot", &err))?;
+    Ok(Json(NamespaceSnapshotResponse {
+        items: snapshot.items,
+        next_seq: snapshot.next_seq,
+    }))
 }
 
+// Incremental change feed for steady-state polling.
+// Clients pass `since=<last_seen_seq>` and receive all changes with seq >= since,
+// along with `next_seq` which should be stored as the new cursor.
+// If the consumer falls behind beyond the rolling window, it must resync via snapshot.
 #[utoipa::path(
     get,
     path = "/v1/namespaces/changes",
@@ -943,25 +809,26 @@ async fn namespace_snapshot(State(state): State<AppState>) -> Json<NamespaceSnap
 async fn namespace_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
-) -> Json<NamespaceChangesResponse> {
+) -> Result<Json<NamespaceChangesResponse>, ApiError> {
     // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
-    let guard = state.namespace_changes.read().await;
-    let items = guard
-        .items
-        .iter()
-        .filter(|item| item.seq >= since)
-        .cloned()
-        .collect();
-    Json(NamespaceChangesResponse {
-        items,
-        next_seq: guard.next_seq,
-    })
+    let changes = state
+        .store
+        .namespace_changes(since)
+        .await
+        .map_err(|err| api_internal("failed to load namespace changes", &err))?;
+    Ok(Json(NamespaceChangesResponse {
+        items: changes.items,
+        next_seq: changes.next_seq,
+    }))
 }
 
+// Full snapshot endpoint for cold start / resync.
+// The snapshot is authoritative current state, and `next_seq` indicates where a
+// consumer should start polling incremental changes.
 #[utoipa::path(
     get,
     path = "/v1/streams/snapshot",
@@ -970,14 +837,24 @@ async fn namespace_changes(
         (status = 200, description = "Full stream snapshot", body = StreamSnapshotResponse)
     )
 )]
-async fn stream_snapshot(State(state): State<AppState>) -> Json<StreamSnapshotResponse> {
-    // Full snapshot used by brokers on cold start.
-    let guard = state.streams.read().await;
-    let items = guard.values().cloned().collect::<Vec<_>>();
-    let next_seq = state.stream_changes.read().await.next_seq;
-    Json(StreamSnapshotResponse { items, next_seq })
+async fn stream_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<StreamSnapshotResponse>, ApiError> {
+    let snapshot = state
+        .store
+        .stream_snapshot()
+        .await
+        .map_err(|err| api_internal("failed to load stream snapshot", &err))?;
+    Ok(Json(StreamSnapshotResponse {
+        items: snapshot.items,
+        next_seq: snapshot.next_seq,
+    }))
 }
 
+// Incremental change feed for steady-state polling.
+// Clients pass `since=<last_seen_seq>` and receive all changes with seq >= since,
+// along with `next_seq` which should be stored as the new cursor.
+// If the consumer falls behind beyond the rolling window, it must resync via snapshot.
 #[utoipa::path(
     get,
     path = "/v1/streams/changes",
@@ -992,25 +869,26 @@ async fn stream_snapshot(State(state): State<AppState>) -> Json<StreamSnapshotRe
 async fn stream_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
-) -> Json<StreamChangesResponse> {
+) -> Result<Json<StreamChangesResponse>, ApiError> {
     // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
-    let guard = state.stream_changes.read().await;
-    let items = guard
-        .items
-        .iter()
-        .filter(|item| item.seq >= since)
-        .cloned()
-        .collect();
-    Json(StreamChangesResponse {
-        items,
-        next_seq: guard.next_seq,
-    })
+    let changes = state
+        .store
+        .stream_changes(since)
+        .await
+        .map_err(|err| api_internal("failed to load stream changes", &err))?;
+    Ok(Json(StreamChangesResponse {
+        items: changes.items,
+        next_seq: changes.next_seq,
+    }))
 }
 
+// Full snapshot endpoint for cold start / resync.
+// The snapshot is authoritative current state, and `next_seq` indicates where a
+// consumer should start polling incremental changes.
 #[utoipa::path(
     get,
     path = "/v1/caches/snapshot",
@@ -1019,14 +897,24 @@ async fn stream_changes(
         (status = 200, description = "Full cache snapshot", body = CacheSnapshotResponse)
     )
 )]
-async fn cache_snapshot(State(state): State<AppState>) -> Json<CacheSnapshotResponse> {
-    // Full snapshot used by brokers on cold start.
-    let guard = state.caches.read().await;
-    let items = guard.values().cloned().collect::<Vec<_>>();
-    let next_seq = state.cache_changes.read().await.next_seq;
-    Json(CacheSnapshotResponse { items, next_seq })
+async fn cache_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<CacheSnapshotResponse>, ApiError> {
+    let snapshot = state
+        .store
+        .cache_snapshot()
+        .await
+        .map_err(|err| api_internal("failed to load cache snapshot", &err))?;
+    Ok(Json(CacheSnapshotResponse {
+        items: snapshot.items,
+        next_seq: snapshot.next_seq,
+    }))
 }
 
+// Incremental change feed for steady-state polling.
+// Clients pass `since=<last_seen_seq>` and receive all changes with seq >= since,
+// along with `next_seq` which should be stored as the new cursor.
+// If the consumer falls behind beyond the rolling window, it must resync via snapshot.
 #[utoipa::path(
     get,
     path = "/v1/caches/changes",
@@ -1041,25 +929,25 @@ async fn cache_snapshot(State(state): State<AppState>) -> Json<CacheSnapshotResp
 async fn cache_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
-) -> Json<CacheChangesResponse> {
+) -> Result<Json<CacheChangesResponse>, ApiError> {
     // Incremental change feed used by brokers between snapshots.
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
-    let guard = state.cache_changes.read().await;
-    let items = guard
-        .items
-        .iter()
-        .filter(|item| item.seq >= since)
-        .cloned()
-        .collect();
-    Json(CacheChangesResponse {
-        items,
-        next_seq: guard.next_seq,
-    })
+    let changes = state
+        .store
+        .cache_changes(since)
+        .await
+        .map_err(|err| api_internal("failed to load cache changes", &err))?;
+    Ok(Json(CacheChangesResponse {
+        items: changes.items,
+        next_seq: changes.next_seq,
+    }))
 }
 
+// Create a stream in a tenant/namespace. Validates tenant+namespace existence.
+// Emits a stream change event; metrics track stream counts and change totals.
 #[utoipa::path(
     post,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams",
@@ -1082,22 +970,6 @@ async fn create_stream(
 ) -> Result<impl IntoResponse, ApiError> {
     // Streams are scoped to tenant + namespace, so validate both first.
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let key = StreamKey {
-        tenant_id: tenant_id.clone(),
-        namespace: namespace.clone(),
-        stream: body.stream.clone(),
-    };
-    let mut guard = state.streams.write().await;
-    if guard.contains_key(&key) {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            body: ErrorResponse {
-                code: "conflict".to_string(),
-                message: "stream already exists".to_string(),
-                request_id: None,
-            },
-        });
-    }
     let stream = Stream {
         tenant_id,
         namespace,
@@ -1109,15 +981,12 @@ async fn create_stream(
         delivery: body.delivery,
         durable: body.durable,
     };
-    guard.insert(key.clone(), stream.clone());
-    state
-        .stream_changes
-        .write()
-        .await
-        .record(StreamChangeOp::Created, key, Some(stream.clone()));
-    metrics::counter!("felix_stream_changes_total", "op" => "created").increment(1);
-    metrics::gauge!("felix_streams_total").set(guard.len() as f64);
-    Ok((StatusCode::CREATED, Json(stream)))
+    match state.store.create_stream(stream.clone()).await {
+        Ok(created) => Ok((StatusCode::CREATED, Json(created))),
+        Err(StoreError::Conflict(_)) => Err(api_conflict("conflict", "stream already exists")),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("namespace not found")),
+        Err(err) => Err(api_internal("failed to create stream", &err)),
+    }
 }
 
 #[utoipa::path(
@@ -1139,22 +1008,20 @@ async fn get_stream(
     State(state): State<AppState>,
 ) -> Result<Json<Stream>, ApiError> {
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let guard = state.streams.read().await;
     let key = StreamKey {
         tenant_id: tenant_id.clone(),
         namespace: namespace.clone(),
         stream,
     };
-    guard.get(&key).cloned().map(Json).ok_or(ApiError {
-        status: StatusCode::NOT_FOUND,
-        body: ErrorResponse {
-            code: "not_found".to_string(),
-            message: "stream not found".to_string(),
-            request_id: None,
-        },
-    })
+    match state.store.get_stream(&key).await {
+        Ok(stream) => Ok(Json(stream)),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("stream not found")),
+        Err(err) => Err(api_internal("failed to fetch stream", &err)),
+    }
 }
 
+// Patch selected stream policy fields (retention/consistency/delivery/durable).
+// This is a read-modify-write update under a write lock and emits an Updated change.
 #[utoipa::path(
     patch,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams/{stream}",
@@ -1181,42 +1048,14 @@ async fn patch_stream(
         namespace: namespace.clone(),
         stream,
     };
-    let mut guard = state.streams.write().await;
-    let stream = guard.get_mut(&key).ok_or(ApiError {
-        status: StatusCode::NOT_FOUND,
-        body: ErrorResponse {
-            code: "not_found".to_string(),
-            message: "stream not found".to_string(),
-            request_id: None,
-        },
-    })?;
-    if let Some(retention) = body.retention {
-        stream.retention = retention;
+    match state.store.patch_stream(&key, body).await {
+        Ok(updated) => Ok(Json(updated)),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("stream not found")),
+        Err(err) => Err(api_internal("failed to update stream", &err)),
     }
-    if let Some(consistency) = body.consistency {
-        stream.consistency = consistency;
-    }
-    if let Some(delivery) = body.delivery {
-        stream.delivery = delivery;
-    }
-    if let Some(durable) = body.durable {
-        stream.durable = durable;
-    }
-    let stream_id = stream.stream.clone();
-    let key = StreamKey {
-        tenant_id: tenant_id.clone(),
-        namespace: namespace.clone(),
-        stream: stream_id,
-    };
-    state
-        .stream_changes
-        .write()
-        .await
-        .record(StreamChangeOp::Updated, key, Some(stream.clone()));
-    metrics::counter!("felix_stream_changes_total", "op" => "updated").increment(1);
-    Ok(Json(stream.clone()))
 }
 
+// Delete a stream and emit a Deleted change so brokers stop serving it.
 #[utoipa::path(
     delete,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams/{stream}",
@@ -1241,27 +1080,14 @@ async fn delete_stream(
         namespace,
         stream,
     };
-    let mut guard = state.streams.write().await;
-    if guard.remove(&key).is_none() {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "stream not found".to_string(),
-                request_id: None,
-            },
-        });
+    match state.store.delete_stream(&key).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("stream not found")),
+        Err(err) => Err(api_internal("failed to delete stream", &err)),
     }
-    state
-        .stream_changes
-        .write()
-        .await
-        .record(StreamChangeOp::Deleted, key, None);
-    metrics::counter!("felix_stream_changes_total", "op" => "deleted").increment(1);
-    metrics::gauge!("felix_streams_total").set(guard.len() as f64);
-    Ok(StatusCode::NO_CONTENT)
 }
 
+// Create a cache in a tenant/namespace. Emits a Created change and updates metrics.
 #[utoipa::path(
     post,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
@@ -1284,37 +1110,18 @@ async fn create_cache(
 ) -> Result<impl IntoResponse, ApiError> {
     // Cache is scoped to tenant + namespace.
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let key = CacheKey {
-        tenant_id: tenant_id.clone(),
-        namespace: namespace.clone(),
-        cache: body.cache.clone(),
-    };
-    let mut guard = state.caches.write().await;
-    if guard.contains_key(&key) {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            body: ErrorResponse {
-                code: "conflict".to_string(),
-                message: "cache already exists".to_string(),
-                request_id: None,
-            },
-        });
-    }
     let cache = Cache {
         tenant_id,
         namespace,
         cache: body.cache,
         display_name: body.display_name,
     };
-    guard.insert(key.clone(), cache.clone());
-    state
-        .cache_changes
-        .write()
-        .await
-        .record(CacheChangeOp::Created, key, Some(cache.clone()));
-    metrics::counter!("felix_cache_changes_total", "op" => "created").increment(1);
-    metrics::gauge!("felix_caches_total").set(guard.len() as f64);
-    Ok((StatusCode::CREATED, Json(cache)))
+    match state.store.create_cache(cache.clone()).await {
+        Ok(created) => Ok((StatusCode::CREATED, Json(created))),
+        Err(StoreError::Conflict(_)) => Err(api_conflict("conflict", "cache already exists")),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("namespace not found")),
+        Err(err) => Err(api_internal("failed to create cache", &err)),
+    }
 }
 
 #[utoipa::path(
@@ -1336,22 +1143,19 @@ async fn get_cache(
     State(state): State<AppState>,
 ) -> Result<Json<Cache>, ApiError> {
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
-    let guard = state.caches.read().await;
     let key = CacheKey {
         tenant_id: tenant_id.clone(),
         namespace: namespace.clone(),
         cache,
     };
-    guard.get(&key).cloned().map(Json).ok_or(ApiError {
-        status: StatusCode::NOT_FOUND,
-        body: ErrorResponse {
-            code: "not_found".to_string(),
-            message: "cache not found".to_string(),
-            request_id: None,
-        },
-    })
+    match state.store.get_cache(&key).await {
+        Ok(cache) => Ok(Json(cache)),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("cache not found")),
+        Err(err) => Err(api_internal("failed to fetch cache", &err)),
+    }
 }
 
+// Patch mutable cache fields (currently display_name only). Emits an Updated change.
 #[utoipa::path(
     patch,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
@@ -1378,27 +1182,14 @@ async fn patch_cache(
         namespace: namespace.clone(),
         cache,
     };
-    let mut guard = state.caches.write().await;
-    let cache = guard.get_mut(&key).ok_or(ApiError {
-        status: StatusCode::NOT_FOUND,
-        body: ErrorResponse {
-            code: "not_found".to_string(),
-            message: "cache not found".to_string(),
-            request_id: None,
-        },
-    })?;
-    if let Some(display_name) = body.display_name {
-        cache.display_name = display_name;
+    match state.store.patch_cache(&key, body).await {
+        Ok(updated) => Ok(Json(updated)),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("cache not found")),
+        Err(err) => Err(api_internal("failed to update cache", &err)),
     }
-    state
-        .cache_changes
-        .write()
-        .await
-        .record(CacheChangeOp::Updated, key, Some(cache.clone()));
-    metrics::counter!("felix_cache_changes_total", "op" => "updated").increment(1);
-    Ok(Json(cache.clone()))
 }
 
+// Delete a cache and emit a Deleted change so brokers remove/invalidate local metadata.
 #[utoipa::path(
     delete,
     path = "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
@@ -1423,25 +1214,11 @@ async fn delete_cache(
         namespace,
         cache,
     };
-    let mut guard = state.caches.write().await;
-    if guard.remove(&key).is_none() {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "cache not found".to_string(),
-                request_id: None,
-            },
-        });
+    match state.store.delete_cache(&key).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(StoreError::NotFound(_)) => Err(api_not_found("cache not found")),
+        Err(err) => Err(api_internal("failed to delete cache", &err)),
     }
-    state
-        .cache_changes
-        .write()
-        .await
-        .record(CacheChangeOp::Deleted, key, None);
-    metrics::counter!("felix_cache_changes_total", "op" => "deleted").increment(1);
-    metrics::gauge!("felix_caches_total").set(guard.len() as f64);
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(OpenApi)]
@@ -1537,12 +1314,45 @@ async fn delete_cache(
 struct ApiDoc;
 
 #[tokio::main]
-async fn main() -> Result<(), std::io::Error> {
+async fn main() -> anyhow::Result<()> {
     let metrics_handle = observability::init_observability("felix-controlplane");
 
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
-    // Initialize in-memory registries for a single-region dev setup.
-    let state = default_state_with_region_id(config.region_id.clone());
+    let store_config = StoreConfig {
+        changes_limit: config.changes_limit,
+        change_retention_max_rows: config.change_retention_max_rows,
+    };
+    let store: Arc<dyn ControlPlaneStore + Send + Sync> = match config.storage {
+        config::StorageBackend::Memory => Arc::new(InMemoryStore::new(store_config)),
+        config::StorageBackend::Postgres => {
+            let pg = config
+                .postgres
+                .as_ref()
+                .context("postgres configuration missing")?;
+            Arc::new(PostgresStore::connect(pg, store_config).await?)
+        }
+    };
+
+    tracing::info!(
+        backend = store.backend_name(),
+        durable = store.is_durable(),
+        "control plane store ready"
+    );
+
+    let state = AppState {
+        region: Region {
+            region_id: config.region_id.clone(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: store.is_durable(),
+            tiered_storage: false,
+            bridges: false,
+        },
+        store,
+    };
+
     tokio::spawn(observability::serve_metrics(
         metrics_handle,
         config.metrics_bind,
@@ -1553,35 +1363,37 @@ async fn main() -> Result<(), std::io::Error> {
     let addr = config.bind_addr;
     tracing::info!(%addr, "control plane listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    // Serve the HTTP API (Axum + OpenAPI docs).
-    axum::serve(listener, app.into_make_service()).await
+    axum::serve(listener, app.into_make_service()).await?;
+    Ok(())
 }
 
+// Constructs the default in-memory state for local development/tests.
+#[cfg(test)]
 fn default_state_with_region_id(region_id: String) -> AppState {
-    // In-memory state for local development; durable metadata comes later.
-    let region = Region {
-        region_id,
-        display_name: "Local Region".to_string(),
-    };
+    let store = InMemoryStore::new(StoreConfig {
+        changes_limit: config::DEFAULT_CHANGES_LIMIT,
+        change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+    });
     AppState {
-        region,
+        region: Region {
+            region_id,
+            display_name: "Local Region".to_string(),
+        },
         api_version: "v1".to_string(),
         features: FeatureFlags {
-            durable_storage: false,
+            durable_storage: store.is_durable(),
             tiered_storage: false,
             bridges: false,
         },
-        tenants: Arc::new(RwLock::new(HashMap::new())),
-        namespaces: Arc::new(RwLock::new(HashMap::new())),
-        tenant_changes: Arc::new(RwLock::new(TenantChangeLog::default())),
-        namespace_changes: Arc::new(RwLock::new(NamespaceChangeLog::default())),
-        streams: Arc::new(RwLock::new(HashMap::new())),
-        stream_changes: Arc::new(RwLock::new(StreamChangeLog::default())),
-        caches: Arc::new(RwLock::new(HashMap::new())),
-        cache_changes: Arc::new(RwLock::new(CacheChangeLog::default())),
+        store: Arc::new(store),
     }
 }
 
+// Builds the Axum router, including:
+// - route wiring for discovery, snapshots, change feeds, and CRUD
+// - Swagger/OpenAPI docs
+// - tracing middleware that extracts parent context from headers (if present)
+// - shared application state injection
 fn build_app(state: AppState) -> Router {
     // API surface: system/regions, change feeds, CRUD for tenants/namespaces/streams/caches.
     let trace_layer =
@@ -1646,40 +1458,38 @@ fn build_app(state: AppState) -> Router {
         .with_state(state)
 }
 
+// Shared guard that ensures both tenant and namespace exist.
+// Centralizing this keeps 404 behavior consistent across endpoints.
 async fn ensure_tenant_namespace(
     state: &AppState,
     tenant_id: &str,
     namespace: &str,
 ) -> Result<(), ApiError> {
-    // Centralized guard so stream routes return consistent 404s.
     ensure_tenant_exists(state, tenant_id).await?;
     let namespace_key = NamespaceKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
     };
-    if !state.namespaces.read().await.contains_key(&namespace_key) {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "namespace not found".to_string(),
-                request_id: None,
-            },
-        });
+    let exists = state
+        .store
+        .namespace_exists(&namespace_key)
+        .await
+        .map_err(|err| api_internal("failed to check namespace existence", &err))?;
+    if !exists {
+        return Err(api_not_found("namespace not found"));
     }
     Ok(())
 }
 
+// Shared guard that ensures a tenant exists, returning a consistent 404 error shape.
 async fn ensure_tenant_exists(state: &AppState, tenant_id: &str) -> Result<(), ApiError> {
-    if !state.tenants.read().await.contains_key(tenant_id) {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            body: ErrorResponse {
-                code: "not_found".to_string(),
-                message: "tenant not found".to_string(),
-                request_id: None,
-            },
-        });
+    let exists = state
+        .store
+        .tenant_exists(tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to check tenant existence", &err))?;
+    if !exists {
+        return Err(api_not_found("tenant not found"));
     }
     Ok(())
 }
@@ -1690,6 +1500,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    #[cfg(feature = "pg-tests")]
+    use sqlx::postgres::PgPoolOptions;
 
     fn json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
         Request::builder()
@@ -1882,5 +1695,200 @@ mod tests {
             .expect("delete");
         let response = app.clone().oneshot(delete).await.expect("delete");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[cfg(feature = "pg-tests")]
+    async fn reset_postgres(url: &str) {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(url)
+            .await
+            .expect("pg pool");
+        sqlx::query(
+            "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, streams, caches, namespaces, tenants RESTART IDENTITY",
+        )
+        .execute(&pool)
+        .await
+        .expect("truncate tables");
+    }
+
+    #[cfg(feature = "pg-tests")]
+    async fn pg_store() -> store::postgres::PostgresStore {
+        let url = std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .expect("set FELIX_CONTROLPLANE_POSTGRES_URL or DATABASE_URL for pg-tests");
+        reset_postgres(&url).await;
+        let pg_cfg = config::PostgresConfig {
+            url,
+            max_connections: 5,
+            connect_timeout_ms: 5_000,
+            acquire_timeout_ms: 5_000,
+        };
+        store::postgres::PostgresStore::connect(
+            &pg_cfg,
+            StoreConfig {
+                changes_limit: config::DEFAULT_CHANGES_LIMIT,
+                change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+            },
+        )
+        .await
+        .expect("connect postgres store")
+    }
+
+    #[cfg(feature = "pg-tests")]
+    #[tokio::test]
+    async fn pg_stream_sequences_monotonic() {
+        let store = pg_store().await;
+
+        store
+            .create_tenant(Tenant {
+                tenant_id: "t1".to_string(),
+                display_name: "Tenant One".to_string(),
+            })
+            .await
+            .expect("tenant");
+        store
+            .create_namespace(Namespace {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                display_name: "Default".to_string(),
+            })
+            .await
+            .expect("namespace");
+
+        let mut stream = Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 1,
+            retention: RetentionPolicy {
+                max_age_seconds: Some(3600),
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtLeastOnce,
+            durable: false,
+        };
+        store
+            .create_stream(stream.clone())
+            .await
+            .expect("create stream");
+
+        stream.retention.max_age_seconds = Some(7200);
+        store
+            .patch_stream(
+                &StreamKey {
+                    tenant_id: "t1".to_string(),
+                    namespace: "default".to_string(),
+                    stream: "orders".to_string(),
+                },
+                StreamPatchRequest {
+                    retention: Some(stream.retention.clone()),
+                    consistency: None,
+                    delivery: None,
+                    durable: None,
+                },
+            )
+            .await
+            .expect("patch stream");
+
+        store
+            .delete_stream(&StreamKey {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                stream: "orders".to_string(),
+            })
+            .await
+            .expect("delete stream");
+
+        let changes = store.stream_changes(0).await.expect("stream changes");
+        let seqs: Vec<u64> = changes.items.iter().map(|c| c.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[1] > w[0]));
+        if let Some(last) = seqs.last() {
+            assert_eq!(changes.next_seq, last + 1);
+        }
+        let snapshot = store.stream_snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.next_seq, changes.next_seq);
+    }
+
+    #[cfg(feature = "pg-tests")]
+    #[tokio::test]
+    async fn pg_delete_namespace_emits_cascades() {
+        let store = pg_store().await;
+
+        store
+            .create_tenant(Tenant {
+                tenant_id: "t1".to_string(),
+                display_name: "Tenant One".to_string(),
+            })
+            .await
+            .expect("tenant");
+        store
+            .create_namespace(Namespace {
+                tenant_id: "t1".to_string(),
+                namespace: "ns1".to_string(),
+                display_name: "NS1".to_string(),
+            })
+            .await
+            .expect("namespace");
+        store
+            .create_stream(Stream {
+                tenant_id: "t1".to_string(),
+                namespace: "ns1".to_string(),
+                stream: "orders".to_string(),
+                kind: StreamKind::Stream,
+                shards: 1,
+                retention: RetentionPolicy {
+                    max_age_seconds: None,
+                    max_size_bytes: None,
+                },
+                consistency: ConsistencyLevel::Leader,
+                delivery: DeliveryGuarantee::AtLeastOnce,
+                durable: false,
+            })
+            .await
+            .expect("stream");
+        store
+            .create_cache(Cache {
+                tenant_id: "t1".to_string(),
+                namespace: "ns1".to_string(),
+                cache: "primary".to_string(),
+                display_name: "Primary".to_string(),
+            })
+            .await
+            .expect("cache");
+
+        store
+            .delete_namespace(&NamespaceKey {
+                tenant_id: "t1".to_string(),
+                namespace: "ns1".to_string(),
+            })
+            .await
+            .expect("delete namespace");
+
+        let stream_changes = store.stream_changes(0).await.expect("stream changes");
+        assert!(
+            stream_changes
+                .items
+                .iter()
+                .any(|c| matches!(c.op, StreamChangeOp::Deleted))
+        );
+
+        let cache_changes = store.cache_changes(0).await.expect("cache changes");
+        assert!(
+            cache_changes
+                .items
+                .iter()
+                .any(|c| matches!(c.op, CacheChangeOp::Deleted))
+        );
+
+        let ns_changes = store.namespace_changes(0).await.expect("ns changes");
+        assert!(
+            ns_changes
+                .items
+                .iter()
+                .any(|c| matches!(c.op, NamespaceChangeOp::Deleted))
+        );
     }
 }
