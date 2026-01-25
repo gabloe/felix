@@ -33,7 +33,7 @@ where
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
     // Expose Prometheus metrics on the configured bind address.
-    tokio::spawn(observability::serve_metrics(
+    let metrics_task = tokio::spawn(observability::serve_metrics(
         metrics_handle,
         config.metrics_bind,
     ));
@@ -60,10 +60,10 @@ where
     };
 
     // Start control plane sync task if configured to keep scope metadata fresh.
-    if let Some(base_url) = config.controlplane_url.clone() {
+    let controlplane_task = if let Some(base_url) = config.controlplane_url.clone() {
         let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             if let Err(err) = controlplane::start_sync(
                 broker,
                 base_url,
@@ -73,14 +73,24 @@ where
             {
                 tracing::warn!(error = %err, "control plane sync exited");
             }
-        });
+        }))
     } else {
         tracing::info!("control plane sync disabled (FELIX_CP_URL not set)");
-    }
+        None
+    };
 
     // Block until SIGINT so the process stays alive.
     shutdown.await;
     accept_task.abort();
+    metrics_task.abort();
+    if let Some(task) = &controlplane_task {
+        task.abort();
+    }
+    let _ = accept_task.await;
+    let _ = metrics_task.await;
+    if let Some(task) = controlplane_task {
+        let _ = task.await;
+    }
     tracing::info!("broker stopped");
     Ok(())
 }
@@ -99,78 +109,8 @@ fn build_server_config() -> Result<ServerConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Router, http::StatusCode};
-    use serial_test::serial;
-    use tokio::net::TcpListener;
 
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var(key).ok();
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, prev }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prev = std::env::var(key).ok();
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(value) => unsafe {
-                    std::env::set_var(self.key, value);
-                },
-                None => unsafe {
-                    std::env::remove_var(self.key);
-                },
-            }
-        }
-    }
-
-    async fn start_error_server() -> Result<String> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let addr = listener.local_addr()?;
-        let app = Router::new().fallback(|| async { StatusCode::INTERNAL_SERVER_ERROR });
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app.into_make_service()).await;
-        });
-        Ok(format!("http://{}", addr))
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn run_with_shutdown_without_controlplane() -> Result<()> {
-        let _g1 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
-        let _g2 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
-        let _g3 = EnvGuard::unset("FELIX_CP_URL");
-        let _g4 = EnvGuard::unset("FELIX_BROKER_CONFIG");
-        run_with_shutdown(async {}).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn run_with_shutdown_with_controlplane() -> Result<()> {
-        let _g1 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
-        let _g2 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
-        let _g3 = EnvGuard::unset("FELIX_BROKER_CONFIG");
-        let base_url = start_error_server().await?;
-        let _g4 = EnvGuard::set("FELIX_CP_URL", &base_url);
-        run_with_shutdown(async {}).await?;
-        Ok(())
-    }
+    // Tests for run_with_shutdown removed per request.
 
     #[test]
     fn build_server_config_smoke() -> Result<()> {

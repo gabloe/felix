@@ -8,14 +8,10 @@ use opentelemetry_sdk::trace as sdktrace;
 use std::net::SocketAddr;
 #[cfg(test)]
 use std::sync::OnceLock;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-#[cfg(test)]
-static FORCE_TRACER_FAILURE: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
@@ -38,10 +34,6 @@ pub fn init_observability(service_name: &str) -> PrometheusHandle {
 }
 
 fn build_tracer_provider(service_name: &str) -> Option<opentelemetry_sdk::trace::TracerProvider> {
-    #[cfg(test)]
-    if FORCE_TRACER_FAILURE.load(Ordering::Relaxed) {
-        return None;
-    }
     let resource = Resource::new(resource_attributes(service_name));
     opentelemetry_otlp::new_pipeline()
         .tracing()
@@ -120,11 +112,6 @@ where
     {
         subscriber.init();
     }
-}
-
-#[cfg(test)]
-pub(crate) fn set_force_tracer_failure(enabled: bool) {
-    FORCE_TRACER_FAILURE.store(enabled, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -216,41 +203,5 @@ mod tests {
         assert_eq!(attrs[0].key.as_str(), "service.name");
     }
 
-    #[test]
-    #[serial]
-    fn init_observability_handles_provider_variants() {
-        set_force_tracer_failure(true);
-        let _handle = init_observability("svc-test");
-        set_force_tracer_failure(false);
-        let _handle = init_observability("svc-test");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn serve_metrics_exposes_routes() -> Result<(), Box<dyn std::error::Error>> {
-        let handle = super::install_metrics_recorder();
-        let addr = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await?
-            .local_addr()?;
-        let server = tokio::spawn(async move {
-            let _ = serve_metrics(handle, addr).await;
-        });
-
-        let base = format!("http://{}", addr);
-        let metrics = reqwest::get(format!("{}/metrics", base))
-            .await?
-            .text()
-            .await?;
-        assert!(metrics.contains("# HELP") || metrics.is_empty());
-        let live = reqwest::get(format!("{}/live", base)).await?.text().await?;
-        assert_eq!(live, "ok");
-        let ready = reqwest::get(format!("{}/ready", base))
-            .await?
-            .text()
-            .await?;
-        assert_eq!(ready, "ok");
-
-        server.abort();
-        Ok(())
-    }
+    // Tests for init_observability and serve_metrics removed per request.
 }

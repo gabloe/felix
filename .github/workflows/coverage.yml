@@ -17,7 +17,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to push to another branch
+      contents: write
     env:
       CARGO_TERM_COLOR: always
 
@@ -30,18 +30,21 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --ignore-filename-regex 'services/broker/src/bin/.*demo.*' --skip-functions
+      - name: Generate code coverage (lcov)
+        run: |
+          set -euxo pipefail
+          cargo llvm-cov \
+            --all-features \
+            --workspace \
+            --lcov \
+            --output-path lcov.info \
+            --ignore-filename-regex 'services/broker/src/bin/.*demo.*' \
+            --skip-functions
 
-      - name: Generate coverage badge
+      - name: Generate coverage badge (coverage.svg)
         uses: ImBIOS/lcov-coverage-badge@v1
         with:
           file: ./lcov.info
-
-      - name: Prepare publish dir
-        run: |
-          mkdir -p publish/.github/badges
-          mv coverage.svg publish/.github/badges/coverage.svg
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -49,7 +52,35 @@ jobs:
           name: lcov-info
           path: lcov.info
 
-      - name: Publish badge to badges branch
+      - name: Prepare publish dir (hard fail if badge missing)
+        run: |
+          set -euxo pipefail
+          mkdir -p publish
+
+          echo "Workspace files:"
+          ls -la
+
+          echo "Searching for coverage.svg:"
+          find . -maxdepth 6 -name 'coverage.svg' -print || true
+
+          # Most common output location:
+          if [ -f ./coverage.svg ]; then
+            cp ./coverage.svg publish/coverage.svg
+          else
+            # Fall back to first match anywhere in repo
+            SVG_PATH="$(find . -maxdepth 6 -name 'coverage.svg' -print -quit || true)"
+            if [ -n "$SVG_PATH" ]; then
+              cp "$SVG_PATH" publish/coverage.svg
+            fi
+          fi
+
+          echo "Publish dir contents:"
+          ls -la publish
+
+          # Fail loudly if we didn't produce a non-empty file
+          test -s publish/coverage.svg
+
+      - name: Publish badge to badges branch (orphan)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -57,5 +88,5 @@ jobs:
           publish_branch: badges
           publish_dir: ./publish
           force_orphan: true
-          exclude_assets: ''              # <-- IMPORTANT: include .github
           commit_message: "chore(ci): update coverage badge"
+          enable_jekyll: false

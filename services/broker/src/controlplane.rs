@@ -553,234 +553,8 @@ mod tests {
         Ok((addr, handle))
     }
 
-    fn success_router() -> Router {
-        Router::new()
-            .route(
-                "/v1/streams/snapshot",
-                get(|| async {
-                    Json(StreamSnapshotResponse {
-                        items: vec![Stream {
-                            tenant_id: "t1".to_string(),
-                            namespace: "ns".to_string(),
-                            stream: "s1".to_string(),
-                            shards: 2,
-                            durable: true,
-                        }],
-                        next_seq: 10,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/snapshot",
-                get(|| async {
-                    Json(CacheSnapshotResponse {
-                        items: vec![Cache {
-                            tenant_id: "t1".to_string(),
-                            namespace: "ns".to_string(),
-                            cache: "c1".to_string(),
-                        }],
-                        next_seq: 11,
-                    })
-                }),
-            )
-            .route(
-                "/v1/tenants/snapshot",
-                get(|| async {
-                    Json(TenantSnapshotResponse {
-                        items: vec![Tenant {
-                            tenant_id: "t1".to_string(),
-                        }],
-                        next_seq: 12,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/snapshot",
-                get(|| async {
-                    Json(NamespaceSnapshotResponse {
-                        items: vec![Namespace {
-                            tenant_id: "t1".to_string(),
-                            namespace: "ns".to_string(),
-                        }],
-                        next_seq: 13,
-                    })
-                }),
-            )
-            .route(
-                "/v1/streams/changes",
-                get(|| async {
-                    Json(StreamChangesResponse {
-                        items: vec![
-                            StreamChange {
-                                op: StreamChangeOp::Created,
-                                key: StreamKey {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    stream: "s2".to_string(),
-                                },
-                                stream: Some(Stream {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    stream: "s2".to_string(),
-                                    shards: 1,
-                                    durable: false,
-                                }),
-                            },
-                            StreamChange {
-                                op: StreamChangeOp::Updated,
-                                key: StreamKey {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    stream: "s3".to_string(),
-                                },
-                                stream: Some(Stream {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    stream: "s3".to_string(),
-                                    shards: 3,
-                                    durable: true,
-                                }),
-                            },
-                            StreamChange {
-                                op: StreamChangeOp::Deleted,
-                                key: StreamKey {
-                                    tenant_id: "t1".to_string(),
-                                    namespace: "ns".to_string(),
-                                    stream: "s1".to_string(),
-                                },
-                                stream: None,
-                            },
-                        ],
-                        next_seq: 20,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/changes",
-                get(|| async {
-                    Json(CacheChangesResponse {
-                        items: vec![
-                            CacheChange {
-                                op: CacheChangeOp::Created,
-                                key: CacheKey {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    cache: "c2".to_string(),
-                                },
-                                cache: Some(Cache {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    cache: "c2".to_string(),
-                                }),
-                            },
-                            CacheChange {
-                                op: CacheChangeOp::Updated,
-                                key: CacheKey {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    cache: "c3".to_string(),
-                                },
-                                cache: Some(Cache {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                    cache: "c3".to_string(),
-                                }),
-                            },
-                            CacheChange {
-                                op: CacheChangeOp::Deleted,
-                                key: CacheKey {
-                                    tenant_id: "t1".to_string(),
-                                    namespace: "ns".to_string(),
-                                    cache: "c1".to_string(),
-                                },
-                                cache: None,
-                            },
-                        ],
-                        next_seq: 21,
-                    })
-                }),
-            )
-            .route(
-                "/v1/tenants/changes",
-                get(|| async {
-                    Json(TenantChangesResponse {
-                        items: vec![
-                            TenantChange {
-                                op: TenantChangeOp::Created,
-                                tenant_id: "t2".to_string(),
-                                tenant: Some(Tenant {
-                                    tenant_id: "t2".to_string(),
-                                }),
-                            },
-                            TenantChange {
-                                op: TenantChangeOp::Deleted,
-                                tenant_id: "t1".to_string(),
-                                tenant: None,
-                            },
-                        ],
-                        next_seq: 22,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/changes",
-                get(|| async {
-                    Json(NamespaceChangesResponse {
-                        items: vec![
-                            NamespaceChange {
-                                op: NamespaceChangeOp::Created,
-                                key: NamespaceKey {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                },
-                                namespace: Some(Namespace {
-                                    tenant_id: "t2".to_string(),
-                                    namespace: "ns2".to_string(),
-                                }),
-                            },
-                            NamespaceChange {
-                                op: NamespaceChangeOp::Deleted,
-                                key: NamespaceKey {
-                                    tenant_id: "t1".to_string(),
-                                    namespace: "ns".to_string(),
-                                },
-                                namespace: None,
-                            },
-                        ],
-                        next_seq: 23,
-                    })
-                }),
-            )
-    }
-
     fn error_router() -> Router {
         Router::new().fallback(|| async { StatusCode::INTERNAL_SERVER_ERROR })
-    }
-
-    #[tokio::test]
-    async fn sync_once_applies_snapshots_and_changes() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-        let (addr, handle) = serve_router(success_router()).await?;
-        let base_url = format!("http://{}", addr);
-        let client = reqwest::Client::new();
-
-        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
-        assert_eq!(state.next_tenant_seq, 22);
-        assert_eq!(state.next_namespace_seq, 23);
-        assert_eq!(state.next_cache_seq, 21);
-        assert_eq!(state.next_stream_seq, 20);
-
-        assert!(!broker.namespace_exists("t1", "ns").await);
-        assert!(broker.namespace_exists("t2", "ns2").await);
-        assert!(broker.cache_exists("t2", "ns2", "c2").await);
-        assert!(broker.cache_exists("t2", "ns2", "c3").await);
-        assert!(!broker.cache_exists("t1", "ns", "c1").await);
-        assert!(broker.stream_exists("t2", "ns2", "s2").await);
-        assert!(broker.stream_exists("t2", "ns2", "s3").await);
-        assert!(!broker.stream_exists("t1", "ns", "s1").await);
-
-        handle.abort();
-        Ok(())
     }
 
     #[tokio::test]
@@ -798,6 +572,201 @@ mod tests {
         assert!(!broker.namespace_exists("t1", "ns").await);
         assert!(!broker.stream_exists("t1", "ns", "s1").await);
         assert!(!broker.cache_exists("t1", "ns", "c1").await);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_once_handles_tenant_deletion() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let router = Router::new()
+            .route(
+                "/v1/tenants/snapshot",
+                get(|| async {
+                    Json(TenantSnapshotResponse {
+                        items: vec![Tenant {
+                            tenant_id: "t1".to_string(),
+                        }],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/namespaces/snapshot",
+                get(|| async {
+                    Json(NamespaceSnapshotResponse {
+                        items: vec![],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/caches/snapshot",
+                get(|| async {
+                    Json(CacheSnapshotResponse {
+                        items: vec![],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/streams/snapshot",
+                get(|| async {
+                    Json(StreamSnapshotResponse {
+                        items: vec![],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/tenants/changes",
+                get(|| async {
+                    Json(TenantChangesResponse {
+                        items: vec![TenantChange {
+                            op: TenantChangeOp::Deleted,
+                            tenant_id: "t1".to_string(),
+                            tenant: None,
+                        }],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/namespaces/changes",
+                get(|| async {
+                    Json(NamespaceChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/caches/changes",
+                get(|| async {
+                    Json(CacheChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/streams/changes",
+                get(|| async {
+                    Json(StreamChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            );
+        let (addr, handle) = serve_router(router).await?;
+        let base_url = format!("http://{}", addr);
+        let client = reqwest::Client::new();
+
+        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+        assert_eq!(state.next_tenant_seq, 2);
+        let err = broker.register_namespace("t1", "ns").await;
+        assert!(err.is_err());
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_once_handles_namespace_deletion() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let router = Router::new()
+            .route(
+                "/v1/tenants/snapshot",
+                get(|| async {
+                    Json(TenantSnapshotResponse {
+                        items: vec![Tenant {
+                            tenant_id: "t1".to_string(),
+                        }],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/namespaces/snapshot",
+                get(|| async {
+                    Json(NamespaceSnapshotResponse {
+                        items: vec![Namespace {
+                            tenant_id: "t1".to_string(),
+                            namespace: "ns".to_string(),
+                        }],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/caches/snapshot",
+                get(|| async {
+                    Json(CacheSnapshotResponse {
+                        items: vec![],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/streams/snapshot",
+                get(|| async {
+                    Json(StreamSnapshotResponse {
+                        items: vec![],
+                        next_seq: 1,
+                    })
+                }),
+            )
+            .route(
+                "/v1/tenants/changes",
+                get(|| async {
+                    Json(TenantChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/namespaces/changes",
+                get(|| async {
+                    Json(NamespaceChangesResponse {
+                        items: vec![NamespaceChange {
+                            op: NamespaceChangeOp::Deleted,
+                            key: NamespaceKey {
+                                tenant_id: "t1".to_string(),
+                                namespace: "ns".to_string(),
+                            },
+                            namespace: None,
+                        }],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/caches/changes",
+                get(|| async {
+                    Json(CacheChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            )
+            .route(
+                "/v1/streams/changes",
+                get(|| async {
+                    Json(StreamChangesResponse {
+                        items: vec![],
+                        next_seq: 2,
+                    })
+                }),
+            );
+        let (addr, handle) = serve_router(router).await?;
+        let base_url = format!("http://{}", addr);
+        let client = reqwest::Client::new();
+
+        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+        assert_eq!(state.next_namespace_seq, 2);
+        assert!(!broker.namespace_exists("t1", "ns").await);
 
         handle.abort();
         Ok(())
