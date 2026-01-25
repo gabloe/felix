@@ -275,9 +275,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn init_observability_succeeds() {
+    async fn init_observability_succeeds() {
         let handle = init_observability("test-service");
         // Should return a valid PrometheusHandle
         let metrics = handle.render();
