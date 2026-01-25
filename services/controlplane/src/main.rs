@@ -1713,10 +1713,16 @@ mod tests {
     }
 
     #[cfg(feature = "pg-tests")]
-    async fn pg_store() -> store::postgres::PostgresStore {
-        let url = std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL")
+    async fn pg_store() -> Option<store::postgres::PostgresStore> {
+        let url = match std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
-            .expect("set FELIX_CONTROLPLANE_POSTGRES_URL or DATABASE_URL for pg-tests");
+        {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("skipping pg-tests: set FELIX_CONTROLPLANE_POSTGRES_URL or DATABASE_URL");
+                return None;
+            }
+        };
         reset_postgres(&url).await;
         let pg_cfg = config::PostgresConfig {
             url,
@@ -1724,21 +1730,25 @@ mod tests {
             connect_timeout_ms: 5_000,
             acquire_timeout_ms: 5_000,
         };
-        store::postgres::PostgresStore::connect(
-            &pg_cfg,
-            StoreConfig {
-                changes_limit: config::DEFAULT_CHANGES_LIMIT,
-                change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-            },
+        Some(
+            store::postgres::PostgresStore::connect(
+                &pg_cfg,
+                StoreConfig {
+                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
+                    change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+                },
+            )
+            .await
+            .expect("connect postgres store"),
         )
-        .await
-        .expect("connect postgres store")
     }
 
     #[cfg(feature = "pg-tests")]
     #[tokio::test]
     async fn pg_stream_sequences_monotonic() {
-        let store = pg_store().await;
+        let Some(store) = pg_store().await else {
+            return;
+        };
 
         store
             .create_tenant(Tenant {
@@ -1815,7 +1825,9 @@ mod tests {
     #[cfg(feature = "pg-tests")]
     #[tokio::test]
     async fn pg_delete_namespace_emits_cascades() {
-        let store = pg_store().await;
+        let Some(store) = pg_store().await else {
+            return;
+        };
 
         store
             .create_tenant(Tenant {
