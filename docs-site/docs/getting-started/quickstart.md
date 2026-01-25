@@ -88,18 +88,20 @@ Here's a minimal example of using the Felix Rust client:
 ### Publish and Subscribe
 
 ```rust
-use felix_client::{ClientConfig, FelixClient};
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Configure client
-    let config = ClientConfig {
-        broker_addr: "127.0.0.1:5000".parse()?,
-        ..Default::default()
-    };
+    let quinn = quinn::ClientConfig::with_platform_verifier();
+    let config = ClientConfig::optimized_defaults(quinn);
+    let addr: SocketAddr = "127.0.0.1:5000".parse()?;
 
     // Connect to broker
-    let client = FelixClient::connect(config).await?;
+    let client = Client::connect(addr, "localhost", config).await?;
+    let publisher = client.publisher().await?;
 
     // Subscribe to a stream
     let mut subscription = client
@@ -108,16 +110,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn a task to receive events
     tokio::spawn(async move {
-        while let Some(event) = subscription.recv().await {
-            println!("Received: {:?}", event);
+        while let Some(event) = subscription.next_event().await.unwrap() {
+            println!("Received: {:?}", event.payload);
         }
     });
 
     // Publish messages
     for i in 0..10 {
         let payload = format!("Message {}", i);
-        client
-            .publish("my-tenant", "my-namespace", "my-stream", payload.as_bytes())
+        publisher
+            .publish(
+                "my-tenant",
+                "my-namespace",
+                "my-stream",
+                payload.into_bytes(),
+                AckMode::None,
+            )
             .await?;
     }
 
@@ -128,24 +136,34 @@ async fn main() -> anyhow::Result<()> {
 ### Cache Operations
 
 ```rust
-use felix_client::{ClientConfig, FelixClient};
+use bytes::Bytes;
+use felix_client::{Client, ClientConfig};
+use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = ClientConfig {
-        broker_addr: "127.0.0.1:5000".parse()?,
-        ..Default::default()
-    };
-
-    let client = FelixClient::connect(config).await?;
+    let quinn = quinn::ClientConfig::with_platform_verifier();
+    let config = ClientConfig::optimized_defaults(quinn);
+    let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+    let client = Client::connect(addr, "localhost", config).await?;
 
     // Put a value with 60-second TTL
     client
-        .cache_put("user:123", b"alice", Some(60_000))
+        .cache_put(
+            "my-tenant",
+            "my-namespace",
+            "users",
+            "user:123",
+            Bytes::from_static(b"alice"),
+            Some(60_000),
+        )
         .await?;
 
     // Get the value
-    if let Some(value) = client.cache_get("user:123").await? {
+    if let Some(value) = client
+        .cache_get("my-tenant", "my-namespace", "users", "user:123")
+        .await?
+    {
         println!("Cached value: {:?}", value);
     }
 

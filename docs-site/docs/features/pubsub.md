@@ -67,14 +67,14 @@ let mut slow_sub = client.subscribe("tenant", "ns", "stream").await?;
 
 // Fast subscriber continues at full rate
 tokio::spawn(async move {
-    while let Some(event) = fast_sub.next().await {
+    while let Ok(Some(event)) = fast_sub.next_event().await {
         process_fast(event).await;  // ~1ms
     }
 });
 
 // Slow subscriber falls behind, drops messages (at-most-once semantics)
 tokio::spawn(async move {
-    while let Some(event) = slow_sub.next().await {
+    while let Ok(Some(event)) = slow_sub.next_event().await {
         process_slow(event).await;  // ~100ms
     }
 });
@@ -96,7 +96,11 @@ for i in 0..64 {
 }
 
 // Publish as batch
-client.publish_batch("tenant", "ns", "stream", batch).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish_batch("tenant", "ns", "stream", batch, AckMode::PerBatch)
+    .await?;
 ```
 
 **Throughput improvement**:
@@ -166,25 +170,46 @@ Felix guarantees ordering within a stream:
 
 ```rust
 // Publisher sends in order
-client.publish_batch("tenant", "ns", "orders", vec![
-    b"order-1".to_vec(),
-    b"order-2".to_vec(),
-    b"order-3".to_vec(),
-]).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish_batch(
+        "tenant",
+        "ns",
+        "orders",
+        vec![b"order-1".to_vec(), b"order-2".to_vec(), b"order-3".to_vec()],
+        AckMode::PerBatch,
+    )
+    .await?;
 
 // Subscriber receives in order
 let mut sub = client.subscribe("tenant", "ns", "orders").await?;
-assert_eq!(sub.next().await.unwrap().payload, b"order-1");
-assert_eq!(sub.next().await.unwrap().payload, b"order-2");
-assert_eq!(sub.next().await.unwrap().payload, b"order-3");
+assert_eq!(
+    sub.next_event().await.unwrap().unwrap().payload,
+    b"order-1"
+);
+assert_eq!(
+    sub.next_event().await.unwrap().unwrap().payload,
+    b"order-2"
+);
+assert_eq!(
+    sub.next_event().await.unwrap().unwrap().payload,
+    b"order-3"
+);
 ```
 
 **Across-stream ordering**: No guarantees.
 
 ```rust
 // These may arrive in any relative order
-client.publish("tenant", "ns", "stream-a", b"msg-a").await?;
-client.publish("tenant", "ns", "stream-b", b"msg-b").await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish("tenant", "ns", "stream-a", b"msg-a".to_vec(), AckMode::None)
+    .await?;
+publisher
+    .publish("tenant", "ns", "stream-b", b"msg-b".to_vec(), AckMode::None)
+    .await?;
 ```
 
 ### 4. Subscriber Isolation
@@ -207,7 +232,7 @@ pub struct Subscription {
 event_queue_depth: 1024  # Default
 
 # Client: additional client-side buffer
-event_buffer_size: 1024  # Default
+event_router_max_pending: 1024  # Default
 ```
 
 **Isolation behavior**:
@@ -307,7 +332,7 @@ Messages are delivered **zero or one time**:
 // Real-time dashboard updates where latest value matters
 let mut sub = client.subscribe("tenant", "ns", "sensor-data").await?;
 
-while let Some(event) = sub.next().await {
+while let Some(event) = sub.next_event().await? {
     let reading: SensorReading = parse(event.payload)?;
     update_dashboard(reading);  // Latest value is what matters
 }
@@ -328,7 +353,7 @@ Messages delivered **one or more times**:
 ```rust
 let mut sub = client.subscribe_with_acks("tenant", "ns", "orders").await?;
 
-while let Some(event) = sub.next().await {
+while let Some(event) = sub.next_event().await? {
     process_order(event.payload)?;
     event.ack().await?;  // Acknowledge processing
 }
@@ -369,10 +394,11 @@ event_queue_depth: 512
 **Client config**:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 4,
-    event_buffer_size: 256,
-    ..Default::default()
+    event_router_max_pending: 256,
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -408,11 +434,13 @@ event_single_binary_min_bytes: 256
 **Client config**:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 16,
-    event_buffer_size: 4096,
-    binary_mode_enabled: true,
-    ..Default::default()
+    publish_conn_pool: 8,
+    publish_streams_per_conn: 4,
+    event_router_max_pending: 4096,
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -438,7 +466,8 @@ event_queue_depth: 1024
 **Client config**:
 
 ```rust
-let config = ClientConfig::default();  // Uses balanced defaults
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);  // Uses balanced defaults
 ```
 
 **Expected performance**:
@@ -453,25 +482,37 @@ let config = ClientConfig::default();  // Uses balanced defaults
 Multiple publishers to one stream:
 
 ```rust
+use felix_wire::AckMode;
+use std::net::SocketAddr;
+
+let broker_addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let server_name = "localhost";
+
 // Publisher 1
 tokio::spawn(async move {
-    let client = Client::connect(broker_url, config).await?;
+    let client = Client::connect(broker_addr, server_name, config).await?;
+    let publisher = client.publisher().await?;
     loop {
-        client.publish("tenant", "ns", "logs", generate_log()).await?;
+        publisher
+            .publish("tenant", "ns", "logs", generate_log(), AckMode::None)
+            .await?;
     }
 });
 
 // Publisher 2
 tokio::spawn(async move {
-    let client = Client::connect(broker_url, config).await?;
+    let client = Client::connect(broker_addr, server_name, config).await?;
+    let publisher = client.publisher().await?;
     loop {
-        client.publish("tenant", "ns", "logs", generate_log()).await?;
+        publisher
+            .publish("tenant", "ns", "logs", generate_log(), AckMode::None)
+            .await?;
     }
 });
 
 // Subscriber receives from both
 let mut sub = client.subscribe("tenant", "ns", "logs").await?;
-while let Some(event) = sub.next().await {
+while let Some(event) = sub.next_event().await? {
     process_log(event);
 }
 ```
@@ -484,16 +525,18 @@ One publisher, many subscribers:
 
 ```rust
 // Single publisher
-let publisher = client.create_publisher("tenant", "ns", "events", config).await?;
+let publisher = client.publisher().await?;
 for event in events {
-    publisher.publish(&event).await?;
+    publisher
+        .publish("tenant", "ns", "events", event, AckMode::None)
+        .await?;
 }
 
 // Many subscribers
 for i in 0..100 {
     let mut sub = client.subscribe("tenant", "ns", "events").await?;
     tokio::spawn(async move {
-        while let Some(event) = sub.next().await {
+        while let Some(event) = sub.next_event().await.unwrap() {
             process(event);
         }
     });

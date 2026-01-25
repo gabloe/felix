@@ -33,13 +33,18 @@ For optimal performance, clients should maintain connection pools:
 
 ```rust
 // Rust client example
+use felix_client::{Client, ClientConfig};
+use std::net::SocketAddr;
+
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 8,      // Pool for pub/sub operations
     cache_conn_pool: 8,      // Pool for cache operations
-    ..Default::default()
+    ..ClientConfig::optimized_defaults(quinn)
 };
 
-let client = Client::connect("https://broker:5000", config).await?;
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
 ```
 
 **Pool sizing guidance**:
@@ -106,15 +111,31 @@ Publish a single message to a stream.
 **Example usage**:
 
 ```rust
-use felix_client::Client;
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
 
-let client = Client::connect("https://broker:5000", config).await?;
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
+let publisher = client.publisher().await?;
 
 // Fire-and-forget publish
-client.publish("acme", "prod", "events", b"Hello Felix").await?;
+publisher
+    .publish("acme", "prod", "events", b"Hello Felix".to_vec(), AckMode::None)
+    .await?;
 
 // With acknowledgement
-client.publish_with_ack("acme", "prod", "events", b"Important message").await?;
+publisher
+    .publish(
+        "acme",
+        "prod",
+        "events",
+        b"Important message".to_vec(),
+        AckMode::PerMessage,
+    )
+    .await?;
 ```
 
 **Performance characteristics**:
@@ -176,7 +197,11 @@ let messages = vec![
     b"Event 3".to_vec(),
 ];
 
-client.publish_batch("acme", "prod", "events", messages).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish_batch("acme", "prod", "events", messages, AckMode::PerBatch)
+    .await?;
 ```
 
 **Performance characteristics**:
@@ -188,13 +213,20 @@ client.publish_batch("acme", "prod", "events", messages).await?;
 **Batch size tuning**:
 
 ```rust
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+
 // Small batches: lower latency, lower throughput
 let small_batch = collect_messages(timeout_ms: 10, max_count: 8);
-client.publish_batch("acme", "prod", "stream", small_batch).await?;
+publisher
+    .publish_batch("acme", "prod", "stream", small_batch, AckMode::PerBatch)
+    .await?;
 
 // Large batches: higher latency, higher throughput
 let large_batch = collect_messages(timeout_ms: 100, max_count: 128);
-client.publish_batch("acme", "prod", "stream", large_batch).await?;
+publisher
+    .publish_batch("acme", "prod", "stream", large_batch, AckMode::PerBatch)
+    .await?;
 ```
 
 ### Binary Batch Publish
@@ -218,16 +250,12 @@ For maximum throughput, use binary encoding.
 **Example** (Rust client handles encoding automatically):
 
 ```rust
-// Client automatically uses binary mode for large batches when enabled
-let config = ClientConfig {
-    binary_mode_enabled: true,
-    binary_mode_threshold_bytes: 512,
-    ..Default::default()
-};
-
-// Large batch automatically encoded as binary
-let messages = vec![large_payload_1, large_payload_2, ...];
-client.publish_batch("acme", "prod", "stream", messages).await?;
+// Encode a batch directly as binary
+let messages = vec![large_payload_1, large_payload_2, /* ... */];
+let publisher = client.publisher().await?;
+publisher
+    .publish_batch_binary("acme", "prod", "stream", &messages)
+    .await?;
 ```
 
 **Performance improvement**:
@@ -296,7 +324,7 @@ Subscribe to a stream to receive events.
 let mut subscription = client.subscribe("acme", "prod", "events").await?;
 
 // Receive events
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     println!("Received: {:?}", event.payload);
 }
 ```
@@ -352,10 +380,11 @@ sequenceDiagram
 Client-side configuration:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 8,              // Connection pool size
-    event_buffer_size: 1024,         // Client-side buffer per subscription
-    ..Default::default()
+    event_router_max_pending: 1024,  // Max pending events in client router
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -408,7 +437,7 @@ Slow subscribers don't affect fast subscribers:
 // Fast subscriber
 let mut fast_sub = client.subscribe("acme", "prod", "stream").await?;
 tokio::spawn(async move {
-    while let Some(event) = fast_sub.next().await {
+    while let Ok(Some(event)) = fast_sub.next_event().await {
         process_quickly(event).await;  // ~1ms processing
     }
 });
@@ -416,7 +445,7 @@ tokio::spawn(async move {
 // Slow subscriber
 let mut slow_sub = client.subscribe("acme", "prod", "stream").await?;
 tokio::spawn(async move {
-    while let Some(event) = slow_sub.next().await {
+    while let Ok(Some(event)) = slow_sub.next_event().await {
         process_slowly(event).await;  // ~100ms processing
     }
 });
@@ -464,10 +493,29 @@ Store a key-value pair with optional TTL.
 
 ```rust
 // Store session with 1-hour TTL
-client.cache_put("sessions", session_id, session_data, Some(3600_000)).await?;
+use bytes::Bytes;
+client
+    .cache_put(
+        "acme",
+        "prod",
+        "sessions",
+        session_id,
+        Bytes::from(session_data),
+        Some(3600_000),
+    )
+    .await?;
 
 // Store config without expiration
-client.cache_put("config", "app-settings", config_data, None).await?;
+client
+    .cache_put(
+        "acme",
+        "prod",
+        "config",
+        "app-settings",
+        Bytes::from(config_data),
+        None,
+    )
+    .await?;
 ```
 
 **Performance**:
@@ -509,7 +557,7 @@ Retrieve a value from the cache.
 **Example usage**:
 
 ```rust
-match client.cache_get("sessions", session_id).await? {
+match client.cache_get("acme", "prod", "sessions", session_id).await? {
     Some(session_data) => {
         // Session found
         validate_session(session_data)?;
@@ -641,8 +689,13 @@ QUIC connection errors are surfaced as connection-level failures:
 
 ```rust
 async fn publish_with_retry(client: &Client, retries: u32) -> Result<()> {
+    use felix_wire::AckMode;
+    let publisher = client.publisher().await?;
     for attempt in 0..retries {
-        match client.publish("acme", "prod", "events", data).await {
+        match publisher
+            .publish("acme", "prod", "events", data.to_vec(), AckMode::PerMessage)
+            .await
+        {
             Ok(_) => return Ok(()),
             Err(e) if e.is_retriable() => {
                 tokio::time::sleep(Duration::from_millis(100 * 2u64.pow(attempt))).await;
@@ -670,11 +723,15 @@ event_batch_max_delay_us: 2000
 ```
 
 ```rust
-// Client: use large batches and binary mode
+// Client: scale publish throughput via pools and sharding
+use felix_client::PublishSharding;
+
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
-    binary_mode_enabled: true,
-    publish_batch_size: 128,
-    ..Default::default()
+    publish_conn_pool: 8,
+    publish_streams_per_conn: 4,
+    publish_sharding: PublishSharding::HashStream,
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -689,7 +746,10 @@ event_batch_max_delay_us: 100
 
 ```rust
 // Client: publish immediately
-client.publish_with_ack("acme", "prod", "events", data).await?;
+let publisher = client.publisher().await?;
+publisher
+    .publish("acme", "prod", "events", data.to_vec(), AckMode::PerMessage)
+    .await?;
 ```
 
 ### Subscribe Performance

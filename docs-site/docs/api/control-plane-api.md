@@ -11,14 +11,14 @@ The control plane is a separate service that provides strongly consistent metada
 
 ```mermaid
 graph TB
-    subgraph CP["Control Plane (RAFT Cluster)"]
-        CP1["controlplane-0<br/>(Leader)"]
-        CP2["controlplane-1<br/>(Follower)"]
-        CP3["controlplane-2<br/>(Follower)"]
+    subgraph CONTROLPLANE["Control Plane (RAFT Cluster)"]
+        CONTROLPLANE1["controlplane-0<br/>(Leader)"]
+        CONTROLPLANE2["controlplane-1<br/>(Follower)"]
+        CONTROLPLANE3["controlplane-2<br/>(Follower)"]
         
-        CP1 <-->|RAFT| CP2
-        CP2 <-->|RAFT| CP3
-        CP1 <-->|RAFT| CP3
+        CONTROLPLANE1 <-->|RAFT| CONTROLPLANE2
+        CONTROLPLANE2 <-->|RAFT| CONTROLPLANE3
+        CONTROLPLANE1 <-->|RAFT| CONTROLPLANE3
     end
     
     subgraph Brokers["Broker Data Plane"]
@@ -32,12 +32,12 @@ graph TB
         Ops[Ops Dashboard]
     end
     
-    CP1 -->|metadata sync| Brokers
-    Clients -->|Admin API| CP1
+    CONTROLPLANE1 -->|metadata sync| Brokers
+    Clients -->|Admin API| CONTROLPLANE1
     
-    style CP1 fill:#ffeb3b
-    style CP2 fill:#e3f2fd
-    style CP3 fill:#e3f2fd
+    style CONTROLPLANE1 fill:#ffeb3b
+    style CONTROLPLANE2 fill:#e3f2fd
+    style CONTROLPLANE3 fill:#e3f2fd
     style Brokers fill:#c8e6c9
 ```
 
@@ -469,32 +469,32 @@ while let Some(update) = watch.next().await {
 ```mermaid
 sequenceDiagram
     participant B as Broker
-    participant CP as Control Plane
+    participant CONTROLPLANE as Control Plane
     
     Note over B: Broker starts up
-    B->>CP: GetSnapshot(version=0)
-    CP-->>B: Snapshot at version 42
+    B->>CONTROLPLANE: GetSnapshot(version=0)
+    CONTROLPLANE-->>B: Snapshot at version 42
     
     Note over B: Apply snapshot
     B->>B: current_version = 42
     
-    B->>CP: WatchUpdates(from_version=42)
-    Note over CP: Long-lived stream
+    B->>CONTROLPLANE: WatchUpdates(from_version=42)
+    Note over CONTROLPLANE: Long-lived stream
     
     loop Metadata changes
-        Note over CP: Stream CREATE at v43
-        CP->>B: Update (version=43)
+        Note over CONTROLPLANE: Stream CREATE at v43
+        CONTROLPLANE->>B: Update (version=43)
         B->>B: Apply update, current_version=43
         
-        Note over CP: Placement UPDATE at v44
-        CP->>B: Update (version=44)
+        Note over CONTROLPLANE: Placement UPDATE at v44
+        CONTROLPLANE->>B: Update (version=44)
         B->>B: Apply update, current_version=44
     end
     
-    Note over B,CP: Connection lost
+    Note over B,CONTROLPLANE: Connection lost
     Note over B: Reconnect
-    B->>CP: WatchUpdates(from_version=44)
-    CP->>B: Resume from v44
+    B->>CONTROLPLANE: WatchUpdates(from_version=44)
+    CONTROLPLANE->>B: Resume from v44
 ```
 
 ## Consistency Guarantees
@@ -538,19 +538,19 @@ match broker.lookup_stream(tenant, namespace, stream) {
 ```mermaid
 sequenceDiagram
     participant B as Broker
-    participant CP1 as CP Leader
-    participant CP2 as CP Follower
+    participant CONTROLPLANE1 as CONTROLPLANE Leader
+    participant CONTROLPLANE2 as CONTROLPLANE Follower
     
-    B->>CP1: WatchUpdates
-    CP1->>B: Updates stream
+    B->>CONTROLPLANE1: WatchUpdates
+    CONTROLPLANE1->>B: Updates stream
     
-    Note over CP1: Leader crashes
+    Note over CONTROLPLANE1: Leader crashes
     Note over B: Detect connection loss
     
-    Note over CP2: RAFT elects new leader
+    Note over CONTROLPLANE2: RAFT elects new leader
     
-    B->>CP2: WatchUpdates(from_version=N)
-    CP2->>B: Resume updates
+    B->>CONTROLPLANE2: WatchUpdates(from_version=N)
+    CONTROLPLANE2->>B: Resume updates
 ```
 
 **Recovery time**: < 5 seconds (RAFT election + reconnect)

@@ -207,17 +207,17 @@ flowchart TB
   DNS --- DP
 
   %% ---------- Control Plane ----------
-  subgraph CP["Control Plane"]
+  subgraph CONTROLPLANE["Control Plane"]
     direction LR
-    CP1["controlplane-0"]
-    CP2["controlplane-1"]
-    CP3["controlplane-2"]
+    CONTROLPLANE1["controlplane-0"]
+    CONTROLPLANE2["controlplane-1"]
+    CONTROLPLANE3["controlplane-2"]
 
     subgraph Raft["RAFT quorum"]
       direction LR
-      CP1 <--> CP2
-      CP2 <--> CP3
-      CP1 <--> CP3
+      CONTROLPLANE1 <--> CONTROLPLANE2
+      CONTROLPLANE2 <--> CONTROLPLANE3
+      CONTROLPLANE1 <--> CONTROLPLANE3
     end
 
     Meta["Metadata store<br/>(topics, tenants, ACLs,<br/>shards, placements)"]
@@ -234,7 +234,7 @@ flowchart TB
   end
 
   %% ---------- Wiring ----------
-  DP <--> CP
+  DP <--> CONTROLPLANE
   DP --> CacheStore
   DP --> LogStore
 
@@ -248,13 +248,13 @@ If publishes can enter any broker and forward to the shard owner, the flow looks
 sequenceDiagram
   participant Client as Producer
   participant B0 as Broker (ingress)
-  participant CP as Control Plane (RAFT)
+  participant CONTROLPLANE as Control Plane (RAFT)
   participant Bp as Broker (owner)
   participant S as Subscribers
 
   Client->>B0: Publish(topic, batch)
-  B0->>CP: Lookup placement(topic/shard)
-  CP-->>B0: owner = Bp
+  B0->>CONTROLPLANE: Lookup placement(topic/shard)
+  CONTROLPLANE-->>B0: owner = Bp
   B0->>Bp: Forward publish (internal QUIC)
   Bp->>S: Fanout (batched events on uni streams)
 ```

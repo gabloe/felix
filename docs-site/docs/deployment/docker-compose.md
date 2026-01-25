@@ -216,8 +216,8 @@ services:
       - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
       
       # Control plane
-      - FELIX_CP_URL=http://controlplane:8443
-      - FELIX_CP_SYNC_INTERVAL_MS=2000
+      - FELIX_CONTROLPLANE_URL=http://controlplane:8443
+      - FELIX_CONTROLPLANE_SYNC_INTERVAL_MS=2000
       
       # Publishing
       - FELIX_ACK_ON_COMMIT=false

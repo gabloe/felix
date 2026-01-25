@@ -29,23 +29,29 @@ felix-client = { version = "0.1", features = ["telemetry"] }
 
 ```rust
 use felix_client::{Client, ClientConfig};
+use std::net::SocketAddr;
 use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Connect to broker
-    let client = Client::connect(
-        "https://localhost:5000",
-        ClientConfig::default()
-    ).await?;
+    let quinn = quinn::ClientConfig::with_platform_verifier();
+    let config = ClientConfig::optimized_defaults(quinn);
+    let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+    let client = Client::connect(addr, "localhost", config).await?;
+    let publisher = client.publisher().await?;
 
     // Publish a message
-    client.publish(
-        "acme",           // tenant_id
-        "prod",           // namespace
-        "events",         // stream
-        b"Hello Felix"    // payload
-    ).await?;
+    use felix_wire::AckMode;
+    publisher
+        .publish(
+            "acme",           // tenant_id
+            "prod",           // namespace
+            "events",         // stream
+            b"Hello Felix".to_vec(), // payload
+            AckMode::None,
+        )
+        .await?;
 
     // Subscribe to stream
     let mut subscription = client.subscribe(
@@ -55,7 +61,7 @@ async fn main() -> Result<()> {
     ).await?;
 
     // Receive events
-    while let Some(event) = subscription.next().await {
+    while let Some(event) = subscription.next_event().await? {
         println!("Received: {:?}", event.payload);
     }
 
@@ -66,16 +72,20 @@ async fn main() -> Result<()> {
 ### Basic Cache Operations
 
 ```rust
+use bytes::Bytes;
+
 // Store value with 60-second TTL
 client.cache_put(
+    "acme",
+    "prod",
     "sessions",
     "user-123",
-    b"session-data",
+    Bytes::from_static(b"session-data"),
     Some(60_000)  // TTL in milliseconds
 ).await?;
 
 // Retrieve value
-match client.cache_get("sessions", "user-123").await? {
+match client.cache_get("acme", "prod", "sessions", "user-123").await? {
     Some(value) => println!("Found: {:?}", value),
     None => println!("Not found or expired"),
 }
@@ -86,8 +96,10 @@ match client.cache_get("sessions", "user-123").await? {
 ### ClientConfig
 
 ```rust
-use felix_client::ClientConfig;
+use felix_client::{ClientConfig, PublishSharding};
+use std::net::SocketAddr;
 
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     // Connection pools
     event_conn_pool: 8,              // Connections for pub/sub
@@ -98,27 +110,14 @@ let config = ClientConfig {
     publish_streams_per_conn: 2,     // Publish streams per conn
     cache_streams_per_conn: 4,       // Cache streams per conn
     
-    // Buffering
-    event_buffer_size: 1024,         // Client-side event buffer
-    publish_queue_size: 1024,        // Publish queue bound
-    cache_queue_size: 1024,          // Cache request queue
-    
-    // Binary mode
-    binary_mode_enabled: true,       // Enable binary batches
-    binary_mode_threshold_bytes: 512, // Min size for binary
-    
-    // TLS
-    tls_skip_verify: false,          // Skip cert validation (dev only!)
-    tls_ca_cert_path: None,          // Custom CA cert
-    
-    // Timeouts
-    connect_timeout_ms: 5000,
-    idle_timeout_ms: 30000,
-    
-    ..Default::default()
+    // Publish sharding
+    publish_sharding: PublishSharding::HashStream,
+
+    ..ClientConfig::optimized_defaults(quinn)
 };
 
-let client = Client::connect("https://broker:5000", config).await?;
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
 ```
 
 ### Configuration Tuning
@@ -126,30 +125,29 @@ let client = Client::connect("https://broker:5000", config).await?;
 **Low-latency configuration**:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 4,
     cache_conn_pool: 4,
     publish_streams_per_conn: 1,
     cache_streams_per_conn: 2,
-    event_buffer_size: 512,
-    binary_mode_enabled: false,  // JSON for simplicity
-    ..Default::default()
+    publish_conn_pool: 2,
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
 **High-throughput configuration**:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 16,
     cache_conn_pool: 16,
     publish_streams_per_conn: 4,
     cache_streams_per_conn: 8,
-    event_buffer_size: 4096,
-    publish_queue_size: 4096,
-    binary_mode_enabled: true,
-    binary_mode_threshold_bytes: 256,
-    ..Default::default()
+    publish_conn_pool: 8,
+    publish_sharding: PublishSharding::HashStream,
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -159,10 +157,16 @@ let config = ClientConfig {
 
 ```rust
 // Fire-and-forget (no ack)
-client.publish("acme", "prod", "events", b"message").await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish("acme", "prod", "events", b"message".to_vec(), AckMode::None)
+    .await?;
 
 // With acknowledgement
-client.publish_with_ack("acme", "prod", "events", b"important").await?;
+publisher
+    .publish("acme", "prod", "events", b"important".to_vec(), AckMode::PerMessage)
+    .await?;
 ```
 
 ### Batch Publishing
@@ -176,11 +180,12 @@ let messages = vec![
     b"message 3".to_vec(),
 ];
 
-client.publish_batch(
+publisher.publish_batch(
     "acme",
     "prod",
     "events",
-    messages
+    messages,
+    AckMode::PerBatch,
 ).await?;
 ```
 
@@ -190,28 +195,18 @@ For high-throughput publishing, use the `Publisher` API:
 
 ```rust
 use felix_client::Publisher;
+use felix_wire::AckMode;
 
-// Create publisher with custom config
-let publisher = client.create_publisher(
-    "acme",
-    "prod",
-    "events",
-    PublisherConfig {
-        sharding: PublishSharding::HashStream,  // or RoundRobin
-        ack_mode: AckMode::None,
-        binary_enabled: true,
-        ..Default::default()
-    }
-).await?;
+// Create publisher (uses ClientConfig settings)
+let publisher = client.publisher().await?;
 
-// Publish with automatic batching
+// Publish messages
 for i in 0..10000 {
     let payload = format!("Event {}", i);
-    publisher.publish(payload.as_bytes()).await?;
+    publisher
+        .publish("acme", "prod", "events", payload.into_bytes(), AckMode::None)
+        .await?;
 }
-
-// Flush any pending batches
-publisher.flush().await?;
 ```
 
 ### Publisher Sharding
@@ -238,7 +233,12 @@ PublishSharding::HashStream
 ```rust
 use felix_common::Error;
 
-match client.publish("acme", "prod", "events", b"data").await {
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+match publisher
+    .publish("acme", "prod", "events", b"data".to_vec(), AckMode::PerMessage)
+    .await
+{
     Ok(()) => println!("Published successfully"),
     Err(Error::UnknownStream { .. }) => {
         eprintln!("Stream doesn't exist");
@@ -262,7 +262,7 @@ match client.publish("acme", "prod", "events", b"data").await {
 let mut subscription = client.subscribe("acme", "prod", "events").await?;
 
 // Process events
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     process_event(event).await?;
 }
 ```
@@ -270,11 +270,14 @@ while let Some(event) = subscription.next().await {
 ### Event Structure
 
 ```rust
+use bytes::Bytes;
+use std::sync::Arc;
+
 pub struct Event {
-    pub tenant_id: String,
-    pub namespace: String,
-    pub stream: String,
-    pub payload: Vec<u8>,
+    pub tenant_id: Arc<str>,
+    pub namespace: Arc<str>,
+    pub stream: Arc<str>,
+    pub payload: Bytes,
 }
 ```
 
@@ -291,10 +294,27 @@ let mut sub3 = client.subscribe("acme", "staging", "logs").await?;
 
 loop {
     select! {
-        Some(event) = sub1.next() => handle_order(event).await?,
-        Some(event) = sub2.next() => handle_inventory(event).await?,
-        Some(event) = sub3.next() => handle_log(event).await?,
-        else => break,
+        event = sub1.next_event() => {
+            if let Some(event) = event? {
+                handle_order(event).await?;
+            } else {
+                break;
+            }
+        }
+        event = sub2.next_event() => {
+            if let Some(event) = event? {
+                handle_inventory(event).await?;
+            } else {
+                break;
+            }
+        }
+        event = sub3.next_event() => {
+            if let Some(event) = event? {
+                handle_log(event).await?;
+            } else {
+                break;
+            }
+        }
     }
 }
 ```
@@ -305,12 +325,12 @@ Avoid blocking the subscription loop:
 
 ```rust
 // Bad: blocks subscription loop
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     expensive_processing(event).await?;  // Blocks next event
 }
 
 // Good: spawn task for processing
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     tokio::spawn(async move {
         expensive_processing(event).await.ok();
     });
@@ -325,7 +345,7 @@ tokio::spawn(async move {
     }
 });
 
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     tx.send(event).await.ok();
 }
 ```
@@ -338,13 +358,13 @@ let mut sub = client.subscribe("acme", "prod", "events").await?;
 
 // Process events
 for _ in 0..100 {
-    if let Some(event) = sub.next().await {
+    if let Some(event) = sub.next_event().await? {
         process(event);
     }
 }
 
-// Explicitly close (or drop to auto-close)
-sub.close().await?;
+// Drop subscription to close
+drop(sub);
 ```
 
 ## Cache Operations
@@ -354,14 +374,16 @@ sub.close().await?;
 ```rust
 // Put with TTL
 client.cache_put(
-    "sessions",           // cache namespace
+    "acme",               // tenant
+    "prod",               // namespace
+    "sessions",           // cache
     "user-abc",           // key
-    session_data,         // value
+    session_data,         // value (Bytes)
     Some(3600_000)        // 1 hour TTL
 ).await?;
 
 // Get
-match client.cache_get("sessions", "user-abc").await? {
+match client.cache_get("acme", "prod", "sessions", "user-abc").await? {
     Some(data) => {
         let session: Session = deserialize(&data)?;
         // Use session
@@ -377,7 +399,9 @@ match client.cache_get("sessions", "user-abc").await? {
 
 ```rust
 // Store permanently (until evicted or restart)
-client.cache_put("config", "app-settings", config_data, None).await?;
+client
+    .cache_put("acme", "prod", "config", "app-settings", config_data, None)
+    .await?;
 ```
 
 ### Concurrent Cache Operations
@@ -390,7 +414,7 @@ use futures::future::join_all;
 // Issue multiple requests concurrently
 let futures = (0..10).map(|i| {
     let key = format!("key-{}", i);
-    client.cache_get("data", &key)
+    client.cache_get("acme", "prod", "data", &key)
 });
 
 let results = join_all(futures).await;
@@ -408,9 +432,15 @@ Cache keys are scoped to prevent collisions:
 
 ```rust
 // These are independent entries
-client.cache_put("sessions", "user-123", data1, ttl).await?;
-client.cache_put("profiles", "user-123", data2, ttl).await?;
-client.cache_put("temp", "user-123", data3, ttl).await?;
+client
+    .cache_put("acme", "prod", "sessions", "user-123", data1, ttl)
+    .await?;
+client
+    .cache_put("acme", "prod", "profiles", "user-123", data2, ttl)
+    .await?;
+client
+    .cache_put("acme", "prod", "temp", "user-123", data3, ttl)
+    .await?;
 ```
 
 ## In-Process Client
@@ -418,6 +448,7 @@ client.cache_put("temp", "user-123", data3, ttl).await?;
 For testing and embedded scenarios, use the in-process client:
 
 ```rust
+use bytes::Bytes;
 use felix_client::InProcessClient;
 use felix_broker::Broker;
 
@@ -428,7 +459,9 @@ let broker = Broker::new(broker_config).await?;
 let client = InProcessClient::new(broker.clone());
 
 // Same API as network client
-client.publish("acme", "prod", "test", b"data").await?;
+client
+    .publish("acme", "prod", "test", Bytes::from_static(b"data"))
+    .await?;
 let mut sub = client.subscribe("acme", "prod", "test").await?;
 ```
 
@@ -446,13 +479,16 @@ let mut sub = client.subscribe("acme", "prod", "test").await?;
 Clients should implement reconnection logic:
 
 ```rust
+use std::net::SocketAddr;
+
 async fn connect_with_retry(
-    url: &str,
+    addr: SocketAddr,
+    server_name: &str,
     config: ClientConfig,
-    max_retries: u32
+    max_retries: u32,
 ) -> Result<Client> {
     for attempt in 0..max_retries {
-        match Client::connect(url, config.clone()).await {
+        match Client::connect(addr, server_name, config.clone()).await {
             Ok(client) => return Ok(client),
             Err(e) if attempt < max_retries - 1 => {
                 let delay = Duration::from_millis(100 * 2u64.pow(attempt));
@@ -537,18 +573,26 @@ println!("Event delivery p50: {:?}", subscribe_timings.p50);
 
 ```rust
 // Good: reuse client across application
+use felix_wire::AckMode;
+use std::net::SocketAddr;
+
 lazy_static! {
     static ref FELIX_CLIENT: Client = {
-        let config = ClientConfig::default();
+        let quinn = quinn::ClientConfig::with_platform_verifier();
+        let config = ClientConfig::optimized_defaults(quinn);
+        let addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(Client::connect("https://broker:5000", config))
+            .block_on(Client::connect(addr, "localhost", config))
             .unwrap()
     };
 }
 
 // Use shared client
-FELIX_CLIENT.publish("acme", "prod", "events", data).await?;
+let publisher = FELIX_CLIENT.publisher().await?;
+publisher
+    .publish("acme", "prod", "events", data.to_vec(), AckMode::None)
+    .await?;
 ```
 
 ### Error Recovery
@@ -562,8 +606,13 @@ async fn publish_with_retry(
     data: &[u8],
     max_retries: u32
 ) -> Result<()> {
+    use felix_wire::AckMode;
+    let publisher = client.publisher().await?;
     for attempt in 0..max_retries {
-        match client.publish(tenant, namespace, stream, data).await {
+        match publisher
+            .publish(tenant, namespace, stream, data.to_vec(), AckMode::PerMessage)
+            .await
+        {
             Ok(()) => return Ok(()),
             Err(e) if is_retriable(&e) && attempt < max_retries - 1 => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -586,20 +635,21 @@ fn is_retriable(error: &felix_common::Error) -> bool {
 ### Resource Cleanup
 
 ```rust
-// Subscriptions are cleaned up on drop, but explicit close is better
+// Subscriptions are cleaned up on drop
 {
     let mut sub = client.subscribe("acme", "prod", "events").await?;
     // Process events...
-    sub.close().await?;  // Explicit close
-}  // Or automatic close on drop
+}  // Automatic close on drop
 ```
 
 ### Batching for Throughput
 
 ```rust
+use felix_wire::AckMode;
 use tokio::time::{interval, Duration};
 
 async fn batching_publisher(client: &Client) -> Result<()> {
+    let publisher = client.publisher().await?;
     let mut batch = Vec::new();
     let mut ticker = interval(Duration::from_millis(10));
     
@@ -607,14 +657,18 @@ async fn batching_publisher(client: &Client) -> Result<()> {
         select! {
             _ = ticker.tick() => {
                 if !batch.is_empty() {
-                    client.publish_batch("acme", "prod", "events", batch.clone()).await?;
+                    publisher
+                        .publish_batch("acme", "prod", "events", batch.clone(), AckMode::PerBatch)
+                        .await?;
                     batch.clear();
                 }
             }
             msg = receive_message() => {
                 batch.push(msg);
                 if batch.len() >= 64 {
-                    client.publish_batch("acme", "prod", "events", batch.clone()).await?;
+                    publisher
+                        .publish_batch("acme", "prod", "events", batch.clone(), AckMode::PerBatch)
+                        .await?;
                     batch.clear();
                 }
             }
@@ -630,6 +684,8 @@ async fn batching_publisher(client: &Client) -> Result<()> {
 ```rust
 #[tokio::test]
 async fn test_publish_subscribe() {
+    use bytes::Bytes;
+
     let broker = Broker::new(BrokerConfig::default()).await.unwrap();
     let client = InProcessClient::new(broker);
     
@@ -637,11 +693,14 @@ async fn test_publish_subscribe() {
     let mut sub = client.subscribe("test", "ns", "stream").await.unwrap();
     
     // Publish
-    client.publish("test", "ns", "stream", b"hello").await.unwrap();
+    client
+        .publish("test", "ns", "stream", Bytes::from_static(b"hello"))
+        .await
+        .unwrap();
     
     // Receive
-    let event = sub.next().await.unwrap();
-    assert_eq!(event.payload, b"hello");
+    let event = sub.recv().await.unwrap();
+    assert_eq!(event, Bytes::from_static(b"hello"));
 }
 ```
 
@@ -650,16 +709,26 @@ async fn test_publish_subscribe() {
 ```rust
 #[tokio::test]
 async fn test_cache_ttl() {
-    let client = Client::connect("https://localhost:5000", Default::default())
+    use std::net::SocketAddr;
+
+    let quinn = quinn::ClientConfig::with_platform_verifier();
+    let config = ClientConfig::optimized_defaults(quinn);
+    let addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+    let client = Client::connect(addr, "localhost", config).await.unwrap();
+    
+    // Store with 100ms TTL
+    use bytes::Bytes;
+    client
+        .cache_put("test", "default", "cache", "key", Bytes::from_static(b"value"), Some(100))
         .await
         .unwrap();
     
-    // Store with 100ms TTL
-    client.cache_put("test", "key", b"value", Some(100)).await.unwrap();
-    
     // Immediately readable
     assert_eq!(
-        client.cache_get("test", "key").await.unwrap(),
+        client
+            .cache_get("test", "default", "cache", "key")
+            .await
+            .unwrap(),
         Some(b"value".to_vec())
     );
     
@@ -667,7 +736,13 @@ async fn test_cache_ttl() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     
     // Should be expired
-    assert_eq!(client.cache_get("test", "key").await.unwrap(), None);
+    assert_eq!(
+        client
+            .cache_get("test", "default", "cache", "key")
+            .await
+            .unwrap(),
+        None
+    );
 }
 ```
 
@@ -686,12 +761,12 @@ async fn test_cache_ttl() {
 
 | Operation | Method | Use Case |
 |-----------|--------|----------|
-| Single publish | `publish()` | Low-rate events |
-| Batch publish | `publish_batch()` | High-throughput |
+| Single publish | `Publisher::publish()` | Low-rate events |
+| Batch publish | `Publisher::publish_batch()` | High-throughput |
 | Subscribe | `subscribe()` | Event consumption |
 | Cache put | `cache_put()` | Store with TTL |
 | Cache get | `cache_get()` | Retrieve value |
-| Publisher | `create_publisher()` | Streaming publish |
+| Publisher | `Client::publisher()` | Streaming publish |
 | In-process | `InProcessClient::new()` | Testing, embedded |
 
 For complete API documentation, see the [rustdoc](https://docs.rs/felix-client).

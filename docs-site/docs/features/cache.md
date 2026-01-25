@@ -72,6 +72,8 @@ Store entries with automatic expiration:
 ```rust
 // Store session with 1-hour TTL
 client.cache_put(
+    "acme",
+    "prod",
     "sessions",
     "user-abc",
     session_data,
@@ -82,7 +84,10 @@ client.cache_put(
 tokio::time::sleep(Duration::from_secs(3601)).await;
 
 // Returns None (expired)
-assert_eq!(client.cache_get("sessions", "user-abc").await?, None);
+assert_eq!(
+    client.cache_get("acme", "prod", "sessions", "user-abc").await?,
+    None
+);
 ```
 
 **TTL semantics**:
@@ -96,16 +101,24 @@ assert_eq!(client.cache_get("sessions", "user-abc").await?, None);
 
 ```rust
 // Short-lived session (5 minutes)
-client.cache_put("sessions", key, data, Some(300_000)).await?;
+client
+    .cache_put("acme", "prod", "sessions", key, data, Some(300_000))
+    .await?;
 
 // Medium-lived cache (1 hour)
-client.cache_put("user-profiles", key, data, Some(3600_000)).await?;
+client
+    .cache_put("acme", "prod", "user-profiles", key, data, Some(3600_000))
+    .await?;
 
 // Long-lived config (24 hours)
-client.cache_put("config", key, data, Some(86400_000)).await?;
+client
+    .cache_put("acme", "prod", "config", key, data, Some(86400_000))
+    .await?;
 
 // Permanent (until restart or eviction)
-client.cache_put("static-data", key, data, None).await?;
+client
+    .cache_put("acme", "prod", "static-data", key, data, None)
+    .await?;
 ```
 
 ### 3. Namespace Scoping
@@ -145,7 +158,7 @@ use futures::future::join_all;
 // Issue 10 concurrent gets
 let futures = (0..10).map(|i| {
     let key = format!("key-{}", i);
-    client.cache_get("config", &key)
+    client.cache_get("acme", "prod", "config", &key)
 });
 
 // Await all responses
@@ -206,11 +219,14 @@ Felix cache provides **read-your-writes** consistency:
 
 ```rust
 // Put value
-client.cache_put("data", "key", b"value-1", None).await?;
+use bytes::Bytes;
+client
+    .cache_put("acme", "prod", "data", "key", Bytes::from_static(b"value-1"), None)
+    .await?;
 
 // Immediately read (same client)
 assert_eq!(
-    client.cache_get("data", "key").await?,
+    client.cache_get("acme", "prod", "data", "key").await?,
     Some(b"value-1".to_vec())
 );
 ```
@@ -280,16 +296,20 @@ Store a key-value pair with optional TTL.
 ```rust
 async fn cache_put(
     &self,
-    cache_name: &str,
+    tenant_id: &str,
+    namespace: &str,
+    cache: &str,
     key: &str,
-    value: impl AsRef<[u8]>,
+    value: Bytes,
     ttl_ms: Option<u64>
 ) -> Result<()>
 ```
 
 **Parameters**:
 
-- `cache_name`: Cache namespace (e.g., "sessions", "config")
+- `tenant_id`: Tenant identifier
+- `namespace`: Namespace within the tenant
+- `cache`: Cache name (e.g., "sessions", "config")
 - `key`: Cache key (arbitrary string)
 - `value`: Value to store (binary data)
 - `ttl_ms`: Optional TTL in milliseconds (None = no expiration)
@@ -299,11 +319,15 @@ async fn cache_put(
 **Example**:
 
 ```rust
+use bytes::Bytes;
+
 // Store with 30-minute TTL
 client.cache_put(
+    "acme",
+    "prod",
     "sessions",
     "session-xyz",
-    &session_data,
+    Bytes::from(session_data),
     Some(1800_000)
 ).await?;
 ```
@@ -317,14 +341,18 @@ Retrieve a value from the cache.
 ```rust
 async fn cache_get(
     &self,
-    cache_name: &str,
+    tenant_id: &str,
+    namespace: &str,
+    cache: &str,
     key: &str
 ) -> Result<Option<Vec<u8>>>
 ```
 
 **Parameters**:
 
-- `cache_name`: Cache namespace
+- `tenant_id`: Tenant identifier
+- `namespace`: Namespace within the tenant
+- `cache`: Cache name
 - `key`: Cache key to retrieve
 
 **Returns**:
@@ -336,7 +364,7 @@ async fn cache_get(
 **Example**:
 
 ```rust
-match client.cache_get("sessions", "session-xyz").await? {
+match client.cache_get("acme", "prod", "sessions", "session-xyz").await? {
     Some(data) => {
         let session: Session = deserialize(&data)?;
         // Use session
@@ -368,18 +396,27 @@ impl SessionStore {
         };
         
         // Store with 30-minute TTL
-        self.client.cache_put(
-            "sessions",
-            &session_id,
-            &serialize(&session)?,
-            Some(1800_000)
-        ).await?;
+        use bytes::Bytes;
+        self.client
+            .cache_put(
+                "acme",
+                "prod",
+                "sessions",
+                &session_id,
+                Bytes::from(serialize(&session)?),
+                Some(1800_000),
+            )
+            .await?;
         
         Ok(session_id)
     }
     
     async fn get_session(&self, session_id: &str) -> Result<Option<Session>> {
-        match self.client.cache_get("sessions", session_id).await? {
+        match self
+            .client
+            .cache_get("acme", "prod", "sessions", session_id)
+            .await?
+        {
             Some(data) => Ok(Some(deserialize(&data)?)),
             None => Ok(None),
         }
@@ -388,12 +425,17 @@ impl SessionStore {
     async fn extend_session(&self, session_id: &str) -> Result<()> {
         if let Some(mut session) = self.get_session(session_id).await? {
             session.expires_at = Utc::now() + Duration::minutes(30);
-            self.client.cache_put(
-                "sessions",
-                session_id,
-                &serialize(&session)?,
-                Some(1800_000)
-            ).await?;
+            use bytes::Bytes;
+            self.client
+                .cache_put(
+                    "acme",
+                    "prod",
+                    "sessions",
+                    session_id,
+                    Bytes::from(serialize(&session)?),
+                    Some(1800_000),
+                )
+                .await?;
         }
         Ok(())
     }
@@ -412,7 +454,11 @@ struct ConfigCache {
 impl ConfigCache {
     async fn get_config(&self, key: &str) -> Result<Config> {
         // Try cache first
-        if let Some(data) = self.client.cache_get("config", key).await? {
+        if let Some(data) = self
+            .client
+            .cache_get("acme", "prod", "config", key)
+            .await?
+        {
             return Ok(deserialize(&data)?);
         }
         
@@ -420,12 +466,17 @@ impl ConfigCache {
         let config = self.load_from_db(key).await?;
         
         // Store in cache with 1-hour TTL
-        self.client.cache_put(
-            "config",
-            key,
-            &serialize(&config)?,
-            Some(3600_000)
-        ).await?;
+        use bytes::Bytes;
+        self.client
+            .cache_put(
+                "acme",
+                "prod",
+                "config",
+                key,
+                Bytes::from(serialize(&config)?),
+                Some(3600_000),
+            )
+            .await?;
         
         Ok(config)
     }
@@ -435,12 +486,17 @@ impl ConfigCache {
         self.save_to_db(key, config).await?;
         
         // Invalidate cache (put with 0 TTL or delete when available)
-        self.client.cache_put(
-            "config",
-            key,
-            &serialize(config)?,
-            Some(0)  // Immediate expiration
-        ).await?;
+        use bytes::Bytes;
+        self.client
+            .cache_put(
+                "acme",
+                "prod",
+                "config",
+                key,
+                Bytes::from(serialize(config)?),
+                Some(0), // Immediate expiration
+            )
+            .await?;
         
         Ok(())
     }
@@ -463,7 +519,11 @@ impl RateLimiter {
         let key = format!("rate-limit:{}", user_id);
         
         // Try to get current count
-        let count = match self.client.cache_get("rate-limits", &key).await? {
+        let count = match self
+            .client
+            .cache_get("acme", "prod", "rate-limits", &key)
+            .await?
+        {
             Some(data) => u32::from_be_bytes(data.try_into().unwrap()),
             None => 0,
         };
@@ -474,12 +534,17 @@ impl RateLimiter {
         
         // Increment count
         let new_count = count + 1;
-        self.client.cache_put(
-            "rate-limits",
-            &key,
-            &new_count.to_be_bytes(),
-            Some(self.window_ms)
-        ).await?;
+        use bytes::Bytes;
+        self.client
+            .cache_put(
+                "acme",
+                "prod",
+                "rate-limits",
+                &key,
+                Bytes::from(new_count.to_be_bytes()),
+                Some(self.window_ms),
+            )
+            .await?;
         
         Ok(true)  // Allow request
     }
@@ -501,7 +566,10 @@ async fn expensive_computation(
     let cache_key = format!("computation:{}", hash(input));
     
     // Check cache
-    if let Some(cached) = client.cache_get("temp", &cache_key).await? {
+    if let Some(cached) = client
+        .cache_get("acme", "prod", "temp", &cache_key)
+        .await?
+    {
         return Ok(String::from_utf8(cached)?);
     }
     
@@ -509,12 +577,17 @@ async fn expensive_computation(
     let result = perform_expensive_work(input)?;
     
     // Cache for 5 minutes
-    client.cache_put(
-        "temp",
-        &cache_key,
-        result.as_bytes(),
-        Some(300_000)
-    ).await?;
+    use bytes::Bytes;
+    client
+        .cache_put(
+            "acme",
+            "prod",
+            "temp",
+            &cache_key,
+            Bytes::from(result.as_bytes().to_vec()),
+            Some(300_000),
+        )
+        .await?;
     
     Ok(result)
 }
@@ -527,22 +600,22 @@ async fn expensive_computation(
 **Latency-optimized** (low concurrency):
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     cache_conn_pool: 2,
     cache_streams_per_conn: 2,
-    cache_queue_size: 256,
-    ..Default::default()
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
 **Throughput-optimized** (high concurrency):
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     cache_conn_pool: 16,
     cache_streams_per_conn: 8,
-    cache_queue_size: 4096,
-    ..Default::default()
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 

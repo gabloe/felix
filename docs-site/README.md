@@ -75,9 +75,13 @@ Use fenced code blocks with language identifiers:
 
 ````markdown
 ```rust
-use felix_client::FelixClient;
+use felix_client::{Client, ClientConfig};
+use std::net::SocketAddr;
 
-let client = FelixClient::connect(config).await?;
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
 ```
 ````
 

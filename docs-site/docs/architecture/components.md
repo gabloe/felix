@@ -13,18 +13,18 @@ graph TB
     Transport[felix-transport]
     Broker[felix-broker]
     Storage[felix-storage]
-    CP[Control Plane]
+    CONTROLPLANE[Control Plane]
     
     Client -->|uses| Wire
     Client -->|uses| Transport
     Transport -->|QUIC| Broker
     Broker -->|stores| Storage
-    Broker -->|syncs| CP
+    Broker -->|syncs| CONTROLPLANE
     
     style Client fill:#e1f5fe
     style Broker fill:#fff3e0
     style Storage fill:#f3e5f5
-    style CP fill:#e8f5e9
+    style CONTROLPLANE fill:#e8f5e9
 ```
 
 ## felix-wire: Protocol Layer
@@ -268,8 +268,8 @@ sequenceDiagram
 The cache provides low-latency key-value operations with TTL:
 
 **Operations**:
-- `cache_put(key, value, ttl_ms)`: Store with optional expiration
-- `cache_get(key)`: Retrieve value or null if missing/expired
+- `cache_put(tenant, namespace, cache, key, value, ttl_ms)`: Store with optional expiration
+- `cache_get(tenant, namespace, cache, key)`: Retrieve value or null if missing/expired
 - `cache_delete(key)`: Explicit deletion (future)
 
 **Implementation characteristics**:
@@ -363,17 +363,17 @@ Brokers are not part of the RAFT cluster. They consume metadata via:
 ```mermaid
 sequenceDiagram
     participant B as Broker
-    participant CP as Control Plane
+    participant CONTROLPLANE as Control Plane
     
-    B->>CP: WatchUpdates(from_version)
-    CP-->>B: Stream of incremental updates
+    B->>CONTROLPLANE: WatchUpdates(from_version)
+    CONTROLPLANE-->>B: Stream of incremental updates
     
     Note over B: Apply updates locally
     Note over B: Update routing tables
     Note over B: Start/stop shard ownership
     
-    B->>CP: WatchUpdates(new_version)
-    CP-->>B: Stream continues...
+    B->>CONTROLPLANE: WatchUpdates(new_version)
+    CONTROLPLANE-->>B: Stream continues...
 ```
 
 **API operations**:

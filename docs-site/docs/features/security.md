@@ -19,7 +19,7 @@ Felix's security model is built on three pillars:
 
 Felix uses QUIC, which integrates TLS 1.3 natively:
 
-**Current implementation**:
+**Planned implementation**:
 
 - **TLS 1.3 mandatory**: No fallback to older TLS versions
 - **Encrypted by default**: All connections are encrypted
@@ -60,18 +60,11 @@ tls_ca_cert_path: "/etc/felix/tls/ca.crt"      # For mTLS (future)
 ```rust
 use felix_client::ClientConfig;
 
-// Production: validate certificates
-let config = ClientConfig {
-    tls_skip_verify: false,
-    tls_ca_cert_path: Some("/path/to/ca.crt"),
-    ..Default::default()
-};
+// Production: validate certificates using the platform verifier
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
 
-// Development only: skip validation
-let config = ClientConfig {
-    tls_skip_verify: true,                      // NEVER in production!
-    ..Default::default()
-};
+// Development: configure Quinn with a test CA or custom verifier as needed
 ```
 
 ### Certificate Management
@@ -177,9 +170,17 @@ Within a tenant, namespaces provide further isolation:
 
 ```rust
 // These are completely independent
-client.publish("acme", "production", "orders", data).await?;
-client.publish("acme", "staging", "orders", data).await?;
-client.publish("acme", "development", "orders", data).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish("acme", "production", "orders", data.to_vec(), AckMode::None)
+    .await?;
+publisher
+    .publish("acme", "staging", "orders", data.to_vec(), AckMode::None)
+    .await?;
+publisher
+    .publish("acme", "development", "orders", data.to_vec(), AckMode::None)
+    .await?;
 ```
 
 **Use cases**:
@@ -234,15 +235,16 @@ spec:
 3. **JWT tokens**: OAuth2/OIDC integration
 4. **Kubernetes ServiceAccounts**: Native K8s identity
 
-**Example with API keys** (future):
+**Example with API keys** (future — API key support is not yet implemented in the client):
 
 ```rust
-let config = ClientConfig {
-    api_key: Some("felix_api_key_abc123xyz".to_string()),
-    ..Default::default()
-};
+use felix_client::{Client, ClientConfig};
+use std::net::SocketAddr;
 
-let client = Client::connect("https://broker:5000", config).await?;
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
 ```
 
 ### Permission Model
@@ -534,7 +536,7 @@ client.delete_user_data("tenant", "user-id").await?;
 ### Deployment Security
 
 1. **Use TLS certificates from trusted CA**: Don't use self-signed in production
-2. **Enable certificate verification**: Never set `tls_skip_verify: true` in production
+2. **Enable certificate verification**: Never disable certificate verification in production clients
 3. **Rotate certificates regularly**: Before expiration, ideally every 90 days
 4. **Use network policies**: Restrict network access to broker
 5. **Isolate broker pods**: Dedicated node pool or namespace
@@ -555,7 +557,6 @@ tls_key_path: "/etc/felix/tls/server.key"
 api_key_hash: "$2b$12$..."                     # Bcrypt hash, not plaintext
 
 # Bad: insecure configuration
-tls_skip_verify: true                          # NEVER
 debug_mode: true                               # Not in production
 log_payloads: true                             # Exposes sensitive data
 ```
@@ -594,20 +595,24 @@ roleRef:
 **Client-side security**:
 
 ```rust
-// 1. Validate broker certificate
-let config = ClientConfig {
-    tls_ca_cert_path: Some("/etc/ca-bundle.crt"),
-    ..Default::default()
-};
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
 
-// 2. Use credentials
-let config = ClientConfig {
-    api_key: Some(env::var("FELIX_API_KEY")?),
-    ..Default::default()
-};
+// 1. Configure TLS via Quinn
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+
+// 2. Connect
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
+let publisher = client.publisher().await?;
 
 // 3. Handle errors securely
-match client.publish("tenant", "ns", "stream", data).await {
+match publisher
+    .publish("tenant", "ns", "stream", data.to_vec(), AckMode::PerMessage)
+    .await
+{
     Ok(()) => {},
     Err(e) => {
         // Don't log sensitive data in errors

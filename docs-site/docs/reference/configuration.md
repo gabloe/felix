@@ -106,7 +106,7 @@ metrics_bind: "0.0.0.0:8080"
 
 **Default**: `None`
 
-**Environment**: `FELIX_CP_URL`
+**Environment**: `FELIX_CONTROLPLANE_URL`
 
 **Example**:
 ```yaml
@@ -126,7 +126,7 @@ controlplane_url: "http://felix-controlplane:8443"
 
 **Default**: `2000`
 
-**Environment**: `FELIX_CP_SYNC_INTERVAL_MS`
+**Environment**: `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`
 
 **Example**:
 ```yaml

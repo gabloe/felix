@@ -49,7 +49,7 @@ export FELIX_BROKER_METRICS_BIND="0.0.0.0:8080"
 
 ## Control Plane
 
-### `FELIX_CP_URL`
+### `FELIX_CONTROLPLANE_URL`
 
 **Description**: Control plane base URL for metadata synchronization.
 
@@ -59,8 +59,8 @@ export FELIX_BROKER_METRICS_BIND="0.0.0.0:8080"
 
 **Example**:
 ```bash
-export FELIX_CP_URL="http://felix-controlplane:8443"
-export FELIX_CP_URL="https://cp.example.com:8443"
+export FELIX_CONTROLPLANE_URL="http://felix-controlplane:8443"
+export FELIX_CONTROLPLANE_URL="https://cp.example.com:8443"
 ```
 
 **Usage**:
@@ -68,7 +68,7 @@ export FELIX_CP_URL="https://cp.example.com:8443"
 - Required for multi-broker clusters
 - Include scheme (`http://` or `https://`)
 
-### `FELIX_CP_SYNC_INTERVAL_MS`
+### `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`
 
 **Description**: Control plane polling interval in milliseconds.
 
@@ -78,9 +78,9 @@ export FELIX_CP_URL="https://cp.example.com:8443"
 
 **Example**:
 ```bash
-export FELIX_CP_SYNC_INTERVAL_MS="2000"
-export FELIX_CP_SYNC_INTERVAL_MS="500"   # Fast polling
-export FELIX_CP_SYNC_INTERVAL_MS="10000" # Slow polling
+export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="2000"
+export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="500"   # Fast polling
+export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="10000" # Slow polling
 ```
 
 ## Publishing Configuration
