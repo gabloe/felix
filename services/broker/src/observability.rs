@@ -303,9 +303,7 @@ mod tests {
                 )
                 .route("/live", axum::routing::get(|| async { "ok" }))
                 .route("/ready", axum::routing::get(|| async { "ok" }));
-            axum::serve(listener, app.into_make_service())
-                .await
-                .ok();
+            axum::serve(listener, app.into_make_service()).await.ok();
         });
 
         // Give the server a moment to start
@@ -343,4 +341,3 @@ mod tests {
         let _ = (handle1.render(), handle2.render());
     }
 }
-

@@ -1022,7 +1022,10 @@ mod tests {
             .await
             .expect("namespace");
         assert!(broker.namespace_exists("t1", "default").await);
-        let removed = broker.remove_namespace("t1", "default").await.expect("remove");
+        let removed = broker
+            .remove_namespace("t1", "default")
+            .await
+            .expect("remove");
         assert!(removed);
         assert!(!broker.namespace_exists("t1", "default").await);
     }
@@ -1040,7 +1043,10 @@ mod tests {
             .await
             .expect("stream");
         assert!(broker.stream_exists("t1", "default", "orders").await);
-        broker.remove_stream("t1", "default", "orders").await;
+        broker
+            .remove_stream("t1", "default", "orders")
+            .await
+            .expect("remove");
         assert!(!broker.stream_exists("t1", "default", "orders").await);
     }
 

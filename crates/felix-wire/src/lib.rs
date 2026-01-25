@@ -1242,12 +1242,17 @@ mod tests {
 
     #[test]
     fn binary_encode_publish_batch_stats() {
-        let payloads = vec![b"payload1".to_vec(), b"payload2".to_vec(), b"payload3".to_vec()];
+        let payloads = vec![
+            b"payload1".to_vec(),
+            b"payload2".to_vec(),
+            b"payload3".to_vec(),
+        ];
         let result = binary::encode_publish_batch_bytes_with_stats("t1", "ns", "stream", &payloads);
         assert!(result.is_ok());
         let (bytes, stats) = result.unwrap();
-        assert!(bytes.len() > 0);
-        assert!(stats.reallocs >= 0);
+        assert!(!bytes.is_empty());
+        // Stats should be valid (reallocs is a usize, so always >= 0)
+        let _ = stats.reallocs;
     }
 
     #[test]
@@ -1286,7 +1291,7 @@ mod tests {
         let none = AckMode::None;
         let per_msg = AckMode::PerMessage;
         let per_batch = AckMode::PerBatch;
-        
+
         // Just ensure they can be used in messages
         let msg = Message::Publish {
             tenant_id: "t".to_string(),
