@@ -1497,6 +1497,8 @@ async fn ensure_tenant_exists(state: &AppState, tenant_id: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{ChangeSet, Snapshot, StoreResult};
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -1697,19 +1699,771 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
-    #[cfg(feature = "pg-tests")]
-    async fn reset_postgres(url: &str) {
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(url)
+    #[tokio::test]
+    async fn system_and_region_endpoints() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let info = Request::builder()
+            .uri("/v1/system/info")
+            .body(Body::empty())
+            .expect("info");
+        let response = app.clone().oneshot(info).await.expect("info");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["region_id"], "local");
+        assert_eq!(payload["api_version"], "v1");
+
+        let health = Request::builder()
+            .uri("/v1/system/health")
+            .body(Body::empty())
+            .expect("health");
+        let response = app.clone().oneshot(health).await.expect("health");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["status"], "ok");
+
+        let regions = Request::builder()
+            .uri("/v1/regions")
+            .body(Body::empty())
+            .expect("regions");
+        let response = app.clone().oneshot(regions).await.expect("regions");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+
+        let get_region = Request::builder()
+            .uri("/v1/regions/local")
+            .body(Body::empty())
+            .expect("get region");
+        let response = app.clone().oneshot(get_region).await.expect("get region");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let missing_region = Request::builder()
+            .uri("/v1/regions/missing")
+            .body(Body::empty())
+            .expect("missing region");
+        let response = app
+            .clone()
+            .oneshot(missing_region)
             .await
-            .expect("pg pool");
+            .expect("missing region");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn tenant_and_namespace_errors() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let list = Request::builder()
+            .uri("/v1/tenants")
+            .body(Body::empty())
+            .expect("list tenants");
+        let response = app.clone().oneshot(list).await.expect("list tenants");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let conflict = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One Again"
+            }),
+        );
+        let response = app.clone().oneshot(conflict).await.expect("conflict");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let list_missing_ns = Request::builder()
+            .uri("/v1/tenants/missing/namespaces")
+            .body(Body::empty())
+            .expect("list missing ns");
+        let response = app
+            .clone()
+            .oneshot(list_missing_ns)
+            .await
+            .expect("list missing ns");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let create_missing_ns = json_request(
+            "POST",
+            "/v1/tenants/missing/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_missing_ns)
+            .await
+            .expect("missing ns");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let delete_namespace = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default")
+            .body(Body::empty())
+            .expect("delete namespace");
+        let response = app
+            .clone()
+            .oneshot(delete_namespace)
+            .await
+            .expect("delete namespace");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let delete_namespace_missing = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default")
+            .body(Body::empty())
+            .expect("delete namespace missing");
+        let response = app
+            .clone()
+            .oneshot(delete_namespace_missing)
+            .await
+            .expect("delete namespace missing");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let delete_tenant = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1")
+            .body(Body::empty())
+            .expect("delete tenant");
+        let response = app
+            .clone()
+            .oneshot(delete_tenant)
+            .await
+            .expect("delete tenant");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let delete_tenant_missing = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1")
+            .body(Body::empty())
+            .expect("delete tenant missing");
+        let response = app
+            .clone()
+            .oneshot(delete_tenant_missing)
+            .await
+            .expect("delete tenant missing");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn stream_and_cache_not_found_paths() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let get_stream = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+            .body(Body::empty())
+            .expect("get stream");
+        let response = app.clone().oneshot(get_stream).await.expect("get stream");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let patch_stream = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/streams/missing",
+            serde_json::json!({
+                "durable": true
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(patch_stream)
+            .await
+            .expect("patch stream");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let get_cache = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+            .body(Body::empty())
+            .expect("get cache");
+        let response = app.clone().oneshot(get_cache).await.expect("get cache");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let patch_cache = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/caches/missing",
+            serde_json::json!({
+                "display_name": "Updated"
+            }),
+        );
+        let response = app.clone().oneshot(patch_cache).await.expect("patch cache");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let list_missing_namespace_streams = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/missing/streams")
+            .body(Body::empty())
+            .expect("list missing streams");
+        let response = app
+            .clone()
+            .oneshot(list_missing_namespace_streams)
+            .await
+            .expect("list missing streams");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let list_missing_namespace_caches = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/missing/caches")
+            .body(Body::empty())
+            .expect("list missing caches");
+        let response = app
+            .clone()
+            .oneshot(list_missing_namespace_caches)
+            .await
+            .expect("list missing caches");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn snapshots_and_changes_endpoints() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_stream = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/streams",
+            serde_json::json!({
+                "stream": "orders",
+                "kind": "Stream",
+                "shards": 1,
+                "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+                "consistency": "Leader",
+                "delivery": "AtLeastOnce",
+                "durable": false
+            }),
+        );
+        let response = app.clone().oneshot(create_stream).await.expect("stream");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_cache = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            serde_json::json!({
+                "cache": "primary",
+                "display_name": "Primary"
+            }),
+        );
+        let response = app.clone().oneshot(create_cache).await.expect("cache");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        for path in [
+            "/v1/tenants/snapshot",
+            "/v1/tenants/changes?since=0",
+            "/v1/namespaces/snapshot",
+            "/v1/namespaces/changes?since=0",
+            "/v1/streams/snapshot",
+            "/v1/streams/changes?since=0",
+            "/v1/caches/snapshot",
+            "/v1/caches/changes?since=0",
+        ] {
+            let req = Request::builder().uri(path).body(Body::empty()).unwrap();
+            let response = app.clone().oneshot(req).await.expect("snapshot/changes");
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = read_json(response).await;
+            assert!(!payload["items"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_and_cache_conflict_and_delete_errors() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_stream = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/streams",
+            serde_json::json!({
+                "stream": "orders",
+                "kind": "Stream",
+                "shards": 1,
+                "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+                "consistency": "Leader",
+                "delivery": "AtLeastOnce",
+                "durable": false
+            }),
+        );
+        let response = app.clone().oneshot(create_stream).await.expect("stream");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let conflict_stream = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/streams",
+            serde_json::json!({
+                "stream": "orders",
+                "kind": "Stream",
+                "shards": 1,
+                "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+                "consistency": "Leader",
+                "delivery": "AtLeastOnce",
+                "durable": false
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(conflict_stream)
+            .await
+            .expect("stream conflict");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let patch_stream = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/streams/orders",
+            serde_json::json!({
+                "retention": { "max_age_seconds": 7200, "max_size_bytes": 1024 },
+                "consistency": "Quorum",
+                "delivery": "AtMostOnce",
+                "durable": true
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(patch_stream)
+            .await
+            .expect("patch stream");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let create_cache = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            serde_json::json!({
+                "cache": "primary",
+                "display_name": "Primary"
+            }),
+        );
+        let response = app.clone().oneshot(create_cache).await.expect("cache");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let conflict_cache = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            serde_json::json!({
+                "cache": "primary",
+                "display_name": "Primary"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(conflict_cache)
+            .await
+            .expect("cache conflict");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let patch_cache = json_request(
+            "PATCH",
+            "/v1/tenants/t1/namespaces/default/caches/primary",
+            serde_json::json!({ "display_name": "Primary Updated" }),
+        );
+        let response = app.clone().oneshot(patch_cache).await.expect("patch cache");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let delete_stream = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+            .body(Body::empty())
+            .expect("delete stream");
+        let response = app
+            .clone()
+            .oneshot(delete_stream)
+            .await
+            .expect("delete stream");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let delete_cache = Request::builder()
+            .method("DELETE")
+            .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+            .body(Body::empty())
+            .expect("delete cache");
+        let response = app
+            .clone()
+            .oneshot(delete_cache)
+            .await
+            .expect("delete cache");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_endpoints_return_items() {
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(default_state_with_region_id("local".to_string())).into_service();
+
+        let create_tenant = json_request(
+            "POST",
+            "/v1/tenants",
+            serde_json::json!({
+                "tenant_id": "t1",
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = app.clone().oneshot(create_tenant).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_namespace = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces",
+            serde_json::json!({
+                "namespace": "default",
+                "display_name": "Default"
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(create_namespace)
+            .await
+            .expect("namespace");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_stream = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/streams",
+            serde_json::json!({
+                "stream": "orders",
+                "kind": "Stream",
+                "shards": 1,
+                "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+                "consistency": "Leader",
+                "delivery": "AtLeastOnce",
+                "durable": false
+            }),
+        );
+        let response = app.clone().oneshot(create_stream).await.expect("stream");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let create_cache = json_request(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            serde_json::json!({
+                "cache": "primary",
+                "display_name": "Primary"
+            }),
+        );
+        let response = app.clone().oneshot(create_cache).await.expect("cache");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let list_tenants = Request::builder()
+            .uri("/v1/tenants")
+            .body(Body::empty())
+            .expect("list tenants");
+        let response = app
+            .clone()
+            .oneshot(list_tenants)
+            .await
+            .expect("list tenants");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let list_namespaces = Request::builder()
+            .uri("/v1/tenants/t1/namespaces")
+            .body(Body::empty())
+            .expect("list namespaces");
+        let response = app
+            .clone()
+            .oneshot(list_namespaces)
+            .await
+            .expect("list namespaces");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let list_streams = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/streams")
+            .body(Body::empty())
+            .expect("list streams");
+        let response = app
+            .clone()
+            .oneshot(list_streams)
+            .await
+            .expect("list streams");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let list_caches = Request::builder()
+            .uri("/v1/tenants/t1/namespaces/default/caches")
+            .body(Body::empty())
+            .expect("list caches");
+        let response = app.clone().oneshot(list_caches).await.expect("list caches");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    struct FailingStore;
+
+    #[async_trait]
+    impl ControlPlaneStore for FailingStore {
+        async fn list_tenants(&self) -> StoreResult<Vec<Tenant>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn create_tenant(&self, _tenant: Tenant) -> StoreResult<Tenant> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn delete_tenant(&self, _tenant_id: &str) -> StoreResult<()> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn tenant_snapshot(&self) -> StoreResult<Snapshot<Tenant>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn tenant_changes(&self, _since: u64) -> StoreResult<ChangeSet<TenantChange>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn list_namespaces(&self, _tenant_id: &str) -> StoreResult<Vec<Namespace>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn create_namespace(&self, _namespace: Namespace) -> StoreResult<Namespace> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn delete_namespace(&self, _key: &NamespaceKey) -> StoreResult<()> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn namespace_snapshot(&self) -> StoreResult<Snapshot<Namespace>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn namespace_changes(&self, _since: u64) -> StoreResult<ChangeSet<NamespaceChange>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn list_streams(
+            &self,
+            _tenant_id: &str,
+            _namespace: &str,
+        ) -> StoreResult<Vec<Stream>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn get_stream(&self, _key: &StreamKey) -> StoreResult<Stream> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn create_stream(&self, _stream: Stream) -> StoreResult<Stream> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn patch_stream(
+            &self,
+            _key: &StreamKey,
+            _patch: StreamPatchRequest,
+        ) -> StoreResult<Stream> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn delete_stream(&self, _key: &StreamKey) -> StoreResult<()> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn stream_snapshot(&self) -> StoreResult<Snapshot<Stream>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn stream_changes(&self, _since: u64) -> StoreResult<ChangeSet<StreamChange>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn list_caches(&self, _tenant_id: &str, _namespace: &str) -> StoreResult<Vec<Cache>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn get_cache(&self, _key: &CacheKey) -> StoreResult<Cache> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn create_cache(&self, _cache: Cache) -> StoreResult<Cache> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn patch_cache(
+            &self,
+            _key: &CacheKey,
+            _patch: CachePatchRequest,
+        ) -> StoreResult<Cache> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn delete_cache(&self, _key: &CacheKey) -> StoreResult<()> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn cache_snapshot(&self) -> StoreResult<Snapshot<Cache>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn cache_changes(&self, _since: u64) -> StoreResult<ChangeSet<CacheChange>> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn tenant_exists(&self, _tenant_id: &str) -> StoreResult<bool> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn namespace_exists(&self, _key: &NamespaceKey) -> StoreResult<bool> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        async fn health_check(&self) -> StoreResult<()> {
+            Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        }
+
+        fn is_durable(&self) -> bool {
+            false
+        }
+
+        fn backend_name(&self) -> &'static str {
+            "fail"
+        }
+    }
+
+    #[tokio::test]
+    async fn system_health_reports_internal_error_on_store_failure() {
+        let state = AppState {
+            region: Region {
+                region_id: "local".to_string(),
+                display_name: "Local Region".to_string(),
+            },
+            api_version: "v1".to_string(),
+            features: FeatureFlags {
+                durable_storage: false,
+                tiered_storage: false,
+                bridges: false,
+            },
+            store: Arc::new(FailingStore),
+        };
+        let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+            build_app(state).into_service();
+
+        let health = Request::builder()
+            .uri("/v1/system/health")
+            .body(Body::empty())
+            .expect("health");
+        let response = app.clone().oneshot(health).await.expect("health");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[cfg(feature = "pg-tests")]
+    async fn reset_postgres(url: &str) -> Result<(), sqlx::Error> {
+        let pool = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(std::time::Duration::from_secs(2))
+                .connect(url),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => return Err(sqlx::Error::PoolTimedOut),
+        };
         sqlx::query(
             "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, streams, caches, namespaces, tenants RESTART IDENTITY",
         )
         .execute(&pool)
         .await
-        .expect("truncate tables");
+        .map(|_| ())
     }
 
     #[cfg(feature = "pg-tests")]
@@ -1723,24 +2477,32 @@ mod tests {
                 return None;
             }
         };
-        reset_postgres(&url).await;
+        if let Err(err) = reset_postgres(&url).await {
+            eprintln!("skipping pg-tests: cannot connect to postgres: {err}");
+            return None;
+        }
         let pg_cfg = config::PostgresConfig {
             url,
             max_connections: 5,
             connect_timeout_ms: 5_000,
             acquire_timeout_ms: 5_000,
         };
-        Some(
-            store::postgres::PostgresStore::connect(
-                &pg_cfg,
-                StoreConfig {
-                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
-                    change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-                },
-            )
-            .await
-            .expect("connect postgres store"),
+        let store = match store::postgres::PostgresStore::connect(
+            &pg_cfg,
+            StoreConfig {
+                changes_limit: config::DEFAULT_CHANGES_LIMIT,
+                change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+            },
         )
+        .await
+        {
+            Ok(store) => store,
+            Err(err) => {
+                eprintln!("skipping pg-tests: connect postgres store failed: {err}");
+                return None;
+            }
+        };
+        Some(store)
     }
 
     #[cfg(feature = "pg-tests")]

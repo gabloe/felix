@@ -461,6 +461,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn send_outgoing_critical_increments_depth() {
         reset_global_ack_depth();
         let depth = Arc::new(AtomicUsize::new(0));

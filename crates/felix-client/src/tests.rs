@@ -346,6 +346,12 @@ fn config_yaml_overrides_ignore_zero_values() {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    unsafe {
+        std::env::remove_var("FELIX_PUB_CONN_POOL");
+        std::env::remove_var("FELIX_CACHE_CONN_POOL");
+        std::env::remove_var("FELIX_EVENT_CONN_POOL");
+    }
+
     let yaml = r#"
 publish_conn_pool: 0
 cache_conn_pool: 5

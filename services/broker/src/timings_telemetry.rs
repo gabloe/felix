@@ -488,3 +488,58 @@ pub fn take_cache_samples() -> Option<BrokerCacheTimingSamples> {
         std::mem::take(&mut *finish),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collection_records_and_samples() {
+        assert!(!should_sample());
+        assert!(take_samples().is_none());
+
+        enable_collection(2);
+        set_enabled(true);
+
+        assert!(should_sample());
+        assert!(!should_sample());
+        assert!(should_sample());
+
+        record_decode_ns(10);
+        record_fanout_ns(11);
+        record_ack_write_ns(12);
+        record_quic_write_ns(13);
+        record_sub_queue_wait_ns(14);
+        record_sub_write_ns(15);
+        record_sub_delivery_ns(16);
+
+        record_cache_read_ns(20);
+        record_cache_decode_ns(21);
+        record_cache_lookup_ns(22);
+        record_cache_insert_ns(23);
+        record_cache_encode_ns(24);
+        record_cache_write_ns(25);
+        record_cache_finish_ns(26);
+
+        let samples = take_samples().expect("samples");
+        assert_eq!(samples.0, vec![10]);
+        assert_eq!(samples.1, vec![11]);
+        assert_eq!(samples.2, vec![12]);
+        assert_eq!(samples.3, vec![13]);
+        assert_eq!(samples.4, vec![14]);
+        assert_eq!(samples.5, vec![15]);
+        assert_eq!(samples.6, vec![16]);
+
+        let cache_samples = take_cache_samples().expect("cache samples");
+        assert_eq!(cache_samples.0, vec![20]);
+        assert_eq!(cache_samples.1, vec![21]);
+        assert_eq!(cache_samples.2, vec![22]);
+        assert_eq!(cache_samples.3, vec![23]);
+        assert_eq!(cache_samples.4, vec![24]);
+        assert_eq!(cache_samples.5, vec![25]);
+        assert_eq!(cache_samples.6, vec![26]);
+
+        set_enabled(false);
+        assert!(!should_sample());
+    }
+}
