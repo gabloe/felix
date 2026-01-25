@@ -17,7 +17,7 @@ Local dev:
 - **Memory (default):** No external dependencies; state lives in-process. Suitable for local development and CI.
 - **Postgres:** Durable metadata with monotonic change sequences. Enable by setting `storage.backend: postgres` or providing `FELIX_CONTROLPLANE_POSTGRES_URL` / `DATABASE_URL`.
 
-Example YAML override (`FELIX_CP_CONFIG`):
+Example YAML override (`FELIX_CONTROLPLANE_CONFIG`):
 ```yaml
 bind_addr: "0.0.0.0:8443"
 storage:

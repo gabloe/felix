@@ -208,12 +208,21 @@ println!("Publish p999: {:?}", publish_timings.p999);
 
 ```rust
 // Enable telemetry
-let config = ClientConfig::default();
-let client = Client::connect("https://broker:5000", config).await?;
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
+
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
+let publisher = client.publisher().await?;
 
 // Run workload
 for _ in 0..10000 {
-    client.publish("tenant", "ns", "stream", data).await?;
+    publisher
+        .publish("tenant", "ns", "stream", data.to_vec(), AckMode::None)
+        .await?;
 }
 
 // Analyze results
@@ -498,7 +507,7 @@ Total: 470 µs
 1. Check broker logs for subscription creation
 2. Verify tenant/namespace/stream exist
 3. Check network connectivity from subscriber
-4. Check subscriber application is calling `subscription.next()`
+4. Check subscriber application is calling `subscription.next_event()`
 5. Enable DEBUG logging to see event delivery
 
 **Issue**: High publish latency

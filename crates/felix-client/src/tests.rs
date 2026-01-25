@@ -71,7 +71,23 @@ async fn clients_share_broker_state() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn cache_worker_exits_on_stream_error() -> Result<()> {
+    struct EnvGuard;
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("FELIX_PUB_CONN_POOL");
+                std::env::remove_var("FELIX_PUB_STREAMS_PER_CONN");
+                std::env::remove_var("FELIX_CACHE_CONN_POOL");
+                std::env::remove_var("FELIX_CACHE_STREAMS_PER_CONN");
+                std::env::remove_var("FELIX_EVENT_CONN_POOL");
+            }
+        }
+    }
+
+    let _env_guard = EnvGuard;
     unsafe {
         std::env::set_var("FELIX_PUB_CONN_POOL", "1");
         std::env::set_var("FELIX_PUB_STREAMS_PER_CONN", "1");
@@ -324,6 +340,7 @@ bench_embed_ts: true
 
 #[allow(deprecated)]
 #[test]
+#[serial_test::serial]
 fn config_yaml_overrides_ignore_zero_values() {
     use crate::config::*;
     use std::io::Write;

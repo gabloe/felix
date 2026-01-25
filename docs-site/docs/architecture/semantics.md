@@ -39,9 +39,9 @@ This semantic is appropriate for:
 
 ```rust
 // Real-time sensor data where latest reading matters most
-let mut subscription = client.subscribe("sensors", "temperature").await?;
+let mut subscription = client.subscribe("acme", "sensors", "temperature").await?;
 
-while let Some(event) = subscription.next().await {
+while let Some(event) = subscription.next_event().await? {
     // Process latest temperature reading
     // If we miss a reading, the next one will arrive soon
     update_dashboard(event.payload);
@@ -119,8 +119,14 @@ graph LR
 
 ```rust
 // Publish to two streams
-client.publish("events", "user-login", login_event).await?;
-client.publish("events", "audit-log", audit_event).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish("acme", "prod", "user-login", login_event, AckMode::None)
+    .await?;
+publisher
+    .publish("acme", "prod", "audit-log", audit_event, AckMode::None)
+    .await?;
 
 // Subscribers to user-login and audit-log may see events in any relative order
 ```
@@ -129,8 +135,12 @@ client.publish("events", "audit-log", audit_event).await?;
 
 ```rust
 // Batch publish preserves order within the batch
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
 let messages = vec![msg1, msg2, msg3];
-client.publish_batch("events", "orders", messages).await?;
+publisher
+    .publish_batch("acme", "prod", "orders", messages, AckMode::PerBatch)
+    .await?;
 
 // Subscribers will see msg1, msg2, msg3 in that order
 ```
@@ -306,10 +316,22 @@ sequenceDiagram
 
 ```rust
 // Store with 60-second TTL
-client.cache_put("session", session_id, session_data, Some(60_000)).await?;
+use bytes::Bytes;
+client
+    .cache_put(
+        "acme",
+        "prod",
+        "session",
+        session_id,
+        Bytes::from(session_data),
+        Some(60_000),
+    )
+    .await?;
 
 // Store without expiration
-client.cache_put("config", config_key, config_value, None).await?;
+client
+    .cache_put("acme", "prod", "config", config_key, Bytes::from(config_value), None)
+    .await?;
 ```
 
 **Expiration behavior**:
@@ -435,9 +457,9 @@ The broker enforces tenant/namespace existence:
 sequenceDiagram
     participant C as Client
     participant B as Broker
-    participant CP as Control Plane
+    participant CONTROLPLANE as Control Plane
     
-    CP->>B: Sync metadata (tenants, namespaces)
+    CONTROLPLANE->>B: Sync metadata (tenants, namespaces)
     C->>B: publish (tenant=unknown, ...)
     B-->>C: error (unknown tenant)
     
@@ -577,7 +599,11 @@ Applications can test semantic guarantees:
 ```rust
 // Publish ordered batch
 let messages = vec!["msg1", "msg2", "msg3"];
-client.publish_batch("test", "orders", messages).await?;
+use felix_wire::AckMode;
+let publisher = client.publisher().await?;
+publisher
+    .publish_batch("test", "default", "orders", messages, AckMode::PerBatch)
+    .await?;
 
 // Verify subscriber receives in order
 let events = collect_events(&mut subscription, 3).await?;
@@ -588,8 +614,8 @@ assert_eq!(events, vec!["msg1", "msg2", "msg3"]);
 
 ```rust
 // Start fast and slow subscribers
-let mut fast_sub = client.subscribe("test", "stream").await?;
-let mut slow_sub = client.subscribe("test", "stream").await?;
+let mut fast_sub = client.subscribe("test", "default", "stream").await?;
+let mut slow_sub = client.subscribe("test", "default", "stream").await?;
 
 // Slow subscriber delays processing
 simulate_slow_processing(&mut slow_sub);

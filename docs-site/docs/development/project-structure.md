@@ -137,23 +137,26 @@ crates/
 - Error handling
 
 **Key types**:
-- `FelixClient`: Main client interface
+- `Client`: Main client interface
 - `Publisher`: Publishing handle
-- `Subscriber`: Subscription handle
-- `CacheClient`: Cache operations
+- `Subscription`: Subscription handle
+- `InProcessClient`: Embedded testing client
 - `ClientConfig`: Client configuration
 
 **Example usage**:
 ```rust
-use felix_client::{FelixClient, ClientConfig};
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
 
-let config = ClientConfig {
-    broker_addr: "127.0.0.1:5000".parse()?,
-    ..Default::default()
-};
-
-let client = FelixClient::connect(config).await?;
-client.publish("tenant", "namespace", "stream", b"data").await?;
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
+let publisher = client.publisher().await?;
+publisher
+    .publish("tenant", "namespace", "stream", b"data".to_vec(), AckMode::None)
+    .await?;
 ```
 
 ### Supporting Crates

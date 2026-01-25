@@ -106,9 +106,9 @@ impl BrokerConfig {
             .unwrap_or_else(|_| "0.0.0.0:5000".to_string())
             .parse()
             .with_context(|| "parse FELIX_QUIC_BIND")?;
-        let controlplane_url = std::env::var("FELIX_CP_URL").ok();
+        let controlplane_url = std::env::var("FELIX_CONTROLPLANE_URL").ok();
         // Poll every 2s by default.
-        let controlplane_sync_interval_ms = std::env::var("FELIX_CP_SYNC_INTERVAL_MS")
+        let controlplane_sync_interval_ms = std::env::var("FELIX_CONTROLPLANE_SYNC_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
@@ -392,8 +392,11 @@ mod tests {
         unsafe {
             env::set_var("FELIX_QUIC_BIND", "127.0.0.1:6000");
             env::set_var("FELIX_BROKER_METRICS_BIND", "127.0.0.1:9000");
-            env::set_var("FELIX_CP_URL", "http://cp.example.com:8443");
-            env::set_var("FELIX_CP_SYNC_INTERVAL_MS", "5000");
+            env::set_var(
+                "FELIX_CONTROLPLANE_URL",
+                "http://controlplane.example.com:8443",
+            );
+            env::set_var("FELIX_CONTROLPLANE_SYNC_INTERVAL_MS", "5000");
             env::set_var("FELIX_ACK_ON_COMMIT", "true");
             env::set_var("FELIX_MAX_FRAME_BYTES", "32000000");
             env::set_var("FELIX_PUBLISH_QUEUE_WAIT_MS", "3000");
@@ -412,7 +415,7 @@ mod tests {
         assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9000");
         assert_eq!(
             config.controlplane_url,
-            Some("http://cp.example.com:8443".to_string())
+            Some("http://controlplane.example.com:8443".to_string())
         );
         assert_eq!(config.controlplane_sync_interval_ms, 5000);
         assert!(config.ack_on_commit);

@@ -194,8 +194,8 @@ cargo run --release -p broker --bin cachedemo
 Set up broker to connect to a local control plane:
 
 ```bash
-export FELIX_CP_URL="http://localhost:8443"
-export FELIX_CP_SYNC_INTERVAL_MS="1000"
+export FELIX_CONTROLPLANE_URL="http://localhost:8443"
+export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="1000"
 
 cargo run --release -p broker
 ```

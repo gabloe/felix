@@ -84,14 +84,14 @@ struct PostgresOverride {
 
 impl ControlPlaneConfig {
     pub fn from_env() -> Result<Self> {
-        let metrics_bind = std::env::var("FELIX_CP_METRICS_BIND")
+        let metrics_bind = std::env::var("FELIX_CONTROLPLANE_METRICS_BIND")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()
-            .with_context(|| "parse FELIX_CP_METRICS_BIND")?;
-        let bind_addr = std::env::var("FELIX_CP_BIND")
+            .with_context(|| "parse FELIX_CONTROLPLANE_METRICS_BIND")?;
+        let bind_addr = std::env::var("FELIX_CONTROLPLANE_BIND")
             .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
             .parse()
-            .with_context(|| "parse FELIX_CP_BIND")?;
+            .with_context(|| "parse FELIX_CONTROLPLANE_BIND")?;
         let region_id = std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string());
 
         let mut storage = std::env::var("FELIX_CONTROLPLANE_STORAGE_BACKEND")
@@ -149,9 +149,9 @@ impl ControlPlaneConfig {
 
     pub fn from_env_or_yaml() -> Result<Self> {
         let mut config = Self::from_env()?;
-        if let Ok(path) = std::env::var("FELIX_CP_CONFIG") {
+        if let Ok(path) = std::env::var("FELIX_CONTROLPLANE_CONFIG") {
             let contents = fs::read_to_string(&path)
-                .with_context(|| format!("read FELIX_CP_CONFIG: {path}"))?;
+                .with_context(|| format!("read FELIX_CONTROLPLANE_CONFIG: {path}"))?;
             let override_cfg: ControlPlaneConfigOverride = serde_yaml::from_str(&contents)
                 .with_context(|| "parse control plane config yaml")?;
 
@@ -245,8 +245,8 @@ mod tests {
     fn from_env_respects_env_vars() {
         clear_felix_env();
         unsafe {
-            env::set_var("FELIX_CP_BIND", "127.0.0.1:9443");
-            env::set_var("FELIX_CP_METRICS_BIND", "127.0.0.1:9090");
+            env::set_var("FELIX_CONTROLPLANE_BIND", "127.0.0.1:9443");
+            env::set_var("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:9090");
             env::set_var("FELIX_REGION_ID", "us-west-2");
             env::set_var("FELIX_CONTROLPLANE_CHANGES_LIMIT", "5000");
         }
@@ -265,7 +265,7 @@ mod tests {
     fn from_env_rejects_invalid_socket_addr() {
         clear_felix_env();
         unsafe {
-            env::set_var("FELIX_CP_BIND", "not-a-valid-address");
+            env::set_var("FELIX_CONTROLPLANE_BIND", "not-a-valid-address");
         }
         let result = ControlPlaneConfig::from_env();
         assert!(result.is_err());
@@ -305,7 +305,7 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let nonexistent = tmpdir.path().join("nonexistent.yml");
         unsafe {
-            env::set_var("FELIX_CP_CONFIG", nonexistent.to_str().unwrap());
+            env::set_var("FELIX_CONTROLPLANE_CONFIG", nonexistent.to_str().unwrap());
         }
         let result = ControlPlaneConfig::from_env_or_yaml();
         assert!(result.is_err());
@@ -331,7 +331,7 @@ storage:
         )
         .unwrap();
         unsafe {
-            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+            env::set_var("FELIX_CONTROLPLANE_CONFIG", config_path.to_str().unwrap());
         }
 
         let config = ControlPlaneConfig::from_env_or_yaml().expect("from_env_or_yaml");
@@ -351,7 +351,7 @@ storage:
         let config_path = tmpdir.path().join("bad.yml");
         fs::write(&config_path, "this is not: valid: yaml:").unwrap();
         unsafe {
-            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+            env::set_var("FELIX_CONTROLPLANE_CONFIG", config_path.to_str().unwrap());
         }
 
         let result = ControlPlaneConfig::from_env_or_yaml();
@@ -368,7 +368,7 @@ storage:
         let config_path = tmpdir.path().join("config.yml");
         fs::write(&config_path, "bind_addr: \"not-a-socket\"").unwrap();
         unsafe {
-            env::set_var("FELIX_CP_CONFIG", config_path.to_str().unwrap());
+            env::set_var("FELIX_CONTROLPLANE_CONFIG", config_path.to_str().unwrap());
         }
 
         let result = ControlPlaneConfig::from_env_or_yaml();

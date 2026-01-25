@@ -73,14 +73,24 @@ QUIC connections survive network changes:
 **Connection ID**: Each QUIC connection has a unique identifier independent of IP/port tuple.
 
 ```rust
+use felix_client::{Client, ClientConfig};
+use felix_wire::AckMode;
+use std::net::SocketAddr;
+
 // QUIC connection survives IP change
-let conn = client.connect("https://broker:5000").await?;
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
+let addr: SocketAddr = "127.0.0.1:5000".parse()?;
+let client = Client::connect(addr, "localhost", config).await?;
+let publisher = client.publisher().await?;
 
 // Network switches from WiFi to cellular
 // Connection automatically migrates to new IP
 
 // Publish continues without interruption
-client.publish("tenant", "ns", "stream", data).await?;
+publisher
+    .publish("tenant", "ns", "stream", data.to_vec(), AckMode::None)
+    .await?;
 ```
 
 !!! note "Future Enhancement"
@@ -329,11 +339,12 @@ Configure pools based on workload:
 **Client configuration**:
 
 ```rust
+let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
     event_conn_pool: 8,        // For pub/sub
     cache_conn_pool: 8,        // For cache
     publish_conn_pool: 4,      // For publishing
-    ..Default::default()
+    ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
@@ -468,17 +479,11 @@ Error: Certificate validation failed: UnknownIssuer
 **Resolution**:
 
 ```rust
-// Development: skip verification (NEVER in production!)
-let config = ClientConfig {
-    tls_skip_verify: true,
-    ..Default::default()
-};
+// Production: validate certificates using the platform verifier
+let quinn = quinn::ClientConfig::with_platform_verifier();
+let config = ClientConfig::optimized_defaults(quinn);
 
-// Production: provide CA certificate
-let config = ClientConfig {
-    tls_ca_cert_path: Some("/path/to/ca.crt"),
-    ..Default::default()
-};
+// Development: configure Quinn with a test CA or custom verifier if needed
 ```
 
 **Flow control deadlock**:

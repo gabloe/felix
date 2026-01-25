@@ -126,7 +126,7 @@ where
             }
         }))
     } else {
-        tracing::info!("control plane sync disabled (FELIX_CP_URL not set)");
+        tracing::info!("control plane sync disabled (FELIX_CONTROLPLANE_URL not set)");
         None
     };
 

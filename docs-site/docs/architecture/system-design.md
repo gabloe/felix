@@ -109,13 +109,13 @@ flowchart TB
     
     subgraph ControlPlane["Control Plane (RAFT)"]
         direction LR
-        CP1["controlplane-0"]
-        CP2["controlplane-1"]
-        CP3["controlplane-2"]
+        CONTROLPLANE1["controlplane-0"]
+        CONTROLPLANE2["controlplane-1"]
+        CONTROLPLANE3["controlplane-2"]
         
-        CP1 <--> CP2
-        CP2 <--> CP3
-        CP1 <--> CP3
+        CONTROLPLANE1 <--> CONTROLPLANE2
+        CONTROLPLANE2 <--> CONTROLPLANE3
+        CONTROLPLANE1 <--> CONTROLPLANE3
         
         Meta["Metadata Store<br/>• Topics/Streams<br/>• Tenants/Namespaces<br/>• Shard Placement<br/>• ACLs/Quotas"]
     end
@@ -208,9 +208,9 @@ sequenceDiagram
     Note over C,B: M stream workers per connection
     
     par Concurrent requests
-        C->>B: cache_put(key1, value1, ttl)
-        C->>B: cache_get(key2)
-        C->>B: cache_put(key3, value3, ttl)
+        C->>B: cache_put(tenant, namespace, cache, key1, value1, ttl)
+        C->>B: cache_get(tenant, namespace, cache, key2)
+        C->>B: cache_put(tenant, namespace, cache, key3, value3, ttl)
     end
     
     par Concurrent responses
@@ -235,12 +235,12 @@ When a client connects to a broker that doesn't own the target shard:
 sequenceDiagram
     participant C as Client
     participant B1 as Broker (ingress)
-    participant CP as Control Plane
+    participant CONTROLPLANE as Control Plane
     participant B2 as Broker (shard owner)
     
     C->>B1: Publish(topic, batch)
-    B1->>CP: Lookup shard placement(topic)
-    CP-->>B1: owner = B2
+    B1->>CONTROLPLANE: Lookup shard placement(topic)
+    CONTROLPLANE-->>B1: owner = B2
     B1->>B2: Forward publish (internal QUIC)
     B2->>B2: Commit to log
     B2-->>B1: ACK
@@ -308,12 +308,12 @@ Felix enforces regional isolation with explicit bridges:
 flowchart LR
     subgraph Region1["Region: US-EAST"]
         B1["Brokers<br/>US-EAST"]
-        CP1["Control Plane<br/>US-EAST"]
+        CONTROLPLANE1["Control Plane<br/>US-EAST"]
     end
     
     subgraph Region2["Region: EU-WEST"]
         B2["Brokers<br/>EU-WEST"]
-        CP2["Control Plane<br/>EU-WEST"]
+        CONTROLPLANE2["Control Plane<br/>EU-WEST"]
     end
     
     subgraph Bridge["Explicit Bridge"]
