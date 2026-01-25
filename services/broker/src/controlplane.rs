@@ -314,6 +314,7 @@ async fn sync_once(
     base_url: &str,
     mut state: SyncState,
 ) -> Result<SyncState> {
+    let log_as_debug = cfg!(test) || std::env::var_os("RUST_TEST_THREADS").is_some();
     // === Cold start snapshot seeding ===
     // 1. Seed tenants first.
     if state.next_tenant_seq == 0 {
