@@ -1,24 +1,54 @@
+use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToBytes};
+use crate::{derive_serialization};
+use anyhow::Result;
+use rkyv::{Archive, Deserialize, Serialize, with::Skip};
+/// # Summary
+/// The data file holds the end-user data. The file is composed of a header and then chunks of data
+/// which can be categorized into two types
+///     * Free
+///     * Used
+/// The free list is the previously used space used in the file which we can re-use vs. growing the
+/// file. The used list contains existing customer data.
+///
+/// # Long Term Goals
+/// Long term we would want to support the following
+///     * File Compaction
+///     * Clear data on free
+///     * Encryption at rest.
+///
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use rkyv::{with::Skip, Archive, Deserialize, Serialize};
-use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToBytes};
-use anyhow::Result;
 
 /// Constants
 const DATA_FILE_IDENTIFIER: u64 = 0x4441544146494C45; // "DATAFILE" in ASCII
 
 #[derive(Archive, Serialize, Deserialize, Debug, Clone)]
+#[repr(u8)]
+enum EntryState {
+    Free = 0,
+    Used = 1,
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
 #[repr(C)]
 struct DataEntry {
-    /// The size of the data.
-    size: u64,
+    /// The unique identifier used to find the data. For items in the free list
+    /// the values are set to 0.
+    identifier: [u8; 1024],
 
-    /// The current offset in the file.
+    /// The state of the current entry in the file. When we want to free an entry we set
+    /// this to free before all other changes. When we  want to use an entry we mark this
+    /// used after setting all other values. This ensures that if there is Power loss we are
+    /// not in an inconsistent state.
+    state: EntryState,
+
+    /// The current offset in the index file. This is only so we can update the
+    /// file when we pull this out of the free list or place it in the free list.
     #[rkyv(with = Skip)]
     current_offset: u64,
 
-    /// The next offset.
+    /// The next offset in the index file. A value of 0 indicates end of the list.
     next_offset: u64,
 }
 
@@ -46,10 +76,7 @@ pub(crate) struct DataHeader {
     pub free_list_start_offset: u64,
 }
 
-impl DeserializeFromBytes for DataEntry {}
-impl DeserializeFromBytes for DataHeader {}
-impl SerializeToBytes for DataEntry {}
-impl SerializeToBytes for DataHeader {}
+derive_serialization!(DataHeader, DataEntry);
 
 pub(crate) struct DataFile {
     pub file_path: PathBuf,
@@ -62,7 +89,6 @@ pub(crate) struct DataFile {
 impl DataFile {
     pub fn open(file_path: PathBuf) -> Result<Self> {
         let file = File::create(file_path.clone())?;
-
 
         // If the file is empty, we need to create it.
         let (header, free_list) = read_header(&file)?;
@@ -80,9 +106,10 @@ impl DataFile {
     /// have already locked the SimpleFileStorage object for writes.
     /// @ return The offset in the file where the data starts (including header).
     fn allocate_next_data_unsafe(&self, size: u64) -> Result<u64> {
-                // Make room for the new data + header.
+        // Make room for the new data + header.
         let current_length = self.file.metadata()?.len();
-        self.file.set_len(current_length + size + size_of::<DataEntry>() as u64)?;
+        self.file
+            .set_len(current_length + size + size_of::<DataEntry>() as u64)?;
 
         Ok(current_length)
     }
@@ -102,7 +129,6 @@ fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
         super::write_to_file(&file, &header, 0)?;
         Ok((header, vec![]))
     } else {
-
         // Read the first u64 to ensure it has the correct value
         let mut identifier_bytes = [0u8; 8];
         let mut f = file.try_clone()?;
@@ -117,12 +143,11 @@ fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
         }
 
         // We need to iterate through the free list and load it into memory.
-        let header: DataHeader = super::read_from_file(&mut f, 0, size_of::<DataHeader>())?;
+        let header: DataHeader = super::read_from_file(&mut f, 0)?;
         let mut free_list = vec![];
         let mut current_offset = header.free_list_start_offset;
         for _ in 0..header.free_list_count {
-            let mut entry: DataEntry =
-                super::read_from_file(&mut f, current_offset, size_of::<DataHeader>())?;
+            let mut entry: DataEntry = super::read_from_file(&mut f, current_offset)?;
             free_list.push(entry.clone());
             entry.current_offset = current_offset;
             current_offset = entry.next_offset;

@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
 
-
 // Serialization
 use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToBytes};
 use rkyv::{Archive, Deserialize, Serialize};
@@ -16,15 +15,8 @@ use rkyv::{Archive, Deserialize, Serialize};
 use super::data_file::*;
 use super::index_file::*;
 
-trait List : Sized {
+trait List: Sized {
     fn next() -> Option<Self>;
-}
-
-
-/// The only data we care about in the data file.
-struct IndexData {
-    free_list: Vec<FreeListEntry>,
-    used_list: Vec<IndexEntry>,
 }
 
 /// The files required to make the back-end work.
@@ -33,27 +25,11 @@ struct Files {
     index_file: IndexFile,
 }
 
-
 pub struct SimpleFileStorage {
     files: RwLock<Files>,
     path_data_file: PathBuf,
     path_index_file: PathBuf,
 }
-
-#[repr(C)]
-#[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq)]
-struct FreeListEntry {
-    size: u64,
-    next_free_list_offset: u64,
-}
-
-// TODO : See if we can implement derive for SerializeToBytes and DeserializeFromBytes.
-impl SerializeToBytes for IndexEntry {}
-impl SerializeToBytes for IndexHeader {}
-impl SerializeToBytes for FreeListEntry {}
-impl DeserializeFromBytes for IndexEntry {}
-impl DeserializeFromBytes for IndexHeader {}
-impl DeserializeFromBytes for FreeListEntry {}
 
 /// This is a very simple file storage meant for testing purposes only. There are
 /// two files: index and data.
