@@ -10,10 +10,21 @@ use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use std::future::Future;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    run_with_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+}
+
+async fn run_with_shutdown<F>(shutdown: F) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let metrics_handle = observability::init_observability("felix-broker");
 
     // Start an in-process broker with an ephemeral cache backend. TODO: support other storage backends via config.
@@ -68,7 +79,7 @@ async fn main() -> Result<()> {
     }
 
     // Block until SIGINT so the process stays alive.
-    let _ = tokio::signal::ctrl_c().await;
+    shutdown.await;
     accept_task.abort();
     tracing::info!("broker stopped");
     Ok(())
@@ -83,4 +94,87 @@ fn build_server_config() -> Result<ServerConfig> {
         vec![cert_der],
         key_der.into(),
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, http::StatusCode};
+    use serial_test::serial;
+    use tokio::net::TcpListener;
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, prev }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var(key).ok();
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(value) => unsafe {
+                    std::env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(self.key);
+                },
+            }
+        }
+    }
+
+    async fn start_error_server() -> Result<String> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let app = Router::new().fallback(|| async { StatusCode::INTERNAL_SERVER_ERROR });
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service()).await;
+        });
+        Ok(format!("http://{}", addr))
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn run_with_shutdown_without_controlplane() -> Result<()> {
+        let _g1 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
+        let _g2 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
+        let _g3 = EnvGuard::unset("FELIX_CP_URL");
+        let _g4 = EnvGuard::unset("FELIX_BROKER_CONFIG");
+        run_with_shutdown(async {}).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn run_with_shutdown_with_controlplane() -> Result<()> {
+        let _g1 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
+        let _g2 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
+        let _g3 = EnvGuard::unset("FELIX_BROKER_CONFIG");
+        let base_url = start_error_server().await?;
+        let _g4 = EnvGuard::set("FELIX_CP_URL", &base_url);
+        run_with_shutdown(async {}).await?;
+        Ok(())
+    }
+
+    #[test]
+    fn build_server_config_smoke() -> Result<()> {
+        let _config = build_server_config()?;
+        Ok(())
+    }
 }
