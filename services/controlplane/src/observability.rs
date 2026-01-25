@@ -6,6 +6,7 @@ use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace as sdktrace;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
@@ -95,12 +96,25 @@ impl<'a> Extractor for HeaderMapExtractor<'a> {
 }
 
 pub async fn serve_metrics(handle: PrometheusHandle, addr: SocketAddr) -> std::io::Result<()> {
+    serve_metrics_with_shutdown(handle, addr, std::future::pending()).await
+}
+
+async fn serve_metrics_with_shutdown<F>(
+    handle: PrometheusHandle,
+    addr: SocketAddr,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let app = axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || async move { handle.render() }),
     );
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 fn install_metrics_recorder() -> PrometheusHandle {
