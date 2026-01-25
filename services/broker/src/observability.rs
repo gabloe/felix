@@ -335,7 +335,7 @@ mod tests {
             // Abort the server task to prevent hanging
             server_handle.abort();
         };
-        
+
         // Run with a 5-second timeout
         tokio::time::timeout(tokio::time::Duration::from_secs(5), test_future)
             .await
