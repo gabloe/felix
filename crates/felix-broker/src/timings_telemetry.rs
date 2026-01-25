@@ -82,6 +82,11 @@ mod tests {
     use serial_test::serial;
 
     // Reset the global collector state for test isolation
+    // SAFETY: This is only safe in single-threaded test context with #[serial] attribute.
+    // The unsafe manipulation of OnceLock is acceptable here because:
+    // 1. Tests are run serially (via #[serial] attribute) to prevent data races
+    // 2. This is test-only code that won't be compiled in production
+    // 3. We need to reset the global state between tests for proper isolation
     fn reset_collector() {
         unsafe {
             let ptr = &COLLECTOR as *const OnceLock<TimingCollector>
