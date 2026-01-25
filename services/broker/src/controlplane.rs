@@ -326,7 +326,7 @@ async fn sync_once(
                 state.next_tenant_seq = snapshot.next_seq;
             }
             Err(err) => {
-                if cfg!(test) {
+                if log_as_debug {
                     tracing::debug!(error = %err, "control plane tenant snapshot failed");
                 } else {
                     tracing::warn!(error = %err, "control plane tenant snapshot failed");
@@ -347,7 +347,7 @@ async fn sync_once(
                 state.next_namespace_seq = snapshot.next_seq;
             }
             Err(err) => {
-                if cfg!(test) {
+                if log_as_debug {
                     tracing::debug!(error = %err, "control plane namespace snapshot failed");
                 } else {
                     tracing::warn!(error = %err, "control plane namespace snapshot failed");
@@ -373,7 +373,7 @@ async fn sync_once(
                 state.next_cache_seq = snapshot.next_seq;
             }
             Err(err) => {
-                if cfg!(test) {
+                if log_as_debug {
                     tracing::debug!(error = %err, "control plane cache snapshot failed");
                 } else {
                     tracing::warn!(error = %err, "control plane cache snapshot failed");
@@ -403,7 +403,7 @@ async fn sync_once(
                 state.next_stream_seq = snapshot.next_seq;
             }
             Err(err) => {
-                if cfg!(test) {
+                if log_as_debug {
                     tracing::debug!(error = %err, "control plane snapshot failed");
                 } else {
                     tracing::warn!(error = %err, "control plane snapshot failed");
@@ -431,7 +431,7 @@ async fn sync_once(
             state.next_tenant_seq = changes.next_seq;
         }
         Err(err) => {
-            if cfg!(test) {
+            if log_as_debug {
                 tracing::debug!(error = %err, "control plane tenant change poll failed");
             } else {
                 tracing::warn!(error = %err, "control plane tenant change poll failed");
@@ -461,7 +461,7 @@ async fn sync_once(
             state.next_namespace_seq = changes.next_seq;
         }
         Err(err) => {
-            if cfg!(test) {
+            if log_as_debug {
                 tracing::debug!(error = %err, "control plane namespace change poll failed");
             } else {
                 tracing::warn!(error = %err, "control plane namespace change poll failed");
@@ -501,7 +501,7 @@ async fn sync_once(
             state.next_cache_seq = changes.next_seq;
         }
         Err(err) => {
-            if cfg!(test) {
+            if log_as_debug {
                 tracing::debug!(error = %err, "control plane cache change poll failed");
             } else {
                 tracing::warn!(error = %err, "control plane cache change poll failed");
@@ -543,7 +543,7 @@ async fn sync_once(
             state.next_stream_seq = changes.next_seq;
         }
         Err(err) => {
-            if cfg!(test) {
+            if log_as_debug {
                 tracing::debug!(error = %err, "control plane change poll failed");
             } else {
                 tracing::warn!(error = %err, "control plane change poll failed");
