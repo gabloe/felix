@@ -24,4 +24,5 @@ coverage.json
 lcov.info
 # MkDocs build output
 /site/
+site/
 .cache/
