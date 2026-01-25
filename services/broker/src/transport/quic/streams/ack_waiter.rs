@@ -8,7 +8,9 @@ use crate::transport::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, AckWaiterResult, Outgoing, handle_ack_enqueue_result,
     send_outgoing_critical,
 };
-use crate::transport::quic::telemetry::{t_consume_instant, t_counter, t_histogram};
+#[cfg(feature = "telemetry")]
+use crate::transport::quic::telemetry::t_histogram;
+use crate::transport::quic::telemetry::{t_consume_instant, t_counter};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_ack_waiter_loop(

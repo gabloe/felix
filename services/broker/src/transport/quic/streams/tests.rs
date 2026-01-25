@@ -11,6 +11,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 use tokio::time::timeout;
@@ -594,8 +595,9 @@ async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let mut source = DelayFrameSource {
-        delay: Duration::from_millis(50),
+    let ready = Arc::new(AtomicBool::new(false));
+    let mut source = PendingFrameSource {
+        ready: Arc::clone(&ready),
     };
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -815,6 +817,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
 #[serial]
 async fn writer_loop_branches() -> Result<()> {
     timings::enable_collection(1);
+    timings::set_enabled(true);
     test_hooks::reset();
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
@@ -1072,7 +1075,6 @@ async fn ack_waiter_loop_cancel_branch() -> Result<()> {
         })
         .await?;
     let _ = cancel_tx.send(true);
-    drop(ack_waiter_tx);
     waiter.await.expect("waiter");
     Ok(())
 }
@@ -1339,12 +1341,72 @@ async fn uni_stream_rejects_non_publish() -> Result<()> {
     Ok(())
 }
 
+struct PendingFrameSource {
+    ready: Arc<AtomicBool>,
+}
+
+impl FrameSource for PendingFrameSource {
+    fn next_frame<'a>(
+        &'a mut self,
+        _max_frame_bytes: usize,
+        _scratch: &'a mut BytesMut,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Frame>>> + Send + 'a>>
+    {
+        let ready = Arc::clone(&self.ready);
+        Box::pin(async move {
+            while !ready.load(Ordering::Relaxed) {
+                tokio::task::yield_now().await;
+            }
+            Ok(None)
+        })
+    }
+}
+
+fn spawn_ack_waiter_with_closed_out_ack(
+    ack_wait_timeout: Duration,
+) -> (
+    mpsc::Sender<AckWaiterMessage>,
+    Arc<Semaphore>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
+    drop(out_ack_rx);
+    let (ack_waiter_tx, ack_waiter_rx) = mpsc::channel(1);
+    let (ack_throttle_tx, _ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let handle = tokio::spawn(run_ack_waiter_loop(
+        ack_waiter_rx,
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        ack_wait_timeout,
+    ));
+    (ack_waiter_tx, Arc::new(Semaphore::new(1)), handle)
+}
+
 #[tokio::test]
 async fn delay_frame_source_returns_none() -> Result<()> {
     let mut source = DelayFrameSource {
-        delay: Duration::from_millis(50),
+        delay: Duration::from_millis(1),
     };
     let mut scratch = BytesMut::new();
+    let frame = source.next_frame(1024, &mut scratch).await?;
+    assert!(frame.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_frame_source_returns_none() -> Result<()> {
+    let ready = Arc::new(AtomicBool::new(false));
+    let mut source = PendingFrameSource {
+        ready: Arc::clone(&ready),
+    };
+    let mut scratch = BytesMut::new();
+    ready.store(true, Ordering::Relaxed);
     let frame = source.next_frame(1024, &mut scratch).await?;
     assert!(frame.is_none());
     Ok(())
@@ -1384,7 +1446,7 @@ async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
     let (send, _recv) = connection.open_bi().await?;
 
-    let (_out_ack_tx, out_ack_rx) = mpsc::channel(1);
+    let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
     let (ack_throttle_tx, _ack_throttle_rx) = watch::channel(false);
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let writer = tokio::spawn(run_writer_loop(
@@ -1396,6 +1458,65 @@ async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
         cancel_rx,
     ));
     let _ = cancel_tx.send(true);
+    writer.await.expect("writer");
+    drop(out_ack_tx);
+
+    server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn writer_loop_records_timings_when_sampled() -> Result<()> {
+    timings::enable_collection(1);
+    timings::set_enabled(true);
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let connection = server.accept().await?;
+        let (_send, mut recv) = connection.accept_bi().await?;
+        let mut buf = vec![0u8; 4096];
+        while let Some(n) = recv.read(&mut buf).await? {
+            if n == 0 {
+                break;
+            }
+        }
+        Result::<()>::Ok(())
+    });
+
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert)?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+    let (send, _recv) = connection.open_bi().await?;
+
+    let (out_ack_tx, out_ack_rx) = mpsc::channel(256);
+    let (ack_throttle_tx, _ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let writer = tokio::spawn(run_writer_loop(
+        send,
+        out_ack_rx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+        ack_throttle_tx,
+        cancel_tx,
+        cancel_rx,
+    ));
+    for i in 0..50u64 {
+        out_ack_tx
+            .send(Outgoing::Message(Message::PublishOk { request_id: i }))
+            .await?;
+    }
+    for _ in 0..50u64 {
+        out_ack_tx.send(Outgoing::CacheMessage(Message::Ok)).await?;
+    }
+    drop(out_ack_tx);
     writer.await.expect("writer");
 
     server_task.await.context("server task")??;
@@ -1545,6 +1666,154 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_error() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (tx_err, rx_err) = oneshot::channel();
+    ack_waiter_tx
+        .send(AckWaiterMessage::Publish {
+            request_id: 21,
+            payload_len: 1,
+            start: telemetry::t_instant_now(),
+            response_rx: rx_err,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    let _ = tx_err.send(Err(anyhow::anyhow!("nope")));
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_dropped() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (_tx_drop, rx_drop) = oneshot::channel::<Result<()>>();
+    ack_waiter_tx
+        .send(AckWaiterMessage::Publish {
+            request_id: 22,
+            payload_len: 1,
+            start: telemetry::t_instant_now(),
+            response_rx: rx_drop,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_timeout() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (tx_timeout, rx_timeout) = oneshot::channel::<Result<()>>();
+    ack_waiter_tx
+        .send(AckWaiterMessage::Publish {
+            request_id: 23,
+            payload_len: 1,
+            start: telemetry::t_instant_now(),
+            response_rx: rx_timeout,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    let _hold_timeout = tx_timeout;
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (tx_ok, rx_ok) = oneshot::channel();
+    ack_waiter_tx
+        .send(AckWaiterMessage::PublishBatch {
+            request_id: 24,
+            payload_bytes: vec![1],
+            response_rx: rx_ok,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    let _ = tx_ok.send(Ok(()));
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (tx_err, rx_err) = oneshot::channel();
+    ack_waiter_tx
+        .send(AckWaiterMessage::PublishBatch {
+            request_id: 25,
+            payload_bytes: vec![1],
+            response_rx: rx_err,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    let _ = tx_err.send(Err(anyhow::anyhow!("nope")));
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (_tx_drop, rx_drop) = oneshot::channel::<Result<()>>();
+    ack_waiter_tx
+        .send(AckWaiterMessage::PublishBatch {
+            request_id: 26,
+            payload_bytes: vec![1],
+            response_rx: rx_drop,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
+    let (ack_waiter_tx, waiters, handle) =
+        spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
+    let (tx_timeout, rx_timeout) = oneshot::channel::<Result<()>>();
+    ack_waiter_tx
+        .send(AckWaiterMessage::PublishBatch {
+            request_id: 27,
+            payload_bytes: vec![1],
+            response_rx: rx_timeout,
+            permit: waiters.clone().acquire_owned().await?,
+        })
+        .await?;
+    let _hold_timeout = tx_timeout;
+    drop(ack_waiter_tx);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.await.expect("ack waiter");
+    Ok(())
+}
+
+#[tokio::test]
 async fn control_loop_pre_canceled_exits() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let (server_config, cert) = build_server_config()?;
@@ -1622,8 +1891,9 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let mut source = DelayFrameSource {
-        delay: Duration::from_millis(50),
+    let ready = Arc::new(AtomicBool::new(false));
+    let mut source = PendingFrameSource {
+        ready: Arc::clone(&ready),
     };
     let (out_ack_tx, _out_ack_rx) = mpsc::channel(1);
     let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
@@ -1684,8 +1954,9 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let mut source = DelayFrameSource {
-        delay: Duration::from_millis(1),
+    let ready = Arc::new(AtomicBool::new(false));
+    let mut source = PendingFrameSource {
+        ready: Arc::clone(&ready),
     };
     let (out_ack_tx, _out_ack_rx) = mpsc::channel(1);
     let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
@@ -1694,9 +1965,11 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
     let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     let cancel_tx_clone = cancel_tx.clone();
+    let ready_clone = Arc::clone(&ready);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1)).await;
         let _ = cancel_tx_clone.send(false);
+        ready_clone.store(true, Ordering::Relaxed);
     });
     let result = run_control_loop(
         &mut source,
@@ -1791,6 +2064,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
 #[serial]
 async fn control_loop_cache_timings_recorded() -> Result<()> {
     timings::enable_collection(1);
+    timings::set_enabled(true);
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
@@ -1817,25 +2091,26 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let frames = vec![
-        Ok(Some(frame_from_message(Message::CachePut {
+    let mut frames = Vec::new();
+    for idx in 0..20u64 {
+        frames.push(Ok(Some(frame_from_message(Message::CachePut {
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             cache: "primary".to_string(),
-            key: "key".to_string(),
+            key: format!("key-{idx}"),
             value: Bytes::from_static(b"value"),
-            request_id: Some(1),
+            request_id: Some(idx),
             ttl_ms: None,
-        }))),
-        Ok(Some(frame_from_message(Message::CacheGet {
+        }))));
+        frames.push(Ok(Some(frame_from_message(Message::CacheGet {
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             cache: "primary".to_string(),
-            key: "key".to_string(),
-            request_id: Some(2),
-        }))),
-        Ok(None),
-    ];
+            key: format!("key-{idx}"),
+            request_id: Some(idx + 100),
+        }))));
+    }
+    frames.push(Ok(None));
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -1898,6 +2173,71 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
         cache: "missing".to_string(),
         key: "key".to_string(),
         request_id: None,
+    })))];
+    let mut source = TestFrameSource::new(frames);
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
+    tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
+    let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(8);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let result = run_control_loop(
+        &mut source,
+        broker,
+        connection,
+        BrokerConfig::from_env()?,
+        build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
+        HashMap::new(),
+        String::new(),
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_rx,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        Arc::new(Semaphore::new(1)),
+        ack_waiter_tx,
+        Duration::from_millis(10),
+        &mut scratch,
+    )
+    .await?;
+    assert!(result);
+    server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let _connection = server.accept().await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Result::<()>::Ok(())
+    });
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert.clone())?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+
+    let frames = vec![Ok(Some(frame_from_message(Message::CachePut {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        cache: "missing".to_string(),
+        key: "key".to_string(),
+        value: Bytes::from_static(b"value"),
+        request_id: None,
+        ttl_ms: None,
     })))];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);

@@ -12,7 +12,9 @@ use crate::config::BrokerConfig;
 use crate::transport::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, reset_local_depth_only,
 };
-use crate::transport::quic::telemetry::{t_counter, t_histogram};
+use crate::transport::quic::telemetry::t_counter;
+#[cfg(feature = "telemetry")]
+use crate::transport::quic::telemetry::t_histogram;
 use crate::transport::quic::{ACK_QUEUE_DEPTH, ACK_WAITERS_MAX, GLOBAL_ACK_DEPTH};
 
 use super::ack_waiter::run_ack_waiter_loop;
