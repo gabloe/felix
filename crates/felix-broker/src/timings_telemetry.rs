@@ -75,3 +75,157 @@ pub fn take_samples() -> Option<BrokerPublishSamples> {
         std::mem::take(&mut *send),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    // Reset the global collector state for test isolation
+    fn reset_collector() {
+        unsafe {
+            let ptr = &COLLECTOR as *const OnceLock<TimingCollector>
+                as *mut OnceLock<TimingCollector>;
+            let _ = (*ptr).take();
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn should_sample_returns_false_when_not_enabled() {
+        reset_collector();
+        assert!(!should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn enable_collection_initializes_collector() {
+        reset_collector();
+        enable_collection(1);
+        assert!(should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn should_sample_respects_sample_every() {
+        reset_collector();
+        enable_collection(3);
+        // First call (idx 0) should sample
+        assert!(should_sample());
+        // Second and third calls should not
+        assert!(!should_sample());
+        assert!(!should_sample());
+        // Fourth call (idx 3) should sample
+        assert!(should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn enable_collection_enforces_minimum_sample_every() {
+        reset_collector();
+        enable_collection(0);
+        // Should be clamped to 1
+        assert!(should_sample());
+        assert!(should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn set_enabled_disables_sampling() {
+        reset_collector();
+        enable_collection(1);
+        set_enabled(false);
+        assert!(!should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn set_enabled_enables_sampling() {
+        reset_collector();
+        enable_collection(1);
+        set_enabled(false);
+        set_enabled(true);
+        assert!(should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn set_enabled_noop_when_not_initialized() {
+        reset_collector();
+        set_enabled(true);
+        // Should not crash, just no-op
+        assert!(!should_sample());
+    }
+
+    #[test]
+    #[serial]
+    fn record_lookup_ns_stores_value() {
+        reset_collector();
+        enable_collection(1);
+        record_lookup_ns(100);
+        record_lookup_ns(200);
+        let (lookup, _, _) = take_samples().expect("samples");
+        assert_eq!(lookup, vec![100, 200]);
+    }
+
+    #[test]
+    #[serial]
+    fn record_append_ns_stores_value() {
+        reset_collector();
+        enable_collection(1);
+        record_append_ns(300);
+        record_append_ns(400);
+        let (_, append, _) = take_samples().expect("samples");
+        assert_eq!(append, vec![300, 400]);
+    }
+
+    #[test]
+    #[serial]
+    fn record_send_ns_stores_value() {
+        reset_collector();
+        enable_collection(1);
+        record_send_ns(500);
+        record_send_ns(600);
+        let (_, _, send) = take_samples().expect("samples");
+        assert_eq!(send, vec![500, 600]);
+    }
+
+    #[test]
+    #[serial]
+    fn take_samples_clears_collected_data() {
+        reset_collector();
+        enable_collection(1);
+        record_lookup_ns(100);
+        record_append_ns(200);
+        record_send_ns(300);
+        
+        let (lookup1, append1, send1) = take_samples().expect("samples");
+        assert_eq!(lookup1.len(), 1);
+        assert_eq!(append1.len(), 1);
+        assert_eq!(send1.len(), 1);
+        
+        // Second take should return empty vectors
+        let (lookup2, append2, send2) = take_samples().expect("samples");
+        assert!(lookup2.is_empty());
+        assert!(append2.is_empty());
+        assert!(send2.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn take_samples_returns_none_when_not_enabled() {
+        reset_collector();
+        assert!(take_samples().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn record_functions_noop_when_not_enabled() {
+        reset_collector();
+        // Should not crash
+        record_lookup_ns(100);
+        record_append_ns(200);
+        record_send_ns(300);
+        assert!(take_samples().is_none());
+    }
+}
