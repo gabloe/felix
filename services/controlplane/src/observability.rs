@@ -133,6 +133,9 @@ mod tests {
     use super::*;
     use opentelemetry::trace::{TraceContextExt, TraceId};
     use serial_test::serial;
+    use std::net::SocketAddr;
+    use std::time::{Duration, Instant};
+    use tokio::sync::oneshot;
 
     struct EnvGuard {
         key: &'static str,
@@ -253,5 +256,87 @@ mod tests {
             span_ctx.trace_id(),
             TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
         );
+    }
+
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(1))
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build test client")
+    }
+
+    async fn wait_for_listen(addr: SocketAddr) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("server never became ready at {}", addr));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn spawn_metrics_server(
+        handle: PrometheusHandle,
+    ) -> (
+        SocketAddr,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let addr: SocketAddr = "127.0.0.1:0".parse().expect("parse addr");
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("bind listener");
+        let bound_addr = listener.local_addr().expect("local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(async move {
+            serve_metrics_with_shutdown(handle, bound_addr, async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        });
+        (bound_addr, shutdown_tx, server_handle)
+    }
+
+    #[test]
+    #[serial]
+    fn install_metrics_recorder_is_cached() {
+        let handle1 = install_metrics_recorder();
+        let handle2 = install_metrics_recorder();
+        let _ = (handle1.render(), handle2.render());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn init_observability_is_idempotent() {
+        let handle1 = init_observability("controlplane-test");
+        let handle2 = init_observability("controlplane-test");
+        let _ = (handle1.render(), handle2.render());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn serve_metrics_responds() {
+        let handle = init_observability("controlplane-metrics-test");
+        let (addr, shutdown_tx, server_handle) = spawn_metrics_server(handle).await;
+        wait_for_listen(addr).await.expect("server ready");
+
+        let client = build_test_client();
+        let url = format!("http://{}/metrics", addr);
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .unwrap_or_else(|err| panic!("GET /metrics failed for {}: {}", url, err));
+        response.error_for_status().expect("metrics status");
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(1), server_handle)
+            .await
+            .expect("server shutdown");
     }
 }
