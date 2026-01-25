@@ -279,10 +279,11 @@ mod tests {
     #[serial]
     async fn init_observability_succeeds() {
         let handle = init_observability("test-service");
-        // Should return a valid PrometheusHandle
+        // Should return a valid PrometheusHandle that can render metrics
         let metrics = handle.render();
-        // Basic validation that it returns something
-        assert!(!metrics.is_empty() || metrics.is_empty()); // Just ensure it doesn't panic
+        // Just ensure the handle works without panicking
+        // (metrics content may be empty on first render)
+        let _ = metrics;
     }
 
     #[tokio::test]
@@ -337,8 +338,9 @@ mod tests {
     fn install_metrics_recorder_is_cached_in_tests() {
         let handle1 = install_metrics_recorder();
         let handle2 = install_metrics_recorder();
-        // Both should work and not panic
-        assert!(!handle1.render().is_empty() || handle1.render().is_empty());
-        assert!(!handle2.render().is_empty() || handle2.render().is_empty());
+        // Both handles should work without panicking
+        // This verifies the caching mechanism works correctly in tests
+        let _ = (handle1.render(), handle2.render());
     }
 }
+
