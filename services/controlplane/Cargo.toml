@@ -26,13 +26,13 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 async-trait = "0.1"
 thiserror = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 
 [dev-dependencies]
 tower = "0.5"
 tempfile = "3"
 serial_test = "3"
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 
 [lib]
 name = "controlplane"
