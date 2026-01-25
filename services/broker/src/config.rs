@@ -612,4 +612,122 @@ fanout_batch_size: 0
 
         clear_felix_env();
     }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_partial_override() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(
+            &config_path,
+            r#"
+quic_bind: "127.0.0.1:7777"
+max_frame_bytes: 8000000
+"#,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+            env::set_var("FELIX_BROKER_METRICS_BIND", "127.0.0.1:9090");
+        }
+
+        let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        // YAML override
+        assert_eq!(config.quic_bind.to_string(), "127.0.0.1:7777");
+        assert_eq!(config.max_frame_bytes, 8000000);
+        // Env var
+        assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9090");
+        // Default
+        assert_eq!(config.controlplane_sync_interval_ms, 2000);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_all_cache_window_settings() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CACHE_CONN_RECV_WINDOW", "512000000");
+            env::set_var("FELIX_CACHE_STREAM_RECV_WINDOW", "128000000");
+            env::set_var("FELIX_CACHE_SEND_WINDOW", "512000000");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.cache_conn_recv_window, 512000000);
+        assert_eq!(config.cache_stream_recv_window, 128000000);
+        assert_eq!(config.cache_send_window, 512000000);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_worker_and_queue_settings() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_BROKER_PUB_WORKERS_PER_CONN", "8");
+            env::set_var("FELIX_BROKER_PUB_QUEUE_DEPTH", "2048");
+            env::set_var("FELIX_EVENT_QUEUE_DEPTH", "4096");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.pub_workers_per_conn, 8);
+        assert_eq!(config.pub_queue_depth, 2048);
+        assert_eq!(config.event_queue_depth, 4096);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_batch_settings() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "256");
+            env::set_var("FELIX_EVENT_BATCH_MAX_BYTES", "1048576");
+            env::set_var("FELIX_EVENT_BATCH_MAX_DELAY_US", "500");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.event_batch_max_events, 256);
+        assert_eq!(config.event_batch_max_bytes, 1048576);
+        assert_eq!(config.event_batch_max_delay_us, 500);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_or_yaml_all_window_overrides() {
+        clear_felix_env();
+        let tmpdir = TempDir::new().unwrap();
+        let config_path = tmpdir.path().join("config.yml");
+        fs::write(
+            &config_path,
+            r#"
+cache_conn_recv_window: 128000000
+cache_stream_recv_window: 32000000
+cache_send_window: 128000000
+pub_workers_per_conn: 16
+pub_queue_depth: 4096
+event_queue_depth: 8192
+"#,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var("FELIX_BROKER_CONFIG", config_path.to_str().unwrap());
+        }
+
+        let config = BrokerConfig::from_env_or_yaml().expect("from_env_or_yaml");
+        assert_eq!(config.cache_conn_recv_window, 128000000);
+        assert_eq!(config.cache_stream_recv_window, 32000000);
+        assert_eq!(config.cache_send_window, 128000000);
+        assert_eq!(config.pub_workers_per_conn, 16);
+        assert_eq!(config.pub_queue_depth, 4096);
+        assert_eq!(config.event_queue_depth, 8192);
+
+        clear_felix_env();
+    }
 }

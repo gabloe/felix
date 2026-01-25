@@ -195,3 +195,15 @@ pub(crate) async fn write_message(send: &mut SendStream, message: Message) -> Re
     let frame = message.encode().context("encode message")?;
     write_frame_parts(send, &frame).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_config_has_reasonable_defaults() {
+        let config = runtime_config();
+        assert!(config.max_frame_bytes > 0);
+        assert!(config.max_frame_bytes <= 64 * 1024 * 1024); // Sanity check
+    }
+}

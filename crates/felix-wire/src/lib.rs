@@ -965,4 +965,362 @@ mod tests {
         let decoded = Message::decode(frame).expect("decode");
         assert_eq!(message, decoded);
     }
+
+    #[test]
+    fn binary_decode_publish_batch_invalid_utf8_tenant() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u16(2); // tenant_id len
+        buf.extend_from_slice(&[0xFF, 0xFE]); // Invalid UTF-8
+        let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze()).expect("frame");
+        let result = binary::decode_publish_batch(&frame);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn binary_decode_publish_batch_invalid_utf8_namespace() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u16(2); // tenant_id len
+        buf.extend_from_slice(b"t1");
+        buf.put_u16(2); // namespace len
+        buf.extend_from_slice(&[0xFF, 0xFE]); // Invalid UTF-8
+        let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze()).expect("frame");
+        let result = binary::decode_publish_batch(&frame);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn binary_decode_publish_batch_invalid_utf8_stream() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u16(2); // tenant_id len
+        buf.extend_from_slice(b"t1");
+        buf.put_u16(2); // namespace len
+        buf.extend_from_slice(b"ns");
+        buf.put_u16(2); // stream len
+        buf.extend_from_slice(&[0xFF, 0xFE]); // Invalid UTF-8
+        let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze()).expect("frame");
+        let result = binary::decode_publish_batch(&frame);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn text_publish_batch_json_with_special_chars() {
+        // Test encoding with special characters that need escaping
+        let payloads = vec![b"payload\nwith\nnewlines".to_vec()];
+        let message = Message::PublishBatch {
+            tenant_id: "tenant".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream".to_string(),
+            payloads,
+            request_id: Some(123),
+            ack: Some(AckMode::PerBatch),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn message_all_variants_encode_decode() {
+        // Test Subscribe message
+        let message = Message::Subscribe {
+            subscription_id: Some(42),
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream".to_string(),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test Subscribed message
+        let message = Message::Subscribed {
+            subscription_id: 42,
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test PublishOk message
+        let message = Message::PublishOk { request_id: 123 };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test PublishError message
+        let message = Message::PublishError {
+            request_id: 123,
+            message: "error".to_string(),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test Ok message
+        let message = Message::Ok;
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test EventStreamHello message
+        let message = Message::EventStreamHello {
+            subscription_id: 99,
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn binary_event_batch_empty_payloads() {
+        let payloads = vec![];
+        let encoded = binary::encode_event_batch_bytes(1, &payloads).expect("encode");
+        let frame = Frame::decode(encoded).expect("decode");
+        let decoded = binary::decode_event_batch(&frame).expect("decode batch");
+        assert_eq!(decoded.subscription_id, 1);
+        assert_eq!(decoded.payloads, payloads);
+    }
+
+    #[test]
+    fn binary_publish_batch_empty_payloads() {
+        let payloads = vec![];
+        let frame =
+            binary::encode_publish_batch("t1", "default", "orders", &payloads).expect("encode");
+        let decoded = binary::decode_publish_batch(&frame).expect("decode");
+        assert_eq!(decoded.payloads, payloads);
+    }
+
+    #[test]
+    fn frame_header_encode_decode() {
+        let header = FrameHeader::new(0x1234, 0xABCD);
+        let mut buf = BytesMut::new();
+        header.encode(&mut buf);
+        let decoded = FrameHeader::decode(buf.freeze()).expect("decode");
+        assert_eq!(decoded.magic, MAGIC);
+        assert_eq!(decoded.version, VERSION);
+        assert_eq!(decoded.flags, 0x1234);
+        assert_eq!(decoded.length, 0xABCD);
+    }
+
+    #[test]
+    fn message_cache_operations() {
+        // Test CachePut
+        let message = Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            cache: "cache1".to_string(),
+            key: "key1".to_string(),
+            value: Bytes::from_static(b"value1"),
+            request_id: Some(42),
+            ttl_ms: Some(60000),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test CacheGet
+        let message = Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            cache: "cache1".to_string(),
+            key: "key1".to_string(),
+            request_id: Some(42),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test CacheValue with value
+        let message = Message::CacheValue {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            cache: "cache1".to_string(),
+            key: "key1".to_string(),
+            value: Some(Bytes::from_static(b"value1")),
+            request_id: Some(42),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test CacheValue miss (no value)
+        let message = Message::CacheValue {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            cache: "cache1".to_string(),
+            key: "key1".to_string(),
+            value: None,
+            request_id: Some(42),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test CacheOk
+        let message = Message::CacheOk { request_id: 42 };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn message_event_variants() {
+        // Test Event message
+        let message = Message::Event {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream1".to_string(),
+            payload: b"event data".to_vec(),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test EventBatch message
+        let message = Message::EventBatch {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream1".to_string(),
+            payloads: vec![b"event1".to_vec(), b"event2".to_vec()],
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test EventStreamHello
+        let message = Message::EventStreamHello {
+            subscription_id: 123,
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn message_publish_with_ack_modes() {
+        // Test Publish with AckMode::None
+        let message = Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream1".to_string(),
+            payload: b"data".to_vec(),
+            request_id: Some(1),
+            ack: Some(AckMode::None),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test Publish with AckMode::PerMessage
+        let message = Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream1".to_string(),
+            payload: b"data".to_vec(),
+            request_id: Some(2),
+            ack: Some(AckMode::PerMessage),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+
+        // Test PublishBatch with AckMode::PerBatch
+        let message = Message::PublishBatch {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "stream1".to_string(),
+            payloads: vec![b"data1".to_vec(), b"data2".to_vec()],
+            request_id: Some(3),
+            ack: Some(AckMode::PerBatch),
+        };
+        let frame = message.encode().expect("encode");
+        let decoded = Message::decode(frame).expect("decode");
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn binary_encode_publish_batch_stats() {
+        let payloads = vec![
+            b"payload1".to_vec(),
+            b"payload2".to_vec(),
+            b"payload3".to_vec(),
+        ];
+        let result = binary::encode_publish_batch_bytes_with_stats("t1", "ns", "stream", &payloads);
+        assert!(result.is_ok());
+        let (bytes, stats) = result.unwrap();
+        assert!(!bytes.is_empty());
+        // Stats should be valid (reallocs is a usize, so always >= 0)
+        let _ = stats.reallocs;
+    }
+
+    #[test]
+    fn binary_encode_event_batch_large() {
+        let payloads: Vec<Bytes> = (0..100)
+            .map(|i| Bytes::from(format!("payload{}", i)))
+            .collect();
+        let result = binary::encode_event_batch_bytes(42, &payloads);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        let frame = Frame::decode(bytes).expect("decode frame");
+        let decoded = binary::decode_event_batch(&frame).expect("decode batch");
+        assert_eq!(decoded.subscription_id, 42);
+        assert_eq!(decoded.payloads.len(), 100);
+    }
+
+    #[test]
+    fn frame_decode_error_cases() {
+        // Test frame with invalid header length
+        let short_bytes = Bytes::from_static(b"short");
+        let result = Frame::decode(short_bytes);
+        assert!(result.is_err());
+
+        // Test frame header with incomplete payload
+        let mut buf = BytesMut::new();
+        let header = FrameHeader::new(0, 100); // Claims 100 bytes
+        header.encode(&mut buf);
+        buf.extend_from_slice(b"only_10"); // But only has 7 bytes
+        let result = Frame::decode(buf.freeze());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ack_mode_serialization() {
+        // Test all AckMode variants serialize correctly
+        let none = AckMode::None;
+        let per_msg = AckMode::PerMessage;
+        let per_batch = AckMode::PerBatch;
+
+        // Just ensure they can be used in messages
+        let msg = Message::Publish {
+            tenant_id: "t".to_string(),
+            namespace: "n".to_string(),
+            stream: "s".to_string(),
+            payload: vec![1, 2, 3],
+            request_id: Some(1),
+            ack: Some(none),
+        };
+        assert!(msg.encode().is_ok());
+
+        let msg2 = Message::Publish {
+            tenant_id: "t".to_string(),
+            namespace: "n".to_string(),
+            stream: "s".to_string(),
+            payload: vec![1, 2, 3],
+            request_id: Some(2),
+            ack: Some(per_msg),
+        };
+        assert!(msg2.encode().is_ok());
+
+        let msg3 = Message::PublishBatch {
+            tenant_id: "t".to_string(),
+            namespace: "n".to_string(),
+            stream: "s".to_string(),
+            payloads: vec![vec![1, 2], vec![3, 4]],
+            request_id: Some(3),
+            ack: Some(per_batch),
+        };
+        assert!(msg3.encode().is_ok());
+    }
 }

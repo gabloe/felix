@@ -960,4 +960,131 @@ mod tests {
             .expect_err("tenant");
         assert!(matches!(err, BrokerError::TenantNotFound(_)));
     }
+
+    #[tokio::test]
+    async fn register_stream_requires_namespace() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        let err = broker
+            .register_stream("t1", "missing", "orders", StreamMetadata::default())
+            .await
+            .expect_err("namespace");
+        assert!(matches!(err, BrokerError::NamespaceNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn publish_to_nonexistent_stream_errors() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        let err = broker
+            .publish("t1", "default", "missing", Bytes::from_static(b"data"))
+            .await
+            .expect_err("stream");
+        assert!(matches!(err, BrokerError::StreamNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn subscribe_to_nonexistent_stream_errors() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        let err = broker
+            .subscribe("t1", "default", "missing")
+            .await
+            .expect_err("stream");
+        assert!(matches!(err, BrokerError::StreamNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn remove_tenant_succeeds() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        let removed = broker.remove_tenant("t1").await.expect("remove");
+        assert!(removed);
+        // Removing again returns false
+        let removed_again = broker.remove_tenant("t1").await.expect("remove");
+        assert!(!removed_again);
+    }
+
+    #[tokio::test]
+    async fn remove_namespace_succeeds() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        assert!(broker.namespace_exists("t1", "default").await);
+        let removed = broker
+            .remove_namespace("t1", "default")
+            .await
+            .expect("remove");
+        assert!(removed);
+        assert!(!broker.namespace_exists("t1", "default").await);
+    }
+
+    #[tokio::test]
+    async fn remove_stream_succeeds() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("stream");
+        assert!(broker.stream_exists("t1", "default", "orders").await);
+        broker
+            .remove_stream("t1", "default", "orders")
+            .await
+            .expect("remove");
+        assert!(!broker.stream_exists("t1", "default", "orders").await);
+    }
+
+    #[tokio::test]
+    async fn cursor_methods() {
+        let cursor = Cursor { next_seq: 42 };
+        assert_eq!(cursor.next_seq(), 42);
+    }
+
+    #[tokio::test]
+    async fn broker_error_display() {
+        let err = BrokerError::CapacityTooLarge;
+        assert!(err.to_string().contains("capacity"));
+
+        let err = BrokerError::CursorTooOld {
+            oldest: 10,
+            requested: 5,
+        };
+        assert!(err.to_string().contains("10"));
+        assert!(err.to_string().contains("5"));
+
+        let err = BrokerError::TenantNotFound("t1".to_string());
+        assert!(err.to_string().contains("t1"));
+
+        let err = BrokerError::NamespaceNotFound {
+            tenant_id: "t1".to_string(),
+            namespace: "ns1".to_string(),
+        };
+        assert!(err.to_string().contains("t1"));
+        assert!(err.to_string().contains("ns1"));
+
+        let err = BrokerError::StreamNotFound {
+            tenant_id: "t1".to_string(),
+            namespace: "ns1".to_string(),
+            stream: "s1".to_string(),
+        };
+        assert!(err.to_string().contains("t1"));
+        assert!(err.to_string().contains("ns1"));
+        assert!(err.to_string().contains("s1"));
+    }
 }
