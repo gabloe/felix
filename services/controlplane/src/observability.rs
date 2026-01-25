@@ -107,11 +107,22 @@ async fn serve_metrics_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve_metrics_with_listener(handle, listener, shutdown).await
+}
+
+async fn serve_metrics_with_listener<F>(
+    handle: PrometheusHandle,
+    listener: tokio::net::TcpListener,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let app = axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || async move { handle.render() }),
     );
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown)
         .await
@@ -294,7 +305,7 @@ mod tests {
         let bound_addr = listener.local_addr().expect("local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server_handle = tokio::spawn(async move {
-            serve_metrics_with_shutdown(handle, bound_addr, async move {
+            serve_metrics_with_listener(handle, listener, async move {
                 let _ = shutdown_rx.await;
             })
             .await
