@@ -7,28 +7,35 @@ use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace as sdktrace;
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static OBS_INIT: OnceLock<()> = OnceLock::new();
+static PROPAGATOR_INIT: OnceLock<()> = OnceLock::new();
+
 pub fn init_observability(service_name: &str) -> PrometheusHandle {
-    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
+    OBS_INIT.get_or_init(|| {
+        global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
 
-    let provider = build_tracer_provider(service_name);
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
-    if let Some(provider) = provider {
-        let tracer = provider.tracer(service_name.to_string());
-        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-        registry.with(otel_layer).init();
-    } else {
-        registry.init();
-    }
+        let provider = build_tracer_provider(service_name);
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let fmt_layer = tracing_subscriber::fmt::layer();
+        let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
+        if let Some(provider) = provider {
+            let tracer = provider.tracer(service_name.to_string());
+            let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+            let _ = registry.with(otel_layer).try_init();
+        } else {
+            let _ = registry.try_init();
+        }
+    });
 
-    PrometheusBuilder::new()
-        .install_recorder()
-        .expect("install metrics recorder")
+    install_metrics_recorder()
 }
 
 fn build_tracer_provider(service_name: &str) -> Option<opentelemetry_sdk::trace::TracerProvider> {
@@ -67,6 +74,11 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
 }
 
 pub fn trace_context_from_headers(headers: &axum::http::HeaderMap) -> opentelemetry::Context {
+    PROPAGATOR_INIT.get_or_init(|| {
+        global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+    });
     global::get_text_map_propagator(|prop| prop.extract(&HeaderMapExtractor(headers)))
 }
 
@@ -89,6 +101,17 @@ pub async fn serve_metrics(handle: PrometheusHandle, addr: SocketAddr) -> std::i
     );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await
+}
+
+fn install_metrics_recorder() -> PrometheusHandle {
+    if let Some(handle) = METRICS_HANDLE.get() {
+        return handle.clone();
+    }
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install metrics recorder");
+    let _ = METRICS_HANDLE.set(handle.clone());
+    handle
 }
 
 #[cfg(test)]

@@ -13,7 +13,6 @@ use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace as sdktrace;
 use std::net::SocketAddr;
-#[cfg(test)]
 use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -21,6 +20,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[cfg(test)]
 static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static OBS_INIT: OnceLock<()> = OnceLock::new();
 
 /// Initializes observability for the service.
 ///
@@ -33,26 +33,30 @@ static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 ///
 /// In tests, metrics recorder is cached to avoid multiple installations.
 pub fn init_observability(service_name: &str) -> PrometheusHandle {
-    // Set global propagator for trace context propagation across service boundaries.
-    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
+    OBS_INIT.get_or_init(|| {
+        // Set global propagator for trace context propagation across service boundaries.
+        global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
 
-    // Attempt to build an OTLP tracer provider; optional and may fail silently.
-    let provider = build_tracer_provider(service_name);
+        // Attempt to build an OTLP tracer provider; optional and may fail silently.
+        let provider = build_tracer_provider(service_name);
 
-    // Use environment variable for log filtering; default to "info" if unset or invalid.
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
+        // Use environment variable for log filtering; default to "info" if unset or invalid.
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let fmt_layer = tracing_subscriber::fmt::layer();
+        let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
 
-    if let Some(provider) = provider {
-        // If OTLP tracer provider is available, create a tracer and add OTLP layer.
-        let tracer = provider.tracer(service_name.to_string());
-        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-        init_subscriber(registry.with(otel_layer));
-    } else {
-        // Fallback to local tracing without OTLP.
-        init_subscriber(registry);
-    }
+        if let Some(provider) = provider {
+            // If OTLP tracer provider is available, create a tracer and add OTLP layer.
+            let tracer = provider.tracer(service_name.to_string());
+            let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+            init_subscriber(registry.with(otel_layer));
+        } else {
+            // Fallback to local tracing without OTLP.
+            init_subscriber(registry);
+        }
+    });
 
     // Install Prometheus metrics recorder.
     install_metrics_recorder()
@@ -174,7 +178,12 @@ mod tests {
     // init_observability and serve_metrics tests removed per request.
 
     use super::*;
+    use crate::test_support::http_test::{
+        build_test_client, get_with_context, spawn_axum_with_shutdown, wait_for_listen,
+    };
     use serial_test::serial;
+    use std::net::SocketAddr;
+    use std::time::Duration;
 
     struct EnvGuard {
         key: &'static str,
@@ -289,51 +298,59 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn serve_metrics_endpoints_respond() {
-        // Wrap the entire test in a timeout to prevent hanging
+        // These tests avoid hangs by using a strict client timeout, readiness polling,
+        // and graceful shutdown for the server task.
         let test_future = async {
             let handle = init_observability("test-metrics-service");
             let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
             let bound_addr = listener.local_addr().unwrap();
 
-            // Start the server in the background with a cancellation mechanism
-            let server_handle = tokio::spawn(async move {
-                let app = axum::Router::new()
-                    .route(
-                        "/metrics",
-                        axum::routing::get(move || async move { handle.render() }),
-                    )
-                    .route("/live", axum::routing::get(|| async { "ok" }))
-                    .route("/ready", axum::routing::get(|| async { "ok" }));
-                axum::serve(listener, app.into_make_service()).await.ok();
-            });
+            let app = axum::Router::new()
+                .route(
+                    "/metrics",
+                    axum::routing::get(move || async move { handle.render() }),
+                )
+                .route("/live", axum::routing::get(|| async { "ok" }))
+                .route("/ready", axum::routing::get(|| async { "ok" }));
 
-            // Give the server a moment to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let (shutdown_tx, server_handle) = spawn_axum_with_shutdown(listener, app);
+            wait_for_listen(bound_addr)
+                .await
+                .expect("metrics server ready");
 
-            // Test /metrics endpoint
+            let client = build_test_client().expect("client");
+
             let metrics_url = format!("http://{}/metrics", bound_addr);
-            let response = reqwest::get(&metrics_url).await;
-            assert!(response.is_ok());
-            let response = response.unwrap();
+            let response = get_with_context(&client, &metrics_url, "GET /metrics")
+                .await
+                .expect("metrics request")
+                .error_for_status()
+                .expect("metrics status");
             assert_eq!(response.status(), 200);
 
-            // Test /live endpoint
             let live_url = format!("http://{}/live", bound_addr);
-            let response = reqwest::get(&live_url).await.unwrap();
-            assert_eq!(response.status(), 200);
-            let body = response.text().await.unwrap();
+            let response = get_with_context(&client, &live_url, "GET /live")
+                .await
+                .expect("live request")
+                .error_for_status()
+                .expect("live status");
+            let body = response.text().await.expect("live body");
             assert_eq!(body, "ok");
 
-            // Test /ready endpoint
             let ready_url = format!("http://{}/ready", bound_addr);
-            let response = reqwest::get(&ready_url).await.unwrap();
-            assert_eq!(response.status(), 200);
-            let body = response.text().await.unwrap();
+            let response = get_with_context(&client, &ready_url, "GET /ready")
+                .await
+                .expect("ready request")
+                .error_for_status()
+                .expect("ready status");
+            let body = response.text().await.expect("ready body");
             assert_eq!(body, "ok");
 
-            // Abort the server task to prevent hanging
-            server_handle.abort();
+            let _ = shutdown_tx.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(1), server_handle)
+                .await
+                .expect("server shutdown");
         };
 
         // Run with a 5-second timeout

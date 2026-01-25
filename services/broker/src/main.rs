@@ -25,6 +25,8 @@
 
 mod controlplane;
 mod observability;
+#[cfg(test)]
+mod test_support;
 
 use anyhow::{Context, Result};
 use broker::{config, quic};
@@ -221,6 +223,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn run_with_shutdown_starts_and_stops() -> Result<()> {
         let _g1 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
         let _g2 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
@@ -235,6 +238,31 @@ mod tests {
             .await
         });
 
+        let _ = shutdown_tx.send(());
+        let result = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("shutdown timeout")?;
+        result?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn run_with_shutdown_controlplane_enabled() -> Result<()> {
+        let _g1 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
+        let _g2 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
+        let _g3 = EnvGuard::set("FELIX_CP_URL", "http://127.0.0.1:1");
+        let _g4 = EnvGuard::set("FELIX_CP_SYNC_INTERVAL_MS", "1");
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            run_with_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
         let _ = shutdown_tx.send(());
         let result = tokio::time::timeout(Duration::from_secs(2), handle)
             .await

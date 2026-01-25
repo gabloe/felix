@@ -1457,3 +1457,109 @@ impl PostgresStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_violation_detects_only_db_codes() {
+        let err = sqlx::Error::RowNotFound;
+        assert!(!is_unique_violation(&err));
+    }
+
+    #[test]
+    fn stream_kind_round_trip() {
+        assert!(matches!(
+            parse_stream_kind("Stream").unwrap(),
+            StreamKind::Stream
+        ));
+        assert!(matches!(
+            parse_stream_kind("Queue").unwrap(),
+            StreamKind::Queue
+        ));
+        assert!(matches!(
+            parse_stream_kind("Cache").unwrap(),
+            StreamKind::Cache
+        ));
+        assert!(parse_stream_kind("Unknown").is_err());
+        assert_eq!(stream_kind_to_str(&StreamKind::Stream), "Stream");
+        assert_eq!(stream_kind_to_str(&StreamKind::Queue), "Queue");
+        assert_eq!(stream_kind_to_str(&StreamKind::Cache), "Cache");
+    }
+
+    #[test]
+    fn consistency_round_trip() {
+        assert!(matches!(
+            parse_consistency("Leader").unwrap(),
+            crate::ConsistencyLevel::Leader
+        ));
+        assert!(matches!(
+            parse_consistency("Quorum").unwrap(),
+            crate::ConsistencyLevel::Quorum
+        ));
+        assert!(parse_consistency("Unknown").is_err());
+        assert_eq!(
+            consistency_to_str(&crate::ConsistencyLevel::Leader),
+            "Leader"
+        );
+        assert_eq!(
+            consistency_to_str(&crate::ConsistencyLevel::Quorum),
+            "Quorum"
+        );
+    }
+
+    #[test]
+    fn delivery_round_trip() {
+        assert!(matches!(
+            parse_delivery("AtMostOnce").unwrap(),
+            crate::DeliveryGuarantee::AtMostOnce
+        ));
+        assert!(matches!(
+            parse_delivery("AtLeastOnce").unwrap(),
+            crate::DeliveryGuarantee::AtLeastOnce
+        ));
+        assert!(parse_delivery("Unknown").is_err());
+        assert_eq!(
+            delivery_to_str(&crate::DeliveryGuarantee::AtMostOnce),
+            "AtMostOnce"
+        );
+        assert_eq!(
+            delivery_to_str(&crate::DeliveryGuarantee::AtLeastOnce),
+            "AtLeastOnce"
+        );
+    }
+
+    #[test]
+    fn stream_from_db_maps_fields() {
+        let row = DbStream {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "s1".to_string(),
+            kind: "Stream".to_string(),
+            shards: 2,
+            retention_max_age_seconds: Some(3600),
+            retention_max_size_bytes: Some(2048),
+            consistency: "Leader".to_string(),
+            delivery: "AtLeastOnce".to_string(),
+            durable: true,
+        };
+        let stream = stream_from_db(row).expect("stream");
+        assert_eq!(stream.tenant_id, "t1");
+        assert_eq!(stream.namespace, "ns");
+        assert_eq!(stream.stream, "s1");
+        assert!(matches!(stream.kind, StreamKind::Stream));
+        assert_eq!(stream.shards, 2);
+        assert_eq!(stream.retention.max_age_seconds, Some(3600));
+        assert_eq!(stream.retention.max_size_bytes, Some(2048));
+        assert!(matches!(
+            stream.consistency,
+            crate::ConsistencyLevel::Leader
+        ));
+        assert!(matches!(
+            stream.delivery,
+            crate::DeliveryGuarantee::AtLeastOnce
+        ));
+        assert!(stream.durable);
+    }
+}

@@ -713,18 +713,27 @@ async fn fetch_namespace_changes(
 mod tests {
     // Tests cover error tolerance (skipping on fetch errors), deletion propagation, and cursor advancement.
     use super::*;
+    use crate::test_support::http_test::{
+        build_test_client, spawn_axum_with_shutdown, wait_for_listen,
+    };
     use axum::{Json, Router, http::StatusCode, routing::get};
     use felix_storage::EphemeralCache;
     use std::net::SocketAddr;
+    use std::time::Duration;
     use tokio::net::TcpListener;
 
-    async fn serve_router(router: Router) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    async fn serve_router(
+        router: Router,
+    ) -> Result<(
+        SocketAddr,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    )> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
-        let handle = tokio::spawn(async move {
-            let _ = axum::serve(listener, router.into_make_service()).await;
-        });
-        Ok((addr, handle))
+        let (shutdown_tx, handle) = spawn_axum_with_shutdown(listener, router);
+        wait_for_listen(addr).await?;
+        Ok((addr, shutdown_tx, handle))
     }
 
     fn error_router() -> Router {
@@ -733,216 +742,237 @@ mod tests {
 
     #[tokio::test]
     async fn sync_once_logs_and_skips_on_errors() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-        let (addr, handle) = serve_router(error_router()).await?;
-        let base_url = format!("http://{}", addr);
-        let client = reqwest::Client::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+            let (addr, shutdown_tx, handle) = serve_router(error_router()).await?;
+            let base_url = format!("http://{}", addr);
+            let client = build_test_client()?;
 
-        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
-        assert_eq!(state.next_tenant_seq, 0);
-        assert_eq!(state.next_namespace_seq, 0);
-        assert_eq!(state.next_cache_seq, 0);
-        assert_eq!(state.next_stream_seq, 0);
-        assert!(!broker.namespace_exists("t1", "ns").await);
-        assert!(!broker.stream_exists("t1", "ns", "s1").await);
-        assert!(!broker.cache_exists("t1", "ns", "c1").await);
+            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            assert_eq!(state.next_tenant_seq, 0);
+            assert_eq!(state.next_namespace_seq, 0);
+            assert_eq!(state.next_cache_seq, 0);
+            assert_eq!(state.next_stream_seq, 0);
+            assert!(!broker.namespace_exists("t1", "ns").await);
+            assert!(!broker.stream_exists("t1", "ns", "s1").await);
+            assert!(!broker.cache_exists("t1", "ns", "c1").await);
 
-        handle.abort();
-        Ok(())
+            let _ = shutdown_tx.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle)
+                .await
+                .expect("server shutdown");
+            Ok(())
+        })
+        .await
+        .expect("test timeout")
     }
 
     #[tokio::test]
     async fn sync_once_handles_tenant_deletion() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-        let router = Router::new()
-            .route(
-                "/v1/tenants/snapshot",
-                get(|| async {
-                    Json(TenantSnapshotResponse {
-                        items: vec![Tenant {
-                            tenant_id: "t1".to_string(),
-                        }],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/snapshot",
-                get(|| async {
-                    Json(NamespaceSnapshotResponse {
-                        items: vec![],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/snapshot",
-                get(|| async {
-                    Json(CacheSnapshotResponse {
-                        items: vec![],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/streams/snapshot",
-                get(|| async {
-                    Json(StreamSnapshotResponse {
-                        items: vec![],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/tenants/changes",
-                get(|| async {
-                    Json(TenantChangesResponse {
-                        items: vec![TenantChange {
-                            op: TenantChangeOp::Deleted,
-                            tenant_id: "t1".to_string(),
-                            tenant: None,
-                        }],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/changes",
-                get(|| async {
-                    Json(NamespaceChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/changes",
-                get(|| async {
-                    Json(CacheChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/streams/changes",
-                get(|| async {
-                    Json(StreamChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            );
-        let (addr, handle) = serve_router(router).await?;
-        let base_url = format!("http://{}", addr);
-        let client = reqwest::Client::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+            let router = Router::new()
+                .route(
+                    "/v1/tenants/snapshot",
+                    get(|| async {
+                        Json(TenantSnapshotResponse {
+                            items: vec![Tenant {
+                                tenant_id: "t1".to_string(),
+                            }],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/snapshot",
+                    get(|| async {
+                        Json(NamespaceSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/snapshot",
+                    get(|| async {
+                        Json(CacheSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/snapshot",
+                    get(|| async {
+                        Json(StreamSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/tenants/changes",
+                    get(|| async {
+                        Json(TenantChangesResponse {
+                            items: vec![TenantChange {
+                                op: TenantChangeOp::Deleted,
+                                tenant_id: "t1".to_string(),
+                                tenant: None,
+                            }],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/changes",
+                    get(|| async {
+                        Json(NamespaceChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/changes",
+                    get(|| async {
+                        Json(CacheChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/changes",
+                    get(|| async {
+                        Json(StreamChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                );
+            let (addr, shutdown_tx, handle) = serve_router(router).await?;
+            let base_url = format!("http://{}", addr);
+            let client = build_test_client()?;
 
-        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
-        assert_eq!(state.next_tenant_seq, 2);
-        let err = broker.register_namespace("t1", "ns").await;
-        assert!(err.is_err());
+            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            assert_eq!(state.next_tenant_seq, 2);
+            let err = broker.register_namespace("t1", "ns").await;
+            assert!(err.is_err());
 
-        handle.abort();
-        Ok(())
+            let _ = shutdown_tx.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle)
+                .await
+                .expect("server shutdown");
+            Ok(())
+        })
+        .await
+        .expect("test timeout")
     }
 
     #[tokio::test]
     async fn sync_once_handles_namespace_deletion() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-        let router = Router::new()
-            .route(
-                "/v1/tenants/snapshot",
-                get(|| async {
-                    Json(TenantSnapshotResponse {
-                        items: vec![Tenant {
-                            tenant_id: "t1".to_string(),
-                        }],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/snapshot",
-                get(|| async {
-                    Json(NamespaceSnapshotResponse {
-                        items: vec![Namespace {
-                            tenant_id: "t1".to_string(),
-                            namespace: "ns".to_string(),
-                        }],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/snapshot",
-                get(|| async {
-                    Json(CacheSnapshotResponse {
-                        items: vec![],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/streams/snapshot",
-                get(|| async {
-                    Json(StreamSnapshotResponse {
-                        items: vec![],
-                        next_seq: 1,
-                    })
-                }),
-            )
-            .route(
-                "/v1/tenants/changes",
-                get(|| async {
-                    Json(TenantChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/namespaces/changes",
-                get(|| async {
-                    Json(NamespaceChangesResponse {
-                        items: vec![NamespaceChange {
-                            op: NamespaceChangeOp::Deleted,
-                            key: NamespaceKey {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+            let router = Router::new()
+                .route(
+                    "/v1/tenants/snapshot",
+                    get(|| async {
+                        Json(TenantSnapshotResponse {
+                            items: vec![Tenant {
+                                tenant_id: "t1".to_string(),
+                            }],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/snapshot",
+                    get(|| async {
+                        Json(NamespaceSnapshotResponse {
+                            items: vec![Namespace {
                                 tenant_id: "t1".to_string(),
                                 namespace: "ns".to_string(),
-                            },
-                            namespace: None,
-                        }],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/caches/changes",
-                get(|| async {
-                    Json(CacheChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            )
-            .route(
-                "/v1/streams/changes",
-                get(|| async {
-                    Json(StreamChangesResponse {
-                        items: vec![],
-                        next_seq: 2,
-                    })
-                }),
-            );
-        let (addr, handle) = serve_router(router).await?;
-        let base_url = format!("http://{}", addr);
-        let client = reqwest::Client::new();
+                            }],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/snapshot",
+                    get(|| async {
+                        Json(CacheSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/snapshot",
+                    get(|| async {
+                        Json(StreamSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/tenants/changes",
+                    get(|| async {
+                        Json(TenantChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/changes",
+                    get(|| async {
+                        Json(NamespaceChangesResponse {
+                            items: vec![NamespaceChange {
+                                op: NamespaceChangeOp::Deleted,
+                                key: NamespaceKey {
+                                    tenant_id: "t1".to_string(),
+                                    namespace: "ns".to_string(),
+                                },
+                                namespace: None,
+                            }],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/changes",
+                    get(|| async {
+                        Json(CacheChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/changes",
+                    get(|| async {
+                        Json(StreamChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                );
+            let (addr, shutdown_tx, handle) = serve_router(router).await?;
+            let base_url = format!("http://{}", addr);
+            let client = build_test_client()?;
 
-        let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
-        assert_eq!(state.next_namespace_seq, 2);
-        assert!(!broker.namespace_exists("t1", "ns").await);
+            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            assert_eq!(state.next_namespace_seq, 2);
+            assert!(!broker.namespace_exists("t1", "ns").await);
 
-        handle.abort();
-        Ok(())
+            let _ = shutdown_tx.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle)
+                .await
+                .expect("server shutdown");
+            Ok(())
+        })
+        .await
+        .expect("test timeout")
     }
 }
