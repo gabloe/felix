@@ -286,49 +286,60 @@ mod tests {
         let _ = metrics;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn serve_metrics_endpoints_respond() {
-        let handle = init_observability("test-metrics-service");
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        let bound_addr = listener.local_addr().unwrap();
+        // Wrap the entire test in a timeout to prevent hanging
+        let test_future = async {
+            let handle = init_observability("test-metrics-service");
+            let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let bound_addr = listener.local_addr().unwrap();
 
-        // Start the server in the background
-        tokio::spawn(async move {
-            let app = axum::Router::new()
-                .route(
-                    "/metrics",
-                    axum::routing::get(move || async move { handle.render() }),
-                )
-                .route("/live", axum::routing::get(|| async { "ok" }))
-                .route("/ready", axum::routing::get(|| async { "ok" }));
-            axum::serve(listener, app.into_make_service()).await.ok();
-        });
+            // Start the server in the background with a cancellation mechanism
+            let server_handle = tokio::spawn(async move {
+                let app = axum::Router::new()
+                    .route(
+                        "/metrics",
+                        axum::routing::get(move || async move { handle.render() }),
+                    )
+                    .route("/live", axum::routing::get(|| async { "ok" }))
+                    .route("/ready", axum::routing::get(|| async { "ok" }));
+                axum::serve(listener, app.into_make_service()).await.ok();
+            });
 
-        // Give the server a moment to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Give the server a moment to start
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Test /metrics endpoint
-        let metrics_url = format!("http://{}/metrics", bound_addr);
-        let response = reqwest::get(&metrics_url).await;
-        assert!(response.is_ok());
-        let response = response.unwrap();
-        assert_eq!(response.status(), 200);
+            // Test /metrics endpoint
+            let metrics_url = format!("http://{}/metrics", bound_addr);
+            let response = reqwest::get(&metrics_url).await;
+            assert!(response.is_ok());
+            let response = response.unwrap();
+            assert_eq!(response.status(), 200);
 
-        // Test /live endpoint
-        let live_url = format!("http://{}/live", bound_addr);
-        let response = reqwest::get(&live_url).await.unwrap();
-        assert_eq!(response.status(), 200);
-        let body = response.text().await.unwrap();
-        assert_eq!(body, "ok");
+            // Test /live endpoint
+            let live_url = format!("http://{}/live", bound_addr);
+            let response = reqwest::get(&live_url).await.unwrap();
+            assert_eq!(response.status(), 200);
+            let body = response.text().await.unwrap();
+            assert_eq!(body, "ok");
 
-        // Test /ready endpoint
-        let ready_url = format!("http://{}/ready", bound_addr);
-        let response = reqwest::get(&ready_url).await.unwrap();
-        assert_eq!(response.status(), 200);
-        let body = response.text().await.unwrap();
-        assert_eq!(body, "ok");
+            // Test /ready endpoint
+            let ready_url = format!("http://{}/ready", bound_addr);
+            let response = reqwest::get(&ready_url).await.unwrap();
+            assert_eq!(response.status(), 200);
+            let body = response.text().await.unwrap();
+            assert_eq!(body, "ok");
+
+            // Abort the server task to prevent hanging
+            server_handle.abort();
+        };
+        
+        // Run with a 5-second timeout
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), test_future)
+            .await
+            .expect("Test timed out");
     }
 
     #[test]
