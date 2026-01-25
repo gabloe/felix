@@ -251,6 +251,17 @@ mod tests {
     }
 
     #[test]
+    fn header_extractor_ignores_invalid_utf8() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            axum::http::HeaderValue::from_bytes(b"\xFF").unwrap(),
+        );
+        let extractor = HeaderMapExtractor(&headers);
+        assert!(extractor.get("traceparent").is_none());
+    }
+
+    #[test]
     fn trace_context_extracts_span_context() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(

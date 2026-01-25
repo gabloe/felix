@@ -62,6 +62,7 @@ pub async fn get_with_context(client: &Client, url: &str, phase: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
     use serial_test::serial;
 
     #[tokio::test]
@@ -97,5 +98,27 @@ mod tests {
             err.to_string().contains("connect GET"),
             "missing phase context: {err}"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_with_context_succeeds() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = axum::Router::new().route("/ok", axum::routing::get(|| async { "ok" }));
+        let (shutdown_tx, handle) = spawn_axum_with_shutdown(listener, app);
+        wait_for_listen(addr).await.expect("ready");
+
+        let client = build_test_client().expect("client");
+        let url = format!("http://{}/ok", addr);
+        let response = get_with_context(&client, &url, "GET /ok")
+            .await
+            .expect("request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("server shutdown");
     }
 }
