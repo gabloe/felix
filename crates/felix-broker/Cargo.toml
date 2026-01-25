@@ -15,3 +15,6 @@ felix-storage = { path = "../felix-storage", version = "0.1.0" }
 [features]
 default = []
 telemetry = []
+
+[dev-dependencies]
+serial_test = "3"

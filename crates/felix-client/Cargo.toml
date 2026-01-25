@@ -26,3 +26,4 @@ telemetry = []
 rcgen = "0.12"
 rustls = "0.23"
 serial_test = "3"
+tempfile = "3"

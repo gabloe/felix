@@ -609,6 +609,7 @@ dependencies = [
  "bytes",
  "felix-storage",
  "metrics",
+ "serial_test",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -630,6 +631,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "serial_test",
+ "tempfile",
  "tokio",
 ]
 
