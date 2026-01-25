@@ -1,17 +1,54 @@
-// Control plane sync loop for the broker.
-// Fetches snapshots on cold start, then polls change feeds to keep local
-// tenant/namespace/stream/cache registries up to date without touching the hot path.
+//! Broker-side control-plane sync client.
+//!
+//! This module runs **inside the broker service** and keeps the broker's local registries
+//! (tenants / namespaces / streams / caches) aligned with the control-plane.
+//!
+//! Design goals
+//! - Keep the **hot data path** (publish / subscribe / cache ops) free of control-plane I/O.
+//! - Provide **eventual consistency**: brokers converge to the control-plane state over time.
+//! - Allow a broker to cold-start with a full snapshot, then poll incremental change feeds.
+//!
+//! What this code assumes about the control-plane HTTP API
+//! - For each resource type there is a `snapshot` endpoint that returns the full current set
+//!   plus a monotonically increasing `next_seq` cursor.
+//! - For each resource type there is a `changes?since=<seq>` endpoint that returns all changes
+//!   after `since`, plus the new `next_seq` cursor.
+//! - `next_seq` is **monotonic** per resource type (not necessarily contiguous).
+//! - Change feeds are allowed to be empty; the broker will simply advance `next_seq`.
+//!
+//! Failure mode philosophy
+//! - Snapshot/changes fetch failures are **non-fatal**: we log a warning and keep going.
+//! - Local application failures (e.g., broker rejects a registration) are treated as real errors
+//!   and bubble up, because they indicate an invariant mismatch or corrupted input.
+//!
+//! NOTE: This file is a *client* of the control-plane. Persisting control-plane data
+//! (e.g., in Postgres) is implemented on the **control-plane service**, not here.
 use anyhow::{Context, Result};
 use felix_broker::{Broker, CacheMetadata, StreamMetadata};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Per-resource cursors into the control-plane change feeds.
+///
+/// Each resource type (tenants, namespaces, caches, streams) has an independent cursor.
+/// A value of `0` is treated as "unseeded" and triggers an initial snapshot fetch.
+///
+/// Why separate cursors?
+/// - Each feed can advance independently.
+/// - It keeps payload sizes small and avoids cross-resource coupling.
+///
+/// NOTE: These cursors are **in-memory** in the broker process. On broker restart,
+/// we re-seed from snapshots (safe but more expensive than resuming from a stored cursor).
 #[derive(Debug, Clone, Copy)]
 struct SyncState {
+    /// Next sequence cursor for the tenants change feed.
     next_tenant_seq: u64,
+    /// Next sequence cursor for the namespaces change feed.
     next_namespace_seq: u64,
+    /// Next sequence cursor for the caches change feed.
     next_cache_seq: u64,
+    /// Next sequence cursor for the streams change feed.
     next_stream_seq: u64,
 }
 
@@ -26,54 +63,66 @@ impl SyncState {
     }
 }
 
+/// Full snapshot response for streams; used to seed a cold-start broker.
 #[derive(Debug, Deserialize, Serialize)]
 struct StreamSnapshotResponse {
     items: Vec<Stream>,
     next_seq: u64,
 }
 
+/// Full snapshot response for caches; used to seed a cold-start broker.
 #[derive(Debug, Deserialize, Serialize)]
 struct CacheSnapshotResponse {
     items: Vec<Cache>,
     next_seq: u64,
 }
 
+/// Full snapshot response for tenants; used to seed a cold-start broker.
 #[derive(Debug, Deserialize, Serialize)]
 struct TenantSnapshotResponse {
     items: Vec<Tenant>,
     next_seq: u64,
 }
 
+/// Full snapshot response for namespaces; used to seed a cold-start broker.
 #[derive(Debug, Deserialize, Serialize)]
 struct NamespaceSnapshotResponse {
     items: Vec<Namespace>,
     next_seq: u64,
 }
 
+/// Incremental change feed response for streams; used after snapshot seeding.
 #[derive(Debug, Deserialize, Serialize)]
 struct StreamChangesResponse {
     items: Vec<StreamChange>,
     next_seq: u64,
 }
 
+/// Incremental change feed response for caches; used after snapshot seeding.
 #[derive(Debug, Deserialize, Serialize)]
 struct CacheChangesResponse {
     items: Vec<CacheChange>,
     next_seq: u64,
 }
 
+/// Incremental change feed response for tenants; used after snapshot seeding.
 #[derive(Debug, Deserialize, Serialize)]
 struct TenantChangesResponse {
     items: Vec<TenantChange>,
     next_seq: u64,
 }
 
+/// Incremental change feed response for namespaces; used after snapshot seeding.
 #[derive(Debug, Deserialize, Serialize)]
 struct NamespaceChangesResponse {
     items: Vec<NamespaceChange>,
     next_seq: u64,
 }
 
+/// Represents a single change-feed event for a tenant.
+/// - `op` is the operation (Created/Deleted).
+/// - `tenant_id` identifies the tenant.
+/// - `tenant` is present for Created.
 #[derive(Debug, Deserialize, Serialize)]
 struct TenantChange {
     op: TenantChangeOp,
@@ -81,6 +130,10 @@ struct TenantChange {
     tenant: Option<Tenant>,
 }
 
+/// Represents a single change-feed event for a namespace.
+/// - `op` is the operation (Created/Deleted).
+/// - `key` identifies the namespace (tenant_id + namespace).
+/// - `namespace` is present for Created.
 #[derive(Debug, Deserialize, Serialize)]
 struct NamespaceChange {
     op: NamespaceChangeOp,
@@ -88,6 +141,10 @@ struct NamespaceChange {
     namespace: Option<Namespace>,
 }
 
+/// Represents a single change-feed event for a stream.
+/// - `op` is the operation (Created/Updated/Deleted).
+/// - `key` identifies the stream (tenant_id + namespace + stream).
+/// - `stream` is present for Created/Updated.
 #[derive(Debug, Deserialize, Serialize)]
 struct StreamChange {
     op: StreamChangeOp,
@@ -95,6 +152,10 @@ struct StreamChange {
     stream: Option<Stream>,
 }
 
+/// Represents a single change-feed event for a cache.
+/// - `op` is the operation (Created/Updated/Deleted).
+/// - `key` identifies the cache (tenant_id + namespace + cache).
+/// - `cache` is present for Created/Updated.
 #[derive(Debug, Deserialize, Serialize)]
 struct CacheChange {
     op: CacheChangeOp,
@@ -102,17 +163,23 @@ struct CacheChange {
     cache: Option<Cache>,
 }
 
+/// Represents a tenant as registered in the broker registry.
+/// Maps to the broker's tenant registry.
 #[derive(Debug, Deserialize, Serialize)]
 struct Tenant {
     tenant_id: String,
 }
 
+/// Represents a namespace as registered in the broker registry.
+/// Maps to the broker's namespace registry.
 #[derive(Debug, Deserialize, Serialize)]
 struct Namespace {
     tenant_id: String,
     namespace: String,
 }
 
+/// Identifies a stream (tenant_id, namespace, stream).
+/// Used as a key in broker registries.
 #[derive(Debug, Deserialize, Serialize)]
 struct StreamKey {
     tenant_id: String,
@@ -120,6 +187,8 @@ struct StreamKey {
     stream: String,
 }
 
+/// Identifies a cache (tenant_id, namespace, cache).
+/// Used as a key in broker registries.
 #[derive(Debug, Deserialize, Serialize)]
 struct CacheKey {
     tenant_id: String,
@@ -127,12 +196,18 @@ struct CacheKey {
     cache: String,
 }
 
+/// Identifies a namespace (tenant_id, namespace).
+/// Used as a key in broker registries.
 #[derive(Debug, Deserialize, Serialize)]
 struct NamespaceKey {
     tenant_id: String,
     namespace: String,
 }
 
+/// Change operation for tenants.
+///
+/// Serialized in camelCase for wire compatibility.
+/// Only Created and Deleted are valid (no update).
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum TenantChangeOp {
@@ -140,6 +215,10 @@ enum TenantChangeOp {
     Deleted,
 }
 
+/// Change operation for namespaces.
+///
+/// Serialized in camelCase for wire compatibility.
+/// Only Created and Deleted are valid (no update).
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum NamespaceChangeOp {
@@ -147,6 +226,10 @@ enum NamespaceChangeOp {
     Deleted,
 }
 
+/// Change operation for streams.
+///
+/// Serialized in camelCase for wire compatibility.
+/// Streams may be Created, Updated, or Deleted.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum StreamChangeOp {
@@ -155,6 +238,10 @@ enum StreamChangeOp {
     Deleted,
 }
 
+/// Change operation for caches.
+///
+/// Serialized in camelCase for wire compatibility.
+/// Caches may be Created, Updated, or Deleted.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CacheChangeOp {
@@ -163,6 +250,8 @@ enum CacheChangeOp {
     Deleted,
 }
 
+/// Represents a stream as registered in the broker registry.
+/// Maps to the broker's stream registry.
 #[derive(Debug, Deserialize, Serialize)]
 struct Stream {
     tenant_id: String,
@@ -172,6 +261,8 @@ struct Stream {
     durable: bool,
 }
 
+/// Represents a cache as registered in the broker registry.
+/// Maps to the broker's cache registry.
 #[derive(Debug, Deserialize, Serialize)]
 struct Cache {
     tenant_id: String,
@@ -179,6 +270,15 @@ struct Cache {
     cache: String,
 }
 
+/// Starts the control-plane sync loop as a background task.
+///
+/// This function runs forever, periodically fetching control-plane snapshots and change feeds,
+/// and applying them to the broker's local registries.
+///
+/// - It is safe to run as a background task (spawns no additional tasks).
+/// - It intentionally sleeps for `interval` between change feed polls.
+/// - It only returns on unrecoverable local errors (e.g., broker rejects a registration),
+///   which indicate a true invariant violation or corrupted input.
 pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
     let client = reqwest::Client::new();
     // Sequence cursors for each change feed; 0 means "not yet seeded".
@@ -190,14 +290,32 @@ pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duratio
     }
 }
 
+/// Performs a single sync iteration: fetches and applies any new control-plane state.
+///
+/// Algorithm:
+/// - On cold start (`next_seq == 0`), fetch full snapshots in dependency order:
+///   1. Tenants
+///   2. Namespaces
+///   3. Caches
+///   4. Streams
+///      This ensures that hierarchical dependencies (tenants -> namespaces -> caches/streams)
+///      are satisfied before applying more granular resources.
+///
+/// - After seeding, fetch incremental change feeds in the same order.
+///   - Each fetch is best-effort: errors are logged and the corresponding cursor is not advanced.
+///   - On success, the cursor is advanced to the new `next_seq`.
+///   - Deletion events use `remove_*` and ignore missing entries.
+///
+/// - The ordering ensures that removal of higher-level resources (e.g., tenant deletion)
+///   occurs before dependent resources, preventing orphaned objects.
 async fn sync_once(
     broker: &Arc<Broker>,
     client: &reqwest::Client,
     base_url: &str,
     mut state: SyncState,
 ) -> Result<SyncState> {
-    // On cold start, fetch full snapshots once to seed local registries.
-    // Seed local caches on first run so the data plane can enforce existence checks.
+    // === Cold start snapshot seeding ===
+    // 1. Seed tenants first.
     if state.next_tenant_seq == 0 {
         match fetch_tenant_snapshot(client, base_url).await {
             Ok(snapshot) => {
@@ -212,6 +330,7 @@ async fn sync_once(
         }
     }
 
+    // 2. Seed namespaces after tenants.
     if state.next_namespace_seq == 0 {
         match fetch_namespace_snapshot(client, base_url).await {
             Ok(snapshot) => {
@@ -228,6 +347,7 @@ async fn sync_once(
         }
     }
 
+    // 3. Seed caches after namespaces.
     if state.next_cache_seq == 0 {
         match fetch_cache_snapshot(client, base_url).await {
             Ok(snapshot) => {
@@ -249,6 +369,8 @@ async fn sync_once(
         }
     }
 
+    // 4. Seed streams after caches.
+    // Note: fetch_snapshot is the streams snapshot (legacy naming).
     if state.next_stream_seq == 0 {
         match fetch_snapshot(client, base_url).await {
             Ok(snapshot) => {
@@ -273,7 +395,8 @@ async fn sync_once(
         }
     }
 
-    // Apply incremental tenant changes for revocation/creation.
+    // === Incremental change feed application ===
+    // 1. Apply tenant changes first (ensures proper revocation/creation).
     match fetch_tenant_changes(client, base_url, state.next_tenant_seq).await {
         Ok(changes) => {
             for change in changes.items {
@@ -295,7 +418,7 @@ async fn sync_once(
         }
     }
 
-    // Apply incremental namespace changes for revocation/creation.
+    // 2. Apply namespace changes after tenants.
     match fetch_namespace_changes(client, base_url, state.next_namespace_seq).await {
         Ok(changes) => {
             for change in changes.items {
@@ -321,7 +444,8 @@ async fn sync_once(
         }
     }
 
-    // Cache updates can be applied once tenants/namespaces are current.
+    // 3. Apply cache changes after namespaces.
+    //    (Caches depend on tenant/namespace existence.)
     match fetch_cache_changes(client, base_url, state.next_cache_seq).await {
         Ok(changes) => {
             for change in changes.items {
@@ -356,7 +480,7 @@ async fn sync_once(
         }
     }
 
-    // Apply incremental stream changes last so existence checks have up-to-date scopes.
+    // 4. Apply stream changes last so existence checks have up-to-date scopes.
     match fetch_changes(client, base_url, state.next_stream_seq).await {
         Ok(changes) => {
             for change in changes.items {
@@ -396,6 +520,8 @@ async fn sync_once(
     Ok(state)
 }
 
+/// Fetches the full stream snapshot from `/v1/streams/snapshot`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_snapshot(
     client: &reqwest::Client,
     base_url: &str,
@@ -411,6 +537,8 @@ async fn fetch_snapshot(
     response.json().await.context("snapshot body")
 }
 
+/// Fetches the full cache snapshot from `/v1/caches/snapshot`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_cache_snapshot(
     client: &reqwest::Client,
     base_url: &str,
@@ -426,6 +554,8 @@ async fn fetch_cache_snapshot(
     response.json().await.context("cache snapshot body")
 }
 
+/// Fetches the full tenant snapshot from `/v1/tenants/snapshot`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_tenant_snapshot(
     client: &reqwest::Client,
     base_url: &str,
@@ -441,6 +571,8 @@ async fn fetch_tenant_snapshot(
     response.json().await.context("tenant snapshot body")
 }
 
+/// Fetches the full namespace snapshot from `/v1/namespaces/snapshot`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_namespace_snapshot(
     client: &reqwest::Client,
     base_url: &str,
@@ -456,6 +588,8 @@ async fn fetch_namespace_snapshot(
     response.json().await.context("namespace snapshot body")
 }
 
+/// Fetches the stream change feed from `/v1/streams/changes?since=<seq>`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_changes(
     client: &reqwest::Client,
     base_url: &str,
@@ -476,6 +610,8 @@ async fn fetch_changes(
     response.json().await.context("changes body")
 }
 
+/// Fetches the cache change feed from `/v1/caches/changes?since=<seq>`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_cache_changes(
     client: &reqwest::Client,
     base_url: &str,
@@ -496,6 +632,8 @@ async fn fetch_cache_changes(
     response.json().await.context("cache changes body")
 }
 
+/// Fetches the tenant change feed from `/v1/tenants/changes?since=<seq>`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_tenant_changes(
     client: &reqwest::Client,
     base_url: &str,
@@ -516,6 +654,8 @@ async fn fetch_tenant_changes(
     response.json().await.context("tenant changes body")
 }
 
+/// Fetches the namespace change feed from `/v1/namespaces/changes?since=<seq>`.
+/// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_namespace_changes(
     client: &reqwest::Client,
     base_url: &str,
@@ -538,6 +678,7 @@ async fn fetch_namespace_changes(
 
 #[cfg(test)]
 mod tests {
+    // Tests cover error tolerance (skipping on fetch errors), deletion propagation, and cursor advancement.
     use super::*;
     use axum::{Json, Router, http::StatusCode, routing::get};
     use felix_storage::EphemeralCache;

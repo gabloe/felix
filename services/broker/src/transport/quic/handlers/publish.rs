@@ -1,4 +1,28 @@
-// Publish path logic: enqueueing, ack handling, and publish worker helpers.
+//! Publish path (ingress) helpers for the QUIC transport.
+//!
+//! This module is the “publish ingestion glue” between QUIC stream handlers and the broker core.
+//! It owns:
+//! - **Ingress enqueue policy** (Drop/Fail/Wait) into the publish worker queues.
+//! - **Worker sharding** (deterministic hashing of tenant/namespace/stream to pick a worker).
+//! - **Ack semantics + backpressure** for control-stream publishes (including commit-ack waiting).
+//! - **Depth tracking** for ingress and outbound-ack queues (local + global gauges).
+//!
+//! Publish arrives in two main shapes:
+//! - **Control stream publish** (bi-directional): publish messages may request an ack (`ack != None`)
+//!   and can be configured as either enqueue-ack or commit-ack (`ack_on_commit`).
+//! - **Uni-directional publish stream** (ingress-only): fire-and-forget publishes with **no acks**.
+//!
+//! Ack meaning depends on configuration:
+//! - `ack_on_commit = false` → **enqueue-ack**: an ack means “accepted into the ingress queue”.
+//!   Lowest latency, but does not guarantee the publish ultimately commits.
+//! - `ack_on_commit = true` → **commit-ack**: an ack means “the publish job completed/committed”.
+//!   Higher latency; bounded by `ack_waiters` and `ack_waiter_tx` to avoid unbounded in-flight acks.
+//!
+//! Backpressure strategy:
+//! - Ingress queue uses `EnqueuePolicy` (Drop/Fail/Wait) to shed load or apply bounded waiting.
+//! - Outbound ack queue maintains a high-water throttle signal (`ack_throttle_tx`) and records
+//!   enqueue failures/timeouts to decide when to cooperatively cancel the control stream.
+//! - Depth counters are tracked both per-stream and globally to support observability and tuning.
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use felix_broker::Broker;
@@ -20,7 +44,15 @@ use crate::transport::quic::{
     GLOBAL_INGRESS_DEPTH, STREAM_CACHE_TTL,
 };
 
-// Work item for the publish worker; response is only used for per-message acks.
+/// Work item consumed by publish workers.
+///
+/// A publish job is the unit the broker’s ingress pipeline processes:
+/// - It identifies the target stream (`tenant_id`, `namespace`, `stream`).
+/// - It carries one or more payloads (single publish or batch).
+/// - `response` is **only** used when the publish was received on the control stream and the
+///   client requested an ack in commit-ack mode (`ack_on_commit = true`).
+///
+/// For uni-stream publishes and enqueue-ack mode, `response` is `None`.
 pub(crate) struct PublishJob {
     pub(crate) tenant_id: String,
     pub(crate) namespace: String,
@@ -29,19 +61,36 @@ pub(crate) struct PublishJob {
     pub(crate) response: Option<oneshot::Sender<Result<()>>>,
 }
 
-// Outbound responses pushed onto the ack/write task.
+/// Items pushed to the outbound writer loop (ack/response path).
+///
+/// The writer loop is the single owner of the QUIC `SendStream` for the control stream.
+/// All responses/acks are funneled into that task to avoid concurrent writes.
+///
+/// Variants:
+/// - `Message`: normal control responses (PublishOk/Error, SubscribeOk, etc.).
+/// - `CacheMessage`: cache fast-path replies that may be encoded differently or routed
+///   separately from general control responses (depending on the writer implementation).
 pub(crate) enum Outgoing {
     Message(Message),
     CacheMessage(Message),
 }
 
-// What to do when the publish queue is full.
+/// Admission policy when the ingress publish queue is full.
+///
+/// - `Drop`: shed load silently (best for fire-and-forget / non-acked traffic).
+/// - `Fail`: reject immediately with an error (best for acked traffic when you prefer fast failure).
+/// - `Wait`: apply bounded backpressure by waiting up to `publish_ctx.wait_timeout`.
+///   Used for commit-ack publishes so the client is less likely to be stranded by overload.
 pub(crate) enum EnqueuePolicy {
     Drop,
     Fail,
     Wait,
 }
 
+/// Result reported by the ack-waiter task for commit-ack publishes.
+///
+/// The waiter task is responsible for awaiting the worker completion signal (oneshot),
+/// applying timeouts, and producing a normalized result for the response writer.
 pub(crate) enum AckWaiterResult {
     Publish {
         request_id: u64,
@@ -64,6 +113,10 @@ pub(crate) enum AckWaiterResult {
     },
 }
 
+/// Message sent to the ack-waiter task to track one in-flight commit-ack request.
+///
+/// Carries the oneshot receiver and a semaphore permit (`ack_waiters`) which bounds the number of
+/// in-flight commit acks. Releasing the permit signals “this commit-ack slot is free again”.
 pub(crate) enum AckWaiterMessage {
     Publish {
         request_id: u64,
@@ -80,6 +133,12 @@ pub(crate) enum AckWaiterMessage {
     },
 }
 
+/// Shared publish-ingress configuration and worker queue handles.
+///
+/// - `workers`: per-worker `mpsc::Sender<PublishJob>` queues.
+/// - `worker_count`: cached length for fast hashing.
+/// - `depth`: best-effort local depth tracking for this publish queue set.
+/// - `wait_timeout`: bound used by `EnqueuePolicy::Wait`.
 #[derive(Clone)]
 pub(crate) struct PublishContext {
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
@@ -88,12 +147,18 @@ pub(crate) struct PublishContext {
     pub(crate) wait_timeout: Duration,
 }
 
+/// Tracks consecutive outbound-ack enqueue timeouts in a sliding time window.
+///
+/// This is a defensive mechanism: if we cannot enqueue responses for too long, the control stream
+/// is likely unhealthy (client not reading, writer wedged, or extreme overload). In that case we
+/// throttle and eventually cancel the stream cooperatively.
 pub(crate) struct AckTimeoutState {
     window_start: Instant,
     count: u32,
 }
 
 impl AckTimeoutState {
+    /// Create a new timeout state window starting at `now`.
     pub(crate) fn new(now: Instant) -> Self {
         Self {
             window_start: now,
@@ -101,11 +166,15 @@ impl AckTimeoutState {
         }
     }
 
+    /// Reset the window and streak counters (typically after a successful enqueue).
     pub(crate) fn reset(&mut self, now: Instant) {
         self.window_start = now;
         self.count = 0;
     }
 
+    /// Record one timeout and return the current streak count within the active window.
+    ///
+    /// If the window has elapsed, we start a new window and reset the streak to 1.
     pub(crate) fn register_timeout(&mut self, now: Instant) -> u32 {
         if now.duration_since(self.window_start) > ACK_TIMEOUT_WINDOW {
             self.window_start = now;
@@ -117,6 +186,13 @@ impl AckTimeoutState {
     }
 }
 
+/// Deterministically map (tenant, namespace, stream) to a publish worker index.
+///
+/// Goal: keep ordering locality and cache locality for a given stream by always hashing to
+/// the same worker, while distributing streams across workers reasonably well.
+///
+/// This *must* be stable across processes for predictable performance; it does not need to be
+/// cryptographically secure.
 pub(crate) fn publish_worker_index(
     tenant_id: &str,
     namespace: &str,
@@ -133,7 +209,17 @@ pub(crate) fn publish_worker_index(
     (hasher.finish() as usize) % worker_count
 }
 
-// Publish queue helper with explicit backpressure and timeout semantics.
+/// Enqueue a publish job into the appropriate worker queue with explicit overload semantics.
+///
+/// Return value:
+/// - `Ok(true)`  → job enqueued
+/// - `Ok(false)` → job intentionally dropped (policy = Drop)
+/// - `Err(...)`  → failure to enqueue (policy = Fail, closed queue, timeout, etc.)
+///
+/// Implementation detail:
+/// - We try `try_send` first to keep the common path allocation-free and to make overload observable
+///   (`Full` vs `Closed`). Only `Wait` does an async `send` with a timeout.
+/// - Any path that successfully enqueues must increment both local and global depth **exactly once**.
 pub(crate) async fn enqueue_publish(
     publish_ctx: &PublishContext,
     job: PublishJob,
@@ -179,6 +265,7 @@ pub(crate) async fn enqueue_publish(
                             .await
                             .map_err(|_| anyhow!("publish enqueue timed out"))?;
                     send_result.map_err(|_| anyhow!("publish queue closed"))?;
+                    // Local depth is per publish context; global depth is used for cross-connection observability.
                     let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;
                     let global = GLOBAL_INGRESS_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
                     t_gauge!("felix_broker_ingress_queue_depth").set(global as f64);

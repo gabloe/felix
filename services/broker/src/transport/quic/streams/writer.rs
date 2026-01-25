@@ -1,3 +1,25 @@
+//! QUIC response writer loop.
+//!
+//! This module owns the *single-writer* side of a broker control stream.
+//! The broker reads control frames (publish, subscribe, cache put/get, etc.) on the receive side,
+//! and enqueues responses/acks onto an `mpsc` channel. A dedicated task runs this writer loop and
+//! is the *only* code that ever writes to the `quinn::SendStream`.
+//!
+//! Why a single writer?
+//! - `quinn::SendStream` does not support concurrent writes safely without external coordination.
+//! - Serializing writes in one task eliminates interleaving/corruption and avoids mutex contention.
+//! - Backpressure is applied via queue depth + throttle signals rather than blocking many tasks.
+//!
+//! Responsibilities:
+//! - Drain `Outgoing` items (either JSON `Message` or binary `Frame` for cache fast-path replies).
+//! - Maintain per-stream and global ack queue depth gauges.
+//! - Toggle `ack_throttle` when depth crosses high/low watermarks.
+//! - On any write/encode failure, initiate cooperative shutdown by signaling `cancel`.
+//!
+//! This file is intentionally small and hot-path oriented: comments explain invariants and
+//! cancellation/backpressure behavior, while logic stays straightforward.
+
+// Writer loop owns the SendStream and serializes all outbound responses.
 use felix_wire::Message;
 use quinn::SendStream;
 use std::sync::Arc;
@@ -16,6 +38,7 @@ use super::hooks::{
     write_message_with_hook,
 };
 
+// Drains outgoing responses, updates depth counters, and handles shutdown on error.
 pub(super) async fn run_writer_loop(
     mut send: SendStream,
     mut out_ack_rx: mpsc::Receiver<Outgoing>,
