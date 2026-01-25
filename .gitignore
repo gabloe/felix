@@ -22,3 +22,6 @@ data/raw/stdout/
 data/raw/latencydemo_runs.jsonl
 coverage.json
 lcov.info
+# MkDocs build output
+/site/
+.cache/
