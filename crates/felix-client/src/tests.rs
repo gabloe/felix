@@ -162,34 +162,57 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
 
 // ===== Config tests =====
 
+#[allow(deprecated)]
 #[test]
 fn config_optimized_defaults() {
     use crate::config::*;
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let config = ClientConfig::optimized_defaults(quinn);
-    
+
     assert_eq!(config.publish_conn_pool, DEFAULT_PUB_CONN_POOL);
-    assert_eq!(config.publish_streams_per_conn, DEFAULT_PUB_STREAMS_PER_CONN);
+    assert_eq!(
+        config.publish_streams_per_conn,
+        DEFAULT_PUB_STREAMS_PER_CONN
+    );
     assert_eq!(config.publish_chunk_bytes, DEFAULT_PUBLISH_CHUNK_BYTES);
     assert_eq!(config.cache_conn_pool, DEFAULT_CACHE_CONN_POOL);
-    assert_eq!(config.cache_streams_per_conn, DEFAULT_CACHE_STREAMS_PER_CONN);
+    assert_eq!(
+        config.cache_streams_per_conn,
+        DEFAULT_CACHE_STREAMS_PER_CONN
+    );
     assert_eq!(config.event_conn_pool, DEFAULT_EVENT_CONN_POOL);
-    assert_eq!(config.event_conn_recv_window, DEFAULT_EVENT_CONN_RECV_WINDOW);
-    assert_eq!(config.event_stream_recv_window, DEFAULT_EVENT_STREAM_RECV_WINDOW);
+    assert_eq!(
+        config.event_conn_recv_window,
+        DEFAULT_EVENT_CONN_RECV_WINDOW
+    );
+    assert_eq!(
+        config.event_stream_recv_window,
+        DEFAULT_EVENT_STREAM_RECV_WINDOW
+    );
     assert_eq!(config.event_send_window, DEFAULT_EVENT_SEND_WINDOW);
-    assert_eq!(config.cache_conn_recv_window, DEFAULT_CACHE_CONN_RECV_WINDOW);
-    assert_eq!(config.cache_stream_recv_window, DEFAULT_CACHE_STREAM_RECV_WINDOW);
+    assert_eq!(
+        config.cache_conn_recv_window,
+        DEFAULT_CACHE_CONN_RECV_WINDOW
+    );
+    assert_eq!(
+        config.cache_stream_recv_window,
+        DEFAULT_CACHE_STREAM_RECV_WINDOW
+    );
     assert_eq!(config.cache_send_window, DEFAULT_CACHE_SEND_WINDOW);
-    assert_eq!(config.event_router_max_pending, DEFAULT_EVENT_ROUTER_MAX_PENDING);
+    assert_eq!(
+        config.event_router_max_pending,
+        DEFAULT_EVENT_ROUTER_MAX_PENDING
+    );
     assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
     assert!(!config.bench_embed_ts);
 }
 
+#[allow(deprecated)]
 #[test]
 #[serial_test::serial]
 fn config_from_env_variables() {
     use crate::config::*;
-    
+
     unsafe {
         std::env::set_var("FELIX_PUB_CONN_POOL", "2");
         std::env::set_var("FELIX_PUB_STREAMS_PER_CONN", "3");
@@ -208,10 +231,10 @@ fn config_from_env_variables() {
         std::env::set_var("FELIX_MAX_FRAME_BYTES", "8388608");
         std::env::set_var("FELIX_BENCH_EMBED_TS", "true");
     }
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
-    
+
     assert_eq!(config.publish_conn_pool, 2);
     assert_eq!(config.publish_streams_per_conn, 3);
     assert_eq!(config.publish_chunk_bytes, 32768);
@@ -227,7 +250,7 @@ fn config_from_env_variables() {
     assert_eq!(config.event_router_max_pending, 1000);
     assert_eq!(config.max_frame_bytes, 8388608);
     assert!(config.bench_embed_ts);
-    
+
     // Clean up
     unsafe {
         std::env::remove_var("FELIX_PUB_CONN_POOL");
@@ -249,12 +272,13 @@ fn config_from_env_variables() {
     }
 }
 
+#[allow(deprecated)]
 #[test]
 fn config_from_yaml_file() {
     use crate::config::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     let yaml = r#"
 publish_conn_pool: 10
 publish_streams_per_conn: 20
@@ -273,14 +297,14 @@ event_router_max_pending: 2000
 max_frame_bytes: 16777216
 bench_embed_ts: true
 "#;
-    
+
     let mut temp_file = NamedTempFile::new().expect("temp file");
     temp_file.write_all(yaml.as_bytes()).expect("write");
     let path = temp_file.path().to_str().expect("path");
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let config = ClientConfig::from_env_or_yaml(quinn, Some(path)).expect("config");
-    
+
     assert_eq!(config.publish_conn_pool, 10);
     assert_eq!(config.publish_streams_per_conn, 20);
     assert_eq!(config.publish_chunk_bytes, 65536);
@@ -298,65 +322,69 @@ bench_embed_ts: true
     assert!(config.bench_embed_ts);
 }
 
+#[allow(deprecated)]
 #[test]
 fn config_yaml_overrides_ignore_zero_values() {
     use crate::config::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     let yaml = r#"
 publish_conn_pool: 0
 cache_conn_pool: 5
 event_conn_pool: 0
 "#;
-    
+
     let mut temp_file = NamedTempFile::new().expect("temp file");
     temp_file.write_all(yaml.as_bytes()).expect("write");
     let path = temp_file.path().to_str().expect("path");
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let config = ClientConfig::from_env_or_yaml(quinn, Some(path)).expect("config");
-    
+
     // Zero values should be ignored, defaults used
     assert_eq!(config.publish_conn_pool, DEFAULT_PUB_CONN_POOL);
     assert_eq!(config.cache_conn_pool, 5);
     assert_eq!(config.event_conn_pool, DEFAULT_EVENT_CONN_POOL);
 }
 
+#[allow(deprecated)]
 #[test]
 fn config_invalid_yaml_file_returns_error() {
     use crate::config::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     let invalid_yaml = r#"
 publish_conn_pool: [invalid
 "#;
-    
+
     let mut temp_file = NamedTempFile::new().expect("temp file");
     temp_file.write_all(invalid_yaml.as_bytes()).expect("write");
     let path = temp_file.path().to_str().expect("path");
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let result = ClientConfig::from_env_or_yaml(quinn, Some(path));
-    
+
     assert!(result.is_err());
 }
 
+#[allow(deprecated)]
 #[test]
 fn config_nonexistent_file_returns_error() {
     use crate::config::*;
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let result = ClientConfig::from_env_or_yaml(quinn, Some("/nonexistent/path/config.yaml"));
-    
+
     assert!(result.is_err());
 }
 
+#[allow(deprecated)]
 #[test]
 fn config_transport_configs() {
     use crate::config::*;
-    
+
     let quinn = quinn::ClientConfig::with_platform_verifier();
     let mut config = ClientConfig::optimized_defaults(quinn);
     config.event_conn_recv_window = 12345;
@@ -365,20 +393,21 @@ fn config_transport_configs() {
     config.cache_conn_recv_window = 45678;
     config.cache_stream_recv_window = 56789;
     config.cache_send_window = 67890;
-    
+
     let base_transport = TransportConfig::default();
-    
+
     let event_transport = event_transport_config(base_transport.clone(), &config);
     assert_eq!(event_transport.receive_window, 12345);
     assert_eq!(event_transport.stream_receive_window, 23456);
     assert_eq!(event_transport.send_window, 34567);
-    
+
     let cache_transport = cache_transport_config(base_transport, &config);
     assert_eq!(cache_transport.receive_window, 45678);
     assert_eq!(cache_transport.stream_receive_window, 56789);
     assert_eq!(cache_transport.send_window, 67890);
 }
 
+#[allow(deprecated)]
 #[test]
 #[serial_test::serial]
 fn config_env_bool_parsing() {
@@ -390,7 +419,7 @@ fn config_env_bool_parsing() {
             let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
             assert!(config.bench_embed_ts, "Failed for value: {}", val);
         }
-        
+
         // Test false values
         for val in &["0", "false", "FALSE", "no", "NO", "random"] {
             std::env::set_var("FELIX_BENCH_EMBED_TS", val);
@@ -398,35 +427,45 @@ fn config_env_bool_parsing() {
             let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
             assert!(!config.bench_embed_ts, "Failed for value: {}", val);
         }
-        
+
         std::env::remove_var("FELIX_BENCH_EMBED_TS");
     }
 }
 
+#[allow(deprecated)]
 #[test]
 #[serial_test::serial]
 fn config_env_sharding_variants() {
     use crate::client::sharding::PublishSharding;
-    
+
     unsafe {
         // Test round robin
         std::env::set_var("FELIX_PUB_SHARDING", "rr");
         let quinn = quinn::ClientConfig::with_platform_verifier();
         let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
-        assert!(matches!(config.publish_sharding, PublishSharding::RoundRobin));
-        
+        assert!(matches!(
+            config.publish_sharding,
+            PublishSharding::RoundRobin
+        ));
+
         // Test hash_stream
         std::env::set_var("FELIX_PUB_SHARDING", "hash_stream");
         let quinn = quinn::ClientConfig::with_platform_verifier();
         let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
-        assert!(matches!(config.publish_sharding, PublishSharding::HashStream));
-        
+        assert!(matches!(
+            config.publish_sharding,
+            PublishSharding::HashStream
+        ));
+
         // Test invalid value (should default to HashStream)
         std::env::set_var("FELIX_PUB_SHARDING", "invalid");
         let quinn = quinn::ClientConfig::with_platform_verifier();
         let config = ClientConfig::from_env_or_yaml(quinn, None).expect("config");
-        assert!(matches!(config.publish_sharding, PublishSharding::HashStream));
-        
+        assert!(matches!(
+            config.publish_sharding,
+            PublishSharding::HashStream
+        ));
+
         std::env::remove_var("FELIX_PUB_SHARDING");
     }
 }
