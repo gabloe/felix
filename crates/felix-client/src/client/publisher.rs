@@ -624,3 +624,104 @@ pub(crate) async fn drain_publish_queue(rx: &mut mpsc::Receiver<PublishRequest>,
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn make_publisher(sharding: PublishSharding, workers: usize) -> Publisher {
+        let mut publish_workers = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let (tx, mut rx) = mpsc::channel::<PublishRequest>(8);
+            let handle = tokio::spawn(async move {
+                while let Some(request) = rx.recv().await {
+                    match request {
+                        PublishRequest::Message { response, .. } => {
+                            let _ = response.send(Ok(()));
+                        }
+                        PublishRequest::BinaryBytes { response, .. } => {
+                            let _ = response.send(Ok(()));
+                        }
+                        PublishRequest::Finish { response } => {
+                            let _ = response.send(Ok(()));
+                            break;
+                        }
+                    }
+                }
+                Ok(())
+            });
+            publish_workers.push(PublishWorker {
+                tx,
+                handle: tokio::sync::Mutex::new(Some(handle)),
+                request_counter: AtomicU64::new(1),
+            });
+        }
+        Publisher {
+            inner: Arc::new(PublisherInner {
+                workers: Arc::new(publish_workers),
+                sharding,
+                rr: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_fails_when_pool_empty() {
+        let publisher = make_publisher(PublishSharding::RoundRobin, 0);
+        let err = publisher
+            .publish("t", "ns", "s", b"payload".to_vec(), AckMode::None)
+            .await
+            .expect_err("empty pool");
+        assert!(err.to_string().contains("publish pool is empty"));
+    }
+
+    #[tokio::test]
+    async fn publish_and_finish_success() {
+        let publisher = make_publisher(PublishSharding::RoundRobin, 1);
+        publisher
+            .publish("t", "ns", "s", b"payload".to_vec(), AckMode::None)
+            .await
+            .expect("publish");
+        publisher
+            .publish("t", "ns", "s", b"payload".to_vec(), AckMode::PerMessage)
+            .await
+            .expect("publish ack");
+        publisher.finish().await.expect("finish");
+    }
+
+    #[tokio::test]
+    async fn publish_batch_and_binary_paths() {
+        let publisher = make_publisher(PublishSharding::HashStream, 2);
+        publisher
+            .publish_batch(
+                "t",
+                "ns",
+                "s",
+                vec![b"a".to_vec(), b"b".to_vec()],
+                AckMode::PerBatch,
+            )
+            .await
+            .expect("publish batch");
+        publisher
+            .publish_batch_binary("t", "ns", "s", &[b"a".to_vec(), b"b".to_vec()])
+            .await
+            .expect("publish batch binary");
+        publisher.finish().await.expect("finish");
+    }
+
+    #[tokio::test]
+    async fn select_worker_round_robin_advances() {
+        let publisher = make_publisher(PublishSharding::RoundRobin, 2);
+        let rr_start = publisher.inner.rr.load(Ordering::Relaxed);
+        let _ = publisher
+            .publish("t", "ns", "s", b"p1".to_vec(), AckMode::None)
+            .await;
+        let _ = publisher
+            .publish("t", "ns", "s", b"p2".to_vec(), AckMode::None)
+            .await;
+        let rr_end = publisher.inner.rr.load(Ordering::Relaxed);
+        assert!(rr_end >= rr_start + 2);
+        publisher.finish().await.expect("finish");
+    }
+}
