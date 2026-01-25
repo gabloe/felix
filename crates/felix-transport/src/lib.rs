@@ -388,4 +388,40 @@ mod tests {
         assert_eq!(received, b"uni");
         Ok(())
     }
+
+    #[test]
+    fn transport_config_custom_values() {
+        let config = TransportConfig {
+            max_frame_bytes: 8 * 1024 * 1024,
+            max_streams: 2048,
+            receive_window: 128 * 1024 * 1024,
+            stream_receive_window: 32 * 1024 * 1024,
+            send_window: 128 * 1024 * 1024,
+        };
+        assert_eq!(config.max_frame_bytes, 8 * 1024 * 1024);
+        assert_eq!(config.max_streams, 2048);
+        assert_eq!(config.receive_window, 128 * 1024 * 1024);
+        assert_eq!(config.stream_receive_window, 32 * 1024 * 1024);
+        assert_eq!(config.send_window, 128 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn quic_server_local_addr() -> Result<()> {
+        let (server_config, _cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport)?;
+        let addr = server.local_addr()?;
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+        assert!(addr.port() > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn connection_id_equality() {
+        let id1 = ConnectionId(42);
+        let id2 = ConnectionId(42);
+        let id3 = ConnectionId(43);
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
 }
