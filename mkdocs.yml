@@ -1,0 +1,121 @@
+site_name: Felix
+site_description: Low-latency QUIC-based pub/sub and distributed cache system
+site_author: Felix Authors
+site_url: https://gabloe.github.io/felix/
+repo_url: https://github.com/gabloe/felix
+repo_name: gabloe/felix
+edit_uri: edit/main/docs-site/docs/
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search:
+      lang: en
+      separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: timeago
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/gabloe/felix
+    - icon: fontawesome/brands/rust
+      link: https://www.rust-lang.org/
+
+copyright: Copyright &copy; 2026 Felix Authors
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Overview: getting-started/overview.md
+    - Quickstart: getting-started/quickstart.md
+    - Installation: getting-started/installation.md
+  - Architecture:
+    - System Design: architecture/system-design.md
+    - Components: architecture/components.md
+    - Wire Protocol: architecture/wire-protocol.md
+    - Semantics: architecture/semantics.md
+  - API Documentation:
+    - Broker API: api/broker-api.md
+    - Control Plane API: api/control-plane-api.md
+    - Client SDK: api/client-sdk.md
+  - Features:
+    - QUIC Transport: features/quic-transport.md
+    - Pub/Sub Streaming: features/pubsub.md
+    - Distributed Cache: features/cache.md
+    - Performance Tuning: features/performance.md
+    - Observability: features/observability.md
+    - Security: features/security.md
+  - Deployment:
+    - Local Development: deployment/local.md
+    - Docker Compose: deployment/docker-compose.md
+    - Kubernetes: deployment/kubernetes.md
+  - Reference:
+    - Configuration: reference/configuration.md
+    - Environment Variables: reference/environment-variables.md
+    - Troubleshooting: reference/troubleshooting.md
+    - FAQ: reference/faq.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Building & Testing: development/building.md
+    - Project Structure: development/project-structure.md
