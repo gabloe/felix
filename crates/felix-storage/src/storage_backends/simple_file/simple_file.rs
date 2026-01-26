@@ -9,8 +9,6 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 // Serialization
-use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToBytes};
-use rkyv::{Archive, Deserialize, Serialize};
 
 use super::data_file::*;
 use super::index_file::*;
@@ -51,13 +49,13 @@ pub struct SimpleFileStorage {
 ///
 /// TODO : Implement compaction.
 impl SimpleFileStorage {
-    pub fn new(path: PathBuf) -> Result<SimpleFileStorage> {
+    pub async fn new(path: PathBuf) -> Result<SimpleFileStorage> {
         let path_data_file = path.join("index");
         let path_index_file = path.join("index");
 
         // Create the files if they do not exist, otherwise we just use them as is.
-        let data_file = DataFile::open(path_data_file.clone())?;
-        let index_file = IndexFile::open(path_index_file.clone())?;
+        let data_file = DataFile::open(path_data_file.clone()).await?;
+        let index_file = IndexFile::open(path_index_file.clone()).await?;
 
         Ok(Self {
             path_data_file,
@@ -80,26 +78,32 @@ impl Debug for SimpleFileStorage {
 impl StorageApi for SimpleFileStorage {
     async fn put(
         &self,
-        tenant_id: &str,
-        namespace: &str,
-        cache: &str,
-        key: &str,
-        value: Bytes,
-        ttl: Option<Duration>,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _key: &str,
+        _value: Bytes,
+        _ttl: Option<Duration>,
     ) {
         todo!()
     }
 
-    async fn get(&self, tenant_id: &str, namespace: &str, cache: &str, key: &str) -> Option<Bytes> {
+    async fn get(
+        &self,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _key: &str,
+    ) -> Option<Bytes> {
         todo!()
     }
 
     async fn delete(
         &self,
-        tenant_id: &str,
-        namespace: &str,
-        cache: &str,
-        key: &str,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _key: &str,
     ) -> Option<Bytes> {
         todo!()
     }

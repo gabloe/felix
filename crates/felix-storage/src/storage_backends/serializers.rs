@@ -1,10 +1,18 @@
+use futures::AsyncWriteExt;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
 use rkyv::de::Pool;
-use rkyv::rancor::Strategy;
+use rkyv::rancor::{Error, Strategy};
 use rkyv::ser::allocator::ArenaHandle;
 use rkyv::util::AlignedVec;
-use rkyv::{Archive, Deserialize, Serialize, from_bytes, to_bytes};
+use rkyv::{Archive, Deserialize, Serialize};
+use std::fmt::Debug;
+
+use anyhow::Result;
+use futures::io::BufWriter;
+use futures::{AsyncWrite, SinkExt};
+use log::debug;
+use rkyv_codec::{RkyvWriter, VarintLength, archive_stream};
 
 #[macro_export]
 macro_rules! derive_serialization {
@@ -12,7 +20,7 @@ macro_rules! derive_serialization {
         // Repeat for each provided type name
         $(
             // Generate the empty implementation block
-            impl SerializeToBytes for $name {}
+            impl SerializeToStream for $name {}
             impl DeserializeFromBytes for $name {}
         )+
     };
@@ -25,7 +33,7 @@ macro_rules! derive_serialize_to_bytes {
         // Repeat for each provided type name
         $(
             // Generate the empty implementation block
-            impl SerializeToBytes for $name {}
+            impl SerializeToStream for $name {}
         )+
     };
 }
@@ -37,32 +45,39 @@ macro_rules! derive_deserialize_from_bytes {
         // Repeat for each provided type name
         $(
             // Generate the empty implementation block
-            impl SerializeToBytes for $name {}
+            impl DeserializeFromBytes for $name {}
         )+
     };
 }
 
-pub(crate) trait SerializeToBytes:
-    Sized + for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+pub(crate) trait SerializeToStream:
+    Debug + Sized + for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>>
 {
-    fn to_bytes(&self) -> anyhow::Result<Vec<u8>> {
-        let bytes = to_bytes(self)?;
-        Ok(bytes.to_vec())
+    async fn write<'b, T>(&self, writer: & 'b  mut BufWriter<T>) -> Result<&'b mut T>
+    where
+        T: AsyncWrite + Unpin,
+    {
+        let mut codec = RkyvWriter::<&mut BufWriter<T>, VarintLength>::new(writer);
+        codec.send(self).await?;
+        writer.flush().await?;
+        Ok(writer.get_mut())
     }
 }
 
 pub(crate) trait DeserializeFromBytes:
-    Sized
+    Debug
+    + Sized
     + Archive<
-        Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-                      + Deserialize<Self, Strategy<Pool, rkyv::rancor::Error>>,
+        Archived: for<'a> CheckBytes<HighValidator<'a, Error>>
+                      + Deserialize<Self, Strategy<Pool, Error>>,
     >
-where
-    Self::Archived: for<'a> CheckBytes<HighValidator<'a, rkyv::rancor::Error>>
-        + Deserialize<Self, Strategy<Pool, rkyv::rancor::Error>>,
 {
-    fn from_bytes(bytes: &Vec<u8>) -> anyhow::Result<Self> {
-        let value = from_bytes::<Self, rkyv::rancor::Error>(bytes)?;
-        Ok(value)
+    async fn read(writer: &mut BufWriter<impl AsyncWrite + Unpin>) -> Result<Self> {
+        let codec = RkyvWriter::<&mut BufWriter<_>, VarintLength>::new(writer);
+        let mut reader = codec.inner().buffer();
+        debug!("Buffer length: {}", reader.len());
+        let mut buffer = AlignedVec::new();
+        let result = archive_stream::<_, Self, VarintLength>(&mut reader, &mut buffer).await?;
+        Ok(rkyv::deserialize::<Self, Error>(result)?)
     }
 }

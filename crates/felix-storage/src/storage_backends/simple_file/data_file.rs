@@ -1,7 +1,14 @@
-use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToBytes};
-use crate::{derive_serialization};
+use crate::derive_serialization;
+use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToStream};
 use anyhow::Result;
+use futures::io::BufReader;
+use futures::{AsyncReadExt, AsyncSeekExt};
 use rkyv::{Archive, Deserialize, Serialize, with::Skip};
+use std::io::SeekFrom;
+use tokio_util::compat::TokioAsyncReadCompatExt;
+
+use std::path::PathBuf;
+use log::debug;
 /// # Summary
 /// The data file holds the end-user data. The file is composed of a header and then chunks of data
 /// which can be categorized into two types
@@ -16,9 +23,7 @@ use rkyv::{Archive, Deserialize, Serialize, with::Skip};
 ///     * Clear data on free
 ///     * Encryption at rest.
 ///
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use tokio::fs::File;
 
 /// Constants
 const DATA_FILE_IDENTIFIER: u64 = 0x4441544146494C45; // "DATAFILE" in ASCII
@@ -53,7 +58,7 @@ struct DataEntry {
 }
 
 // Using 16 bits because you never know.
-#[derive(Archive, Serialize, Deserialize, Debug)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
 #[repr(u16)]
 pub(crate) enum DataVersion {
     V0,
@@ -61,7 +66,7 @@ pub(crate) enum DataVersion {
 
 /// This is the header of the data file. It is 512 bytes long and contains metadata about the files
 /// content.
-#[derive(Archive, Serialize, Deserialize, Debug)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
 #[repr(C)]
 pub(crate) struct DataHeader {
     /// Identifies this file as a DataFile.
@@ -87,11 +92,11 @@ pub(crate) struct DataFile {
 }
 
 impl DataFile {
-    pub fn open(file_path: PathBuf) -> Result<Self> {
-        let file = File::create(file_path.clone())?;
+    pub async fn open(file_path: PathBuf) -> Result<Self> {
+        let file = File::create(file_path.clone()).await?;
 
         // If the file is empty, we need to create it.
-        let (header, free_list) = read_header(&file)?;
+        let (header, free_list) = read_header(&file).await?;
 
         Ok(Self {
             file_path,
@@ -105,18 +110,19 @@ impl DataFile {
     /// Allocate a new block at the end of the data file for use. This assumes we
     /// have already locked the SimpleFileStorage object for writes.
     /// @ return The offset in the file where the data starts (including header).
-    fn allocate_next_data_unsafe(&self, size: u64) -> Result<u64> {
+    async fn allocate_next_data_unsafe(&self, size: u64) -> Result<u64> {
         // Make room for the new data + header.
-        let current_length = self.file.metadata()?.len();
+        let current_length = self.file.metadata().await?.len();
         self.file
-            .set_len(current_length + size + size_of::<DataEntry>() as u64)?;
+            .set_len(current_length + size + size_of::<DataEntry>() as u64)
+            .await?;
 
         Ok(current_length)
     }
 }
 
-fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
-    if let Ok(metadata) = file.metadata()
+async fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
+    if let Ok(metadata) = file.metadata().await
         && metadata.len() == 0
     {
         let header = DataHeader {
@@ -126,15 +132,26 @@ fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
             free_list_start_offset: 0,
         };
 
-        super::write_to_file(&file, &header, 0)?;
+        super::write_to_file(file, &header, 0).await?;
         Ok((header, vec![]))
     } else {
         // Read the first u64 to ensure it has the correct value
         let mut identifier_bytes = [0u8; 8];
-        let mut f = file.try_clone()?;
-        f.seek(SeekFrom::Start(0))?;
-        f.read_exact(&mut identifier_bytes)?;
+
+        let f = file.try_clone().await?;
+        let mut reader = BufReader::new(f.compat());
+        reader.seek(SeekFrom::Start(1)).await?;
+        reader.read_exact(&mut identifier_bytes).await?;
+
+        let bytes = DATA_FILE_IDENTIFIER.to_le_bytes();
+        debug_assert_eq!(8, bytes.len());
+
         let identifier = u64::from_le_bytes(identifier_bytes);
+
+        for (i, v) in bytes.iter().enumerate() {
+            debug!("file[{i}] = {f}, ID[{i}]={v}", f = identifier_bytes[i]);
+        }
+
         if identifier != DATA_FILE_IDENTIFIER {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -143,11 +160,11 @@ fn read_header(file: &File) -> Result<(DataHeader, Vec<DataEntry>)> {
         }
 
         // We need to iterate through the free list and load it into memory.
-        let header: DataHeader = super::read_from_file(&mut f, 0)?;
+        let header: DataHeader = super::read_from_file(file, 0).await?;
         let mut free_list = vec![];
         let mut current_offset = header.free_list_start_offset;
         for _ in 0..header.free_list_count {
-            let mut entry: DataEntry = super::read_from_file(&mut f, current_offset)?;
+            let mut entry: DataEntry = super::read_from_file(file, current_offset).await?;
             free_list.push(entry.clone());
             entry.current_offset = current_offset;
             current_offset = entry.next_offset;
