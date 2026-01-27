@@ -20,6 +20,19 @@ jobs:
       contents: write
     env:
       CARGO_TERM_COLOR: always
+      FELIX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:55432/postgres
+    services:
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          - 55432:5432
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - uses: actions/checkout@v5
@@ -30,15 +43,28 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Wait for Postgres service
+        run: |
+          set -euxo pipefail
+          for _ in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 55432 -U postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+
       - name: Generate code coverage (lcov)
         run: |
           set -euxo pipefail
           cargo llvm-cov \
+            --no-cfg-coverage \
             --all-features \
             --workspace \
             --lcov \
             --output-path lcov.info \
-            --ignore-filename-regex 'services/broker/src/bin/.*demo.*' \
+            --ignore-filename-regex 'services/broker/src/bin/.*demo.*|services/broker/src/auth_demo.rs' \
             --skip-functions
 
       - name: Generate coverage badge (coverage.svg)

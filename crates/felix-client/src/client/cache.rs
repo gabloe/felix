@@ -1,4 +1,13 @@
-// Cache worker implementations and request handling.
+//! Cache client worker implementations and request handling.
+//!
+//! # Purpose
+//! Manages the per-connection cache stream, serializing cache requests and
+//! returning responses to callers while recording optional timings.
+//!
+//! # Design notes
+//! A single bi-directional stream is used per cache worker to preserve request
+//! ordering and simplify response matching. Backpressure is handled by the
+//! mpsc queue and per-connection inflight counters.
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_wire::Message;
@@ -6,6 +15,7 @@ use quinn::{RecvStream, SendStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug;
 
 #[cfg(feature = "telemetry")]
 use crate::timings;
@@ -46,7 +56,9 @@ pub(crate) async fn run_cache_worker(
         timings::record_cache_open_stream_ns(open_ns);
     }
     let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+    debug!(conn_index, "cache worker started");
     while let Some(request) = rx.recv().await {
+        debug!(conn_index, "cache worker received request");
         let result = handle_cache_request(&mut send, &mut recv, request, &mut frame_scratch).await;
 
         // Decrement "in-flight ops" gauge for this connection, saturating at 0.
@@ -68,11 +80,13 @@ pub(crate) async fn run_cache_worker(
             }
         }
 
-        if result.is_err() {
+        if let Err(err) = result {
+            debug!(conn_index, error = %err, "cache worker request failed");
             break;
         }
     }
     let _ = send.finish();
+    debug!(conn_index, "cache worker exited");
     // We should probably use a connection-level atomic that we decremented when work completes so
     // that we can track inflight ops more accurately.
 }

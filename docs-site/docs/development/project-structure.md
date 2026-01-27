@@ -218,10 +218,10 @@ publisher
 **Purpose**: Authentication and authorization.
 
 **Responsibilities**:
-- mTLS authentication (planned)
-- Token-based auth (planned)
-- RBAC policies (planned)
+- Token-based auth (OIDC exchange + Felix JWTs)
+- RBAC policies and permission matching
 - Tenant isolation enforcement
+- mTLS authentication (planned)
 
 #### felix-consensus
 

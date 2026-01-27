@@ -29,7 +29,7 @@ mod observability;
 mod test_support;
 
 use anyhow::{Context, Result};
-use broker::{config, quic};
+use broker::{auth::BrokerAuth, config, quic};
 use felix_broker::Broker;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -76,6 +76,11 @@ where
     let config = config::BrokerConfig::from_env_or_yaml()?;
     // Configuration is resolved from environment variables (and optionally a YAML file).
     // Keep this early so the remainder of startup is entirely driven by `config`.
+    let controlplane_url = config
+        .controlplane_url
+        .clone()
+        .context("FELIX_CONTROLPLANE_URL must be set for auth")?;
+    let auth = Arc::new(BrokerAuth::new(controlplane_url));
 
     // Start the Prometheus metrics HTTP server. This is separate from QUIC traffic and
     // intentionally lightweight so metrics remain available even under load.
@@ -104,8 +109,9 @@ where
         let quic_server = Arc::clone(&quic_server);
         let broker = Arc::clone(&broker);
         let quic_config = config.clone();
+        let auth = Arc::clone(&auth);
         tokio::spawn(async move {
-            if let Err(err) = quic::serve(quic_server, broker, quic_config).await {
+            if let Err(err) = quic::serve(quic_server, broker, quic_config, auth).await {
                 tracing::warn!(error = %err, "quic accept loop exited");
             }
         })
@@ -228,7 +234,7 @@ mod tests {
         let _g1 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", "127.0.0.1:0");
         let _g2 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
         let _g3 = EnvGuard::unset("FELIX_CP_URL");
-        let _g4 = EnvGuard::unset("FELIX_CONTROLPLANE_URL");
+        let _g4 = EnvGuard::set("FELIX_CONTROLPLANE_URL", "http://127.0.0.1:1");
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -253,6 +259,7 @@ mod tests {
         let _g2 = EnvGuard::set("FELIX_QUIC_BIND", "127.0.0.1:0");
         let _g3 = EnvGuard::set("FELIX_CP_URL", "http://127.0.0.1:1");
         let _g4 = EnvGuard::set("FELIX_CP_SYNC_INTERVAL_MS", "1");
+        let _g5 = EnvGuard::set("FELIX_CONTROLPLANE_URL", "http://127.0.0.1:1");
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {

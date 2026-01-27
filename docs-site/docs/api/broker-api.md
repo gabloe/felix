@@ -55,6 +55,22 @@ let client = Client::connect(addr, "localhost", config).await?;
 !!! tip "Connection Reuse"
     Establishing QUIC connections has significant overhead (TLS handshake, key exchange). Reuse connections aggressively by maintaining long-lived pools.
 
+## Authentication (Felix Tokens)
+
+Brokers require a tenant-scoped Felix token for authorization. Tokens are obtained from the control plane using an upstream OIDC JWT.
+
+**End-to-end flow**:
+1. Obtain an OIDC token from your identity provider.
+2. Exchange it for a Felix token via the control plane.
+3. Connect to the broker and present `tenant_id + felix_token` in the auth frame.
+
+**Broker validation**:
+- Verifies the token signature using tenant JWKS from the control plane.
+- Checks `iss = felix-auth`, `aud = felix-broker`, `exp/nbf`, and `tid` matches the connection tenant.
+- Parses `perms` once and enforces per operation using wildcard matching.
+
+If authentication fails, the broker rejects the connection or returns an unauthorized error for the operation.
+
 ## Publish Operations
 
 ### Single Message Publish

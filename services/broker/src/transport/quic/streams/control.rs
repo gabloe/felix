@@ -33,6 +33,7 @@
 //   Err(_)    => hard failure (decode/IO/etc.)
 use anyhow::{Context, Result};
 use bytes::BytesMut;
+use felix_authz::{Action, CacheScope, Namespace, StreamName, cache_resource, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::collections::HashMap;
@@ -43,6 +44,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
+use crate::auth::{AuthContext, BrokerAuth};
 use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
@@ -76,6 +78,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     broker: Arc<Broker>,
     connection: felix_transport::QuicConnection,
     config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
     mut stream_cache: HashMap<String, (bool, Instant)>,
     mut stream_cache_key: String,
@@ -94,6 +97,14 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // If we observe EOF from the peer (source returns None), we treat it as a graceful close.
     // Otherwise, we will cancel downstream tasks and tear down the connection cooperatively.
     let mut graceful_close = false;
+    let mut auth_ctx: Option<AuthContext> = None;
+    let authz_ctx = AuthzResponseContext {
+        out_ack_tx: &out_ack_tx,
+        out_ack_depth: &out_ack_depth,
+        ack_throttle_tx: &ack_throttle_tx,
+        ack_timeout_state: &ack_timeout_state,
+        cancel_tx: &cancel_tx,
+    };
     loop {
         if *cancel_rx_read.borrow() {
             break;
@@ -126,12 +137,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         let read_ns = read_start.map(|start| start.elapsed().as_nanos() as u64);
         // Fast-path: binary publish batch frames avoid JSON decode/allocations.
         if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
+            if auth_ctx.is_none() {
+                send_control_error(
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    "auth required",
+                )
+                .await?;
+                return Ok(false);
+            }
             handle_binary_publish_batch_control(
                 &broker,
                 &mut stream_cache,
                 &mut stream_cache_key,
                 &publish_ctx,
                 &frame,
+                auth_ctx.as_ref(),
                 sample,
             )
             .await?;
@@ -166,6 +190,46 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
         match message {
+            Message::Auth { tenant_id, token } => {
+                if auth_ctx.is_some() {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "auth already established",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+                match auth.authenticate(&tenant_id, &token).await {
+                    Ok(ctx) => {
+                        auth_ctx = Some(ctx);
+                        send_control_ok(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            &ack_throttle_tx,
+                            &ack_timeout_state,
+                            &cancel_tx,
+                        )
+                        .await?;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "auth failed");
+                        send_control_error(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            &ack_throttle_tx,
+                            &ack_timeout_state,
+                            &cancel_tx,
+                            "auth failed",
+                        )
+                        .await?;
+                        return Ok(false);
+                    }
+                }
+            }
             Message::Publish {
                 tenant_id,
                 namespace,
@@ -174,6 +238,19 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
+                if !authorize_stream(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamPublish,
+                    &namespace,
+                    &stream,
+                    request_id,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
                 handle_publish_message(
                     &broker,
                     &publish_ctx,
@@ -207,6 +284,19 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
+                if !authorize_stream(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamPublish,
+                    &namespace,
+                    &stream,
+                    request_id,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
                 handle_publish_batch_message(
                     &broker,
                     &publish_ctx,
@@ -237,6 +327,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 stream,
                 subscription_id,
             } => {
+                if !authorize_stream_simple(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamSubscribe,
+                    &namespace,
+                    &stream,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
                 // Subscribe establishes server-side subscription state and typically spawns a
                 // uni-directional event stream back to the client for delivery.
                 let done = handle_subscribe_message(
@@ -267,6 +369,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ttl_ms,
             } => {
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheWrite,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
                 if let Some(read_ns) = read_ns {
                     timings::record_cache_read_ns(read_ns);
                 }
@@ -357,6 +471,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheRead,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
                 if let Some(read_ns) = read_ns {
                     timings::record_cache_read_ns(read_ns);
                 }
@@ -464,4 +590,220 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
     // (protocol error) or Err (hard failure).
     Ok(graceful_close)
+}
+
+async fn send_control_error(
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<AtomicUsize>,
+    ack_throttle_tx: &watch::Sender<bool>,
+    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &watch::Sender<bool>,
+    message: &str,
+) -> Result<()> {
+    handle_ack_enqueue_result(
+        send_outgoing_critical(
+            out_ack_tx,
+            out_ack_depth,
+            "felix_broker_out_ack_depth",
+            ack_throttle_tx,
+            Outgoing::Message(Message::Error {
+                message: message.to_string(),
+            }),
+        )
+        .await,
+        ack_timeout_state,
+        ack_throttle_tx,
+        cancel_tx,
+    )
+    .await
+}
+
+async fn send_control_ok(
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<AtomicUsize>,
+    ack_throttle_tx: &watch::Sender<bool>,
+    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &watch::Sender<bool>,
+) -> Result<()> {
+    handle_ack_enqueue_result(
+        send_outgoing_critical(
+            out_ack_tx,
+            out_ack_depth,
+            "felix_broker_out_ack_depth",
+            ack_throttle_tx,
+            Outgoing::Message(Message::Ok),
+        )
+        .await,
+        ack_timeout_state,
+        ack_throttle_tx,
+        cancel_tx,
+    )
+    .await
+}
+
+struct AuthzResponseContext<'a> {
+    out_ack_tx: &'a mpsc::Sender<Outgoing>,
+    out_ack_depth: &'a Arc<AtomicUsize>,
+    ack_throttle_tx: &'a watch::Sender<bool>,
+    ack_timeout_state: &'a Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &'a watch::Sender<bool>,
+}
+
+async fn authorize_stream(
+    auth_ctx: Option<&AuthContext>,
+    tenant_id: &str,
+    action: Action,
+    namespace: &str,
+    stream: &str,
+    request_id: Option<u64>,
+    ctx: &AuthzResponseContext<'_>,
+) -> Result<bool> {
+    let Some(auth_ctx) = auth_ctx else {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "auth required",
+        )
+        .await?;
+        return Ok(false);
+    };
+    if auth_ctx.tenant_id != tenant_id {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "tenant mismatch",
+        )
+        .await?;
+        return Ok(false);
+    }
+    let resource = stream_resource(&Namespace::new(namespace), &StreamName::new(stream));
+    if auth_ctx.matcher.allows(action, &resource) {
+        return Ok(true);
+    }
+    let outgoing = match request_id {
+        Some(request_id) => Outgoing::Message(Message::PublishError {
+            request_id,
+            message: "forbidden".to_string(),
+        }),
+        None => Outgoing::Message(Message::Error {
+            message: "forbidden".to_string(),
+        }),
+    };
+    handle_ack_enqueue_result(
+        send_outgoing_critical(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            "felix_broker_out_ack_depth",
+            ctx.ack_throttle_tx,
+            outgoing,
+        )
+        .await,
+        ctx.ack_timeout_state,
+        ctx.ack_throttle_tx,
+        ctx.cancel_tx,
+    )
+    .await?;
+    Ok(false)
+}
+
+async fn authorize_stream_simple(
+    auth_ctx: Option<&AuthContext>,
+    tenant_id: &str,
+    action: Action,
+    namespace: &str,
+    stream: &str,
+    ctx: &AuthzResponseContext<'_>,
+) -> Result<bool> {
+    let Some(auth_ctx) = auth_ctx else {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "auth required",
+        )
+        .await?;
+        return Ok(false);
+    };
+    if auth_ctx.tenant_id != tenant_id {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "tenant mismatch",
+        )
+        .await?;
+        return Ok(false);
+    }
+    let resource = stream_resource(&Namespace::new(namespace), &StreamName::new(stream));
+    if auth_ctx.matcher.allows(action, &resource) {
+        return Ok(true);
+    }
+    send_control_error(
+        ctx.out_ack_tx,
+        ctx.out_ack_depth,
+        ctx.ack_throttle_tx,
+        ctx.ack_timeout_state,
+        ctx.cancel_tx,
+        "forbidden",
+    )
+    .await?;
+    Ok(false)
+}
+
+async fn authorize_cache(
+    auth_ctx: Option<&AuthContext>,
+    tenant_id: &str,
+    action: Action,
+    namespace: &str,
+    cache: &str,
+    ctx: &AuthzResponseContext<'_>,
+) -> Result<bool> {
+    let Some(auth_ctx) = auth_ctx else {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "auth required",
+        )
+        .await?;
+        return Ok(false);
+    };
+    if auth_ctx.tenant_id != tenant_id {
+        send_control_error(
+            ctx.out_ack_tx,
+            ctx.out_ack_depth,
+            ctx.ack_throttle_tx,
+            ctx.ack_timeout_state,
+            ctx.cancel_tx,
+            "tenant mismatch",
+        )
+        .await?;
+        return Ok(false);
+    }
+    let resource = cache_resource(&Namespace::new(namespace), &CacheScope::new(cache));
+    if auth_ctx.matcher.allows(action, &resource) {
+        return Ok(true);
+    }
+    send_control_error(
+        ctx.out_ack_tx,
+        ctx.out_ack_depth,
+        ctx.ack_throttle_tx,
+        ctx.ack_timeout_state,
+        ctx.cancel_tx,
+        "forbidden",
+    )
+    .await?;
+    Ok(false)
 }

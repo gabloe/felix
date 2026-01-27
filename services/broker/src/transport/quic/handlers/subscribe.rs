@@ -669,3 +669,31 @@ pub(crate) async fn run_event_writer(
     let _ = event_send.finish();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_event_json_frame_includes_base64_payload() {
+        let config = EventWriterConfig {
+            subscription_id: 7,
+            tenant_id: Arc::from("tenant"),
+            namespace: Arc::from("ns"),
+            stream: Arc::from("stream"),
+            batch_size: 1,
+            max_events: 1,
+            max_bytes: 1024,
+            flush_delay: Duration::from_millis(1),
+            binary_single_enabled: false,
+            binary_single_min_bytes: 1,
+        };
+        let frame = encode_event_json_frame(&config, b"payload").expect("frame");
+        let json: serde_json::Value = serde_json::from_slice(&frame.payload).expect("json");
+        assert_eq!(json["type"], "event");
+        assert_eq!(json["tenant_id"], "tenant");
+        assert_eq!(json["namespace"], "ns");
+        assert_eq!(json["stream"], "stream");
+        assert_eq!(json["payload"], "cGF5bG9hZA==");
+    }
+}

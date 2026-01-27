@@ -1,7 +1,14 @@
-// Console demo that exercises cache Put/Get over QUIC using felix-wire frames.
+//! Cache demo binary for QUIC cache put/get operations.
+//!
+//! # Purpose
+//! Spins up an in-process broker and QUIC server, then drives cache traffic
+//! from a client to measure latency and throughput characteristics.
+//!
+//! # Notes
+//! Intended for local benchmarking and diagnostics rather than production use.
 use anyhow::{Context, Result};
-use broker::quic;
 use broker::timings as broker_timings;
+use broker::{auth::BrokerAuth, auth_demo, quic};
 use bytes::Bytes;
 use felix_broker::{Broker, CacheMetadata};
 use felix_client::timings as client_timings;
@@ -18,6 +25,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+type DemoAuthResult = Result<(Arc<BrokerAuth>, Option<(String, String)>)>;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("== Felix QUIC Cache Demo ==");
@@ -31,6 +40,7 @@ async fn main() -> Result<()> {
         .register_cache("t1", "default", "primary", CacheMetadata)
         .await?;
     let config = broker::config::BrokerConfig::from_env()?;
+    let (auth, auth_override) = resolve_demo_auth(&config)?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let transport = broker::transport::cache_transport_config(&config, TransportConfig::default());
     let server = Arc::new(QuicServer::bind(
@@ -39,10 +49,16 @@ async fn main() -> Result<()> {
         transport,
     )?);
     let addr = server.local_addr()?;
-    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker, config.clone()));
+    let server_task = tokio::spawn(quic::serve(
+        Arc::clone(&server),
+        broker,
+        config.clone(),
+        auth,
+    ));
 
     println!("Step 2/4: connecting QUIC client.");
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    let client = Client::connect(addr, "localhost", client_config).await?;
 
     println!("Step 3/4: running cache benchmarks.");
     let mut bench = BenchConfig::from_env();
@@ -716,4 +732,24 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
     ClientConfig::from_env_or_yaml(quinn, None)
+}
+
+fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+    if let Some(controlplane_url) = config.controlplane_url.clone() {
+        return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
+    }
+
+    let demo = auth_demo::demo_auth_for_tenant("t1")?;
+    Ok((demo.auth, Some((demo.tenant_id, demo.token))))
+}
+
+fn apply_demo_auth(
+    mut config: ClientConfig,
+    auth_override: Option<(String, String)>,
+) -> ClientConfig {
+    if let Some((tenant_id, token)) = auth_override {
+        config.auth_tenant_id = Some(tenant_id);
+        config.auth_token = Some(token);
+    }
+    config
 }

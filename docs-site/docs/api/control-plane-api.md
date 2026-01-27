@@ -3,7 +3,118 @@
 The Felix control plane manages cluster metadata, stream definitions, shard placement, and node membership. This document describes the control plane architecture, APIs, and operational patterns.
 
 !!! note "Current Status"
-    The control plane is planned but not yet implemented in the MVP. This document describes the intended design and API surface. MVP brokers run standalone without control plane coordination.
+    The control plane HTTP API is implemented for metadata and authentication (token exchange + JWKS). RAFT clustering and some advanced capabilities are planned. This document includes both current HTTP endpoints and future design details.
+
+## Authentication and Token Exchange (HTTP)
+
+Felix uses upstream OIDC JWTs for authentication and exchanges them for tenant-scoped Felix tokens. Brokers validate Felix tokens locally.
+
+### POST /v1/tenants/{tenant_id}/token/exchange
+
+Exchange an upstream OIDC token for a Felix token.
+
+**Request**:
+
+```http
+POST /v1/tenants/{tenant_id}/token/exchange
+Authorization: Bearer <oidc_jwt>
+Content-Type: application/json
+
+{
+  "requested": ["stream.publish", "stream.subscribe", "cache.read"],
+  "resources": ["ns:payments", "stream:payments/orders/*"]
+}
+```
+
+**Response**:
+
+```json
+{
+  "felix_token": "<jwt>",
+  "expires_in": 900,
+  "token_type": "Bearer"
+}
+```
+
+**Notes**:
+- `requested` and `resources` are optional hints to filter the issued permission set.
+- If no permissions remain after evaluation, the exchange returns `403`.
+
+### Configuring Allowed IdPs
+
+IdP allowlists are stored per tenant in the control plane database (`idp_issuers` table) and can be managed via the admin HTTP endpoints below (or directly in the store for tests/dev).
+
+Required fields:
+- `issuer` (iss)
+- `audiences` (allowed `aud` values)
+- `subject_claim` (default `sub`)
+- optional `groups_claim`
+- either `discovery_url` or `jwks_url`
+
+### Admin API: IdP Issuers
+
+Admin endpoints require a Felix token with `tenant.admin` for the tenant.
+
+Create or update an issuer for a tenant:
+
+```http
+POST /v1/tenants/{tenant_id}/idp-issuers
+Content-Type: application/json
+
+{
+  "issuer": "https://login.microsoftonline.com/<tenant>/v2.0",
+  "audiences": ["api://felix-controlplane"],
+  "discovery_url": null,
+  "jwks_url": null,
+  "claim_mappings": {
+    "subject_claim": "sub",
+    "groups_claim": "groups"
+  }
+}
+```
+
+Delete an issuer:
+
+```http
+DELETE /v1/tenants/{tenant_id}/idp-issuers/{issuer}
+```
+
+### Internal Bootstrap API (Day-0)
+
+Used once per tenant to seed auth before any admin tokens exist. Disabled by default and bound to a separate internal address when enabled.
+
+```http
+POST /internal/bootstrap/tenants/{tenant_id}/initialize
+X-Felix-Bootstrap-Token: <secret>
+Content-Type: application/json
+
+{
+  "display_name": "Tenant One",
+  "idp_issuers": [...],
+  "initial_admin_principals": ["p:alice"]
+}
+```
+
+### GET /v1/tenants/{tenant_id}/.well-known/jwks.json
+
+Fetch tenant signing keys (public JWKS) used by brokers to verify Felix tokens.
+
+**Response**:
+
+```json
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "kid": "k1",
+      "alg": "RS256",
+      "use": "sig",
+      "n": "...",
+      "e": "AQAB"
+    }
+  ]
+}
+```
 
 ## Architecture Overview
 

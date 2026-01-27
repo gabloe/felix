@@ -1,4 +1,13 @@
-// Client-side defaults and transport configuration helpers.
+//! Client-side defaults and transport configuration helpers.
+//!
+//! # Purpose
+//! Holds configuration defaults, env/YAML parsing, and transport tuning knobs
+//! for the Felix client. These settings control connection pools, stream
+//! windows, sharding behavior, and safety caps.
+//!
+//! # Design notes
+//! Defaults favor throughput for publish and low latency for cache and event
+//! streams, while providing hard caps to protect against oversized frames.
 use anyhow::{Context, Result};
 use felix_transport::TransportConfig;
 use serde::Deserialize;
@@ -52,6 +61,8 @@ pub struct ClientConfig {
     pub publish_streams_per_conn: usize,
     pub publish_chunk_bytes: usize,
     pub publish_sharding: PublishSharding,
+    pub auth_tenant_id: Option<String>,
+    pub auth_token: Option<String>,
     pub cache_conn_pool: usize,
     pub cache_streams_per_conn: usize,
     pub event_conn_pool: usize,
@@ -83,6 +94,8 @@ struct ClientConfigOverride {
     publish_streams_per_conn: Option<usize>,
     publish_chunk_bytes: Option<usize>,
     publish_sharding: Option<String>,
+    auth_tenant_id: Option<String>,
+    auth_token: Option<String>,
     cache_conn_pool: Option<usize>,
     cache_streams_per_conn: Option<usize>,
     event_conn_pool: Option<usize>,
@@ -127,6 +140,8 @@ impl ClientConfig {
             publish_streams_per_conn: DEFAULT_PUB_STREAMS_PER_CONN,
             publish_chunk_bytes: DEFAULT_PUBLISH_CHUNK_BYTES,
             publish_sharding: PublishSharding::HashStream,
+            auth_tenant_id: None,
+            auth_token: None,
             cache_conn_pool: DEFAULT_CACHE_CONN_POOL,
             cache_streams_per_conn: DEFAULT_CACHE_STREAMS_PER_CONN,
             event_conn_pool: DEFAULT_EVENT_CONN_POOL,
@@ -192,6 +207,16 @@ impl ClientConfig {
         if let Some(value) = read_bool_env("FELIX_BENCH_EMBED_TS") {
             config.bench_embed_ts = value;
         }
+        if let Ok(value) = std::env::var("FELIX_AUTH_TENANT")
+            && !value.trim().is_empty()
+        {
+            config.auth_tenant_id = Some(value);
+        }
+        if let Ok(value) = std::env::var("FELIX_AUTH_TOKEN")
+            && !value.trim().is_empty()
+        {
+            config.auth_token = Some(value);
+        }
         config
     }
 
@@ -226,6 +251,12 @@ impl ClientConfigOverride {
             && let Some(parsed) = parse_sharding(value)
         {
             config.publish_sharding = parsed;
+        }
+        if let Some(value) = &self.auth_tenant_id {
+            config.auth_tenant_id = Some(value.clone());
+        }
+        if let Some(value) = &self.auth_token {
+            config.auth_token = Some(value.clone());
         }
         if let Some(value) = self.cache_conn_pool
             && value > 0

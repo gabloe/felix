@@ -1,12 +1,23 @@
-// Tests cover the control/uni loops, writer/ack waiter branches, and telemetry paths.
+//! QUIC stream unit/integration tests for the broker transport.
+//!
+//! # Purpose
+//! Covers the control/uni loops, writer/ack waiter branches, and telemetry paths
+//! to ensure protocol handling and backpressure behaviors remain correct.
 use anyhow::{Context, Result};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::{Bytes, BytesMut};
+use felix_authz::{FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyMaterial};
 use felix_broker::Broker;
 use felix_storage::EphemeralCache;
-use felix_transport::{QuicClient, QuicServer, TransportConfig};
+use felix_transport::{QuicClient, QuicConnection, QuicServer, TransportConfig};
 use felix_wire::{Frame, Message};
+use jsonwebtoken::Algorithm;
 use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
+use rsa::RsaPublicKey;
+use rsa::pkcs1::DecodeRsaPublicKey;
+use rsa::traits::PublicKeyParts;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
@@ -22,8 +33,9 @@ use super::control::run_control_loop;
 use super::frame_source::{DelayFrameSource, FrameSource, TestFrameSource};
 use super::handlers::{handle_stream, handle_uni_stream};
 use super::hooks::test_hooks;
-use super::uni::run_uni_loop;
+use super::uni::{UniLoopArgs, run_uni_loop};
 use super::writer::run_writer_loop;
+use crate::auth::{BrokerAuth, ControlPlaneKeyStore};
 use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::handlers::publish::{
@@ -31,6 +43,131 @@ use crate::transport::quic::handlers::publish::{
 };
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
+
+const TEST_PRIVATE_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTL
+UTv4l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2V
+rUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8H
+oGfG/AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBI
+Mc4lQzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi+yUod+j8MtvIj812dkS4QMiRVN/
+by2h3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQIDAQABAoIBAHREk0I0O9DvECKd
+WUpAmF3mY7oY9PNQiu44Yaf+AoSuyRpRUGTMIgc3u3eivOE8ALX0BmYUO5JtuRNZ
+Dpvt4SAwqCnVUinIf6C+eH/wSurCpapSM0BAHp4aOA7igptyOMgMPYBHNA1e9A7j
+E0dCxKWMl3DSWNyjQTk4zeRGEAEfbNjHrq6YCtjHSZSLmWiG80hnfnYos9hOr5Jn
+LnyS7ZmFE/5P3XVrxLc/tQ5zum0R4cbrgzHiQP5RgfxGJaEi7XcgherCCOgurJSS
+bYH29Gz8u5fFbS+Yg8s+OiCss3cs1rSgJ9/eHZuzGEdUZVARH6hVMjSuwvqVTFaE
+8AgtleECgYEA+uLMn4kNqHlJS2A5uAnCkj90ZxEtNm3E8hAxUrhssktY5XSOAPBl
+xyf5RuRGIImGtUVIr4HuJSa5TX48n3Vdt9MYCprO/iYl6moNRSPt5qowIIOJmIjY
+2mqPDfDt/zw+fcDD3lmCJrFlzcnh0uea1CohxEbQnL3cypeLt+WbU6kCgYEAzSp1
+9m1ajieFkqgoB0YTpt/OroDx38vvI5unInJlEeOjQ+oIAQdN2wpxBvTrRorMU6P0
+7mFUbt1j+Co6CbNiw+X8HcCaqYLR5clbJOOWNR36PuzOpQLkfK8woupBxzW9B8gZ
+mY8rB1mbJ+/WTPrEJy6YGmIEBkWylQ2VpW8O4O0CgYEApdbvvfFBlwD9YxbrcGz7
+MeNCFbMz+MucqQntIKoKJ91ImPxvtc0y6e/Rhnv0oyNlaUOwJVu0yNgNG117w0g4
+t/+Q38mvVC5xV7/cn7x9UMFk6MkqVir3dYGEqIl/OP1grY2Tq9HtB5iyG9L8NIam
+QOLMyUqqMUILxdthHyFmiGkCgYEAn9+PjpjGMPHxL0gj8Q8VbzsFtou6b1deIRRA
+2CHmSltltR1gYVTMwXxQeUhPMmgkMqUXzs4/WijgpthY44hK1TaZEKIuoxrS70nJ
+4WQLf5a9k1065fDsFZD6yGjdGxvwEmlGMZgTwqV7t1I4X0Ilqhav5hcs5apYL7gn
+PYPeRz0CgYALHCj/Ji8XSsDoF/MhVhnGdIs2P99NNdmo3R2Pv0CuZbDKMU559LJH
+UvrKS8WkuWRDuKrz1W/EQKApFjDGpdqToZqriUFQzwy7mR3ayIiogzNtHcvbDHx8
+oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
+-----END RSA PRIVATE KEY-----"#;
+
+const TEST_PUBLIC_KEY_PEM: &str = r#"-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4
+l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2VrUyW
+yj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG
+/AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4l
+QzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi+yUod+j8MtvIj812dkS4QMiRVN/by2h
+3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQIDAQAB
+-----END RSA PUBLIC KEY-----"#;
+
+struct AuthFixture {
+    tenant_id: String,
+    token: String,
+    auth: Arc<BrokerAuth>,
+}
+
+fn auth_fixture(tenant_id: &str, perms: Vec<String>) -> AuthFixture {
+    let jwks = jwks_from_public_key(TEST_PUBLIC_KEY_PEM, "k1");
+    let mut key_materials = HashMap::new();
+    key_materials.insert(
+        tenant_id.to_string(),
+        TenantKeyMaterial {
+            kid: "k1".to_string(),
+            alg: Algorithm::RS256,
+            private_key_pem: TEST_PRIVATE_KEY_PEM.as_bytes().to_vec(),
+            public_key_pem: TEST_PUBLIC_KEY_PEM.as_bytes().to_vec(),
+            jwks: jwks.clone(),
+        },
+    );
+    let issuer = FelixTokenIssuer::new(
+        "felix-auth",
+        "felix-broker",
+        Duration::from_secs(900),
+        Arc::new(key_materials),
+    );
+    let token = issuer
+        .mint(&TenantId::new(tenant_id), "p:test", perms)
+        .expect("mint token");
+
+    let key_store = Arc::new(ControlPlaneKeyStore::new("http://localhost".to_string()));
+    key_store.insert_jwks(&TenantId::new(tenant_id), jwks);
+    let auth = Arc::new(BrokerAuth::with_key_store(key_store));
+    AuthFixture {
+        tenant_id: tenant_id.to_string(),
+        token,
+        auth,
+    }
+}
+
+fn jwks_from_public_key(pem: &str, kid: &str) -> Jwks {
+    let public_key = RsaPublicKey::from_pkcs1_pem(pem).expect("parse public key");
+    let n = URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
+    let e = URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
+    Jwks {
+        keys: vec![Jwk {
+            kty: "RSA".to_string(),
+            kid: kid.to_string(),
+            alg: "RS256".to_string(),
+            use_field: KeyUse::Sig,
+            n,
+            e,
+        }],
+    }
+}
+
+fn default_perms() -> Vec<String> {
+    vec![
+        "stream.publish:stream:*/*".to_string(),
+        "stream.subscribe:stream:*/*".to_string(),
+        "cache.read:cache:*/*".to_string(),
+        "cache.write:cache:*/*".to_string(),
+    ]
+}
+
+fn auth_message(fixture: &AuthFixture) -> Message {
+    Message::Auth {
+        tenant_id: fixture.tenant_id.clone(),
+        token: fixture.token.clone(),
+    }
+}
+
+async fn open_authenticated_bi(
+    connection: &QuicConnection,
+    auth: &AuthFixture,
+    max_frame_bytes: usize,
+    frame_scratch: &mut BytesMut,
+) -> Result<(quinn::SendStream, quinn::RecvStream)> {
+    let (mut send, mut recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(auth)).await?;
+    let response =
+        crate::transport::quic::read_message_limited(&mut recv, max_frame_bytes, frame_scratch)
+            .await?;
+    match response {
+        Some(Message::Ok) => Ok((send, recv)),
+        other => Err(anyhow::anyhow!("auth failed: {other:?}")),
+    }
+}
 
 #[tokio::test]
 async fn cache_put_get_round_trip() -> Result<()> {
@@ -40,6 +177,7 @@ async fn cache_put_get_round_trip() -> Result<()> {
     broker
         .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -55,6 +193,7 @@ async fn cache_put_get_round_trip() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -65,6 +204,14 @@ async fn cache_put_get_round_trip() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
 
     let (mut send, mut recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
+    let response = crate::transport::quic::read_message_limited(
+        &mut recv,
+        max_frame_bytes,
+        &mut frame_scratch,
+    )
+    .await?;
+    assert_eq!(response, Some(Message::Ok));
     crate::transport::quic::write_message(
         &mut send,
         Message::CachePut {
@@ -88,6 +235,14 @@ async fn cache_put_get_round_trip() -> Result<()> {
     assert_eq!(response, Some(Message::Ok));
 
     let (mut send, mut recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
+    let response = crate::transport::quic::read_message_limited(
+        &mut recv,
+        max_frame_bytes,
+        &mut frame_scratch,
+    )
+    .await?;
+    assert_eq!(response, Some(Message::Ok));
     crate::transport::quic::write_message(
         &mut send,
         Message::CacheGet {
@@ -126,6 +281,7 @@ async fn cache_put_get_round_trip() -> Result<()> {
 #[tokio::test]
 async fn publish_rejects_unknown_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -141,6 +297,7 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -151,6 +308,14 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
 
     let (mut send, mut recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
+    let response = crate::transport::quic::read_message_limited(
+        &mut recv,
+        max_frame_bytes,
+        &mut frame_scratch,
+    )
+    .await?;
+    assert_eq!(response, Some(Message::Ok));
     crate::transport::quic::write_message(
         &mut send,
         Message::Publish {
@@ -184,7 +349,8 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
         .register_stream("t1", "default", "missing", Default::default())
         .await
         .expect("register");
-    let (mut send, mut recv) = connection.open_bi().await?;
+    let (mut send, mut recv) =
+        open_authenticated_bi(&connection, &auth, max_frame_bytes, &mut frame_scratch).await?;
     crate::transport::quic::write_message(
         &mut send,
         Message::Publish {
@@ -219,6 +385,7 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -235,6 +402,7 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -244,7 +412,8 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let (mut send, mut recv) = connection.open_bi().await?;
+    let (mut send, mut recv) =
+        open_authenticated_bi(&connection, &auth, max_frame_bytes, &mut frame_scratch).await?;
     crate::transport::quic::write_message(
         &mut send,
         Message::Publish {
@@ -290,6 +459,7 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
     broker
         .register_stream("t1", "default", "beta", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -303,12 +473,13 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = felix_client::Client::connect_with_transport(
         addr,
         "localhost",
-        build_client_config(cert)?,
+        build_client_config(cert, &auth)?,
         TransportConfig::default(),
     )
     .await?;
@@ -414,6 +585,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
     broker
         .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
@@ -436,6 +608,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
 
     let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::Publish {
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
@@ -483,6 +656,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
         Arc::clone(&broker),
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
         String::new(),
@@ -512,6 +686,7 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
@@ -535,7 +710,11 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
 
     let binary =
         binary_publish_batch_frame("t1", "default", "updates", &[Bytes::from_static(b"one")]);
-    let frames = vec![Ok(Some(binary)), Ok(Some(invalid_json_frame()))];
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(binary)),
+        Ok(Some(invalid_json_frame())),
+    ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -550,6 +729,7 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
             Arc::clone(&broker),
             connection,
             BrokerConfig::from_env()?,
+            Arc::clone(&auth.auth),
             publish_ctx,
             HashMap::new(),
             String::new(),
@@ -575,6 +755,7 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
 #[tokio::test]
 async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
@@ -617,6 +798,7 @@ async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
         Arc::clone(&broker),
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
         String::new(),
@@ -647,6 +829,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -676,7 +859,10 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         request_id: None,
         ttl_ms: None,
     });
-    let mut source = TestFrameSource::new(vec![Ok(Some(cache_put.clone()))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(cache_put.clone())),
+    ]);
     let connection_clone = connection.clone();
 
     let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
@@ -693,6 +879,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         Arc::clone(&broker),
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
         String::new(),
@@ -712,7 +899,10 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
     assert!(result);
     drop(out_ack_rx);
 
-    let mut source = TestFrameSource::new(vec![Ok(Some(cache_put))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(cache_put)),
+    ]);
     let (closed_tx, _closed_rx) = mpsc::channel(1);
     drop(_closed_rx);
     let err = run_control_loop(
@@ -720,6 +910,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         Arc::clone(&broker),
         connection_clone,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::clone(&broker)).await,
         HashMap::new(),
         String::new(),
@@ -749,11 +940,13 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     let binary =
         binary_publish_batch_frame("t1", "default", "updates", &[Bytes::from_static(b"one")]);
     let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(binary)),
         Ok(Some(frame_from_message(Message::Publish {
             tenant_id: "t1".to_string(),
@@ -777,35 +970,50 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
     run_uni_loop(
         &mut source,
         Arc::clone(&broker),
-        BrokerConfig::from_env()?,
-        publish_ctx,
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config: BrokerConfig::from_env()?,
+            auth: Arc::clone(&auth.auth),
+            publish_ctx,
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut scratch,
     )
     .await?;
 
-    let mut source = TestFrameSource::new(vec![Ok(Some(frame_from_message(Message::Ok)))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Ok))),
+    ]);
     run_uni_loop(
         &mut source,
         Arc::clone(&broker),
-        BrokerConfig::from_env()?,
-        build_publish_context(Arc::clone(&broker)).await,
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config: BrokerConfig::from_env()?,
+            auth: Arc::clone(&auth.auth),
+            publish_ctx: build_publish_context(Arc::clone(&broker)).await,
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut scratch,
     )
     .await?;
 
-    let mut source = TestFrameSource::new(vec![Ok(Some(invalid_json_frame()))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(invalid_json_frame())),
+    ]);
     assert!(
         run_uni_loop(
             &mut source,
             Arc::clone(&broker),
-            BrokerConfig::from_env()?,
-            build_publish_context(Arc::clone(&broker)).await,
-            HashMap::new(),
-            String::new(),
+            UniLoopArgs {
+                config: BrokerConfig::from_env()?,
+                auth: Arc::clone(&auth.auth),
+                publish_ctx: build_publish_context(Arc::clone(&broker)).await,
+                stream_cache: HashMap::new(),
+                stream_cache_key: String::new(),
+            },
             &mut scratch,
         )
         .await
@@ -1085,6 +1293,7 @@ async fn ack_waiter_loop_cancel_branch() -> Result<()> {
 async fn handle_stream_drain_timeout_branch() -> Result<()> {
     test_hooks::reset();
     test_hooks::set_force_drain_timeout(true);
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1092,6 +1301,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
+    let auth_for_server = Arc::clone(&auth.auth);
     let server_task = tokio::spawn(async move {
         let connection = server.accept().await?;
         let (send, recv) = connection.accept_bi().await?;
@@ -1102,6 +1312,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
             Arc::new(Broker::new(EphemeralCache::new().into())),
             connection,
             config,
+            auth_for_server,
             publish_ctx,
             send,
             recv,
@@ -1117,6 +1328,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, _recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
     crate::transport::quic::write_message(&mut send, Message::Ok).await?;
     send.finish()?;
 
@@ -1128,6 +1340,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
 #[tokio::test]
 async fn control_stream_rejects_unexpected_message() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1143,6 +1356,7 @@ async fn control_stream_rejects_unexpected_message() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -1152,7 +1366,8 @@ async fn control_stream_rejects_unexpected_message() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let (mut send, mut recv) = connection.open_bi().await?;
+    let (mut send, mut recv) =
+        open_authenticated_bi(&connection, &auth, max_frame_bytes, &mut frame_scratch).await?;
     crate::transport::quic::write_message(&mut send, Message::Ok).await?;
     send.finish()?;
     let response = crate::transport::quic::read_message_limited(
@@ -1173,6 +1388,7 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1188,6 +1404,7 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -1197,7 +1414,8 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let (mut send, mut recv) = connection.open_bi().await?;
+    let (mut send, mut recv) =
+        open_authenticated_bi(&connection, &auth, max_frame_bytes, &mut frame_scratch).await?;
     crate::transport::quic::write_message(
         &mut send,
         Message::CachePut {
@@ -1237,6 +1455,7 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1252,6 +1471,7 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -1261,7 +1481,8 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let (mut send, mut recv) = connection.open_bi().await?;
+    let (mut send, mut recv) =
+        open_authenticated_bi(&connection, &auth, max_frame_bytes, &mut frame_scratch).await?;
     crate::transport::quic::write_message(
         &mut send,
         Message::CacheGet {
@@ -1302,6 +1523,7 @@ async fn uni_stream_rejects_non_publish() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1315,6 +1537,7 @@ async fn uni_stream_rejects_non_publish() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.auth),
     ));
 
     let client = QuicClient::bind(
@@ -1325,6 +1548,7 @@ async fn uni_stream_rejects_non_publish() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
 
     let mut send = connection.open_uni().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
     let frame = Message::CacheGet {
         tenant_id: "t1".to_string(),
         namespace: "default".to_string(),
@@ -1817,6 +2041,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
 #[tokio::test]
 async fn control_loop_pre_canceled_exits() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1849,6 +2074,7 @@ async fn control_loop_pre_canceled_exits() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -1873,6 +2099,7 @@ async fn control_loop_pre_canceled_exits() -> Result<()> {
 #[tokio::test]
 async fn control_loop_cancel_changed_breaks() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1912,6 +2139,7 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -1936,6 +2164,7 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
 #[tokio::test]
 async fn control_loop_cancel_changed_continues() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -1977,6 +2206,7 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -2002,6 +2232,7 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
 async fn control_loop_subscribe_done_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2021,12 +2252,15 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let frames = vec![Ok(Some(frame_from_message(Message::Subscribe {
-        tenant_id: "t1".to_string(),
-        namespace: "default".to_string(),
-        stream: "missing".to_string(),
-        subscription_id: None,
-    })))];
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Subscribe {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "missing".to_string(),
+            subscription_id: None,
+        }))),
+    ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -2040,6 +2274,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
         String::new(),
@@ -2073,6 +2308,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
         .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2093,6 +2329,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
     let connection = client.connect(addr, "localhost").await?;
 
     let mut frames = Vec::new();
+    frames.push(Ok(Some(frame_from_message(auth_message(&auth)))));
     for idx in 0..20u64 {
         frames.push(Ok(Some(frame_from_message(Message::CachePut {
             tenant_id: "t1".to_string(),
@@ -2125,6 +2362,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
         String::new(),
@@ -2149,6 +2387,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
 #[tokio::test]
 async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2168,13 +2407,16 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let frames = vec![Ok(Some(frame_from_message(Message::CacheGet {
-        tenant_id: "t1".to_string(),
-        namespace: "default".to_string(),
-        cache: "missing".to_string(),
-        key: "key".to_string(),
-        request_id: None,
-    })))];
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "missing".to_string(),
+            key: "key".to_string(),
+            request_id: None,
+        }))),
+    ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -2188,6 +2430,7 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -2212,6 +2455,7 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
 #[tokio::test]
 async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2231,15 +2475,18 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let frames = vec![Ok(Some(frame_from_message(Message::CachePut {
-        tenant_id: "t1".to_string(),
-        namespace: "default".to_string(),
-        cache: "missing".to_string(),
-        key: "key".to_string(),
-        value: Bytes::from_static(b"value"),
-        request_id: None,
-        ttl_ms: None,
-    })))];
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "missing".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: None,
+            ttl_ms: None,
+        }))),
+    ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -2253,6 +2500,7 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -2277,6 +2525,7 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
 #[tokio::test]
 async fn control_loop_error_message_returns_false() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2296,9 +2545,12 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    let frames = vec![Ok(Some(frame_from_message(Message::Error {
-        message: "bad".to_string(),
-    })))];
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Error {
+            message: "bad".to_string(),
+        }))),
+    ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, _out_ack_rx) = mpsc::channel(8);
     let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
@@ -2311,6 +2563,7 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
         broker,
         connection,
         BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
         String::new(),
@@ -2340,6 +2593,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let (tx, rx) = mpsc::channel::<PublishJob>(1);
     drop(rx);
     let publish_ctx = PublishContext {
@@ -2351,53 +2605,70 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     let binary =
         binary_publish_batch_frame("t1", "default", "updates", &[Bytes::from_static(b"one")]);
-    let mut source = TestFrameSource::new(vec![Ok(Some(binary))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(binary)),
+    ]);
     run_uni_loop(
         &mut source,
         Arc::clone(&broker),
-        BrokerConfig::from_env()?,
-        publish_ctx.clone(),
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config: BrokerConfig::from_env()?,
+            auth: Arc::clone(&auth.auth),
+            publish_ctx: publish_ctx.clone(),
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut scratch,
     )
     .await?;
 
-    let mut source = TestFrameSource::new(vec![Ok(Some(frame_from_message(Message::Publish {
-        tenant_id: "t1".to_string(),
-        namespace: "default".to_string(),
-        stream: "updates".to_string(),
-        payload: b"payload".to_vec(),
-        request_id: Some(1),
-        ack: Some(felix_wire::AckMode::None),
-    })))]);
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            payload: b"payload".to_vec(),
+            request_id: Some(1),
+            ack: Some(felix_wire::AckMode::None),
+        }))),
+    ]);
     run_uni_loop(
         &mut source,
         Arc::clone(&broker),
-        BrokerConfig::from_env()?,
-        publish_ctx.clone(),
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config: BrokerConfig::from_env()?,
+            auth: Arc::clone(&auth.auth),
+            publish_ctx: publish_ctx.clone(),
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut scratch,
     )
     .await?;
 
-    let mut source =
-        TestFrameSource::new(vec![Ok(Some(frame_from_message(Message::PublishBatch {
+    let mut source = TestFrameSource::new(vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::PublishBatch {
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             stream: "updates".to_string(),
             payloads: vec![b"a".to_vec()],
             request_id: Some(2),
             ack: Some(felix_wire::AckMode::None),
-        })))]);
+        }))),
+    ]);
     run_uni_loop(
         &mut source,
         Arc::clone(&broker),
-        BrokerConfig::from_env()?,
-        publish_ctx,
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config: BrokerConfig::from_env()?,
+            auth: Arc::clone(&auth.auth),
+            publish_ctx,
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut scratch,
     )
     .await?;
@@ -2412,6 +2683,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
+    let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
@@ -2420,10 +2692,18 @@ async fn handle_uni_stream_smoke() -> Result<()> {
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
+    let auth_for_server = Arc::clone(&auth.auth);
     let server_task = tokio::spawn(async move {
         let connection = server.accept().await?;
         let recv = connection.accept_uni().await?;
-        handle_uni_stream(broker, BrokerConfig::from_env()?, publish_ctx, recv).await?;
+        handle_uni_stream(
+            broker,
+            BrokerConfig::from_env()?,
+            auth_for_server,
+            publish_ctx,
+            recv,
+        )
+        .await?;
         Result::<()>::Ok(())
     });
 
@@ -2434,6 +2714,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let mut send = connection.open_uni().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
     let frame = Message::Publish {
         tenant_id: "t1".to_string(),
         namespace: "default".to_string(),
@@ -2454,6 +2735,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
 #[serial]
 async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
     test_hooks::reset();
+    let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
@@ -2461,6 +2743,7 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
+    let auth_for_server = Arc::clone(&auth.auth);
     let server_task = tokio::spawn(async move {
         let connection = server.accept().await?;
         let (send, recv) = connection.accept_bi().await?;
@@ -2491,7 +2774,16 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
         config.ack_on_commit = true;
         config.ack_wait_timeout_ms = 1000;
         config.control_stream_drain_timeout_ms = 1;
-        handle_stream(broker, connection, config, publish_ctx, send, recv).await?;
+        handle_stream(
+            broker,
+            connection,
+            config,
+            auth_for_server,
+            publish_ctx,
+            send,
+            recv,
+        )
+        .await?;
         Result::<()>::Ok(())
     });
 
@@ -2502,6 +2794,7 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, _recv) = connection.open_bi().await?;
+    crate::transport::quic::write_message(&mut send, auth_message(&auth)).await?;
     crate::transport::quic::write_message(
         &mut send,
         Message::Publish {
@@ -2537,7 +2830,13 @@ fn build_quinn_client_config(cert: CertificateDer<'static>) -> Result<QuinnClien
     Ok(quinn)
 }
 
-fn build_client_config(cert: CertificateDer<'static>) -> Result<felix_client::ClientConfig> {
+fn build_client_config(
+    cert: CertificateDer<'static>,
+    auth: &AuthFixture,
+) -> Result<felix_client::ClientConfig> {
     let quinn = build_quinn_client_config(cert)?;
-    felix_client::ClientConfig::from_env_or_yaml(quinn, None)
+    let mut config = felix_client::ClientConfig::from_env_or_yaml(quinn, None)?;
+    config.auth_tenant_id = Some(auth.tenant_id.clone());
+    config.auth_token = Some(auth.token.clone());
+    Ok(config)
 }
