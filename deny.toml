@@ -1,7 +1,22 @@
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = ["RUSTSEC-2024-0370"]
+
+# TODO: These ignores are TEMPORARY and must be removed.
+#
+# RUSTSEC-2023-0071 (rsa / Marvin Attack):
+# The RustCrypto `rsa` crate uses a non–constant-time implementation that can
+# leak private key material via timing side channels. This is unacceptable for
+# network-facing services (broker/controlplane) that sign or verify tokens.
+# We must remove `rsa` entirely from production code paths (e.g. migrate Felix
+# tokens to Ed25519 or a ring/aws-lc-backed implementation).
+#
+# RUSTSEC-2024-0370:
+# This advisory indicates a known vulnerability with no currently enforced
+# mitigation in our dependency graph. Ignoring it weakens our supply-chain
+# security guarantees and risks shipping known-bad cryptographic behavior.
+# We must either upgrade away from the affected crate or replace it.
+ignore = ["RUSTSEC-2024-0370", "RUSTSEC-2023-0071"]
 
 [licenses]
 allow = [
@@ -15,6 +30,7 @@ allow = [
   "CDLA-Permissive-2.0",
   "CC0-1.0",
   "Zlib",
+  "MPL-2.0",
 ]
 confidence-threshold = 0.8
 
