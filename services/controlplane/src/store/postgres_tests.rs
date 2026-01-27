@@ -15,6 +15,7 @@ use crate::model::{
     NamespaceKey, RetentionPolicy, Stream, StreamKey, StreamKind, StreamPatchRequest, Tenant,
 };
 use serial_test::serial;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 use testcontainers::clients::Cli;
@@ -27,6 +28,8 @@ struct PgContainer {
 }
 
 static PG_CONTAINER: tokio::sync::OnceCell<PgContainer> = tokio::sync::OnceCell::const_new();
+
+static MIGRATOR: Migrator = sqlx::migrate!();
 
 fn docker_available() -> bool {
     std::process::Command::new("docker")
@@ -101,6 +104,10 @@ async fn reset_db(url: &str) -> Result<(), sqlx::Error> {
         .acquire_timeout(Duration::from_secs(5))
         .connect(url)
         .await?;
+
+    // Ensure schema exists before we try to TRUNCATE. Fresh testcontainers DBs may have no tables yet.
+    MIGRATOR.run(&pool).await?;
+
     sqlx::query(
         "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, \
          streams, caches, namespaces, idp_issuers, rbac_policies, rbac_groupings, \
