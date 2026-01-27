@@ -1,7 +1,13 @@
-// Console demo that exercises pub/sub over QUIC using felix-wire frames.
-// Shows the end-to-end flow: broker boot, subscribe, publish, receive.
+//! Pub/sub demo binary for the QUIC transport.
+//!
+//! # Purpose
+//! Demonstrates the end-to-end flow for broker boot, subscription, publish, and
+//! message receive using felix-wire frames over QUIC.
+//!
+//! # Notes
+//! This is a developer-facing demo; it favors clarity over performance.
 use anyhow::{Context, Result};
-use broker::quic;
+use broker::{auth::BrokerAuth, auth_demo, quic};
 use felix_broker::{Broker, StreamMetadata};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
@@ -13,6 +19,8 @@ use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use tokio::time::Duration;
+
+type DemoAuthResult = Result<(Arc<BrokerAuth>, Option<(String, String)>)>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,10 +51,12 @@ async fn main() -> Result<()> {
 
     // Start the broker with QUIC transport in a background task to accept client connections.
     let config = broker::config::BrokerConfig::from_env()?;
-    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker, config));
+    let (auth, auth_override) = resolve_demo_auth(&config)?;
+    let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker, config, auth));
 
     println!("Step 2/6: connecting QUIC client.");
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    let client = Client::connect(addr, "localhost", client_config).await?;
 
     println!("Step 3/6: opening a subscription stream.");
     let mut subscription = client.subscribe("t1", "default", "demo-topic").await?;
@@ -118,4 +128,24 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
     ClientConfig::from_env_or_yaml(quinn, None)
+}
+
+fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+    if let Some(controlplane_url) = config.controlplane_url.clone() {
+        return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
+    }
+
+    let demo = auth_demo::demo_auth_for_tenant("t1")?;
+    Ok((demo.auth, Some((demo.tenant_id, demo.token))))
+}
+
+fn apply_demo_auth(
+    mut config: ClientConfig,
+    auth_override: Option<(String, String)>,
+) -> ClientConfig {
+    if let Some((tenant_id, token)) = auth_override {
+        config.auth_tenant_id = Some(tenant_id);
+        config.auth_token = Some(token);
+    }
+    config
 }

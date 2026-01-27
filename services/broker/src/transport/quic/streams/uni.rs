@@ -13,6 +13,7 @@
 
 use anyhow::{Context, Result};
 use bytes::BytesMut;
+use felix_authz::{Action, Namespace, StreamName, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
 
+use crate::auth::{AuthContext, BrokerAuth};
 use crate::config::BrokerConfig;
 use crate::transport::quic::handlers::publish::{
     PublishContext, handle_binary_publish_batch_uni, handle_publish_batch_message_uni,
@@ -28,6 +30,14 @@ use crate::transport::quic::handlers::publish::{
 use crate::transport::quic::telemetry::t_counter;
 
 use super::frame_source::FrameSource;
+
+pub(super) struct UniLoopArgs {
+    pub config: BrokerConfig,
+    pub auth: Arc<BrokerAuth>,
+    pub publish_ctx: PublishContext,
+    pub stream_cache: HashMap<String, (bool, std::time::Instant)>,
+    pub stream_cache_key: String,
+}
 
 /// Runs the uni-directional publish stream loop.
 ///
@@ -62,12 +72,17 @@ use super::frame_source::FrameSource;
 pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
     source: &mut S,
     broker: Arc<Broker>,
-    config: BrokerConfig,
-    publish_ctx: PublishContext,
-    mut stream_cache: HashMap<String, (bool, std::time::Instant)>,
-    mut stream_cache_key: String,
+    args: UniLoopArgs,
     frame_scratch: &mut BytesMut,
 ) -> Result<()> {
+    let UniLoopArgs {
+        config,
+        auth,
+        publish_ctx,
+        mut stream_cache,
+        mut stream_cache_key,
+    } = args;
+    let mut auth_ctx: Option<AuthContext> = None;
     loop {
         // Read the next frame from the source. The FrameSource abstraction allows reading frames from
         // different underlying transport mechanisms while enforcing max frame size limits.
@@ -88,6 +103,7 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
                 &mut stream_cache_key,
                 &publish_ctx,
                 &frame,
+                auth_ctx.as_ref(),
             )
             .await?;
             // If handler indicates not handled, close the stream loop
@@ -117,6 +133,21 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
 
         // Handle the decoded message according to its variant.
         match message {
+            Message::Auth { tenant_id, token } => {
+                if auth_ctx.is_some() {
+                    tracing::debug!("closing uni stream after duplicate auth");
+                    break;
+                }
+                match auth.authenticate(&tenant_id, &token).await {
+                    Ok(ctx) => {
+                        auth_ctx = Some(ctx);
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "closing uni stream after auth failure");
+                        break;
+                    }
+                }
+            }
             Message::Publish {
                 tenant_id,
                 namespace,
@@ -124,6 +155,22 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
                 payload,
                 ..
             } => {
+                let Some(auth_ctx) = auth_ctx.as_ref() else {
+                    tracing::debug!("closing uni stream after unauthenticated publish");
+                    break;
+                };
+                if auth_ctx.tenant_id != tenant_id {
+                    tracing::debug!("closing uni stream after tenant mismatch");
+                    break;
+                }
+                let resource = stream_resource(
+                    &Namespace::new(namespace.as_str()),
+                    &StreamName::new(stream.as_str()),
+                );
+                if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
+                    tracing::debug!("closing uni stream after unauthorized publish");
+                    break;
+                }
                 // Handle a single publish message. The handler returns whether the message was handled
                 // successfully and whether to continue processing.
                 let handled = handle_publish_message_uni(
@@ -149,6 +196,22 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
                 payloads,
                 ..
             } => {
+                let Some(auth_ctx) = auth_ctx.as_ref() else {
+                    tracing::debug!("closing uni stream after unauthenticated publish batch");
+                    break;
+                };
+                if auth_ctx.tenant_id != tenant_id {
+                    tracing::debug!("closing uni stream after tenant mismatch");
+                    break;
+                }
+                let resource = stream_resource(
+                    &Namespace::new(namespace.as_str()),
+                    &StreamName::new(stream.as_str()),
+                );
+                if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
+                    tracing::debug!("closing uni stream after unauthorized publish batch");
+                    break;
+                }
                 // Handle a batch of publish messages similarly.
                 let handled = handle_publish_batch_message_uni(
                     &broker,

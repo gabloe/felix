@@ -1,4 +1,11 @@
-// QUIC connection accept loop and per-connection worker setup.
+//! QUIC connection accept loop and per-connection worker setup.
+//!
+//! # Purpose
+//! Accepts incoming QUIC connections, configures per-connection state, and
+//! spawns stream handlers for publish, subscribe, and cache workloads.
+//!
+//! # Design notes
+//! Each connection gets its own task to isolate failures and reduce contention.
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_broker::timings as broker_publish_timings;
@@ -7,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use crate::auth::BrokerAuth;
 use crate::config::BrokerConfig;
 use crate::timings;
 
@@ -21,6 +29,7 @@ pub async fn serve(
     server: Arc<QuicServer>,
     broker: Arc<Broker>,
     config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
 ) -> Result<()> {
     // Main accept loop: spawn a task per incoming QUIC connection.
     if config.disable_timings {
@@ -31,8 +40,9 @@ pub async fn serve(
         let connection = server.accept().await?;
         let broker = Arc::clone(&broker);
         let config = config.clone();
+        let auth = Arc::clone(&auth);
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(broker, connection, config).await {
+            if let Err(err) = handle_connection(broker, connection, config, auth).await {
                 tracing::warn!(error = %err, "quic connection handler failed");
             }
         });
@@ -43,6 +53,7 @@ pub(crate) async fn handle_connection(
     broker: Arc<Broker>,
     connection: QuicConnection,
     config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
 ) -> Result<()> {
     // One QUIC connection can multiplex multiple streams.
     let worker_count = config.pub_workers_per_conn.max(1);
@@ -107,12 +118,14 @@ pub(crate) async fn handle_connection(
                 let broker = Arc::clone(&broker);
                 let connection = connection.clone();
                 let config = config.clone();
+                let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
                 tokio::spawn(async move {
                     if let Err(err) = handle_stream(
                         broker,
                         connection,
                         config,
+                        auth,
                         publish_ctx,
                         send,
                         recv,
@@ -138,11 +151,13 @@ pub(crate) async fn handle_connection(
                 };
                 let broker = Arc::clone(&broker);
                 let config = config.clone();
+                let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
                 tokio::spawn(async move {
                     if let Err(err) = handle_uni_stream(
                         broker,
                         config,
+                        auth,
                         publish_ctx,
                         recv,
                     )

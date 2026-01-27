@@ -11,3 +11,5 @@ sudo apt install -y linux-perf
 cargo install flamegraph samply cargo-samply cargo-llvm-cov
 
 bash scripts/setup-githooks.sh
+
+mkdir -p /workspaces/felix/.tmp

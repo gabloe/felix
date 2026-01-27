@@ -1,4 +1,16 @@
-use crate::{
+//! Control-plane storage interfaces and shared types.
+//!
+//! # Purpose
+//! Defines the `ControlPlaneStore` trait, error types, and shared snapshot/change
+//! structs used by both in-memory and Postgres backends.
+//!
+//! # Notes
+//! Store implementors should preserve change ordering and enforce conflict/not-found
+//! semantics consistently with these trait contracts.
+use crate::auth::felix_token::TenantSigningKeys;
+use crate::auth::idp_registry::IdpIssuerConfig;
+use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
     Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
@@ -8,6 +20,9 @@ use thiserror::Error;
 pub mod memory;
 pub mod postgres;
 
+#[cfg(test)]
+mod postgres_tests;
+
 #[derive(Debug, Clone)]
 pub struct StoreConfig {
     pub changes_limit: u64,
@@ -16,6 +31,7 @@ pub struct StoreConfig {
 
 impl StoreConfig {
     pub fn change_window(&self) -> usize {
+        // Clamp to at least changes_limit; the DB retention may be higher but never lower.
         self.change_retention_max_rows
             .unwrap_or(self.changes_limit as i64)
             .max(self.changes_limit as i64) as usize
@@ -84,3 +100,41 @@ pub trait ControlPlaneStore: Send + Sync {
     fn is_durable(&self) -> bool;
     fn backend_name(&self) -> &'static str;
 }
+
+#[async_trait]
+pub trait AuthStore: Send + Sync {
+    async fn list_idp_issuers(&self, tenant_id: &str) -> StoreResult<Vec<IdpIssuerConfig>>;
+    async fn upsert_idp_issuer(&self, tenant_id: &str, issuer: IdpIssuerConfig) -> StoreResult<()>;
+    async fn delete_idp_issuer(&self, tenant_id: &str, issuer: &str) -> StoreResult<()>;
+
+    async fn list_rbac_policies(&self, tenant_id: &str) -> StoreResult<Vec<PolicyRule>>;
+    async fn list_rbac_groupings(&self, tenant_id: &str) -> StoreResult<Vec<GroupingRule>>;
+    async fn add_rbac_policy(&self, tenant_id: &str, policy: PolicyRule) -> StoreResult<()>;
+    async fn add_rbac_grouping(&self, tenant_id: &str, grouping: GroupingRule) -> StoreResult<()>;
+
+    async fn get_tenant_signing_keys(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys>;
+    async fn set_tenant_signing_keys(
+        &self,
+        tenant_id: &str,
+        keys: TenantSigningKeys,
+    ) -> StoreResult<()>;
+
+    async fn tenant_auth_is_bootstrapped(&self, tenant_id: &str) -> StoreResult<bool>;
+    async fn set_tenant_auth_bootstrapped(
+        &self,
+        tenant_id: &str,
+        bootstrapped: bool,
+    ) -> StoreResult<()>;
+
+    async fn ensure_signing_key_current(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys>;
+    async fn seed_rbac_policies_and_groupings(
+        &self,
+        tenant_id: &str,
+        policies: Vec<PolicyRule>,
+        groupings: Vec<GroupingRule>,
+    ) -> StoreResult<()>;
+}
+
+pub trait ControlPlaneAuthStore: ControlPlaneStore + AuthStore {}
+
+impl<T> ControlPlaneAuthStore for T where T: ControlPlaneStore + AuthStore {}

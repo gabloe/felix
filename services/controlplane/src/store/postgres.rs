@@ -69,15 +69,21 @@
 //! - Prefer TLS to Postgres in production.
 //! - Avoid dynamic SQL. This module uses dynamic SQL only for retention deletes and only with a
 //!   fixed allowlist of table names defined in code.
-use super::{ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult};
-use crate::{
+use super::{
+    AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult,
+};
+use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
+use crate::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
+use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::config::PostgresConfig;
+use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, RetentionPolicy, Stream, StreamChange, StreamChangeOp,
     StreamKey, StreamKind, StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
-    config::PostgresConfig,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
+use jsonwebtoken::Algorithm;
 use serde_json::Value;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{FromRow, PgPool};
@@ -146,6 +152,38 @@ struct DbCache {
     namespace: String,
     cache: String,
     display_name: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DbIdpIssuer {
+    issuer: String,
+    audiences: Value,
+    discovery_url: Option<String>,
+    jwks_url: Option<String>,
+    subject_claim: String,
+    groups_claim: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DbSigningKey {
+    kid: String,
+    alg: String,
+    private_pem: String,
+    public_pem: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DbPolicy {
+    subject: String,
+    object: String,
+    action: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DbGrouping {
+    user_id: String,
+    role: String,
 }
 
 /// Row shape for the `tenant_changes` table.
@@ -1409,35 +1447,51 @@ fn stream_kind_to_str(kind: &StreamKind) -> &'static str {
     }
 }
 
-fn parse_consistency(value: &str) -> StoreResult<crate::ConsistencyLevel> {
+fn parse_consistency(value: &str) -> StoreResult<crate::model::ConsistencyLevel> {
     match value {
-        "Leader" => Ok(crate::ConsistencyLevel::Leader),
-        "Quorum" => Ok(crate::ConsistencyLevel::Quorum),
+        "Leader" => Ok(crate::model::ConsistencyLevel::Leader),
+        "Quorum" => Ok(crate::model::ConsistencyLevel::Quorum),
         _ => Err(StoreError::Unexpected(anyhow!(
             "invalid consistency {value}"
         ))),
     }
 }
 
-fn consistency_to_str(value: &crate::ConsistencyLevel) -> &'static str {
+fn consistency_to_str(value: &crate::model::ConsistencyLevel) -> &'static str {
     match value {
-        crate::ConsistencyLevel::Leader => "Leader",
-        crate::ConsistencyLevel::Quorum => "Quorum",
+        crate::model::ConsistencyLevel::Leader => "Leader",
+        crate::model::ConsistencyLevel::Quorum => "Quorum",
     }
 }
 
-fn parse_delivery(value: &str) -> StoreResult<crate::DeliveryGuarantee> {
+fn parse_delivery(value: &str) -> StoreResult<crate::model::DeliveryGuarantee> {
     match value {
-        "AtMostOnce" => Ok(crate::DeliveryGuarantee::AtMostOnce),
-        "AtLeastOnce" => Ok(crate::DeliveryGuarantee::AtLeastOnce),
+        "AtMostOnce" => Ok(crate::model::DeliveryGuarantee::AtMostOnce),
+        "AtLeastOnce" => Ok(crate::model::DeliveryGuarantee::AtLeastOnce),
         _ => Err(StoreError::Unexpected(anyhow!("invalid delivery {value}"))),
     }
 }
 
-fn delivery_to_str(value: &crate::DeliveryGuarantee) -> &'static str {
+fn delivery_to_str(value: &crate::model::DeliveryGuarantee) -> &'static str {
     match value {
-        crate::DeliveryGuarantee::AtMostOnce => "AtMostOnce",
-        crate::DeliveryGuarantee::AtLeastOnce => "AtLeastOnce",
+        crate::model::DeliveryGuarantee::AtMostOnce => "AtMostOnce",
+        crate::model::DeliveryGuarantee::AtLeastOnce => "AtLeastOnce",
+    }
+}
+
+fn parse_algorithm(value: &str) -> StoreResult<Algorithm> {
+    match value {
+        "RS256" => Ok(Algorithm::RS256),
+        "ES256" => Ok(Algorithm::ES256),
+        _ => Err(StoreError::Unexpected(anyhow!("invalid alg {value}"))),
+    }
+}
+
+fn algorithm_to_str(value: Algorithm) -> &'static str {
+    match value {
+        Algorithm::RS256 => "RS256",
+        Algorithm::ES256 => "ES256",
+        _ => "RS256",
     }
 }
 
@@ -1454,6 +1508,309 @@ impl PostgresStore {
             .await
             .map_err(|e| StoreError::Unexpected(e.into()))?;
         metrics::gauge!("felix_caches_total").set(cache_total as f64);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AuthStore for PostgresStore {
+    async fn list_idp_issuers(&self, tenant_id: &str) -> StoreResult<Vec<IdpIssuerConfig>> {
+        let rows: Vec<DbIdpIssuer> = sqlx::query_as(
+            "SELECT issuer, audiences, discovery_url, jwks_url, subject_claim, groups_claim \
+             FROM idp_issuers WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+
+        let mut issuers = Vec::with_capacity(rows.len());
+        for row in rows {
+            let audiences: Vec<String> = serde_json::from_value(row.audiences)
+                .map_err(|err| StoreError::Unexpected(anyhow!("invalid audiences json: {err}")))?;
+            issuers.push(IdpIssuerConfig {
+                issuer: row.issuer,
+                audiences,
+                discovery_url: row.discovery_url,
+                jwks_url: row.jwks_url,
+                claim_mappings: ClaimMappings {
+                    subject_claim: row.subject_claim,
+                    groups_claim: row.groups_claim,
+                },
+            });
+        }
+        Ok(issuers)
+    }
+
+    async fn upsert_idp_issuer(&self, tenant_id: &str, issuer: IdpIssuerConfig) -> StoreResult<()> {
+        let audiences = serde_json::to_value(&issuer.audiences)
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        sqlx::query(
+            "INSERT INTO idp_issuers (tenant_id, issuer, audiences, discovery_url, jwks_url, subject_claim, groups_claim) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (tenant_id, issuer) DO UPDATE SET \
+                audiences = EXCLUDED.audiences, \
+                discovery_url = EXCLUDED.discovery_url, \
+                jwks_url = EXCLUDED.jwks_url, \
+                subject_claim = EXCLUDED.subject_claim, \
+                groups_claim = EXCLUDED.groups_claim",
+        )
+        .bind(tenant_id)
+        .bind(&issuer.issuer)
+        .bind(audiences)
+        .bind(&issuer.discovery_url)
+        .bind(&issuer.jwks_url)
+        .bind(&issuer.claim_mappings.subject_claim)
+        .bind(&issuer.claim_mappings.groups_claim)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(())
+    }
+
+    async fn delete_idp_issuer(&self, tenant_id: &str, issuer: &str) -> StoreResult<()> {
+        sqlx::query("DELETE FROM idp_issuers WHERE tenant_id = $1 AND issuer = $2")
+            .bind(tenant_id)
+            .bind(issuer)
+            .execute(&self.pool)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(())
+    }
+
+    async fn list_rbac_policies(&self, tenant_id: &str) -> StoreResult<Vec<PolicyRule>> {
+        let rows: Vec<DbPolicy> = sqlx::query_as(
+            "SELECT subject, object, action FROM rbac_policies WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PolicyRule {
+                subject: row.subject,
+                object: row.object,
+                action: row.action,
+            })
+            .collect())
+    }
+
+    async fn list_rbac_groupings(&self, tenant_id: &str) -> StoreResult<Vec<GroupingRule>> {
+        let rows: Vec<DbGrouping> =
+            sqlx::query_as("SELECT user_id, role FROM rbac_groupings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| GroupingRule {
+                user: row.user_id,
+                role: row.role,
+            })
+            .collect())
+    }
+
+    async fn add_rbac_policy(&self, tenant_id: &str, policy: PolicyRule) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(&policy.subject)
+        .bind(&policy.object)
+        .bind(&policy.action)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(())
+    }
+
+    async fn add_rbac_grouping(&self, tenant_id: &str, grouping: GroupingRule) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO rbac_groupings (tenant_id, user_id, role) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(&grouping.user)
+        .bind(&grouping.role)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(())
+    }
+
+    async fn get_tenant_signing_keys(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
+        let rows: Vec<DbSigningKey> = sqlx::query_as(
+            "SELECT kid, alg, private_pem, public_pem, status \
+             FROM tenant_signing_keys WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+
+        if rows.is_empty() {
+            return Err(StoreError::NotFound("signing keys".into()));
+        }
+
+        let mut current: Option<SigningKey> = None;
+        let mut previous = Vec::new();
+        for row in rows {
+            let key = SigningKey {
+                kid: row.kid,
+                alg: parse_algorithm(&row.alg)?,
+                private_key_pem: row.private_pem.into_bytes(),
+                public_key_pem: row.public_pem.into_bytes(),
+            };
+            match row.status.as_str() {
+                "current" => current = Some(key),
+                "previous" => previous.push(key),
+                _ => {}
+            }
+        }
+
+        let current = current.ok_or_else(|| StoreError::NotFound("signing keys".into()))?;
+        Ok(TenantSigningKeys { current, previous })
+    }
+
+    async fn set_tenant_signing_keys(
+        &self,
+        tenant_id: &str,
+        keys: TenantSigningKeys,
+    ) -> StoreResult<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        sqlx::query("DELETE FROM tenant_signing_keys WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+
+        let current_alg = algorithm_to_str(keys.current.alg);
+        sqlx::query(
+            "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
+             VALUES ($1, $2, $3, $4, $5, 'current')",
+        )
+        .bind(tenant_id)
+        .bind(&keys.current.kid)
+        .bind(current_alg)
+        .bind(String::from_utf8_lossy(&keys.current.private_key_pem).to_string())
+        .bind(String::from_utf8_lossy(&keys.current.public_key_pem).to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| StoreError::Unexpected(err.into()))?;
+
+        for key in &keys.previous {
+            let alg = algorithm_to_str(key.alg);
+            sqlx::query(
+                "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
+                 VALUES ($1, $2, $3, $4, $5, 'previous')",
+            )
+            .bind(tenant_id)
+            .bind(&key.kid)
+            .bind(alg)
+            .bind(String::from_utf8_lossy(&key.private_key_pem).to_string())
+            .bind(String::from_utf8_lossy(&key.public_key_pem).to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(())
+    }
+
+    async fn tenant_auth_is_bootstrapped(&self, tenant_id: &str) -> StoreResult<bool> {
+        let row: Option<(bool,)> =
+            sqlx::query_as("SELECT auth_bootstrapped FROM tenants WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|err| StoreError::Unexpected(err.into()))?;
+        Ok(row.map(|(value,)| value).unwrap_or(false))
+    }
+
+    async fn set_tenant_auth_bootstrapped(
+        &self,
+        tenant_id: &str,
+        bootstrapped: bool,
+    ) -> StoreResult<()> {
+        let result = sqlx::query("UPDATE tenants SET auth_bootstrapped = $2 WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .bind(bootstrapped)
+            .execute(&self.pool)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound("tenant".into()));
+        }
+        Ok(())
+    }
+
+    async fn ensure_signing_key_current(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
+        match self.get_tenant_signing_keys(tenant_id).await {
+            Ok(keys) => Ok(keys),
+            Err(StoreError::NotFound(_)) => {
+                let keys =
+                    crate::auth::keys::generate_signing_keys().map_err(StoreError::Unexpected)?;
+                self.set_tenant_signing_keys(tenant_id, keys.clone())
+                    .await?;
+                Ok(keys)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn seed_rbac_policies_and_groupings(
+        &self,
+        tenant_id: &str,
+        policies: Vec<PolicyRule>,
+        groupings: Vec<GroupingRule>,
+    ) -> StoreResult<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        for policy in policies {
+            sqlx::query(
+                "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(tenant_id)
+            .bind(&policy.subject)
+            .bind(&policy.object)
+            .bind(&policy.action)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        }
+        for grouping in groupings {
+            sqlx::query(
+                "INSERT INTO rbac_groupings (tenant_id, user_id, role) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(tenant_id)
+            .bind(&grouping.user)
+            .bind(&grouping.role)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        }
+        tx.commit()
+            .await
+            .map_err(|err| StoreError::Unexpected(err.into()))?;
         Ok(())
     }
 }
@@ -1492,19 +1849,19 @@ mod tests {
     fn consistency_round_trip() {
         assert!(matches!(
             parse_consistency("Leader").unwrap(),
-            crate::ConsistencyLevel::Leader
+            crate::model::ConsistencyLevel::Leader
         ));
         assert!(matches!(
             parse_consistency("Quorum").unwrap(),
-            crate::ConsistencyLevel::Quorum
+            crate::model::ConsistencyLevel::Quorum
         ));
         assert!(parse_consistency("Unknown").is_err());
         assert_eq!(
-            consistency_to_str(&crate::ConsistencyLevel::Leader),
+            consistency_to_str(&crate::model::ConsistencyLevel::Leader),
             "Leader"
         );
         assert_eq!(
-            consistency_to_str(&crate::ConsistencyLevel::Quorum),
+            consistency_to_str(&crate::model::ConsistencyLevel::Quorum),
             "Quorum"
         );
     }
@@ -1513,19 +1870,19 @@ mod tests {
     fn delivery_round_trip() {
         assert!(matches!(
             parse_delivery("AtMostOnce").unwrap(),
-            crate::DeliveryGuarantee::AtMostOnce
+            crate::model::DeliveryGuarantee::AtMostOnce
         ));
         assert!(matches!(
             parse_delivery("AtLeastOnce").unwrap(),
-            crate::DeliveryGuarantee::AtLeastOnce
+            crate::model::DeliveryGuarantee::AtLeastOnce
         ));
         assert!(parse_delivery("Unknown").is_err());
         assert_eq!(
-            delivery_to_str(&crate::DeliveryGuarantee::AtMostOnce),
+            delivery_to_str(&crate::model::DeliveryGuarantee::AtMostOnce),
             "AtMostOnce"
         );
         assert_eq!(
-            delivery_to_str(&crate::DeliveryGuarantee::AtLeastOnce),
+            delivery_to_str(&crate::model::DeliveryGuarantee::AtLeastOnce),
             "AtLeastOnce"
         );
     }
@@ -1554,11 +1911,11 @@ mod tests {
         assert_eq!(stream.retention.max_size_bytes, Some(2048));
         assert!(matches!(
             stream.consistency,
-            crate::ConsistencyLevel::Leader
+            crate::model::ConsistencyLevel::Leader
         ));
         assert!(matches!(
             stream.delivery,
-            crate::DeliveryGuarantee::AtLeastOnce
+            crate::model::DeliveryGuarantee::AtLeastOnce
         ));
         assert!(stream.durable);
     }

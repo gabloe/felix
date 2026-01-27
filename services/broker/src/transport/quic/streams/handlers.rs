@@ -29,6 +29,7 @@ use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
+use crate::auth::BrokerAuth;
 use crate::config::BrokerConfig;
 use crate::transport::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, reset_local_depth_only,
@@ -40,7 +41,7 @@ use crate::transport::quic::{ACK_QUEUE_DEPTH, ACK_WAITERS_MAX, GLOBAL_ACK_DEPTH}
 
 use super::ack_waiter::run_ack_waiter_loop;
 use super::control::run_control_loop;
-use super::uni::run_uni_loop;
+use super::uni::{UniLoopArgs, run_uni_loop};
 use super::writer::run_writer_loop;
 
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub(crate) async fn handle_stream(
     broker: Arc<Broker>,
     connection: felix_transport::QuicConnection,
     config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
     send: SendStream,
     mut recv: RecvStream,
@@ -175,6 +177,7 @@ pub(crate) async fn handle_stream(
         Arc::clone(&broker),
         connection.clone(),
         config.clone(),
+        Arc::clone(&auth),
         publish_ctx,
         stream_cache,
         stream_cache_key,
@@ -263,6 +266,7 @@ pub(crate) async fn handle_stream(
 pub(crate) async fn handle_uni_stream(
     broker: Arc<Broker>,
     config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
     mut recv: RecvStream,
 ) -> Result<()> {
@@ -273,10 +277,13 @@ pub(crate) async fn handle_uni_stream(
     run_uni_loop(
         &mut recv,
         broker,
-        config,
-        publish_ctx,
-        HashMap::new(),
-        String::new(),
+        UniLoopArgs {
+            config,
+            auth,
+            publish_ctx,
+            stream_cache: HashMap::new(),
+            stream_cache_key: String::new(),
+        },
         &mut frame_scratch,
     )
     .await

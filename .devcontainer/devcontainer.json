@@ -3,7 +3,7 @@
 {
 	"name": "Rust",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
+	"image": "mcr.microsoft.com/devcontainers/rust:2-1-bookworm",
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	"mounts": [
@@ -16,25 +16,29 @@
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
-		"ghcr.io/audacioustux/devcontainers/taskfile:1": {}
+		"ghcr.io/audacioustux/devcontainers/taskfile:1": {},
+		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
 
-	"containerEnv": {
-		"CARGO_TARGET_DIR": "/tmp/cargo-target"
+	"remoteEnv": {
+		"DOCKER_HOST": "unix:///var/run/docker.sock",
+		"CARGO_TARGET_DIR": "/workspaces/felix/target",
+		"TMPDIR": "/workspaces/felix/.tmp"
 	},
 
 	// Note: Docker Desktop blocks setting kernel.perf_event_paranoid via --sysctl; adjust on the host if needed for perf.
 	// Enable perf profiling tools (samply) inside the container.
 	"runArgs": [
 		"--cap-add=SYS_PTRACE",
-		"--security-opt=seccomp=unconfined"
+		"--security-opt=seccomp=unconfined",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock"
 	],
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "bash scripts/devcontainer-setup.sh",
+	"postCreateCommand": "bash scripts/devcontainer-setup.sh"
 
 	// Configure tool-specific properties.
 	// "customizations": {},
