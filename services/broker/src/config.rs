@@ -251,7 +251,7 @@ impl BrokerConfig {
         if let Some(contents) = contents {
             // YAML overrides allow ops-friendly config files.
             let override_cfg: BrokerConfigOverride =
-                serde_yaml::from_str(&contents).with_context(|| "parse broker config yaml")?;
+                serde_yaml_ng::from_str(&contents).with_context(|| "parse broker config yaml")?;
             if let Some(value) = override_cfg.quic_bind {
                 config.quic_bind = value.parse().with_context(|| "parse quic_bind")?;
             }

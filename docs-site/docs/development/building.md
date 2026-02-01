@@ -142,12 +142,20 @@ cargo run --release -p broker --bin pubsub-demo-notifications
 # Orders/payments pipeline demo
 cargo run --release -p broker --bin pubsub-demo-orders
 
+# Live RBAC policy change demo (control plane + broker + token exchange)
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+
+# Cross-tenant isolation demo (control plane + broker + token exchange)
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
+
 # Or with Task
 task demo:pubsub
 task demo:cache
 task demo:latency
 task demo:notifications
 task demo:orders
+task demo:rbac-live
+task demo:cross-tenant-isolation
 ```
 
 ### Custom Demo Arguments
@@ -640,6 +648,8 @@ task demo:cache     # Run cache demo
 task demo:latency   # Run latency demo
 task demo:notifications  # Run notifications demo
 task demo:orders         # Run orders pipeline demo
+task demo:rbac-live      # Run live RBAC mutation demo
+task demo:cross-tenant-isolation  # Run cross-tenant isolation demo
 
 # Benchmarking
 task perf:latency-matrix  # Run full latency benchmark matrix

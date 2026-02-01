@@ -142,14 +142,18 @@ Verify end-to-end functionality with a self-contained demo (no separate broker r
 cargo run --release -p broker --bin pubsub-demo-simple
 ```
 
-Other demos you can try:
+Other demos you can try (including a control-plane RBAC mutation demo):
 
 ```bash
 cargo run --release -p broker --bin cache-demo
 cargo run --release -p broker --bin latency-demo
 cargo run --release -p broker --bin pubsub-demo-notifications
 cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
 ```
+
+Note: the cross-tenant isolation demo uses a Postgres-backed control plane.
 
 See the [Demos Overview](../demos/overview.md) for details and expected output.
 
@@ -264,14 +268,28 @@ Native Windows support is not currently tested.
 
 ## Docker (Alternative)
 
-A Docker image is available for quick testing (not recommended for production):
+Docker images can be built locally for quick testing (not recommended for production):
 
 ```bash
-# Build the image
-docker build -t felix-broker -f docker/Dockerfile .
+# Build the broker image
+docker build -t felix-broker -f docker/broker.Dockerfile .
 
 # Run the broker
 docker run -p 5000:5000/udp -p 8080:8080 felix-broker
+```
+
+### Control Plane Container
+
+Build and run the control plane in a separate container:
+
+```bash
+# Build the control plane image
+docker build -t felix-controlplane -f docker/controlplane.Dockerfile .
+
+# Run the control plane (example uses a local Postgres)
+docker run -p 8443:8443 \
+  -e FELIX_CONTROLPLANE_POSTGRES_URL=postgres://postgres:postgres@host.docker.internal:55432/postgres \
+  felix-controlplane
 ```
 
 See [Docker Compose Guide](../deployment/docker-compose.md) for orchestrated deployments.

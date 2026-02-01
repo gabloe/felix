@@ -9,7 +9,7 @@ Docker Compose provides an easy way to run Felix with multiple components:
 - **Felix broker**: Main data plane service
 - **Prometheus** (optional): Metrics collection
 - **OpenTelemetry Collector** (optional): Distributed tracing
-- **Control plane** (future): Metadata and coordination
+- **Control plane**: Metadata and coordination
 
 !!! info "Compose vs Kubernetes"
     Use Docker Compose for local development and testing. For production deployments with high availability, see the [Kubernetes guide](kubernetes.md).
@@ -81,6 +81,61 @@ docker compose logs -f felix-broker
 
 ```bash
 curl http://localhost:8080/healthz
+```
+
+### Broker + Control Plane (Local)
+
+Minimal broker + control plane stack with Postgres:
+
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "55432:5432"
+
+  felix-controlplane:
+    image: felix/controlplane:latest
+    build:
+      context: .
+      dockerfile: docker/controlplane.Dockerfile
+      args:
+        PROFILE: release
+    environment:
+      - FELIX_CONTROLPLANE_POSTGRES_URL=postgres://postgres:postgres@postgres:5432/postgres
+      - RUST_LOG=info
+    ports:
+      - "8443:8443"
+    depends_on:
+      - postgres
+
+  felix-broker:
+    image: felix/broker:latest
+    build:
+      context: .
+      dockerfile: docker/broker.Dockerfile
+      args:
+        PROFILE: release
+    ports:
+      - "5000:5000/udp"  # QUIC data plane
+      - "8080:8080"      # Metrics HTTP
+    environment:
+      - FELIX_QUIC_BIND=0.0.0.0:5000
+      - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
+      - FELIX_CONTROLPLANE_URL=http://felix-controlplane:8443
+      - RUST_LOG=info
+    depends_on:
+      - felix-controlplane
+```
+
+Start the stack:
+
+```bash
+docker compose up -d
 ```
 
 ### Full Stack with Observability

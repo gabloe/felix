@@ -23,8 +23,9 @@ tasks:
     env:
       FELIX_TEST_DATABASE_URL: '{{default "postgres://postgres:postgres@host.docker.internal:55432/postgres" .FELIX_TEST_DATABASE_URL}}'
     cmds:
+      - "task pg:down"
       - "task pg:up"
-      - "cargo llvm-cov --no-cfg-coverage --ignore-filename-regex 'demos/broker/.*demo.*|services/broker/src/auth_demo.rs' --skip-functions --all-features --workspace"
+      - "cargo llvm-cov --no-cfg-coverage --ignore-filename-regex '(^|.*/)demos/.*' --skip-functions --all-features --workspace"
       - "task pg:down"
   build:
     cmds: ["cargo build --workspace --release"]
@@ -75,8 +76,6 @@ tasks:
             exit 1
           fi
         done
-  demo:pubsub:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple"]
   demo:cache:
     cmds: ["cargo run --release -p broker --bin cache-demo"]
   demo:latency:
@@ -85,6 +84,17 @@ tasks:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications"]
   demo:orders:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-orders"]
+  demo:pubsub:
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple"]
+  demo:rbac-live:
+    cmds:
+      - "cargo run --manifest-path demos/rbac-live/Cargo.toml"
+  demo:cross-tenant-isolation:
+    cmds:
+      - "task pg:down"
+      - "task pg:up"
+      - "cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml"
+      - "task pg:down"
   perf:latency-matrix:
     cmds:
       - "python3 scripts/perf/run_latency_matrix.py"

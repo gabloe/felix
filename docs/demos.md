@@ -28,6 +28,64 @@ task <demo-task>
 
 ## Demo catalog
 
+### Live RBAC Policy Change (`demo-rbac-live`)
+
+Demonstrates a full end-to-end authorization flow using the real control plane,
+broker, and token exchange endpoints. It starts a fake ES256 OIDC IdP, bootstraps
+tenant configuration, performs publish/subscribe/cache operations that are
+initially denied, then applies RBAC updates via the control plane API and shows
+the same operations succeed without restarting services.
+
+This demo uses an in-memory control-plane store (no Postgres required).
+
+Run:
+
+```bash
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+```
+
+Or via Task:
+
+```bash
+task demo:rbac-live
+```
+
+Expected output includes step-by-step PASS/FAIL markers such as:
+
+```
+STEP 9 publish denied: PASS
+STEP 12 RBAC policies added: PASS
+STEP 15 publish allowed: PASS
+STEP 17 cache allowed: PASS
+```
+
+### Cross-Tenant Isolation (`demo-cross-tenant-isolation`)
+
+Demonstrates that Felix enforces tenant boundaries end-to-end. The demo boots a
+Postgres-backed control plane, a real broker, a fake ES256 OIDC IdP, and then
+shows that a token minted for `t1` cannot access `t2` resources. It also shows
+that a `t2` token without RBAC grants is denied in `t2`.
+
+Run:
+
+```bash
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
+```
+
+Or via Task:
+
+```bash
+task demo:cross-tenant-isolation
+```
+
+Expected output includes step-by-step PASS/FAIL markers such as:
+
+```
+STEP 13 t1 publish allowed: PASS
+STEP 16 t1 token on t2 publish denied: PASS
+STEP 19 t2 token publish denied: PASS
+```
+
 ### Pub/Sub Demo (`pubsub-demo-simple`)
 **What it shows**:
 - QUIC publish/subscribe round-trip

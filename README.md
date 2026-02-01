@@ -172,8 +172,13 @@ crates/
 
 services/
   broker             # broker service binary
-  controlplane       # control plane service (future)
+  controlplane       # control plane service
   agent              # node/infra agent (future)
+
+demos/
+  broker             # broker demo binaries
+  rbac-live          # live RBAC mutation demo (control plane + broker)
+  cross_tenant_isolation # cross-tenant isolation demo (Postgres + control plane + broker)
 
 docs/
   architecture.md    # system architecture
@@ -183,9 +188,16 @@ docs/
   todos.md           # implementation checklist
   assets/            # documentation images (logo, diagrams)
 
+docs-site/           # MkDocs site sources
+docker/              # local Docker assets
+scripts/             # developer tooling and utilities
+charts/              # Helm charts
+data/                # sample data and artifacts
 .github/             # CI workflows and repo metadata
 Taskfile.yml         # task runner shortcuts
 Cargo.toml           # workspace manifest
+mkdocs.yml           # MkDocs config
+deny.toml            # cargo-deny policy
 ```
 
 ---

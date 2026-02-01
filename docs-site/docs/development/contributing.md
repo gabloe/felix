@@ -379,7 +379,7 @@ use anyhow::{Context, Result};
 fn load_config(path: &str) -> Result<Config> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("Failed to read config from {}", path))?;
-    let config: Config = serde_yaml::from_str(&contents)
+    let config: Config = serde_yaml_ng::from_str(&contents)
         .context("Failed to parse config YAML")?;
     Ok(config)
 }

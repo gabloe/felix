@@ -313,6 +313,26 @@ cargo run --release -p broker --bin pubsub-demo-orders
 
 Optional flags: `--orders=12`, `--duplicate-every=5`, `--kill-worker=payments`.
 
+#### Live RBAC Policy Change
+
+```bash
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+```
+
+Demonstrates live RBAC updates via the control plane with real token exchange
+and broker authorization.
+Uses an in-memory control-plane store (no Postgres required).
+
+#### Cross-Tenant Isolation
+
+```bash
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
+```
+
+Demonstrates that tokens minted for one tenant cannot access another tenant's
+resources, even when the same upstream identity is used.
+Uses a Postgres-backed control plane (requires `task pg:up` or an external DB).
+
 ## Using Task Commands
 
 If you have [Task](https://taskfile.dev/) installed:
@@ -336,6 +356,8 @@ task demo:cache
 task demo:latency
 task demo:notifications
 task demo:orders
+task demo:rbac-live
+task demo:cross-tenant-isolation
 
 # Run conformance tests
 task conformance
