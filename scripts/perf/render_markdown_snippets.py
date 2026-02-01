@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "scripts" / "perf" / "presets.yml"
-OUTPUT_MD = ROOT / "charts" / "latencydemo" / "latencydemo_snippet.md"
+OUTPUT_MD = ROOT / "charts" / "latency_demo" / "latency_demo_snippet.md"
 
 
 def load_config(path: Path) -> dict:
@@ -25,7 +25,7 @@ def load_config(path: Path) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Render markdown embedding latencydemo charts.")
+    parser = argparse.ArgumentParser(description="Render markdown embedding latency_demo charts.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--output", default=str(OUTPUT_MD))
     args = parser.parse_args()
@@ -36,14 +36,14 @@ def main():
     batches = config.get("workload", {}).get("batch", [1, 64])
 
     lines = []
-    lines.append("## latencydemo charts")
+    lines.append("## latency_demo charts")
     lines.append("")
 
     for profile in profiles:
         lines.append(f"### {profile}")
         for fanout in fanouts:
             for batch in batches:
-                base = f"charts/latencydemo/{profile}/f{fanout}_b{batch}"
+                base = f"charts/latency_demo/{profile}/f{fanout}_b{batch}"
                 lines.append("")
                 lines.append(f"#### fanout={fanout} batch={batch}")
                 lines.append("")

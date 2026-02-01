@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "scripts" / "perf" / "presets.yml"
-AGG_CSV = ROOT / "data" / "derived" / "latencydemo_agg.csv"
-CHARTS_DIR = ROOT / "charts" / "latencydemo"
+AGG_CSV = ROOT / "data" / "derived" / "latency_demo_agg.csv"
+CHARTS_DIR = ROOT / "charts" / "latency_demo"
 
 
 def load_config(path: Path) -> dict:
@@ -172,7 +172,7 @@ def chart_group(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate clustered charts from latencydemo_agg.csv.")
+    parser = argparse.ArgumentParser(description="Generate clustered charts from latency_demo_agg.csv.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--input", default=str(AGG_CSV))
     parser.add_argument("--cap-percentile", type=float, default=None)
@@ -207,7 +207,7 @@ def main():
         git_sha = unique_or_mixed([r.get("git_sha") for r in group_rows])
 
         title_prefix = (
-            f"latencydemo {profile} fanout={fanout} batch={batch} "
+            f"latency_demo {profile} fanout={fanout} batch={batch} "
             f"binary={binary} warmup={warmup} total={total} trials={trials}"
         )
         footer = f"git {git_sha} | {date_str}"

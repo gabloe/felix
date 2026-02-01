@@ -19,7 +19,7 @@ Thumbs.db
 *.bak
 *.gz
 data/raw/stdout/
-data/raw/latencydemo_runs.jsonl
+data/raw/latency_demo_runs.jsonl
 coverage.json
 lcov.info
 # MkDocs build output

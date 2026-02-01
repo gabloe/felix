@@ -167,14 +167,18 @@ cd felix
 # Build the workspace
 cargo build --workspace --release
 
-# Run the broker
+# Run the broker (optional for demos)
 cargo run --release -p broker
 
-# Run a demo
-cargo run --release -p broker --bin pubsubdemo
+# Run a demo (self-contained)
+cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p broker --bin cache-demo
+cargo run --release -p broker --bin latency-demo
+cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p broker --bin pubsub-demo-orders
 ```
 
-See the [Quickstart Guide](getting-started/quickstart.md) for detailed instructions.
+See the [Demos Overview](demos/overview.md) or the [Quickstart Guide](getting-started/quickstart.md) for detailed instructions.
 
 ## Community & Support
 

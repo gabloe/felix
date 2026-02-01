@@ -59,7 +59,7 @@ Performance knobs
   timings and frame counters. Default builds compile telemetry out
   (`cfg(feature = "telemetry")`, no runtime branches when disabled) to avoid
   instrumentation overhead on hot paths.
-- Telemetry overhead is workload-dependent. Example (`latencydemo`,
+- Telemetry overhead is workload-dependent. Example (`latency-demo`,
   localhost, payload=4096B, fanout=1, batch=64, 10 runs): medians were similar
   with and without telemetry, but tail latency showed higher variance. Text:
   p999 median 5.15ms (min/max 3.27/8.89) vs 4.82ms (3.24/12.47);

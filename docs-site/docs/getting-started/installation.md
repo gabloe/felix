@@ -136,17 +136,22 @@ Press `Ctrl+C` to stop the broker.
 
 ### Run a Demo
 
-Verify end-to-end functionality with the pub/sub demo:
+Verify end-to-end functionality with a self-contained demo (no separate broker required):
 
 ```bash
-# Start the broker in one terminal
-cargo run --release -p broker
-
-# In another terminal, run the demo
-cargo run --release -p broker --bin pubsubdemo
+cargo run --release -p broker --bin pubsub-demo-simple
 ```
 
-The demo should complete successfully with message delivery confirmation.
+Other demos you can try:
+
+```bash
+cargo run --release -p broker --bin cache-demo
+cargo run --release -p broker --bin latency-demo
+cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p broker --bin pubsub-demo-orders
+```
+
+See the [Demos Overview](../demos/overview.md) for details and expected output.
 
 ## Optional Tools
 

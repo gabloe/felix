@@ -259,14 +259,18 @@ services/
 │   ├── src/
 │   │   ├── main.rs      # Broker entrypoint
 │   │   ├── config.rs    # Configuration loading
-│   │   └── bin/         # Demo applications
-│   │       ├── pubsubdemo.rs
-│   │       ├── cachedemo.rs
-│   │       └── latencydemo.rs
 │   ├── Cargo.toml
 │   └── README.md        # Performance profiles
 ├── controlplane/        # Control plane (future)
 └── agent/               # Infrastructure agent (future)
+
+demos/
+└── broker/              # Demo binaries for the broker crate
+    ├── pubsubdemo.rs
+    ├── cachedemo.rs
+    ├── latencydemo.rs
+    ├── notifications_demo.rs
+    └── orders_demo.rs
 ```
 
 ### Broker Service
@@ -282,11 +286,13 @@ services/
 - Expose metrics endpoint
 - Handle graceful shutdown
 
-**Demo binaries**:
+**Demo binaries** (see `demos/broker/`):
 
 - **`pubsubdemo.rs`**: Pub/sub demonstration
 - **`cachedemo.rs`**: Cache benchmark
 - **`latencydemo.rs`**: Latency measurement tool
+- **`notifications_demo.rs`**: Multi-tenant notifications workflow demo
+- **`orders_demo.rs`**: Orders/payments pipeline demo
 
 ## Documentation
 
@@ -297,6 +303,7 @@ Architecture and design documentation:
 ```
 docs/
 ├── architecture.md      # System architecture overview
+├── demos.md             # Demo catalog and run instructions
 ├── protocol.md          # Wire protocol specification
 ├── control-plane.md     # Control plane design
 ├── semantics.md         # Delivery semantics

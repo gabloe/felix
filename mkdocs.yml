@@ -93,6 +93,10 @@ nav:
     - Overview: getting-started/overview.md
     - Quickstart: getting-started/quickstart.md
     - Installation: getting-started/installation.md
+  - Demos:
+    - Overview: demos/overview.md
+    - Notifications: demos/notifications.md
+    - Orders Pipeline: demos/orders.md
   - Architecture:
     - System Design: architecture/system-design.md
     - Components: architecture/components.md

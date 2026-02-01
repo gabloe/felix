@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "scripts" / "perf" / "presets.yml"
 RAW_DIR = ROOT / "data" / "raw"
 STDOUT_DIR = RAW_DIR / "stdout"
-RAW_JSONL = RAW_DIR / "latencydemo_runs.jsonl"
+RAW_JSONL = RAW_DIR / "latency_demo_runs.jsonl"
 
 DURATION_RE = re.compile(r"^([0-9]*\.?[0-9]+)\s*(us|ms)$")
 RESULTS_RE = re.compile(
@@ -213,7 +213,7 @@ def build_matrix(config: dict, trials: int, binary_override=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run latencydemo across a matrix.")
+    parser = argparse.ArgumentParser(description="Run latency_demo across a matrix.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--trials", type=int, default=None)
     parser.add_argument("--filter", default="")
@@ -253,7 +253,7 @@ def main():
                 "-p",
                 "broker",
                 "--bin",
-                "latencydemo",
+                "latency_demo",
                 "--",
             ]
             if item["binary"]:
@@ -325,7 +325,7 @@ def main():
                 "-p",
                 "broker",
                 "--bin",
-                "latencydemo",
+                "latency_demo",
                 "--",
             ]
             if item["binary"]:

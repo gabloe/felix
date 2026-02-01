@@ -46,37 +46,51 @@ The broker is now ready to accept connections!
 
 ## Run a Demo
 
-Felix includes several demonstration programs. Open a new terminal and try the pub/sub demo:
+Felix includes several self-contained demos that start an in-process broker and QUIC server.
+You do not need to run the broker separately for these demos.
 
 ```bash
-cargo run --release -p broker --bin pubsubdemo
+cargo run --release -p broker --bin pubsub-demo-simple
 ```
 
 This demo:
 
 1. Creates a client connection to the broker
 2. Subscribes to a test stream
-3. Publishes messages to that stream
-4. Displays received events
+3. Publishes two messages to that stream
+4. Displays the received events
 
 **Sample output:**
 
 ```
-Subscriber task started
-Published 100 messages
-Received event: payload #0
-Received event: payload #1
-Received event: payload #2
-...
-Demo completed: 100/100 messages delivered
+== Felix QUIC Pub/Sub Demo ==
+Step 1/6: booting in-process broker + QUIC server.
+Step 2/6: connecting QUIC client.
+Step 3/6: opening a subscription stream.
+Step 4/6: publishing two messages on the same stream.
+Step 5/6: receiving events.
+Event on demo-topic: hello
+Event on demo-topic: world
+Demo complete.
 ```
+
+**More demos:**
+
+```bash
+cargo run --release -p broker --bin cache-demo
+cargo run --release -p broker --bin latency-demo
+cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p broker --bin pubsub-demo-orders
+```
+
+See the [Demos Overview](../demos/overview.md) for details on what each demo does and what to expect.
 
 ## Try the Cache
 
 Run the cache demonstration:
 
 ```bash
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 This benchmarks cache operations (put, get_hit, get_miss) across various payload sizes and measures latency/throughput.
@@ -182,10 +196,10 @@ Run the latency demo with various configurations:
 
 ```bash
 # Basic run with defaults
-cargo run --release -p broker --bin latencydemo
+cargo run --release -p broker --bin latency-demo
 
 # Custom configuration
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -206,7 +220,7 @@ cargo run --release -p broker --bin latencydemo -- \
 ### Cache Benchmark
 
 ```bash
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 Measures cache operations at various payload sizes with configurable concurrency.
@@ -270,9 +284,11 @@ task fmt
 task lint
 
 # Run demos
-task demo-pubsub
-task demo-cache
-task demo-latency
+task demo:pubsub
+task demo:cache
+task demo:latency
+task demo:notifications
+task demo:orders
 ```
 
 See `Taskfile.yml` in the repository root for all available tasks.

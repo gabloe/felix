@@ -24,14 +24,14 @@ tasks:
       FELIX_TEST_DATABASE_URL: '{{default "postgres://postgres:postgres@host.docker.internal:55432/postgres" .FELIX_TEST_DATABASE_URL}}'
     cmds:
       - "task pg:up"
-      - "cargo llvm-cov --no-cfg-coverage --ignore-filename-regex 'services/broker/src/bin/.*demo.*|services/broker/src/auth_demo.rs' --skip-functions --all-features --workspace"
+      - "cargo llvm-cov --no-cfg-coverage --ignore-filename-regex 'demos/broker/.*demo.*|services/broker/src/auth_demo.rs' --skip-functions --all-features --workspace"
       - "task pg:down"
   build:
     cmds: ["cargo build --workspace --release"]
   clean:
     cmds:
       - "cargo clean"
-      - "rm -rf data/raw/stdout data/raw/latencydemo_runs.jsonl"
+      - "rm -rf data/raw/stdout data/raw/latency_demo_runs.jsonl"
   clean-all:
     cmds: ["rm -rf target"]
   deny:
@@ -75,14 +75,16 @@ tasks:
             exit 1
           fi
         done
-  demo:
-    cmds: ["cargo run --release -p broker --bin pubsubdemo"]
-  demo-pubsub:
-    cmds: ["cargo run --release -p broker --bin pubsubdemo"]
-  demo-cache:
-    cmds: ["cargo run --release -p broker --bin cachedemo"]
-  demo-latency:
-    cmds: ["cargo run --release -p broker --bin latencydemo"]
+  demo:pubsub:
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple"]
+  demo:cache:
+    cmds: ["cargo run --release -p broker --bin cache-demo"]
+  demo:latency:
+    cmds: ["cargo run --release -p broker --bin latency-demo"]
+  demo:notifications:
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications"]
+  demo:orders:
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-orders"]
   perf:latency-matrix:
     cmds:
       - "python3 scripts/perf/run_latency_matrix.py"
