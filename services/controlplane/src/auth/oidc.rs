@@ -16,6 +16,8 @@
 //! - Only ES256 is accepted by default; RS256 is allowed only when the
 //!   `oidc-rsa` feature is enabled. Felix tokens are EdDSA and handled in a
 //!   separate module.
+//! - RS256 is not accepted by default because of the Marvin side-channel attack
+//!   which currently has no known mitigations in Rust's crypto libraries.
 //! - Issuer and audience claims are validated against configuration.
 //! - JWKS and discovery caches are time-bounded and refreshed on demand.
 //!

@@ -137,18 +137,41 @@ pub fn reset_frame_counters() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static COUNTER_TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    #[cfg(feature = "telemetry")]
+    use super::Ordering;
 
     #[test]
     fn frame_counters_snapshot_returns_values() {
+        let _guard = COUNTER_TEST_GUARD.lock().expect("counter guard");
+        reset_frame_counters();
         let snapshot = frame_counters_snapshot();
-        // Just verify it returns a snapshot (all zeros in non-telemetry mode)
-        assert_eq!(snapshot.frames_in_ok, 0);
-        assert_eq!(snapshot.frames_in_err, 0);
-        assert_eq!(snapshot.frames_out_ok, 0);
+        #[cfg(not(feature = "telemetry"))]
+        {
+            // Just verify it returns a snapshot (all zeros in non-telemetry mode).
+            assert_eq!(snapshot.frames_in_ok, 0);
+            assert_eq!(snapshot.frames_in_err, 0);
+            assert_eq!(snapshot.frames_out_ok, 0);
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            let counters = frame_counters();
+            counters.frames_in_ok.fetch_add(2, Ordering::Relaxed);
+            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+            counters.frames_out_ok.fetch_add(3, Ordering::Relaxed);
+            let updated = frame_counters_snapshot();
+            assert!(updated.frames_in_ok >= snapshot.frames_in_ok + 2);
+            assert!(updated.frames_in_err > snapshot.frames_in_err);
+            assert!(updated.frames_out_ok >= snapshot.frames_out_ok + 3);
+        }
     }
 
     #[test]
     fn reset_frame_counters_does_not_panic() {
+        let _guard = COUNTER_TEST_GUARD.lock().expect("counter guard");
         reset_frame_counters();
         // Just ensure it doesn't panic
     }

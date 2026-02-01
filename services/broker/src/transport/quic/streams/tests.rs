@@ -563,6 +563,72 @@ fn binary_publish_batch_frame(
     Frame::decode(bytes).expect("decode frame")
 }
 
+async fn run_control_loop_with_frames(
+    broker: Arc<Broker>,
+    auth: Arc<BrokerAuth>,
+    frames: Vec<Result<Option<Frame>>>,
+    config: BrokerConfig,
+) -> Result<(bool, Vec<Outgoing>)> {
+    let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let _connection = server.accept().await?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Result::<()>::Ok(())
+    });
+
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert)?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+
+    let mut source = TestFrameSource::new(frames);
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
+    let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(8);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let result = run_control_loop(
+        &mut source,
+        Arc::clone(&broker),
+        connection,
+        config,
+        auth,
+        publish_ctx,
+        HashMap::new(),
+        String::new(),
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_rx,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        Arc::new(Semaphore::new(8)),
+        ack_waiter_tx,
+        Duration::from_millis(10),
+        &mut scratch,
+    )
+    .await?;
+
+    let mut messages = Vec::new();
+    while let Ok(message) = out_ack_rx.try_recv() {
+        messages.push(message);
+    }
+
+    server_task.await.context("server task")??;
+    Ok((result, messages))
+}
+
 #[tokio::test]
 // This test prevents regressions in `control_loop_handles_publish_and_cache_requests` behavior.
 async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
@@ -665,6 +731,578 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
     .await?;
     assert!(!result);
     server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_rejects_second_auth() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(matches!(
+        messages.first(),
+        Some(Outgoing::Message(Message::Ok))
+    ));
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth already established")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_rejects_auth_failed() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![Ok(Some(frame_from_message(Message::Auth {
+        tenant_id: "t1".to_string(),
+        token: "invalid".to_string(),
+    })))];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth failed")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_rejects_binary_publish_batch_without_auth() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream("t1", "default", "updates", Default::default())
+        .await?;
+    let auth = auth_fixture("t1", default_perms());
+    let binary =
+        binary_publish_batch_frame("t1", "default", "updates", &[Bytes::from_static(b"one")]);
+    let frames = vec![Ok(Some(binary))];
+    let (result, messages) = run_control_loop_with_frames(
+        Arc::clone(&broker),
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_rejects_publish_batch_forbidden() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream("t1", "default", "updates", Default::default())
+        .await?;
+    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:*/*".to_string()]);
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::PublishBatch {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            payloads: vec![b"a".to_vec()],
+            request_id: Some(9),
+            ack: Some(felix_wire::AckMode::None),
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        Arc::clone(&broker),
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::PublishError { request_id: 9, message }) if message.contains("forbidden")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_publish_without_auth_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![Ok(Some(frame_from_message(Message::Publish {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        stream: "updates".to_string(),
+        payload: b"payload".to_vec(),
+        request_id: Some(10),
+        ack: Some(felix_wire::AckMode::PerMessage),
+    })))];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_publish_forbidden_without_request_id_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", vec![]);
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            payload: b"payload".to_vec(),
+            request_id: None,
+            ack: Some(felix_wire::AckMode::PerMessage),
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_publish_tenant_mismatch_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Publish {
+            tenant_id: "t2".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            payload: b"payload".to_vec(),
+            request_id: Some(12),
+            ack: Some(felix_wire::AckMode::PerMessage),
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_subscribe_forbidden_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", vec![]);
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Subscribe {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            subscription_id: None,
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_subscribe_returns_true() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Subscribe {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "missing".to_string(),
+            subscription_id: None,
+        }))),
+    ];
+    let (result, _messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_subscribe_tenant_mismatch_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::Subscribe {
+            tenant_id: "t2".to_string(),
+            namespace: "default".to_string(),
+            stream: "updates".to_string(),
+            subscription_id: None,
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_forbidden_sends_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", vec![]);
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: Some(33),
+            ttl_ms: None,
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_best_effort_closed_reports_error() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .await?;
+    let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let auth = auth_fixture("t1", default_perms());
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let _connection = server.accept().await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Result::<()>::Ok(())
+    });
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert.clone())?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: None,
+            ttl_ms: None,
+        }))),
+    ];
+    let mut source = TestFrameSource::new(frames);
+    let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
+    drop(out_ack_rx);
+    let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(8);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let result = run_control_loop(
+        &mut source,
+        broker,
+        connection,
+        BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
+        publish_ctx,
+        HashMap::new(),
+        String::new(),
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_rx,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        Arc::new(Semaphore::new(8)),
+        ack_waiter_tx,
+        Duration::from_millis(10),
+        &mut scratch,
+    )
+    .await;
+    assert!(result.is_err());
+    server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_missing_scope_with_request_id_continues() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "missing".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: Some(34),
+            ttl_ms: None,
+        }))),
+        Ok(None),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::CacheMessage(Message::Error { message }) if message.contains("cache scope not found")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_rejects_subscribe_without_auth() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![Ok(Some(frame_from_message(Message::Subscribe {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        stream: "updates".to_string(),
+        subscription_id: Some(1),
+    })))];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_get_missing_scope_with_request_id_continues() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "missing".to_string(),
+            key: "key".to_string(),
+            request_id: Some(42),
+        }))),
+        Ok(None),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::CacheMessage(Message::Error { message }) if message.contains("cache scope not found")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_records_timing_and_ack() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .await?;
+    let auth = auth_fixture("t1", default_perms());
+    timings::enable_collection(1);
+    timings::set_enabled(true);
+
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: Some(7),
+            ttl_ms: None,
+        }))),
+        Ok(None),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::CacheMessage(Message::CacheOk { request_id: 7 })
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_get_rejects_missing_auth() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![Ok(Some(frame_from_message(Message::CacheGet {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        cache: "primary".to_string(),
+        key: "key".to_string(),
+        request_id: Some(1),
+    })))];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_cache_put_rejects_tenant_mismatch() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let frames = vec![
+        Ok(Some(frame_from_message(auth_message(&auth)))),
+        Ok(Some(frame_from_message(Message::CachePut {
+            tenant_id: "t2".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: "key".to_string(),
+            value: Bytes::from_static(b"value"),
+            request_id: Some(2),
+            ttl_ms: None,
+        }))),
+    ];
+    let (result, messages) = run_control_loop_with_frames(
+        broker,
+        Arc::clone(&auth.auth),
+        frames,
+        BrokerConfig::from_env()?,
+    )
+    .await?;
+    assert!(!result);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+    )));
     Ok(())
 }
 
@@ -808,6 +1446,70 @@ async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
     )
     .await?;
     assert!(!result);
+    server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_loop_handles_cancel_toggle_and_continues() -> Result<()> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    let auth = auth_fixture("t1", default_perms());
+    let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let _connection = server.accept().await?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Result::<()>::Ok(())
+    });
+
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert.clone())?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+
+    let mut source = DelayFrameSource {
+        delay: Duration::from_millis(20),
+    };
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
+    tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
+    let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let _ = cancel_tx.send(true);
+    let _ = cancel_tx.send(false);
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(8);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let result = run_control_loop(
+        &mut source,
+        Arc::clone(&broker),
+        connection,
+        BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
+        publish_ctx,
+        HashMap::new(),
+        String::new(),
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_rx,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        Arc::new(Semaphore::new(8)),
+        ack_waiter_tx,
+        Duration::from_millis(10),
+        &mut scratch,
+    )
+    .await?;
+    assert!(result);
     server_task.await.context("server task")??;
     Ok(())
 }
@@ -2312,6 +3014,89 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
     )
     .await?;
     assert!(result);
+    server_task.await.context("server task")??;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+#[cfg(feature = "telemetry")]
+async fn control_loop_cache_get_records_lookup_timing() -> Result<()> {
+    timings::enable_collection(1);
+    timings::set_enabled(true);
+    let _ = timings::take_cache_samples();
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .await?;
+    let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
+    let auth = auth_fixture("t1", default_perms());
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+    let server_task = tokio::spawn(async move {
+        let _connection = server.accept().await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Result::<()>::Ok(())
+    });
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert.clone())?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+
+    let mut frames = Vec::new();
+    frames.push(Ok(Some(frame_from_message(auth_message(&auth)))));
+    for idx in 0..128u64 {
+        frames.push(Ok(Some(frame_from_message(Message::CacheGet {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            cache: "primary".to_string(),
+            key: format!("key-{idx}"),
+            request_id: Some(idx),
+        }))));
+    }
+    frames.push(Ok(None));
+    let mut source = TestFrameSource::new(frames);
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
+    tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
+    let (ack_throttle_tx, ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(8);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now())));
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let result = run_control_loop(
+        &mut source,
+        broker,
+        connection,
+        BrokerConfig::from_env()?,
+        Arc::clone(&auth.auth),
+        publish_ctx,
+        HashMap::new(),
+        String::new(),
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_rx,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        cancel_rx,
+        Arc::new(Semaphore::new(8)),
+        ack_waiter_tx,
+        Duration::from_millis(10),
+        &mut scratch,
+    )
+    .await?;
+    assert!(result);
+    let samples = timings::take_cache_samples().expect("cache samples");
+    assert!(!samples.2.is_empty(), "lookup samples should be recorded");
     server_task.await.context("server task")??;
     Ok(())
 }

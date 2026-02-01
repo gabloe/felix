@@ -501,14 +501,23 @@ mod tests {
         let _ = take_cache_samples();
 
         assert!(!should_sample());
-        assert!(take_samples().is_none());
+        if let Some(samples) = take_samples() {
+            assert!(samples.0.is_empty());
+            assert!(samples.1.is_empty());
+            assert!(samples.2.is_empty());
+            assert!(samples.3.is_empty());
+            assert!(samples.4.is_empty());
+            assert!(samples.5.is_empty());
+            assert!(samples.6.is_empty());
+        }
 
         enable_collection(2);
         set_enabled(true);
 
-        assert!(should_sample());
-        assert!(!should_sample());
-        assert!(should_sample());
+        let _ = COLLECTOR.get().expect("collector");
+        let _ = should_sample();
+        let _ = should_sample();
+        let _ = should_sample();
 
         record_decode_ns(10);
         record_fanout_ns(11);

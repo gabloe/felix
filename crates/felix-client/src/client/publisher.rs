@@ -628,6 +628,11 @@ pub(crate) async fn drain_publish_queue(rx: &mut mpsc::Receiver<PublishRequest>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+    use felix_transport::{QuicClient, QuicServer, TransportConfig};
+    use rcgen::generate_simple_self_signed;
+    use rustls::RootCertStore;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::sync::atomic::Ordering;
 
     fn make_publisher(sharding: PublishSharding, workers: usize) -> Publisher {
@@ -711,6 +716,82 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "telemetry")]
+    async fn publish_records_enqueue_timings_when_sampling() {
+        crate::timings::enable_collection(1);
+        let publisher = make_publisher(PublishSharding::RoundRobin, 1);
+        publisher
+            .publish("t", "ns", "s", b"payload".to_vec(), AckMode::None)
+            .await
+            .expect("publish");
+        publisher
+            .publish_batch(
+                "t",
+                "ns",
+                "s",
+                vec![b"a".to_vec(), b"b".to_vec()],
+                AckMode::PerBatch,
+            )
+            .await
+            .expect("publish batch");
+        publisher
+            .publish_batch_binary("t", "ns", "s", &[b"a".to_vec(), b"b".to_vec()])
+            .await
+            .expect("publish batch binary");
+        publisher.finish().await.expect("finish");
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "telemetry")]
+    async fn publish_batch_binary_appends_bench_ts_when_enabled() -> Result<()> {
+        use crate::config::{
+            ClientRuntimeConfig, DEFAULT_EVENT_ROUTER_MAX_PENDING, DEFAULT_MAX_FRAME_BYTES,
+            install_runtime_config_for_tests, reset_runtime_config_for_tests,
+        };
+
+        reset_runtime_config_for_tests();
+        install_runtime_config_for_tests(ClientRuntimeConfig {
+            event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            bench_embed_ts: true,
+        });
+
+        let (tx, mut rx) = mpsc::channel::<PublishRequest>(1);
+        let handle = tokio::spawn(async move {
+            if let Some(PublishRequest::BinaryBytes {
+                bytes, response, ..
+            }) = rx.recv().await
+            {
+                let frame = felix_wire::Frame::decode(bytes).context("decode frame")?;
+                let decoded = felix_wire::binary::decode_publish_batch(&frame)
+                    .context("decode publish batch")?;
+                assert_eq!(decoded.payloads.len(), 1);
+                assert!(decoded.payloads[0].len() > 1);
+                let _ = response.send(Ok(()));
+            }
+            Ok(())
+        });
+
+        let publisher = Publisher {
+            inner: Arc::new(PublisherInner {
+                workers: Arc::new(vec![PublishWorker {
+                    tx,
+                    handle: tokio::sync::Mutex::new(Some(handle)),
+                    request_counter: AtomicU64::new(1),
+                }]),
+                sharding: PublishSharding::RoundRobin,
+                rr: AtomicUsize::new(0),
+            }),
+        };
+        publisher
+            .publish_batch_binary("t", "ns", "s", &[b"x".to_vec()])
+            .await
+            .expect("publish batch binary");
+        publisher.finish().await.expect("finish");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn select_worker_round_robin_advances() {
         let publisher = make_publisher(PublishSharding::RoundRobin, 2);
         let rr_start = publisher.inner.rr.load(Ordering::Relaxed);
@@ -723,5 +804,319 @@ mod tests {
         let rr_end = publisher.inner.rr.load(Ordering::Relaxed);
         assert!(rr_end >= rr_start + 2);
         publisher.finish().await.expect("finish");
+    }
+
+    fn make_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
+        let cert = generate_simple_self_signed(vec!["localhost".into()])
+            .context("generate self-signed cert")?;
+        let cert_der = CertificateDer::from(cert.serialize_der()?);
+        let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+        let server_config = quinn::ServerConfig::with_single_cert(
+            vec![cert_der.clone()],
+            PrivateKeyDer::Pkcs8(key_der),
+        )
+        .context("build server config")?;
+        Ok((server_config, cert_der))
+    }
+
+    fn make_client_config(cert: CertificateDer<'static>) -> Result<quinn::ClientConfig> {
+        let mut roots = RootCertStore::empty();
+        roots.add(cert).context("add root cert")?;
+        Ok(quinn::ClientConfig::with_root_certificates(
+            std::sync::Arc::new(roots),
+        )?)
+    }
+
+    #[tokio::test]
+    async fn finish_publisher_stream_drains_recv() -> Result<()> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            let _ = recv.read_to_end(1024).await?;
+            send.write_all(b"pong").await?;
+            send.finish()?;
+            let _ = send.stopped().await;
+            Result::<()>::Ok(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (mut send, mut recv) = connection.open_bi().await?;
+        send.write_all(b"ping").await?;
+
+        finish_publisher_stream(&mut send, &mut recv).await?;
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finish_skips_finish_request_when_channel_closed() {
+        let (tx, rx) = mpsc::channel::<PublishRequest>(1);
+        drop(rx);
+        let handle = tokio::spawn(async { Ok(()) });
+        let publisher = Publisher {
+            inner: Arc::new(PublisherInner {
+                workers: Arc::new(vec![PublishWorker {
+                    tx,
+                    handle: tokio::sync::Mutex::new(Some(handle)),
+                    request_counter: AtomicU64::new(1),
+                }]),
+                sharding: PublishSharding::RoundRobin,
+                rr: AtomicUsize::new(0),
+            }),
+        };
+        publisher.finish().await.expect("finish");
+    }
+
+    #[tokio::test]
+    async fn run_publisher_writer_publish_batch_no_ack_ok() -> Result<()> {
+        crate::timings::enable_collection(1);
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (_send, mut recv) = connection.accept_bi().await?;
+            let drain_task = tokio::spawn(async move {
+                let _ = recv.read_to_end(1024 * 1024).await;
+            });
+            let _ = shutdown_rx.await;
+            drain_task.abort();
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (client_send, client_recv) = connection.open_bi().await?;
+        let (tx, rx) = mpsc::channel(4);
+        let writer_task = tokio::spawn(run_publisher_writer(client_send, client_recv, rx, 1024));
+
+        let (response_tx, response_rx) = oneshot::channel();
+        tx.send(PublishRequest::Message {
+            message: Message::PublishBatch {
+                tenant_id: "t1".to_string(),
+                namespace: "ns".to_string(),
+                stream: "s".to_string(),
+                payloads: vec![b"a".to_vec(), b"b".to_vec()],
+                request_id: None,
+                ack: Some(AckMode::None),
+            },
+            ack: AckMode::None,
+            request_id: None,
+            response: response_tx,
+        })
+        .await
+        .context("send request")?;
+
+        let response = response_rx.await.context("response dropped");
+        drop(tx);
+        let _ = shutdown_tx.send(());
+        let writer_result = writer_task.await.context("writer join");
+        let server_result = server_task.await.context("server join");
+        if let Err(err) = server_result {
+            return Err(err);
+        }
+        if let Err(err) = writer_result {
+            return Err(err);
+        }
+        if let Err(err) = response {
+            return Err(err.context("publish batch response"));
+        }
+        writer_result.unwrap()?;
+        server_result.unwrap()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_publisher_writer_binary_bytes_success() -> Result<()> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (_send, mut recv) = connection.accept_bi().await?;
+            let drain_task = tokio::spawn(async move {
+                let _ = recv.read_to_end(1024 * 1024).await;
+            });
+            let _ = shutdown_rx.await;
+            drain_task.abort();
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (client_send, client_recv) = connection.open_bi().await?;
+        let (tx, rx) = mpsc::channel(4);
+        let writer_task = tokio::spawn(run_publisher_writer(client_send, client_recv, rx, 1024));
+
+        let payloads = vec![b"p1".to_vec(), b"p2".to_vec()];
+        let (bytes, _) =
+            felix_wire::binary::encode_publish_batch_bytes_with_stats("t1", "ns", "s", &payloads)?;
+        let (response_tx, response_rx) = oneshot::channel();
+        tx.send(PublishRequest::BinaryBytes {
+            bytes,
+            item_count: payloads.len(),
+            sample: false,
+            response: response_tx,
+        })
+        .await
+        .context("send binary request")?;
+
+        let response = response_rx.await.context("response dropped");
+        drop(tx);
+        let _ = shutdown_tx.send(());
+        let writer_result = writer_task.await.context("writer join");
+        let server_result = server_task.await.context("server join");
+        if let Err(err) = server_result {
+            return Err(err);
+        }
+        if let Err(err) = writer_result {
+            return Err(err);
+        }
+        if let Err(err) = response {
+            return Err(err.context("binary batch response"));
+        }
+        writer_result.unwrap()?;
+        server_result.unwrap()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_publisher_writer_error_drains_queue() -> Result<()> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            let mut scratch = BytesMut::new();
+            let frame = crate::wire::read_frame_into(&mut recv, &mut scratch, false)
+                .await?
+                .context("missing publish frame")?;
+            let message = Message::decode(frame).context("decode message")?;
+            let request_id = match message {
+                Message::Publish { request_id, .. } => request_id,
+                other => return Err(anyhow::anyhow!("unexpected message: {other:?}")),
+            }
+            .context("missing request_id")?;
+            let ack = Message::PublishError {
+                request_id,
+                message: "denied".to_string(),
+            };
+            let frame = ack.encode().context("encode ack")?;
+            send.write_all(&frame.encode()).await.context("write ack")?;
+            send.finish().context("finish ack")?;
+            let _ = recv.read_to_end(1024 * 1024).await;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (send, recv) = connection.open_bi().await?;
+
+        let (tx, rx) = mpsc::channel(4);
+        let writer_task = tokio::spawn(run_publisher_writer(send, recv, rx, 1024));
+
+        let (resp_tx1, resp_rx1) = oneshot::channel();
+        let (resp_tx2, resp_rx2) = oneshot::channel();
+        tx.send(PublishRequest::Message {
+            message: Message::Publish {
+                tenant_id: "t1".to_string(),
+                namespace: "ns".to_string(),
+                stream: "s".to_string(),
+                payload: b"bad".to_vec(),
+                request_id: Some(1),
+                ack: Some(AckMode::PerMessage),
+            },
+            ack: AckMode::PerMessage,
+            request_id: Some(1),
+            response: resp_tx1,
+        })
+        .await
+        .context("send request1")?;
+        tx.send(PublishRequest::Message {
+            message: Message::Publish {
+                tenant_id: "t1".to_string(),
+                namespace: "ns".to_string(),
+                stream: "s".to_string(),
+                payload: b"queued".to_vec(),
+                request_id: Some(2),
+                ack: Some(AckMode::PerMessage),
+            },
+            ack: AckMode::PerMessage,
+            request_id: Some(2),
+            response: resp_tx2,
+        })
+        .await
+        .context("send request2")?;
+        drop(tx);
+
+        let err1 = resp_rx1.await.context("resp1 drop")?.expect_err("err1");
+        assert!(err1.to_string().contains("denied"));
+        let err2 = resp_rx2.await.context("resp2 drop")?.expect_err("err2");
+        assert!(err2.to_string().contains("denied"));
+
+        let writer_err = writer_task.await.context("writer join")?;
+        assert!(writer_err.is_err());
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_publish_queue_returns_errors() {
+        let (tx, mut rx) = mpsc::channel::<PublishRequest>(4);
+        let (resp_tx1, resp_rx1) = oneshot::channel();
+        let (resp_tx2, resp_rx2) = oneshot::channel();
+        let (resp_tx3, resp_rx3) = oneshot::channel();
+
+        tx.send(PublishRequest::Message {
+            message: Message::Publish {
+                tenant_id: "t".to_string(),
+                namespace: "ns".to_string(),
+                stream: "s".to_string(),
+                payload: vec![],
+                request_id: None,
+                ack: Some(AckMode::None),
+            },
+            ack: AckMode::None,
+            request_id: None,
+            response: resp_tx1,
+        })
+        .await
+        .expect("send message");
+        tx.send(PublishRequest::BinaryBytes {
+            bytes: Bytes::from_static(b"bin"),
+            item_count: 1,
+            sample: false,
+            response: resp_tx2,
+        })
+        .await
+        .expect("send binary");
+        tx.send(PublishRequest::Finish { response: resp_tx3 })
+            .await
+            .expect("send finish");
+        drop(tx);
+
+        drain_publish_queue(&mut rx, "closed").await;
+
+        let err1 = resp_rx1.await.expect("resp1").expect_err("expected error");
+        let err2 = resp_rx2.await.expect("resp2").expect_err("expected error");
+        let err3 = resp_rx3.await.expect("resp3").expect_err("expected error");
+        assert!(err1.to_string().contains("closed"));
+        assert!(err2.to_string().contains("closed"));
+        assert!(err3.to_string().contains("closed"));
     }
 }

@@ -62,6 +62,24 @@ pub enum StoreError {
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
+impl From<sqlx::Error> for StoreError {
+    fn from(err: sqlx::Error) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for StoreError {
+    fn from(err: sqlx::migrate::MigrateError) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
+impl From<serde_json::Error> for StoreError {
+    fn from(err: serde_json::Error) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
 #[async_trait]
 pub trait ControlPlaneStore: Send + Sync {
     async fn list_tenants(&self) -> StoreResult<Vec<Tenant>>;
