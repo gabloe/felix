@@ -38,7 +38,43 @@ tasks:
     cmds:
       - "cargo install cargo-deny --version 0.19.0 --locked"
       - "cargo-deny check"
-      - "if cargo tree -i rsa | rg -q \"rsa v\"; then echo \"rsa crate detected in dependency tree\"; exit 1; fi"
+  deny:rsa:default:
+    cmds:
+      - |
+        set +e
+        tree=$(cargo tree -i rsa 2>/dev/null)
+        status=$?
+        set -e
+        if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
+          echo "$tree"
+          echo "rsa crate detected in default dependency tree"
+          exit 1
+        fi
+  deny:rsa:oidc:
+    cmds:
+      - |
+        set +e
+        tree=$(cargo tree -i rsa -p controlplane --features oidc-rsa 2>/dev/null)
+        status=$?
+        set -e
+        if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
+          echo "$tree"
+          echo "rsa crate detected for oidc-rsa build (expected if RS256 is enabled)"
+        else
+          echo "rsa crate not detected for oidc-rsa build"
+        fi
+      - |
+        for pkg in broker felix-authz felix-client felix-broker felix-transport felix-wire; do
+          set +e
+          tree=$(cargo tree -i rsa -p "$pkg" 2>/dev/null)
+          status=$?
+          set -e
+          if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
+            echo "$tree"
+            echo "rsa crate detected in $pkg dependency tree"
+            exit 1
+          fi
+        done
   demo:
     cmds: ["cargo run --release -p broker --bin pubsubdemo"]
   demo-pubsub:

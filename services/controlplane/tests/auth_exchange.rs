@@ -5,7 +5,7 @@
 //! correct tenant scoping and RBAC-derived permissions.
 //!
 //! # Key invariants
-//! - Upstream IdP tokens are RS256 test fixtures only.
+//! - Upstream IdP tokens are RS256 test fixtures only (behind `oidc-rsa`).
 //! - Felix-issued tokens must be EdDSA and include `iss`, `aud`, and `tid`.
 //! - Exchange never widens permissions beyond RBAC policies.
 //!
@@ -18,7 +18,8 @@
 //! - Async ordering is controlled by awaiting server bind before requests.
 //!
 //! # How to use
-//! Run with `cargo test -p controlplane auth_exchange` to execute these tests.
+//! Run with `cargo test -p controlplane --features oidc-rsa auth_exchange` to execute these tests.
+#![cfg(feature = "oidc-rsa")]
 mod common;
 
 use axum::body::Body;
