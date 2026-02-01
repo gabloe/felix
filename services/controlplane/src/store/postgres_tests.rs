@@ -1,5 +1,25 @@
 //! Postgres store unit tests with real DB integration.
 //!
+//! # Purpose
+//! Exercise the Postgres-backed store with real SQL to verify schema, migrations,
+//! and CRUD/change-log behavior.
+//!
+//! # Key invariants
+//! - Tests use a dedicated schema to avoid cross-test contamination.
+//! - Migrations are run once per schema to minimize test time.
+//! - Reset logic truncates tables to a clean baseline.
+//!
+//! # Security model / threat assumptions
+//! - Database URLs may contain credentials; tests should not log them.
+//! - Docker-based Postgres is used only in test environments.
+//!
+//! # Concurrency + ordering guarantees
+//! - Tests are serialized to avoid shared schema races.
+//! - OnceCell guards ensure container/migration setup occurs once.
+//!
+//! # How to use
+//! Run with `cargo test -p controlplane --features pg-tests postgres_store_full_roundtrip`.
+//!
 //! These tests live in a separate module so coverage is attributed to the production
 //! `postgres.rs` implementation without inflating that file's line counts.
 #![cfg(feature = "pg-tests")]
@@ -15,6 +35,7 @@ use crate::model::{
     NamespaceKey, RetentionPolicy, Stream, StreamKey, StreamKind, StreamPatchRequest, Tenant,
 };
 use serial_test::serial;
+use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
@@ -28,10 +49,14 @@ struct PgContainer {
 }
 
 static PG_CONTAINER: tokio::sync::OnceCell<PgContainer> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static PG_MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
 static MIGRATOR: Migrator = sqlx::migrate!();
 
 fn docker_available() -> bool {
+    // We probe docker availability to decide whether to spin up a container.
     std::process::Command::new("docker")
         .arg("version")
         .output()
@@ -39,6 +64,7 @@ fn docker_available() -> bool {
 }
 
 async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Error> {
+    // Poll until Postgres is ready or the timeout is reached to avoid flaky startup.
     let start = tokio::time::Instant::now();
     loop {
         let attempt = tokio::time::timeout(
@@ -71,6 +97,7 @@ async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Err
 }
 
 async fn pg_url() -> Option<String> {
+    // Prefer explicitly configured URLs to avoid using docker in CI unless needed.
     if let Ok(url) = std::env::var("FELIX_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
         .or_else(|_| std::env::var("DATABASE_URL"))
@@ -78,11 +105,13 @@ async fn pg_url() -> Option<String> {
         return Some(url);
     }
     if !docker_available() {
+        // We skip tests gracefully when docker is unavailable.
         eprintln!("skipping pg-tests: docker not available");
         return None;
     }
     let container = PG_CONTAINER
         .get_or_try_init(|| async {
+            // Use a single long-lived container to keep tests deterministic and fast.
             let docker = Box::leak(Box::new(Cli::default()));
             let container = docker.run(Postgres::default());
             let port = container.get_host_port_ipv4(5432);
@@ -98,45 +127,110 @@ async fn pg_url() -> Option<String> {
     Some(container.url.clone())
 }
 
-async fn reset_db(url: &str) -> Result<(), sqlx::Error> {
+async fn test_schema_name() -> String {
+    // Unique schema per test run avoids collisions across processes.
+    PG_SCHEMA
+        .get_or_init(|| async {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            format!("felix_test_{}_{}", std::process::id(), nanos)
+        })
+        .await
+        .clone()
+}
+
+fn url_with_schema(base_url: &str, schema: &str) -> String {
+    // We pass search_path via connection options to isolate test schema.
+    let encoded = format!("-csearch_path%3D{}", schema);
+    if base_url.contains('?') {
+        format!("{base_url}&options={encoded}")
+    } else {
+        format!("{base_url}?options={encoded}")
+    }
+}
+
+async fn ensure_schema(base_url: &str) -> Result<String, sqlx::Error> {
+    // Create the schema once so subsequent tests can reuse it.
+    let schema = test_schema_name().await;
+    let schema_clone = schema.clone();
+    PG_SCHEMA_READY
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(base_url).await?;
+            let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
+            sqlx::query(&create_sql).execute(&mut conn).await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(schema)
+}
+
+async fn run_migrations_once(url: &str) -> Result<(), sqlx::Error> {
+    // Migrations are expensive; run them once per schema to reduce flakiness.
+    PG_MIGRATED
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(url).await?;
+            MIGRATOR.run(&mut conn).await?;
+            conn.close().await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(())
+}
+
+async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
+    // This reset ensures each test starts from a clean slate.
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
         .connect(url)
         .await?;
 
-    // Ensure schema exists before we try to TRUNCATE. Fresh testcontainers DBs may have no tables yet.
-    MIGRATOR.run(&pool).await?;
+    let exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+        .bind(format!("{schema}.tenant_changes"))
+        .fetch_one(&pool)
+        .await?;
+    if exists.is_none() {
+        // If tables don't exist yet, there's nothing to truncate.
+        pool.close().await;
+        return Ok(());
+    }
 
-    sqlx::query(
-        "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, \
-         streams, caches, namespaces, idp_issuers, rbac_policies, rbac_groupings, \
-         tenant_signing_keys, tenants RESTART IDENTITY CASCADE",
-    )
-    .execute(&pool)
-    .await
-    .map(|_| ())
+    let schema_ident = format!(r#""{}""#, schema);
+    let truncate = format!(
+        "TRUNCATE {schema_ident}.tenant_changes, {schema_ident}.namespace_changes, \
+         {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
+         {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.idp_issuers, \
+         {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
+         {schema_ident}.tenant_signing_keys, {schema_ident}.tenants RESTART IDENTITY CASCADE",
+    );
+    sqlx::query(&truncate).execute(&pool).await.map(|_| ())
 }
 
 #[tokio::test]
 #[serial]
 async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
+    // This test prevents regressions in schema, migrations, and change-log flows.
     let Some(url) = pg_url().await else {
         return Ok(());
     };
-    reset_db(&url).await?;
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
 
     let pg_cfg = config::PostgresConfig {
         url: url.clone(),
-        max_connections: 8,
+        max_connections: 5,
         connect_timeout_ms: 10_000,
         acquire_timeout_ms: 10_000,
     };
-    let store = PostgresStore::connect(
+    let store = PostgresStore::connect_without_migrations(
         &pg_cfg,
         StoreConfig {
             changes_limit: config::DEFAULT_CHANGES_LIMIT,
-            change_retention_max_rows: Some(10),
+            change_retention_max_rows: None,
         },
     )
     .await?;

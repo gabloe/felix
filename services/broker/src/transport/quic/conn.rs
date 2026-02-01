@@ -1,11 +1,20 @@
 //! QUIC connection accept loop and per-connection worker setup.
 //!
-//! # Purpose
-//! Accepts incoming QUIC connections, configures per-connection state, and
-//! spawns stream handlers for publish, subscribe, and cache workloads.
+//! # Purpose and responsibility
+//! Accepts incoming QUIC connections, configures per-connection publish workers,
+//! and spawns stream handlers for publish, subscribe, and cache workloads.
 //!
-//! # Design notes
-//! Each connection gets its own task to isolate failures and reduce contention.
+//! # Where it fits in Felix
+//! The broker's QUIC transport entrypoint; it wires network connections to the
+//! publish/subscribe protocol handlers.
+//!
+//! # Key invariants and assumptions
+//! - Each connection gets its own publish worker pool for isolation.
+//! - Ingress depth counters must be decremented when queues drain or close.
+//!
+//! # Security considerations
+//! - Authentication is performed per stream via the `BrokerAuth` handler.
+//! - Errors are logged without leaking payload contents.
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_broker::timings as broker_publish_timings;
@@ -25,6 +34,30 @@ use super::handlers::publish::{
 
 use super::streams::{handle_stream, handle_uni_stream};
 
+/// Serve incoming QUIC connections for the broker.
+///
+/// # What it does
+/// Runs the accept loop, spawns a task per connection, and configures timing
+/// telemetry based on the broker configuration.
+///
+/// # Why it exists
+/// Centralizes connection lifecycle handling and isolates per-connection work.
+///
+/// # Invariants
+/// - Timing telemetry is disabled when `disable_timings` is set.
+/// - Each accepted connection is handled in its own task.
+///
+/// # Errors
+/// - Propagates QUIC accept errors from the server.
+///
+/// # Example
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use broker::transport::quic::conn::serve;
+/// # async fn run(server: Arc<felix_transport::QuicServer>, broker: Arc<felix_broker::Broker>, config: broker::config::BrokerConfig, auth: Arc<broker::auth::BrokerAuth>) {
+/// let _ = serve(server, broker, config, auth).await;
+/// # }
+/// ```
 pub async fn serve(
     server: Arc<QuicServer>,
     broker: Arc<Broker>,
@@ -37,6 +70,7 @@ pub async fn serve(
         broker_publish_timings::set_enabled(false);
     }
     loop {
+        // Accept the next QUIC connection.
         let connection = server.accept().await?;
         let broker = Arc::clone(&broker);
         let config = config.clone();
@@ -49,6 +83,22 @@ pub async fn serve(
     }
 }
 
+/// Handle a single QUIC connection and its streams.
+///
+/// # What it does
+/// Creates per-connection publish workers and dispatches incoming bi/uni streams
+/// to their respective handlers.
+///
+/// # Why it exists
+/// Keeps per-connection state (publish queues and depth counters) scoped to the
+/// connection lifecycle.
+///
+/// # Invariants
+/// - `worker_count` and `publish_queue_depth` are at least 1.
+/// - Global ingress depth counters are decremented when workers exit.
+///
+/// # Errors
+/// - Returns on connection-level QUIC errors.
 pub(crate) async fn handle_connection(
     broker: Arc<Broker>,
     connection: QuicConnection,
@@ -71,11 +121,13 @@ pub(crate) async fn handle_connection(
         //   scheduling and per-connection backpressure.
         tokio::spawn(async move {
             while let Some(job) = publish_rx.recv().await {
+                // Decrement local + global ingress depth when a job is consumed.
                 let _ = decrement_depth(
                     &queue_depth_worker,
                     &GLOBAL_INGRESS_DEPTH,
                     "felix_broker_ingress_queue_depth",
                 );
+                // Publish the batch and forward the result to the caller if requested.
                 let result = broker_for_worker
                     .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
                     .await
@@ -85,6 +137,7 @@ pub(crate) async fn handle_connection(
                     let _ = response.send(result);
                 }
             }
+            // Drain remaining depth on worker shutdown to keep counters consistent.
             reset_local_depth_only(
                 &queue_depth_worker,
                 &GLOBAL_INGRESS_DEPTH,
@@ -107,6 +160,7 @@ pub(crate) async fn handle_connection(
                     Ok(streams) => streams,
                     Err(err) => {
                         tracing::info!(error = %err, "quic connection closed");
+                        // Reset ingress depth when connection shuts down unexpectedly.
                         reset_local_depth_only(
                             &queue_depth,
                             &GLOBAL_INGRESS_DEPTH,
@@ -121,6 +175,7 @@ pub(crate) async fn handle_connection(
                 let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
                 tokio::spawn(async move {
+                    // Dispatch the bidirectional control stream handler.
                     if let Err(err) = handle_stream(
                         broker,
                         connection,
@@ -141,6 +196,7 @@ pub(crate) async fn handle_connection(
                     Ok(recv) => recv,
                     Err(err) => {
                         tracing::info!(error = %err, "quic connection closed");
+                        // Reset ingress depth when connection shuts down unexpectedly.
                         reset_local_depth_only(
                             &queue_depth,
                             &GLOBAL_INGRESS_DEPTH,
@@ -154,6 +210,7 @@ pub(crate) async fn handle_connection(
                 let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
                 tokio::spawn(async move {
+                    // Dispatch the unidirectional publish stream handler.
                     if let Err(err) = handle_uni_stream(
                         broker,
                         config,

@@ -1,3 +1,24 @@
+//! Integration tests for the token exchange endpoint.
+//!
+//! # Purpose
+//! Validate that upstream IdP tokens are exchanged for Felix EdDSA tokens with
+//! correct tenant scoping and RBAC-derived permissions.
+//!
+//! # Key invariants
+//! - Upstream IdP tokens are RS256 test fixtures only.
+//! - Felix-issued tokens must be EdDSA and include `iss`, `aud`, and `tid`.
+//! - Exchange never widens permissions beyond RBAC policies.
+//!
+//! # Security model / threat assumptions
+//! - IdP RSA keys here are test-only fixtures and not secret.
+//! - Private keys and tokens must not be logged in production code.
+//!
+//! # Concurrency + ordering guarantees
+//! - Tests spawn a local JWKS server on a random port to avoid collisions.
+//! - Async ordering is controlled by awaiting server bind before requests.
+//!
+//! # How to use
+//! Run with `cargo test -p controlplane auth_exchange` to execute these tests.
 mod common;
 
 use axum::body::Body;
@@ -9,21 +30,21 @@ use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
 use controlplane::auth::felix_token::{FelixClaims, SigningKey, TenantSigningKeys};
 use controlplane::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
-use controlplane::auth::oidc::OidcValidator;
+use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::auth::principal::principal_id;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::model::Tenant;
 use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
-use rsa::pkcs1::EncodeRsaPrivateKey;
-use rsa::traits::PublicKeyParts;
-use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-const FELIX_PRIVATE_KEY: &str = r#"-----BEGIN RSA PRIVATE KEY-----
+// RSA private key for the upstream IdP used in tests.
+// This is a test-only fixture and must never be used for Felix-issued tokens.
+const IDP_PRIVATE_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTL
 UTv4l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2V
 rUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8H
@@ -51,23 +72,43 @@ UvrKS8WkuWRDuKrz1W/EQKApFjDGpdqToZqriUFQzwy7mR3ayIiogzNtHcvbDHx8
 oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
 -----END RSA PRIVATE KEY-----"#;
 
-const FELIX_PUBLIC_KEY: &str = r#"-----BEGIN RSA PUBLIC KEY-----
-MIIBCgKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4
-l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2VrUyW
-yj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG
-/AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4l
-QzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi+yUod+j8MtvIj812dkS4QMiRVN/by2h
-3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQIDAQAB
------END RSA PUBLIC KEY-----"#;
+// Corresponding RSA public key parameters for the above private key.
+// These are used to populate a JWKS payload for the mock IdP.
+const IDP_JWK_N: &str = "yRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4l4sggh5_CYYi_cvI-SXVT9kPWSKXxJXBXd_4LkvcPuUakBoAkfh-eiFVMh2VrUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG_AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4lQzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi-yUod-j8MtvIj812dkS4QMiRVN_by2h3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQ";
+const IDP_JWK_E: &str = "AQAB";
+const FELIX_PRIVATE_KEY: [u8; 32] = [9u8; 32];
 
+// Test helper to verify a Felix token using the provided tenant signing keys.
 fn verify_token(
     keys: &TenantSigningKeys,
     tenant_id: &str,
     token: &str,
 ) -> Result<FelixClaims, jsonwebtoken::errors::Error> {
+    // Step 1: Enforce EdDSA-only Felix tokens to avoid RSA downgrade.
+    let header = jsonwebtoken::decode_header(token)?;
+    if header.alg != Algorithm::EdDSA {
+        return Err(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidToken,
+        ));
+    }
+    // Step 2: If `kid` is set, ensure it belongs to the tenant key set.
+    // This mirrors production behavior and avoids accepting unknown keys.
+    if let Some(kid) = header.kid.as_deref()
+        && !keys.all_keys().any(|key| key.kid == kid)
+    {
+        return Err(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidToken,
+        ));
+    }
     let mut last_err = None;
     for key in keys.all_keys() {
-        let decoding_key = DecodingKey::from_rsa_pem(&key.public_key_pem)?;
+        // Step 3: Ensure public key length is correct before decoding.
+        let _: [u8; 32] = key.public_key.as_slice().try_into().map_err(|_| {
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken)
+        })?;
+        let x = URL_SAFE_NO_PAD.encode(key.public_key);
+        let decoding_key = DecodingKey::from_ed_components(&x)?;
+        // Step 4: Validate issuer/audience and tenant scope after signature check.
         let mut validation = Validation::new(key.alg);
         validation.set_audience(&["felix-broker"]);
         validation.set_issuer(&["felix-auth"]);
@@ -90,13 +131,13 @@ fn verify_token(
 
 #[tokio::test]
 async fn exchange_returns_tenant_scoped_token() {
-    let idp_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).expect("key");
-    let idp_public = RsaPublicKey::from(&idp_key);
-    let jwks = jwks_for_key(&idp_public, "kid-1");
+    // This test ensures the exchange path mints EdDSA tokens scoped to a tenant
+    // and containing RBAC-derived permissions.
+    let jwks = jwks_for_key("kid-1");
     let (addr, _handle) = spawn_jwks_server(jwks).await;
 
     let issuer = format!("http://{addr}");
-    let token = mint_upstream_token(&idp_key, &issuer, "aud-1", "kid-1");
+    let token = mint_upstream_token(IDP_PRIVATE_KEY_PEM, &issuer, "aud-1", "kid-1");
 
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: 200,
@@ -153,9 +194,11 @@ async fn exchange_returns_tenant_scoped_token() {
             TenantSigningKeys {
                 current: SigningKey {
                     kid: "k1".to_string(),
-                    alg: Algorithm::RS256,
-                    private_key_pem: FELIX_PRIVATE_KEY.as_bytes().to_vec(),
-                    public_key_pem: FELIX_PUBLIC_KEY.as_bytes().to_vec(),
+                    alg: Algorithm::EdDSA,
+                    private_key: FELIX_PRIVATE_KEY,
+                    public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                        .verifying_key()
+                        .to_bytes(),
                 },
                 previous: vec![],
             },
@@ -175,7 +218,7 @@ async fn exchange_returns_tenant_scoped_token() {
             bridges: false,
         },
         store: Arc::new(store),
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -197,9 +240,11 @@ async fn exchange_returns_tenant_scoped_token() {
     let keys = TenantSigningKeys {
         current: SigningKey {
             kid: "k1".to_string(),
-            alg: Algorithm::RS256,
-            private_key_pem: FELIX_PRIVATE_KEY.as_bytes().to_vec(),
-            public_key_pem: FELIX_PUBLIC_KEY.as_bytes().to_vec(),
+            alg: Algorithm::EdDSA,
+            private_key: FELIX_PRIVATE_KEY,
+            public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                .verifying_key()
+                .to_bytes(),
         },
         previous: vec![],
     };
@@ -214,13 +259,13 @@ async fn exchange_returns_tenant_scoped_token() {
 
 #[tokio::test]
 async fn exchange_forbidden_without_policies() {
-    let idp_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).expect("key");
-    let idp_public = RsaPublicKey::from(&idp_key);
-    let jwks = jwks_for_key(&idp_public, "kid-1");
+    // This test prevents regressions where tokens are minted without any RBAC
+    // policies, which would violate authorization expectations.
+    let jwks = jwks_for_key("kid-1");
     let (addr, _handle) = spawn_jwks_server(jwks).await;
 
     let issuer = format!("http://{addr}");
-    let token = mint_upstream_token(&idp_key, &issuer, "aud-1", "kid-1");
+    let token = mint_upstream_token(IDP_PRIVATE_KEY_PEM, &issuer, "aud-1", "kid-1");
 
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: 200,
@@ -252,9 +297,11 @@ async fn exchange_forbidden_without_policies() {
             TenantSigningKeys {
                 current: SigningKey {
                     kid: "k1".to_string(),
-                    alg: Algorithm::RS256,
-                    private_key_pem: FELIX_PRIVATE_KEY.as_bytes().to_vec(),
-                    public_key_pem: FELIX_PUBLIC_KEY.as_bytes().to_vec(),
+                    alg: Algorithm::EdDSA,
+                    private_key: FELIX_PRIVATE_KEY,
+                    public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                        .verifying_key()
+                        .to_bytes(),
                 },
                 previous: vec![],
             },
@@ -274,7 +321,7 @@ async fn exchange_forbidden_without_policies() {
             bridges: false,
         },
         store: Arc::new(store),
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -293,6 +340,8 @@ async fn exchange_forbidden_without_policies() {
 }
 
 async fn spawn_jwks_server(jwks: serde_json::Value) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    // Deterministic local JWKS server to avoid flakiness and external dependencies.
+    // Binding to 127.0.0.1:0 lets the OS choose an available port.
     use axum::{Json, Router, routing::get};
     use tokio::net::TcpListener;
 
@@ -315,22 +364,23 @@ async fn spawn_jwks_server(jwks: serde_json::Value) -> (SocketAddr, tokio::task:
     (addr, handle)
 }
 
-fn jwks_for_key(key: &RsaPublicKey, kid: &str) -> serde_json::Value {
-    let n = URL_SAFE_NO_PAD.encode(key.n().to_bytes_be());
-    let e = URL_SAFE_NO_PAD.encode(key.e().to_bytes_be());
+fn jwks_for_key(kid: &str) -> serde_json::Value {
+    // This helper returns an RSA JWKS fixture for upstream IdP validation only.
     json!({
         "keys": [{
             "kty": "RSA",
             "kid": kid,
             "alg": "RS256",
             "use": "sig",
-            "n": n,
-            "e": e
+            "n": IDP_JWK_N,
+            "e": IDP_JWK_E
         }]
     })
 }
 
-fn mint_upstream_token(key: &RsaPrivateKey, issuer: &str, audience: &str, kid: &str) -> String {
+fn mint_upstream_token(pem: &str, issuer: &str, audience: &str, kid: &str) -> String {
+    // Test-only RS256 token minting to simulate an external IdP.
+    // Felix tokens must always be EdDSA.
     let mut header = jsonwebtoken::Header::new(Algorithm::RS256);
     header.kid = Some(kid.to_string());
     let now = chrono::Utc::now().timestamp();
@@ -341,7 +391,6 @@ fn mint_upstream_token(key: &RsaPrivateKey, issuer: &str, audience: &str, kid: &
         "iat": now,
         "exp": now + 300
     });
-    let pem = key.to_pkcs1_pem(Default::default()).expect("pem");
     jsonwebtoken::encode(
         &header,
         &claims,

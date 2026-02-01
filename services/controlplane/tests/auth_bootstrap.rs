@@ -6,7 +6,7 @@ use common::read_json;
 use controlplane::api::bootstrap::BootstrapInitializeRequest;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router};
-use controlplane::auth::oidc::OidcValidator;
+use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
 };
@@ -32,7 +32,7 @@ fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>,
             bridges: false,
         },
         store: state_store,
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: enabled,
         bootstrap_token: token,
     };

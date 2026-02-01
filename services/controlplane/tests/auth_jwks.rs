@@ -1,17 +1,39 @@
+//! Integration tests for the tenant JWKS endpoint.
+//!
+//! # Purpose
+//! Verify that the control-plane exposes Ed25519 public keys in JWKS format and
+//! that missing tenants return 404s.
+//!
+//! # Key invariants
+//! - JWKS entries must be OKP/Ed25519 with `alg = EdDSA`.
+//! - No RSA components (`n`, `e`) are present for Felix keys.
+//!
+//! # Security model / threat assumptions
+//! - JWKS is public by design; tests ensure no private material is exposed.
+//! - Tokens/keys are treated as secrets and not logged.
+//!
+//! # Concurrency + ordering guarantees
+//! - Uses in-memory store for deterministic, race-free behavior.
+//!
+//! # How to use
+//! Run with `cargo test -p controlplane auth_jwks` to execute these tests.
 mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::read_json;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
 use controlplane::auth::keys::generate_signing_keys;
-use controlplane::auth::oidc::OidcValidator;
+use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn jwks_endpoint_returns_keys_for_tenant() {
+    // This test ensures JWKS output is EdDSA/Ed25519 and does not include RSA fields.
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
@@ -41,7 +63,7 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
             bridges: false,
         },
         store: std::sync::Arc::new(store),
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -54,11 +76,23 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
     let response = app.clone().oneshot(req).await.expect("jwks");
     assert_eq!(response.status(), StatusCode::OK);
     let payload = read_json(response).await;
-    assert!(!payload["keys"].as_array().unwrap().is_empty());
+    let keys = payload["keys"].as_array().unwrap();
+    assert!(!keys.is_empty());
+    let key = &keys[0];
+    assert_eq!(key["kty"], "OKP");
+    assert_eq!(key["crv"], "Ed25519");
+    assert_eq!(key["alg"], "EdDSA");
+    assert_eq!(key["use"], "sig");
+    let x = key["x"].as_str().expect("x");
+    let decoded = URL_SAFE_NO_PAD.decode(x.as_bytes()).expect("decode x");
+    assert_eq!(decoded.len(), 32);
+    assert!(key.get("n").is_none());
+    assert!(key.get("e").is_none());
 }
 
 #[tokio::test]
 async fn jwks_endpoint_missing_tenant_returns_404() {
+    // This test prevents leaking tenant presence by returning a consistent 404.
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
@@ -76,7 +110,7 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
             bridges: false,
         },
         store: std::sync::Arc::new(store),
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };

@@ -38,7 +38,7 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
             bridges: false,
         },
         store: Arc::new(store),
-        oidc_validator: controlplane::auth::oidc::OidcValidator::default(),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -1015,7 +1015,7 @@ async fn system_health_reports_internal_error_on_store_failure() {
             bridges: false,
         },
         store: Arc::new(FailingStore),
-        oidc_validator: controlplane::auth::oidc::OidcValidator::default(),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };

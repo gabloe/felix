@@ -1,48 +1,44 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/rust
 {
-	"name": "Rust",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/rust:2-1-bookworm",
+  "name": "Rust",
+  "image": "mcr.microsoft.com/devcontainers/rust:2-1-bookworm",
 
-	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
-	"mounts": [
-		{
-	 		"source": "devcontainer-cargo-cache-${devcontainerId}",
-	 		"target": "/usr/local/cargo",
-	 		"type": "volume"
-	 	}
-	 ],
+  // Persist cargo + target + tmp across container rebuilds.
+  // NOTE: Docker volumes often mount as root-owned; we fix permissions below.
+  "mounts": [
+    { "source": "felix-cargo",  "target": "/usr/local/cargo",        "type": "volume" },
+    { "source": "felix-target", "target": "/workspaces/.cargo-target","type": "volume" },
+    { "source": "felix-tmp",    "target": "/workspaces/.tmp",        "type": "volume" }
+  ],
 
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	"features": {
-		"ghcr.io/audacioustux/devcontainers/taskfile:1": {},
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
-	},
+  "features": {
+    "ghcr.io/audacioustux/devcontainers/taskfile:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
 
-	"remoteEnv": {
-		"DOCKER_HOST": "unix:///var/run/docker.sock",
-		"CARGO_TARGET_DIR": "/workspaces/felix/target",
-		"TMPDIR": "/workspaces/felix/.tmp"
-	},
+  "remoteEnv": {
+    "DOCKER_HOST": "unix:///var/run/docker.sock",
 
-	// Note: Docker Desktop blocks setting kernel.perf_event_paranoid via --sysctl; adjust on the host if needed for perf.
-	// Enable perf profiling tools (samply) inside the container.
-	"runArgs": [
-		"--cap-add=SYS_PTRACE",
-		"--security-opt=seccomp=unconfined",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock"
-	],
+    // Make builds deterministic and avoid filling /tmp inside the container layer.
+    "CARGO_TARGET_DIR": "/workspaces/.cargo-target",
 
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
+    // Keep temp off /tmp (which can be small / tmpfs depending on runtime),
+    // but ensure it is writable via chown in postCreate/postStart.
+    "TMPDIR": "/workspaces/.tmp"
+  },
 
-	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "bash scripts/devcontainer-setup.sh"
+  "runArgs": [
+    "--cap-add=SYS_PTRACE",
+    "--security-opt=seccomp=unconfined",
+    "-v",
+    "/var/run/docker.sock:/var/run/docker.sock"
+  ],
 
-	// Configure tool-specific properties.
-	// "customizations": {},
+  // Fix permissions on mounted volumes before running any setup that may invoke rustup/cargo.
+  // Do NOT remove these chowns unless you also remove the volume mounts.
+  "postCreateCommand": "bash -lc 'set -euo pipefail; sudo mkdir -p /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp; sudo chown -R vscode:vscode /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp; sudo chmod -R u+rwX /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp; bash scripts/devcontainer-setup.sh'",
 
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+  // Also enforce on every start (rebuilds, restarts, attach) so you never regress.
+  "postStartCommand": "bash -lc 'set -euo pipefail; sudo mkdir -p /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp; sudo chown -R vscode:vscode /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp; sudo chmod -R u+rwX /usr/local/cargo /workspaces/.cargo-target /workspaces/.tmp'"
 }

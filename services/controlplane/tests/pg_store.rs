@@ -7,13 +7,67 @@ use controlplane::model::{
     StreamPatchRequest, Tenant,
 };
 use controlplane::store::{ControlPlaneStore, StoreConfig};
+use sqlx::Connection;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-static PG_STORE: tokio::sync::OnceCell<Arc<controlplane::store::postgres::PostgresStore>> =
-    tokio::sync::OnceCell::const_new();
+static PG_SCHEMA: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static PG_MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
-async fn reset_postgres(url: &str) -> Result<(), sqlx::Error> {
+static MIGRATOR: Migrator = sqlx::migrate!();
+
+async fn test_schema_name() -> String {
+    PG_SCHEMA
+        .get_or_init(|| async {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            format!("felix_test_{}_{}", std::process::id(), nanos)
+        })
+        .await
+        .clone()
+}
+
+fn url_with_schema(base_url: &str, schema: &str) -> String {
+    let encoded = format!("-csearch_path%3D{}", schema);
+    if base_url.contains('?') {
+        format!("{base_url}&options={encoded}")
+    } else {
+        format!("{base_url}?options={encoded}")
+    }
+}
+
+async fn ensure_schema(base_url: &str) -> Result<String, sqlx::Error> {
+    let schema = test_schema_name().await;
+    let schema_clone = schema.clone();
+    PG_SCHEMA_READY
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(base_url).await?;
+            let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
+            sqlx::query(&create_sql).execute(&mut conn).await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(schema)
+}
+
+async fn run_migrations_once(url: &str) -> Result<(), sqlx::Error> {
+    PG_MIGRATED
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(url).await?;
+            MIGRATOR.run(&mut conn).await?;
+            conn.close().await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(())
+}
+
+async fn reset_postgres(url: &str, schema: &str) -> Result<(), sqlx::Error> {
     let pool = match tokio::time::timeout(
         std::time::Duration::from_secs(2),
         PgPoolOptions::new()
@@ -26,16 +80,25 @@ async fn reset_postgres(url: &str) -> Result<(), sqlx::Error> {
         Ok(result) => result?,
         Err(_) => return Err(sqlx::Error::PoolTimedOut),
     };
-    sqlx::query(
-        "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, streams, caches, namespaces, tenants RESTART IDENTITY",
-    )
-    .execute(&pool)
-    .await
-    .map(|_| ())
+    let exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+        .bind(format!("{schema}.tenant_changes"))
+        .fetch_one(&pool)
+        .await?;
+    if exists.is_none() {
+        pool.close().await;
+        return Ok(());
+    }
+    let schema_ident = format!(r#""{}""#, schema);
+    let truncate = format!(
+        "TRUNCATE {schema_ident}.tenant_changes, {schema_ident}.namespace_changes, \
+         {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
+         {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.tenants RESTART IDENTITY",
+    );
+    sqlx::query(&truncate).execute(&pool).await.map(|_| ())
 }
 
 async fn pg_store() -> Option<Arc<controlplane::store::postgres::PostgresStore>> {
-    let url = match std::env::var("FELIX_TEST_DATABASE_URL")
+    let base_url = match std::env::var("FELIX_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
         .or_else(|_| std::env::var("DATABASE_URL"))
     {
@@ -45,7 +108,19 @@ async fn pg_store() -> Option<Arc<controlplane::store::postgres::PostgresStore>>
             return None;
         }
     };
-    if let Err(err) = reset_postgres(&url).await {
+    let schema = match ensure_schema(&base_url).await {
+        Ok(schema) => schema,
+        Err(err) => {
+            eprintln!("skipping pg-tests: cannot create schema: {err}");
+            return None;
+        }
+    };
+    let url = url_with_schema(&base_url, &schema);
+    if let Err(err) = run_migrations_once(&url).await {
+        eprintln!("skipping pg-tests: cannot run migrations: {err}");
+        return None;
+    }
+    if let Err(err) = reset_postgres(&url, &schema).await {
         eprintln!("skipping pg-tests: cannot connect to postgres: {err}");
         return None;
     }
@@ -55,21 +130,16 @@ async fn pg_store() -> Option<Arc<controlplane::store::postgres::PostgresStore>>
         connect_timeout_ms: 5_000,
         acquire_timeout_ms: 5_000,
     };
-    let store = match PG_STORE
-        .get_or_try_init(|| async {
-            let store = controlplane::store::postgres::PostgresStore::connect(
-                &pg_cfg,
-                StoreConfig {
-                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
-                    change_retention_max_rows: Some(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-                },
-            )
-            .await?;
-            Ok::<_, controlplane::store::StoreError>(Arc::new(store))
-        })
-        .await
+    let store = match controlplane::store::postgres::PostgresStore::connect_without_migrations(
+        &pg_cfg,
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: None,
+        },
+    )
+    .await
     {
-        Ok(store) => Arc::clone(store),
+        Ok(store) => Arc::new(store),
         Err(err) => {
             eprintln!("skipping pg-tests: connect postgres store failed: {err}");
             return None;

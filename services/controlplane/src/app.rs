@@ -10,7 +10,7 @@ use crate::api;
 use crate::api::openapi::ApiDoc;
 use crate::api::types::{FeatureFlags, Region};
 use crate::auth;
-use crate::auth::oidc::OidcValidator;
+use crate::auth::oidc::UpstreamOidcValidator;
 use crate::observability;
 use crate::store::ControlPlaneAuthStore;
 use axum::Router;
@@ -25,7 +25,7 @@ pub struct AppState {
     pub api_version: String,
     pub features: FeatureFlags,
     pub store: Arc<dyn ControlPlaneAuthStore + Send + Sync>,
-    pub oidc_validator: OidcValidator,
+    pub oidc_validator: UpstreamOidcValidator,
     pub bootstrap_enabled: bool,
     pub bootstrap_token: Option<String>,
 }

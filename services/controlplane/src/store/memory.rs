@@ -802,6 +802,7 @@ impl AuthStore for InMemoryStore {
             .write()
             .await
             .insert(tenant_id.to_string(), keys);
+        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
         Ok(())
     }
 
@@ -842,6 +843,7 @@ impl AuthStore for InMemoryStore {
             .write()
             .await
             .insert(tenant_id.to_string(), keys.clone());
+        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
         Ok(keys)
     }
 

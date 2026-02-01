@@ -9,7 +9,7 @@ use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
 use controlplane::auth::felix_token::mint_token;
 use controlplane::auth::keys::generate_signing_keys;
-use controlplane::auth::oidc::OidcValidator;
+use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
 };
@@ -37,7 +37,7 @@ async fn idp_issuer_and_rbac_admin_endpoints() {
             bridges: false,
         },
         store: state_store,
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -144,7 +144,7 @@ async fn idp_admin_missing_tenant_returns_404() {
             bridges: false,
         },
         store: state_store,
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };

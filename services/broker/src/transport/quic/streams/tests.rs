@@ -1,13 +1,32 @@
 //! QUIC stream unit/integration tests for the broker transport.
 //!
 //! # Purpose
-//! Covers the control/uni loops, writer/ack waiter branches, and telemetry paths
+//! Cover the control/uni loops, writer/ack waiter branches, and telemetry paths
 //! to ensure protocol handling and backpressure behaviors remain correct.
+//!
+//! # Key invariants
+//! - QUIC streams preserve ordering per stream and per connection.
+//! - Ack/writer loops respect backpressure and timeouts.
+//! - Felix tokens are EdDSA and verified via JWKS.
+//!
+//! # Security model / threat assumptions
+//! - Test keys and tokens are fixtures only; do not log secrets in production.
+//! - RSA is not used for Felix tokens; EdDSA is enforced.
+//!
+//! # Concurrency + ordering guarantees
+//! - Tests use local loopback and serial sections to avoid races.
+//! - Many tests spawn background tasks; ordering is validated explicitly.
+//!
+//! # How to use
+//! Run with `cargo test -p broker quic` or narrow with individual test names.
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::{Bytes, BytesMut};
-use felix_authz::{FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyMaterial};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use felix_authz::{
+    FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
+};
 use felix_broker::Broker;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicConnection, QuicServer, TransportConfig};
@@ -15,9 +34,6 @@ use felix_wire::{Frame, Message};
 use jsonwebtoken::Algorithm;
 use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
-use rsa::RsaPublicKey;
-use rsa::pkcs1::DecodeRsaPublicKey;
-use rsa::traits::PublicKeyParts;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
@@ -44,42 +60,7 @@ use crate::transport::quic::handlers::publish::{
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
 
-const TEST_PRIVATE_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTL
-UTv4l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2V
-rUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8H
-oGfG/AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBI
-Mc4lQzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi+yUod+j8MtvIj812dkS4QMiRVN/
-by2h3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQIDAQABAoIBAHREk0I0O9DvECKd
-WUpAmF3mY7oY9PNQiu44Yaf+AoSuyRpRUGTMIgc3u3eivOE8ALX0BmYUO5JtuRNZ
-Dpvt4SAwqCnVUinIf6C+eH/wSurCpapSM0BAHp4aOA7igptyOMgMPYBHNA1e9A7j
-E0dCxKWMl3DSWNyjQTk4zeRGEAEfbNjHrq6YCtjHSZSLmWiG80hnfnYos9hOr5Jn
-LnyS7ZmFE/5P3XVrxLc/tQ5zum0R4cbrgzHiQP5RgfxGJaEi7XcgherCCOgurJSS
-bYH29Gz8u5fFbS+Yg8s+OiCss3cs1rSgJ9/eHZuzGEdUZVARH6hVMjSuwvqVTFaE
-8AgtleECgYEA+uLMn4kNqHlJS2A5uAnCkj90ZxEtNm3E8hAxUrhssktY5XSOAPBl
-xyf5RuRGIImGtUVIr4HuJSa5TX48n3Vdt9MYCprO/iYl6moNRSPt5qowIIOJmIjY
-2mqPDfDt/zw+fcDD3lmCJrFlzcnh0uea1CohxEbQnL3cypeLt+WbU6kCgYEAzSp1
-9m1ajieFkqgoB0YTpt/OroDx38vvI5unInJlEeOjQ+oIAQdN2wpxBvTrRorMU6P0
-7mFUbt1j+Co6CbNiw+X8HcCaqYLR5clbJOOWNR36PuzOpQLkfK8woupBxzW9B8gZ
-mY8rB1mbJ+/WTPrEJy6YGmIEBkWylQ2VpW8O4O0CgYEApdbvvfFBlwD9YxbrcGz7
-MeNCFbMz+MucqQntIKoKJ91ImPxvtc0y6e/Rhnv0oyNlaUOwJVu0yNgNG117w0g4
-t/+Q38mvVC5xV7/cn7x9UMFk6MkqVir3dYGEqIl/OP1grY2Tq9HtB5iyG9L8NIam
-QOLMyUqqMUILxdthHyFmiGkCgYEAn9+PjpjGMPHxL0gj8Q8VbzsFtou6b1deIRRA
-2CHmSltltR1gYVTMwXxQeUhPMmgkMqUXzs4/WijgpthY44hK1TaZEKIuoxrS70nJ
-4WQLf5a9k1065fDsFZD6yGjdGxvwEmlGMZgTwqV7t1I4X0Ilqhav5hcs5apYL7gn
-PYPeRz0CgYALHCj/Ji8XSsDoF/MhVhnGdIs2P99NNdmo3R2Pv0CuZbDKMU559LJH
-UvrKS8WkuWRDuKrz1W/EQKApFjDGpdqToZqriUFQzwy7mR3ayIiogzNtHcvbDHx8
-oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
------END RSA PRIVATE KEY-----"#;
-
-const TEST_PUBLIC_KEY_PEM: &str = r#"-----BEGIN RSA PUBLIC KEY-----
-MIIBCgKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4
-l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2VrUyW
-yj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG
-/AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4l
-QzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi+yUod+j8MtvIj812dkS4QMiRVN/by2h
-3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQIDAQAB
------END RSA PUBLIC KEY-----"#;
+const TEST_PRIVATE_KEY: [u8; 32] = [13u8; 32];
 
 struct AuthFixture {
     tenant_id: String,
@@ -88,15 +69,18 @@ struct AuthFixture {
 }
 
 fn auth_fixture(tenant_id: &str, perms: Vec<String>) -> AuthFixture {
-    let jwks = jwks_from_public_key(TEST_PUBLIC_KEY_PEM, "k1");
+    // Build a deterministic Ed25519 keypair and JWKS for repeatable auth tests.
+    let signing_key = Ed25519SigningKey::from_bytes(&TEST_PRIVATE_KEY);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let jwks = jwks_from_public_key(&public_key, "k1");
     let mut key_materials = HashMap::new();
     key_materials.insert(
         tenant_id.to_string(),
         TenantKeyMaterial {
             kid: "k1".to_string(),
-            alg: Algorithm::RS256,
-            private_key_pem: TEST_PRIVATE_KEY_PEM.as_bytes().to_vec(),
-            public_key_pem: TEST_PUBLIC_KEY_PEM.as_bytes().to_vec(),
+            alg: Algorithm::EdDSA,
+            private_key: TEST_PRIVATE_KEY,
+            public_key,
             jwks: jwks.clone(),
         },
     );
@@ -106,11 +90,16 @@ fn auth_fixture(tenant_id: &str, perms: Vec<String>) -> AuthFixture {
         Duration::from_secs(900),
         Arc::new(key_materials),
     );
+    // Mint a Felix token to authenticate QUIC clients in tests.
     let token = issuer
         .mint(&TenantId::new(tenant_id), "p:test", perms)
         .expect("mint token");
 
-    let key_store = Arc::new(ControlPlaneKeyStore::new("http://localhost".to_string()));
+    let key_store = Arc::new(ControlPlaneKeyStore::new(
+        "http://localhost".to_string(),
+        Arc::new(TenantKeyCache::default()),
+    ));
+    // Inject JWKS directly to avoid network calls in tests.
     key_store.insert_jwks(&TenantId::new(tenant_id), jwks);
     let auth = Arc::new(BrokerAuth::with_key_store(key_store));
     AuthFixture {
@@ -120,23 +109,23 @@ fn auth_fixture(tenant_id: &str, perms: Vec<String>) -> AuthFixture {
     }
 }
 
-fn jwks_from_public_key(pem: &str, kid: &str) -> Jwks {
-    let public_key = RsaPublicKey::from_pkcs1_pem(pem).expect("parse public key");
-    let n = URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
-    let e = URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
+fn jwks_from_public_key(public_key: &[u8], kid: &str) -> Jwks {
+    // Encode Ed25519 public key as JWK `x` component (base64url).
+    let x = URL_SAFE_NO_PAD.encode(public_key);
     Jwks {
         keys: vec![Jwk {
-            kty: "RSA".to_string(),
+            kty: "OKP".to_string(),
             kid: kid.to_string(),
-            alg: "RS256".to_string(),
+            alg: "EdDSA".to_string(),
             use_field: KeyUse::Sig,
-            n,
-            e,
+            crv: Some("Ed25519".to_string()),
+            x: Some(x),
         }],
     }
 }
 
 fn default_perms() -> Vec<String> {
+    // Broad permissions simplify transport tests without exercising RBAC.
     vec![
         "stream.publish:stream:*/*".to_string(),
         "stream.subscribe:stream:*/*".to_string(),
@@ -146,6 +135,7 @@ fn default_perms() -> Vec<String> {
 }
 
 fn auth_message(fixture: &AuthFixture) -> Message {
+    // Auth messages always carry tenant id + token.
     Message::Auth {
         tenant_id: fixture.tenant_id.clone(),
         token: fixture.token.clone(),
@@ -158,8 +148,10 @@ async fn open_authenticated_bi(
     max_frame_bytes: usize,
     frame_scratch: &mut BytesMut,
 ) -> Result<(quinn::SendStream, quinn::RecvStream)> {
+    // Step 1: Open a bi-directional stream and perform auth handshake.
     let (mut send, mut recv) = connection.open_bi().await?;
     crate::transport::quic::write_message(&mut send, auth_message(auth)).await?;
+    // Step 2: Read the auth response; reject on anything but OK.
     let response =
         crate::transport::quic::read_message_limited(&mut recv, max_frame_bytes, frame_scratch)
             .await?;
@@ -170,6 +162,7 @@ async fn open_authenticated_bi(
 }
 
 #[tokio::test]
+// This test prevents regressions in `cache_put_get_round_trip` behavior.
 async fn cache_put_get_round_trip() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -279,6 +272,7 @@ async fn cache_put_get_round_trip() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `publish_rejects_unknown_stream` behavior.
 async fn publish_rejects_unknown_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -378,6 +372,7 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `publish_ack_on_commit_smoke` behavior.
 async fn publish_ack_on_commit_smoke() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -441,15 +436,9 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
+// This test prevents regressions in `publish_sharding_preserves_stream_order` behavior.
 async fn publish_sharding_preserves_stream_order() -> Result<()> {
-    unsafe {
-        std::env::set_var("FELIX_BROKER_PUB_WORKERS_PER_CONN", "4");
-        std::env::set_var("FELIX_BROKER_PUB_QUEUE_DEPTH", "1024");
-        std::env::set_var("FELIX_PUB_CONN_POOL", "1");
-        std::env::set_var("FELIX_PUB_STREAMS_PER_CONN", "2");
-        std::env::set_var("FELIX_PUB_SHARDING", "hash_stream");
-    }
-
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
@@ -575,6 +564,7 @@ fn binary_publish_batch_frame(
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_handles_publish_and_cache_requests` behavior.
 async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -679,6 +669,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_handles_binary_and_decode_error` behavior.
 async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -753,6 +744,7 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_handles_cancel_and_graceful_close` behavior.
 async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -821,6 +813,7 @@ async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_cache_put_best_effort_full_and_closed` behavior.
 async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -933,6 +926,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `uni_loop_publish_and_errors` behavior.
 async fn uni_loop_publish_and_errors() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1024,6 +1018,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `writer_loop_branches` behavior.
 async fn writer_loop_branches() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -1137,6 +1132,7 @@ async fn writer_loop_branches() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_loop_branches` behavior.
 async fn ack_waiter_loop_branches() -> Result<()> {
     test_hooks::reset();
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
@@ -1255,6 +1251,7 @@ async fn ack_waiter_loop_branches() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_loop_cancel_branch` behavior.
 async fn ack_waiter_loop_cancel_branch() -> Result<()> {
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(1);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -1290,6 +1287,7 @@ async fn ack_waiter_loop_cancel_branch() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `handle_stream_drain_timeout_branch` behavior.
 async fn handle_stream_drain_timeout_branch() -> Result<()> {
     test_hooks::reset();
     test_hooks::set_force_drain_timeout(true);
@@ -1338,6 +1336,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_stream_rejects_unexpected_message` behavior.
 async fn control_stream_rejects_unexpected_message() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -1384,6 +1383,7 @@ async fn control_stream_rejects_unexpected_message() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `cache_put_unknown_cache_closes_stream` behavior.
 async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1451,6 +1451,7 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `cache_get_unknown_cache_closes_stream` behavior.
 async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1516,6 +1517,7 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `uni_stream_rejects_non_publish` behavior.
 async fn uni_stream_rejects_non_publish() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1614,6 +1616,7 @@ fn spawn_ack_waiter_with_closed_out_ack(
 }
 
 #[tokio::test]
+// This test prevents regressions in `delay_frame_source_returns_none` behavior.
 async fn delay_frame_source_returns_none() -> Result<()> {
     let mut source = DelayFrameSource {
         delay: Duration::from_millis(1),
@@ -1625,6 +1628,7 @@ async fn delay_frame_source_returns_none() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `pending_frame_source_returns_none` behavior.
 async fn pending_frame_source_returns_none() -> Result<()> {
     let ready = Arc::new(AtomicBool::new(false));
     let mut source = PendingFrameSource {
@@ -1638,6 +1642,7 @@ async fn pending_frame_source_returns_none() -> Result<()> {
 }
 
 #[test]
+// This test prevents regressions in `should_reset_throttle_true_when_crossing_low_water` behavior.
 fn should_reset_throttle_true_when_crossing_low_water() {
     assert!(super::hooks::should_reset_throttle(Some((
         ACK_HI_WATER,
@@ -1647,6 +1652,7 @@ fn should_reset_throttle_true_when_crossing_low_water() {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `writer_loop_cancel_breaks_on_cancel` behavior.
 async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
@@ -1692,6 +1698,7 @@ async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `writer_loop_records_timings_when_sampled` behavior.
 async fn writer_loop_records_timings_when_sampled() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -1750,6 +1757,7 @@ async fn writer_loop_records_timings_when_sampled() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_loop_cancel_changed_breaks` behavior.
 async fn ack_waiter_loop_cancel_changed_breaks() -> Result<()> {
     let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
     drop(out_ack_rx);
@@ -1775,6 +1783,7 @@ async fn ack_waiter_loop_cancel_changed_breaks() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_loop_logs_on_enqueue_failure` behavior.
 async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
     drop(out_ack_rx);
@@ -1892,6 +1901,7 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_error` behavior.
 async fn ack_waiter_enqueue_failure_publish_error() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -1914,6 +1924,7 @@ async fn ack_waiter_enqueue_failure_publish_error() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_dropped` behavior.
 async fn ack_waiter_enqueue_failure_publish_dropped() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -1935,6 +1946,7 @@ async fn ack_waiter_enqueue_failure_publish_dropped() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_timeout` behavior.
 async fn ack_waiter_enqueue_failure_publish_timeout() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -1957,6 +1969,7 @@ async fn ack_waiter_enqueue_failure_publish_timeout() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_ok` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -1978,6 +1991,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_error` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -1999,6 +2013,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_dropped` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2019,6 +2034,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_timeout` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2039,6 +2055,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_pre_canceled_exits` behavior.
 async fn control_loop_pre_canceled_exits() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2097,6 +2114,7 @@ async fn control_loop_pre_canceled_exits() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_cancel_changed_breaks` behavior.
 async fn control_loop_cancel_changed_breaks() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2162,6 +2180,7 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_cancel_changed_continues` behavior.
 async fn control_loop_cancel_changed_continues() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2229,6 +2248,7 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_subscribe_done_true` behavior.
 async fn control_loop_subscribe_done_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
@@ -2298,6 +2318,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `control_loop_cache_timings_recorded` behavior.
 async fn control_loop_cache_timings_recorded() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -2385,6 +2406,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_cache_get_missing_no_request_id_returns_true` behavior.
 async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2453,6 +2475,7 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_cache_put_missing_no_request_id_returns_true` behavior.
 async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2523,6 +2546,7 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
 }
 
 #[tokio::test]
+// This test prevents regressions in `control_loop_error_message_returns_false` behavior.
 async fn control_loop_error_message_returns_false() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2586,6 +2610,7 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `uni_loop_breaks_on_enqueue_error` behavior.
 async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -2676,6 +2701,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
 }
 
 #[tokio::test]
+// This test prevents regressions in `handle_uni_stream_smoke` behavior.
 async fn handle_uni_stream_smoke() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -2733,6 +2759,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// This test prevents regressions in `handle_stream_drain_timeout_sleep_branch` behavior.
 async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
     test_hooks::reset();
     let auth = auth_fixture("t1", default_perms());

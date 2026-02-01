@@ -17,7 +17,7 @@ mod store;
 use anyhow::Context;
 use api::types::{FeatureFlags, Region};
 use app::{AppState, build_bootstrap_router, build_router};
-use auth::oidc::OidcValidator;
+use auth::oidc::UpstreamOidcValidator;
 use std::sync::Arc;
 use store::{ControlPlaneAuthStore, StoreConfig, memory::InMemoryStore, postgres::PostgresStore};
 
@@ -92,7 +92,7 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
             bridges: false,
         },
         store,
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: config.bootstrap.enabled,
         bootstrap_token: config.bootstrap.token,
     })

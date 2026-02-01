@@ -1,15 +1,56 @@
 //! RBAC permission expansion helpers.
 //!
-//! # Purpose
-//! Computes effective permissions for a principal and expands implied actions
+//! # Purpose and responsibility
+//! Computes effective permissions from Casbin and expands implied actions
 //! (e.g., tenant admin implies namespace/stream/cache rights).
+//!
+//! # Where it fits in Felix
+//! Used during token exchange to derive the permission set embedded into Felix
+//! tokens and by admin flows that need to reason about effective access.
+//!
+//! # Key invariants and assumptions
+//! - Input permissions are `action:object` strings derived from Casbin rules.
+//! - Expansion rules must not widen scope beyond the implied hierarchy.
+//!
+//! # Security considerations
+//! - Expansion must be conservative; never grant more than implied by policy.
+//! - Wildcard propagation must be carefully constrained by object prefixes.
 use casbin::{Enforcer, RbacApi};
 use std::collections::HashSet;
 
+/// Compute effective permissions for a principal within a domain.
+///
+/// # What it does
+/// Loads implicit permissions from Casbin, normalizes them into
+/// `action:object` strings, and applies inheritance expansion.
+///
+/// # Why it exists
+/// Allows the token exchange flow to embed a flattened permission list that is
+/// fast to evaluate by brokers.
+///
+/// # Invariants
+/// - Returned permissions are de-duplicated.
+/// - All permissions are scoped to the provided domain.
+///
+/// # Errors
+/// - Does not return errors; relies on Casbin APIs that return empty results.
+///
+/// # Example
+/// ```rust,no_run
+/// use controlplane::auth::rbac::permissions::effective_permissions;
+/// use casbin::Enforcer;
+///
+/// # async fn demo(enforcer: &Enforcer) {
+/// let perms = effective_permissions(enforcer, "p:user", "tenant-a");
+/// let _ = perms;
+/// # }
+/// ```
 pub fn effective_permissions(enforcer: &Enforcer, principal: &str, domain: &str) -> Vec<String> {
+    // Step 1: Ask Casbin for implicit permissions (roles + groupings).
     let rules: Vec<Vec<String>> =
         enforcer.get_implicit_permissions_for_user(principal, Some(domain));
 
+    // Step 2: Normalize to `action:object` strings and de-duplicate.
     let mut perms: HashSet<String> = HashSet::new();
     for rule in rules {
         if rule.len() < 4 {
@@ -20,11 +61,13 @@ pub fn effective_permissions(enforcer: &Enforcer, principal: &str, domain: &str)
         perms.insert(format!("{act}:{obj}"));
     }
 
+    // Step 3: Expand implied permissions (admin -> namespace/stream/cache).
     expand_inheritance(&mut perms);
     perms.into_iter().collect()
 }
 
 fn expand_inheritance(perms: &mut HashSet<String>) {
+    // Collect implied permissions to avoid mutating the set while iterating.
     let mut implied = Vec::new();
     for perm in perms.iter() {
         let Some((action, object)) = perm.split_once(':') else {
@@ -32,16 +75,19 @@ fn expand_inheritance(perms: &mut HashSet<String>) {
         };
         match action {
             "tenant.admin" => {
+                // Tenant admin implies full namespace, stream, and cache access.
                 implied.push("ns.manage:ns:*".to_string());
                 implied.push("stream.publish:stream:*/*".to_string());
                 implied.push("stream.subscribe:stream:*/*".to_string());
                 implied.push("cache.read:cache:*/*".to_string());
                 implied.push("cache.write:cache:*/*".to_string());
+                // If admin is scoped to a specific tenant, also add wildcard.
                 if object != "tenant:*" {
                     implied.push("tenant.admin:tenant:*".to_string());
                 }
             }
             "ns.manage" => {
+                // Namespace manage implies stream/cache access within that namespace.
                 if let Some(ns) = object.strip_prefix("ns:") {
                     let ns = ns.trim();
                     if ns == "*" {

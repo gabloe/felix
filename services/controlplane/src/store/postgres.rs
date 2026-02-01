@@ -10,6 +10,20 @@
 //! broker logs, or durable queues). It stores *metadata* that other services use to decide how to
 //! route, authorize, or configure data-plane behavior.
 //!
+//! # Key invariants
+//! - Authoritative tables represent current state; change tables are append-only.
+//! - Each change table has a monotonically increasing `seq`.
+//! - Transactions update authoritative state and append change events atomically.
+//!
+//! # Security model / threat assumptions
+//! - Database URLs may contain credentials; avoid logging them.
+//! - We assume Postgres enforces durability and access control.
+//! - Dynamic SQL is limited to a fixed, internal allowlist.
+//!
+//! # Concurrency model
+//! - The store is shared across async handlers; `sqlx::PgPool` manages concurrency.
+//! - Each method acquires a pooled connection; pool sizing controls throughput.
+//!
 //! # Data model: authoritative state + append-only change logs
 //! We persist state in two complementary forms:
 //!
@@ -56,6 +70,10 @@
 //! - Connection pooling/timeouts are explicitly configured because hanging forever on DB failures is
 //!   unacceptable for production control-plane services.
 //!
+//! # How to use
+//! Call [`PostgresStore::connect`] with a [`PostgresConfig`] and [`StoreConfig`], then use the
+//! returned store via the [`ControlPlaneStore`] and [`AuthStore`] traits.
+//!
 //! # Retention of change logs (optional)
 //! This module can spawn a best-effort retention task that bounds each change table to the most
 //! recent `N` rows. This prevents unbounded growth, but it reduces the “catch-up window” for clients.
@@ -90,20 +108,37 @@ use sqlx::{FromRow, PgPool};
 use std::str::FromStr;
 use std::time::Duration;
 
+#[cfg(feature = "pg-tests")]
+const RETENTION_TICK: Duration = Duration::from_secs(1);
+#[cfg(not(feature = "pg-tests"))]
+const RETENTION_TICK: Duration = Duration::from_secs(60);
+
 /// Durable control-plane store backed by Postgres.
 ///
-/// ## Concurrency and pooling
-/// `PostgresStore` is safe to share across request handlers. Each API call issues one or more SQL
-/// statements through a `sqlx::PgPool`. `sqlx` manages concurrent access by leasing connections from
-/// the pool; pool sizing is therefore a key tuning knob.
+/// # What it does
+/// Implements [`ControlPlaneStore`] and [`AuthStore`] using Postgres as the
+/// authoritative metadata store and change-log backend.
 ///
-/// ## Durability semantics
-/// Writes are durable to the extent your Postgres deployment is durable (WAL/fsync, storage, etc.).
-/// This module does not implement its own durability; it relies on Postgres as the source of truth.
+/// # Inputs/outputs
+/// - Inputs: Postgres connection config and store config.
+/// - Outputs: durable reads/writes for control-plane metadata.
 ///
-/// ## Consistency model
-/// Mutations are transactional: authoritative state and the corresponding change-log entry are
-/// written in the same transaction, providing atomicity for “snapshot + incremental changes” consumers.
+/// # Errors
+/// - Connection and query failures are surfaced as [`StoreError`].
+///
+/// # Security notes
+/// - Database URLs may include credentials; avoid logging them.
+/// - Use least-privilege DB roles and TLS in production.
+///
+/// # Example
+/// ```rust,no_run
+/// use controlplane::config::PostgresConfig;
+/// use controlplane::store::{StoreConfig, postgres::PostgresStore};
+///
+/// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
+///     let _ = PostgresStore::connect(&pg, cfg).await;
+/// }
+/// ```
 pub struct PostgresStore {
     pool: PgPool,
     config: StoreConfig,
@@ -168,8 +203,8 @@ struct DbIdpIssuer {
 struct DbSigningKey {
     kid: String,
     alg: String,
-    private_pem: String,
-    public_pem: String,
+    private_pem: Vec<u8>,
+    public_pem: Vec<u8>,
     status: String,
 }
 
@@ -233,19 +268,81 @@ struct CacheChangeRow {
 impl PostgresStore {
     /// Connect to Postgres, run migrations, and optionally start retention maintenance.
     ///
-    /// Notes:
-    /// - Pool timeouts are important in production to avoid indefinite hangs when DB is unhealthy.
-    /// - `sqlx::migrate!("./migrations")` embeds migrations at compile time, and at runtime applies
-    ///   any pending migrations on startup (before serving).
-    /// - If `change_retention_max_rows` is set, we spawn a best-effort task to keep change tables
-    ///   bounded. This is not a substitute for operational retention policies/backups.
+    /// # What it does
+    /// Creates a connection pool, applies embedded migrations, and starts a
+    /// best-effort retention task when configured.
+    ///
+    /// # Inputs/outputs
+    /// - Inputs: `pg` connection config and `config` store settings.
+    /// - Output: a ready-to-use [`PostgresStore`].
+    ///
+    /// # Errors
+    /// - Connection, migration, or pool setup failures.
+    ///
+    /// # Security notes
+    /// - Avoid logging `pg.url` as it may contain credentials.
+    /// - Use TLS and least-privilege DB roles in production.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use controlplane::config::PostgresConfig;
+    /// use controlplane::store::{StoreConfig, postgres::PostgresStore};
+    ///
+    /// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
+    ///     let _ = PostgresStore::connect(&pg, cfg).await;
+    /// }
+    /// ```
     pub async fn connect(pg: &PostgresConfig, config: StoreConfig) -> StoreResult<Self> {
+        #[cfg(any(test, feature = "pg-tests"))]
+        let _ = Self::connect_without_migrations;
+        Self::connect_internal(pg, config, true).await
+    }
+
+    /// Connect to Postgres without running migrations.
+    ///
+    /// # What it does
+    /// Creates a connection pool without applying migrations. Intended for tests
+    /// that manage migrations externally.
+    ///
+    /// # Inputs/outputs
+    /// - Inputs: `pg` connection config and `config` store settings.
+    /// - Output: a [`PostgresStore`] using the existing schema.
+    ///
+    /// # Errors
+    /// - Connection or pool setup failures.
+    ///
+    /// # Security notes
+    /// - Avoid logging `pg.url` as it may contain credentials.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use controlplane::config::PostgresConfig;
+    /// use controlplane::store::{StoreConfig, postgres::PostgresStore};
+    ///
+    /// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
+    ///     let _ = PostgresStore::connect_without_migrations(&pg, cfg).await;
+    /// }
+    /// ```
+    #[cfg(any(test, feature = "pg-tests"))]
+    pub async fn connect_without_migrations(
+        pg: &PostgresConfig,
+        config: StoreConfig,
+    ) -> StoreResult<Self> {
+        Self::connect_internal(pg, config, false).await
+    }
+
+    async fn connect_internal(
+        pg: &PostgresConfig,
+        config: StoreConfig,
+        run_migrations: bool,
+    ) -> StoreResult<Self> {
         // Connection pool tuning matters for control-plane stability:
         // - `max_connections` caps concurrent DB work and protects the DB from overload.
         // - `acquire_timeout` bounds how long a request will wait for a pooled connection before failing fast.
         // - `connect_timeout` bounds how long we wait when establishing a new physical connection.
         //
         // In production, prefer failing fast + surfacing health failures over hanging indefinitely.
+        // Avoid logging `pg.url` because it may contain credentials.
         let connect_options =
             PgConnectOptions::from_str(&pg.url).map_err(|e| StoreError::Unexpected(e.into()))?;
         let pool = PgPoolOptions::new()
@@ -255,12 +352,14 @@ impl PostgresStore {
             .await
             .map_err(|e| StoreError::Unexpected(e.into()))?;
 
-        // Migrations run *before* serving requests so handlers can assume the schema exists.
-        // If migrations fail, we fail startup rather than serving partially functional endpoints.
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        if run_migrations {
+            // Migrations run *before* serving requests so handlers can assume the schema exists.
+            // If migrations fail, we fail startup rather than serving partially functional endpoints.
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .map_err(|e| StoreError::Unexpected(e.into()))?;
+        }
 
         // Optional change-log retention: bounds append-only tables so they don't grow forever.
         // Tradeoff: reduces how far behind a client can fall before requiring a full snapshot bootstrap.
@@ -308,7 +407,7 @@ fn spawn_retention_task(pool: PgPool, max_rows: i64) {
         "cache_changes",
     ];
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        let mut ticker = tokio::time::interval(RETENTION_TICK);
         loop {
             ticker.tick().await;
             for table in tables {
@@ -1480,19 +1579,25 @@ fn delivery_to_str(value: &crate::model::DeliveryGuarantee) -> &'static str {
 }
 
 fn parse_algorithm(value: &str) -> StoreResult<Algorithm> {
+    // Felix tokens must remain EdDSA; reject any other algorithm on load.
     match value {
-        "RS256" => Ok(Algorithm::RS256),
-        "ES256" => Ok(Algorithm::ES256),
+        "EdDSA" => Ok(Algorithm::EdDSA),
         _ => Err(StoreError::Unexpected(anyhow!("invalid alg {value}"))),
     }
 }
 
 fn algorithm_to_str(value: Algorithm) -> &'static str {
+    // Persist only EdDSA to prevent accidental RSA reintroduction.
     match value {
-        Algorithm::RS256 => "RS256",
-        Algorithm::ES256 => "ES256",
-        _ => "RS256",
+        Algorithm::EdDSA => "EdDSA",
+        _ => "EdDSA",
     }
+}
+
+fn decode_key(value: &[u8], label: &str) -> StoreResult<[u8; 32]> {
+    value
+        .try_into()
+        .map_err(|_| StoreError::Unexpected(anyhow!("invalid {label} length")))
 }
 
 impl PostgresStore {
@@ -1644,6 +1749,7 @@ impl AuthStore for PostgresStore {
     }
 
     async fn get_tenant_signing_keys(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
+        // We fetch all keys to support rotation; callers will try `current` first.
         let rows: Vec<DbSigningKey> = sqlx::query_as(
             "SELECT kid, alg, private_pem, public_pem, status \
              FROM tenant_signing_keys WHERE tenant_id = $1",
@@ -1660,11 +1766,13 @@ impl AuthStore for PostgresStore {
         let mut current: Option<SigningKey> = None;
         let mut previous = Vec::new();
         for row in rows {
+            // Parse and validate EdDSA-only key material from raw bytes.
+            // Private key bytes are stored as raw Ed25519 seeds, not PKCS8.
             let key = SigningKey {
                 kid: row.kid,
                 alg: parse_algorithm(&row.alg)?,
-                private_key_pem: row.private_pem.into_bytes(),
-                public_key_pem: row.public_pem.into_bytes(),
+                private_key: decode_key(&row.private_pem, "private key")?,
+                public_key: decode_key(&row.public_pem, "public key")?,
             };
             match row.status.as_str() {
                 "current" => current = Some(key),
@@ -1682,11 +1790,16 @@ impl AuthStore for PostgresStore {
         tenant_id: &str,
         keys: TenantSigningKeys,
     ) -> StoreResult<()> {
+        // Validate that keys are EdDSA and public keys match private seeds.
+        // This prevents accidental RSA reintroduction and corrupted key storage.
+        keys.validate()
+            .map_err(|err| StoreError::Unexpected(anyhow!(err)))?;
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|err| StoreError::Unexpected(err.into()))?;
+        // Replace all keys atomically to keep `current` and `previous` consistent.
         sqlx::query("DELETE FROM tenant_signing_keys WHERE tenant_id = $1")
             .bind(tenant_id)
             .execute(&mut *tx)
@@ -1694,6 +1807,7 @@ impl AuthStore for PostgresStore {
             .map_err(|err| StoreError::Unexpected(err.into()))?;
 
         let current_alg = algorithm_to_str(keys.current.alg);
+        // Store raw Ed25519 seeds; never serialize or log these values.
         sqlx::query(
             "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
              VALUES ($1, $2, $3, $4, $5, 'current')",
@@ -1701,14 +1815,15 @@ impl AuthStore for PostgresStore {
         .bind(tenant_id)
         .bind(&keys.current.kid)
         .bind(current_alg)
-        .bind(String::from_utf8_lossy(&keys.current.private_key_pem).to_string())
-        .bind(String::from_utf8_lossy(&keys.current.public_key_pem).to_string())
+        .bind(keys.current.private_key.as_slice())
+        .bind(keys.current.public_key.as_slice())
         .execute(&mut *tx)
         .await
         .map_err(|err| StoreError::Unexpected(err.into()))?;
 
         for key in &keys.previous {
             let alg = algorithm_to_str(key.alg);
+            // Store previous keys for rotation; still valid for verification.
             sqlx::query(
                 "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
                  VALUES ($1, $2, $3, $4, $5, 'previous')",
@@ -1716,8 +1831,8 @@ impl AuthStore for PostgresStore {
             .bind(tenant_id)
             .bind(&key.kid)
             .bind(alg)
-            .bind(String::from_utf8_lossy(&key.private_key_pem).to_string())
-            .bind(String::from_utf8_lossy(&key.public_key_pem).to_string())
+            .bind(key.private_key.as_slice())
+            .bind(key.public_key.as_slice())
             .execute(&mut *tx)
             .await
             .map_err(|err| StoreError::Unexpected(err.into()))?;
@@ -1726,6 +1841,8 @@ impl AuthStore for PostgresStore {
         tx.commit()
             .await
             .map_err(|err| StoreError::Unexpected(err.into()))?;
+        // Invalidate derived key cache so new keys take effect immediately.
+        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
         Ok(())
     }
 
@@ -1757,6 +1874,7 @@ impl AuthStore for PostgresStore {
     }
 
     async fn ensure_signing_key_current(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
+        // If no keys exist, generate a new Ed25519 key set for the tenant.
         match self.get_tenant_signing_keys(tenant_id).await {
             Ok(keys) => Ok(keys),
             Err(StoreError::NotFound(_)) => {
@@ -1776,6 +1894,7 @@ impl AuthStore for PostgresStore {
         policies: Vec<PolicyRule>,
         groupings: Vec<GroupingRule>,
     ) -> StoreResult<()> {
+        // Seed policy/grouping data atomically to avoid partial authorization state.
         let mut tx = self
             .pool
             .begin()
@@ -1821,12 +1940,14 @@ mod tests {
 
     #[test]
     fn unique_violation_detects_only_db_codes() {
+        // This test prevents false positives when inspecting non-DB errors.
         let err = sqlx::Error::RowNotFound;
         assert!(!is_unique_violation(&err));
     }
 
     #[test]
     fn stream_kind_round_trip() {
+        // This test ensures DB string mapping stays stable for stream kinds.
         assert!(matches!(
             parse_stream_kind("Stream").unwrap(),
             StreamKind::Stream
@@ -1847,6 +1968,7 @@ mod tests {
 
     #[test]
     fn consistency_round_trip() {
+        // This test ensures consistency levels map correctly between DB and API.
         assert!(matches!(
             parse_consistency("Leader").unwrap(),
             crate::model::ConsistencyLevel::Leader
@@ -1868,6 +1990,7 @@ mod tests {
 
     #[test]
     fn delivery_round_trip() {
+        // This test ensures delivery guarantees map correctly between DB and API.
         assert!(matches!(
             parse_delivery("AtMostOnce").unwrap(),
             crate::model::DeliveryGuarantee::AtMostOnce
@@ -1889,6 +2012,7 @@ mod tests {
 
     #[test]
     fn stream_from_db_maps_fields() {
+        // This test guards against schema/model drift when parsing DB rows.
         let row = DbStream {
             tenant_id: "t1".to_string(),
             namespace: "ns".to_string(),

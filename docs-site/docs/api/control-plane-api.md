@@ -105,12 +105,12 @@ Fetch tenant signing keys (public JWKS) used by brokers to verify Felix tokens.
 {
   "keys": [
     {
-      "kty": "RSA",
+      "kty": "OKP",
       "kid": "k1",
-      "alg": "RS256",
+      "alg": "EdDSA",
       "use": "sig",
-      "n": "...",
-      "e": "AQAB"
+      "crv": "Ed25519",
+      "x": "..."
     }
   ]
 }

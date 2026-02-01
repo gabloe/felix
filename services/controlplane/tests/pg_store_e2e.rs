@@ -2,11 +2,27 @@
 //! Postgres-backed control-plane store end-to-end tests.
 //!
 //! # Purpose
-//! These tests exercise the Postgres store against a real database to validate:
+//! Exercise the Postgres store against a real database to validate:
 //! - schema migrations and connection setup
 //! - CRUD + snapshot/changefeed behaviors
-//! - auth/bootstrap tables (idp issuers, RBAC, signing keys)
+//! - auth/bootstrap tables (IdP issuers, RBAC, signing keys)
 //! - retention trimming and cascade delete semantics
+//!
+//! # Key invariants
+//! - Tests use isolated schemas to avoid cross-test contamination.
+//! - Felix signing keys are Ed25519 and stored as raw 32-byte seeds.
+//! - Change streams are monotonically increasing per table.
+//!
+//! # Security model / threat assumptions
+//! - Database URLs may include credentials and must not be logged.
+//! - Tokens/keys in these tests are fixtures only and not secrets in production.
+//!
+//! # Concurrency + ordering guarantees
+//! - Tests are serialized via `serial_test` to avoid shared container races.
+//! - JWKS/bootstrap paths are exercised after stores are fully initialized.
+//!
+//! # How to use
+//! Run with `cargo test -p controlplane --features pg-tests pg_store_e2e`.
 //!
 //! # Test infrastructure
 //! We use `testcontainers` to spin up an ephemeral Postgres instance and reset state between tests.
@@ -21,7 +37,7 @@ use common::read_json;
 use controlplane::app;
 use controlplane::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use controlplane::auth::keys::generate_signing_keys;
-use controlplane::auth::oidc::OidcValidator;
+use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::model::{
     Cache, CachePatchRequest, ConsistencyLevel, DeliveryGuarantee, Namespace, NamespaceKey,
@@ -29,21 +45,33 @@ use controlplane::model::{
 };
 use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use controlplane::{config, store};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use serde_json::json;
 use serial_test::serial;
+use sqlx::Connection;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use testcontainers::clients::Cli;
 use testcontainers::core::Container;
 use testcontainers_modules::postgres::Postgres;
 use tower::ServiceExt;
 
 fn docker_available() -> bool {
+    // Detect docker so we can skip tests instead of failing in CI.
     std::process::Command::new("docker")
         .arg("version")
         .output()
         .is_ok()
+}
+
+fn test_ed25519_key_bytes() -> ([u8; 32], [u8; 32]) {
+    // Deterministic Ed25519 seed prevents flaky signatures.
+    let private_key = [11u8; 32];
+    let signing_key = Ed25519SigningKey::from_bytes(&private_key);
+    let public_key = signing_key.verifying_key().to_bytes();
+    (private_key, public_key)
 }
 
 struct PgFixture {
@@ -57,14 +85,17 @@ struct PgContainer {
 }
 
 static PG_CONTAINER: tokio::sync::OnceCell<PgContainer> = tokio::sync::OnceCell::const_new();
-static PG_STORE_DEFAULT: tokio::sync::OnceCell<Arc<store::postgres::PostgresStore>> =
-    tokio::sync::OnceCell::const_new();
-static PG_STORE_RETENTION_50: tokio::sync::OnceCell<Arc<store::postgres::PostgresStore>> =
-    tokio::sync::OnceCell::const_new();
-static PG_STORE_RETENTION_1: tokio::sync::OnceCell<Arc<store::postgres::PostgresStore>> =
-    tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_DEFAULT: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_RETENTION: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_DEFAULT_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static PG_SCHEMA_RETENTION_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static PG_MIGRATED_DEFAULT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static PG_MIGRATED_RETENTION: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+static MIGRATOR: Migrator = sqlx::migrate!();
 
 async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Error> {
+    // Poll until Postgres accepts connections to avoid startup races.
     let start = tokio::time::Instant::now();
     loop {
         let attempt = tokio::time::timeout(
@@ -96,21 +127,102 @@ async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Err
     }
 }
 
-async fn reset_db(url: &str) -> Result<(), sqlx::Error> {
+async fn test_schema_name(cell: &tokio::sync::OnceCell<String>, suffix: &str) -> String {
+    // Unique schema per run keeps tests isolated across processes.
+    cell.get_or_init(|| async {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        if suffix.is_empty() {
+            format!("felix_test_{}_{}", std::process::id(), nanos)
+        } else {
+            format!("felix_test_{}_{}_{}", std::process::id(), nanos, suffix)
+        }
+    })
+    .await
+    .clone()
+}
+
+fn url_with_schema(base_url: &str, schema: &str) -> String {
+    // Use search_path to keep all queries in the test schema.
+    let encoded = format!("-csearch_path%3D{}", schema);
+    if base_url.contains('?') {
+        format!("{base_url}&options={encoded}")
+    } else {
+        format!("{base_url}?options={encoded}")
+    }
+}
+
+async fn ensure_schema(
+    base_url: &str,
+    cell: &tokio::sync::OnceCell<String>,
+    ready: &tokio::sync::OnceCell<()>,
+    suffix: &str,
+) -> Result<String, sqlx::Error> {
+    // Create the schema once to minimize setup cost and avoid races.
+    let schema = test_schema_name(cell, suffix).await;
+    let schema_clone = schema.clone();
+    ready
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(base_url).await?;
+            let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
+            sqlx::query(&create_sql).execute(&mut conn).await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(schema)
+}
+
+async fn run_migrations_once(
+    url: &str,
+    migrated: &tokio::sync::OnceCell<()>,
+) -> Result<(), sqlx::Error> {
+    // Migrations are expensive; run them once per schema.
+    migrated
+        .get_or_try_init(|| async move {
+            let mut conn = sqlx::PgConnection::connect(url).await?;
+            MIGRATOR.run(&mut conn).await?;
+            conn.close().await?;
+            Ok::<_, sqlx::Error>(())
+        })
+        .await?;
+    Ok(())
+}
+
+async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
+    // Reset ensures each test starts from a clean baseline.
     let pool = PgPoolOptions::new()
         // Use a small, short-lived pool for reset to avoid competing with the store pool.
         .max_connections(1)
-        .acquire_timeout(Duration::from_secs(5))
+        .acquire_timeout(Duration::from_secs(10))
         .connect(url)
         .await?;
-    sqlx::query(
-        "TRUNCATE tenant_changes, namespace_changes, stream_changes, cache_changes, \
-         streams, caches, namespaces, idp_issuers, rbac_policies, rbac_groupings, \
-         tenant_signing_keys, tenants RESTART IDENTITY CASCADE",
-    )
-    .execute(&pool)
-    .await
-    .map(|_| ())
+
+    // In CI we can race reset vs migrations or run against a fresh external DB.
+    // Postgres doesn't support TRUNCATE IF EXISTS, so guard via to_regclass.
+    let exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+        .bind(format!("{schema}.tenant_changes"))
+        .fetch_one(&pool)
+        .await?;
+    if exists.is_none() {
+        // Nothing to reset yet.
+        pool.close().await;
+        return Ok(());
+    }
+
+    let schema_ident = format!(r#""{}""#, schema);
+    let truncate = format!(
+        "TRUNCATE {schema_ident}.tenant_changes, {schema_ident}.namespace_changes, \
+         {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
+         {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.idp_issuers, \
+         {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
+         {schema_ident}.tenant_signing_keys, {schema_ident}.tenants RESTART IDENTITY CASCADE",
+    );
+    sqlx::query(&truncate).execute(&pool).await?;
+
+    pool.close().await;
+    Ok(())
 }
 
 async fn pg_container() -> Result<Option<&'static PgContainer>> {
@@ -125,6 +237,7 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
             let container = docker.run(Postgres::default());
             let port = container.get_host_port_ipv4(5432);
             let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+            // Avoid logging the full URL in case it includes credentials.
             eprintln!("pg-tests: postgres ready on 127.0.0.1:{port}");
             eprintln!("pg-tests: waiting for postgres to accept connections");
             wait_for_postgres(&url, Duration::from_secs(30)).await?;
@@ -145,68 +258,117 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
     }
 }
 
-async fn pg_store(retention: Option<i64>) -> Result<Option<PgFixture>> {
+async fn pg_store() -> Result<Option<PgFixture>> {
+    // Prefer explicit URLs to avoid docker dependency when CI provides a DB.
     let url_override = std::env::var("FELIX_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
         .or_else(|_| std::env::var("DATABASE_URL"))
         .ok();
-    let url = if let Some(url) = url_override {
-        eprintln!("pg-tests: using external postgres url (retention={retention:?})");
+    let base_url = if let Some(url) = url_override {
+        // Do not log the full URL to avoid credential leakage.
+        eprintln!("pg-tests: using external postgres url");
         url
     } else {
         let Some(container) = pg_container().await? else {
             return Ok(None);
         };
-        eprintln!("pg-tests: using shared postgres container (retention={retention:?})");
+        eprintln!("pg-tests: using shared postgres container");
         container.url.clone()
     };
+    let schema = ensure_schema(&base_url, &PG_SCHEMA_DEFAULT, &PG_SCHEMA_DEFAULT_READY, "").await?;
+    let url = url_with_schema(&base_url, &schema);
+    run_migrations_once(&url, &PG_MIGRATED_DEFAULT).await?;
     let pg_cfg = config::PostgresConfig {
         url: url.clone(),
-        // Give the containerized Postgres more headroom to avoid pool timeouts in CI.
-        max_connections: 10,
-        connect_timeout_ms: 10_000,
-        acquire_timeout_ms: 10_000,
+        max_connections: 5,
+        connect_timeout_ms: 20_000,
+        acquire_timeout_ms: 20_000,
     };
-    let retention = retention.unwrap_or(config::DEFAULT_CHANGE_RETENTION_MAX_ROWS);
-    let store_cell = match retention {
-        1 => &PG_STORE_RETENTION_1,
-        50 => &PG_STORE_RETENTION_50,
-        _ => &PG_STORE_DEFAULT,
-    };
-    let store = match store_cell
-        .get_or_try_init(|| async {
-            let store = store::postgres::PostgresStore::connect(
-                &pg_cfg,
-                StoreConfig {
-                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
-                    change_retention_max_rows: Some(retention),
-                },
-            )
-            .await?;
-            Ok::<_, store::StoreError>(Arc::new(store))
-        })
-        .await
+    let store = match store::postgres::PostgresStore::connect_without_migrations(
+        &pg_cfg,
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: None,
+        },
+    )
+    .await
     {
-        Ok(store) => Arc::clone(store),
+        Ok(store) => Arc::new(store),
         Err(err) => {
             eprintln!("skipping pg-tests: connect postgres store failed: {err}");
             return Ok(None);
         }
     };
     eprintln!("pg-tests: connected to postgres and ran migrations");
-    let _ = reset_db(&url).await;
+    reset_db(&url, &schema).await?;
     eprintln!("pg-tests: database reset complete");
 
     // Keep docker client alive via return value.
     Ok(Some(PgFixture { store, url }))
 }
 
-async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> {
+async fn pg_store_with_retention(retention: i64) -> Result<Option<PgFixture>> {
+    // Separate schema for retention tests avoids interaction with default schema.
     let url_override = std::env::var("FELIX_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
         .or_else(|_| std::env::var("DATABASE_URL"))
         .ok();
-    let url = if let Some(url) = url_override {
+    let base_url = if let Some(url) = url_override {
+        // Do not log the full URL to avoid credential leakage.
+        eprintln!("pg-tests: using external postgres url (retention={retention})");
+        url
+    } else {
+        let Some(container) = pg_container().await? else {
+            return Ok(None);
+        };
+        eprintln!("pg-tests: using shared postgres container (retention={retention})");
+        container.url.clone()
+    };
+    let schema = ensure_schema(
+        &base_url,
+        &PG_SCHEMA_RETENTION,
+        &PG_SCHEMA_RETENTION_READY,
+        "retention",
+    )
+    .await?;
+    let url = url_with_schema(&base_url, &schema);
+    run_migrations_once(&url, &PG_MIGRATED_RETENTION).await?;
+
+    let pg_cfg = config::PostgresConfig {
+        url: url.clone(),
+        max_connections: 5,
+        connect_timeout_ms: 20_000,
+        acquire_timeout_ms: 20_000,
+    };
+    let store = match store::postgres::PostgresStore::connect_without_migrations(
+        &pg_cfg,
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: Some(retention),
+        },
+    )
+    .await
+    {
+        Ok(store) => Arc::new(store),
+        Err(err) => {
+            eprintln!("skipping pg-tests: connect postgres store failed: {err}");
+            return Ok(None);
+        }
+    };
+    eprintln!("pg-tests: connected to postgres and ran migrations (retention={retention})");
+    reset_db(&url, &schema).await?;
+    eprintln!("pg-tests: database reset complete (retention={retention})");
+    Ok(Some(PgFixture { store, url }))
+}
+
+async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> {
+    // Reuse existing docker container or external DB with a schema per config.
+    let url_override = std::env::var("FELIX_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .ok();
+    let base_url = if let Some(url) = url_override {
+        // Do not log the full URL to avoid credential leakage.
         eprintln!("pg-tests: using external postgres url (custom config)");
         url
     } else {
@@ -216,13 +378,32 @@ async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> 
         eprintln!("pg-tests: using shared postgres container (custom config)");
         container.url.clone()
     };
+    let use_retention_schema = config.change_retention_max_rows.is_some();
+    let (schema_cell, ready_cell, migrated_cell, suffix) = if use_retention_schema {
+        (
+            &PG_SCHEMA_RETENTION,
+            &PG_SCHEMA_RETENTION_READY,
+            &PG_MIGRATED_RETENTION,
+            "retention",
+        )
+    } else {
+        (
+            &PG_SCHEMA_DEFAULT,
+            &PG_SCHEMA_DEFAULT_READY,
+            &PG_MIGRATED_DEFAULT,
+            "",
+        )
+    };
+    let schema = ensure_schema(&base_url, schema_cell, ready_cell, suffix).await?;
+    let url = url_with_schema(&base_url, &schema);
+    run_migrations_once(&url, migrated_cell).await?;
     let pg_cfg = config::PostgresConfig {
         url: url.clone(),
         max_connections: 5,
-        connect_timeout_ms: 10_000,
-        acquire_timeout_ms: 10_000,
+        connect_timeout_ms: 20_000,
+        acquire_timeout_ms: 20_000,
     };
-    let store = store::postgres::PostgresStore::connect(&pg_cfg, config).await;
+    let store = store::postgres::PostgresStore::connect_without_migrations(&pg_cfg, config).await;
     let store = match store {
         Ok(store) => Arc::new(store),
         Err(err) => {
@@ -231,7 +412,7 @@ async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> 
         }
     };
     eprintln!("pg-tests: connected to postgres and ran migrations (custom config)");
-    let _ = reset_db(&url).await;
+    reset_db(&url, &schema).await?;
     eprintln!("pg-tests: database reset complete (custom config)");
     Ok(Some(PgFixture { store, url }))
 }
@@ -239,7 +420,8 @@ async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> 
 #[tokio::test]
 #[serial]
 async fn pg_store_core_crud_and_auth() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test guards CRUD, auth, and change-stream basics across real Postgres.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -517,7 +699,7 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 #[serial]
 async fn pg_store_connect_and_retention_task_ticks() -> Result<()> {
     let Some(fixture) = pg_store_with_config(StoreConfig {
@@ -544,9 +726,8 @@ async fn pg_store_connect_and_retention_task_ticks() -> Result<()> {
         })
         .await?;
 
-    // Advance time to ensure the retention task executes at least one tick.
-    tokio::time::advance(Duration::from_secs(61)).await;
-    tokio::task::yield_now().await;
+    // Allow the retention task to tick at least once.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
 
     let changes = store.tenant_changes(0).await?;
     assert!(
@@ -588,7 +769,7 @@ async fn pg_store_connect_without_retention() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_additional_paths() -> Result<()> {
-    let Some(fixture) = pg_store(Some(50)).await? else {
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -762,7 +943,7 @@ async fn pg_store_additional_paths() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_list_and_change_roundtrip() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -871,7 +1052,7 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_not_found_and_noop_paths() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1043,7 +1224,7 @@ async fn pg_store_not_found_and_noop_paths() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1123,7 +1304,8 @@ async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_signing_keys_requires_current() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test prevents accepting signing key sets without a current key.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1142,15 +1324,16 @@ async fn pg_store_signing_keys_requires_current() -> Result<()> {
         .acquire_timeout(Duration::from_secs(5))
         .connect(&url)
         .await?;
+    let (private_key, public_key) = test_ed25519_key_bytes();
     sqlx::query(
         "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind("t1")
     .bind("k1")
-    .bind("RS256")
-    .bind("priv")
-    .bind("pub")
+    .bind("EdDSA")
+    .bind(private_key.as_slice())
+    .bind(public_key.as_slice())
     .bind("previous")
     .execute(&pool)
     .await?;
@@ -1168,7 +1351,8 @@ async fn pg_store_signing_keys_requires_current() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_full_surface_area() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test ensures all store methods remain wired and return consistent data.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1323,8 +1507,8 @@ async fn pg_store_full_surface_area() -> Result<()> {
     .bind("t1")
     .bind("bad")
     .bind("BogusAlg")
-    .bind("priv")
-    .bind("pub")
+    .bind(vec![0u8; 32])
+    .bind(vec![0u8; 32])
     .bind("current")
     .execute(&pool)
     .await?;
@@ -1338,7 +1522,8 @@ async fn pg_store_full_surface_area() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_change_and_auth_parsing_errors() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test ensures parsing errors surface for invalid change/auth rows.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1433,10 +1618,11 @@ async fn pg_store_change_and_auth_parsing_errors() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 #[serial]
 async fn pg_change_retention_trims_changes() -> Result<()> {
-    let Some(fixture) = pg_store(Some(1)).await? else {
+    // This test ensures the retention task trims change tables as configured.
+    let Some(fixture) = pg_store_with_retention(1).await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1454,8 +1640,7 @@ async fn pg_change_retention_trims_changes() -> Result<()> {
         })
         .await?;
 
-    tokio::time::advance(Duration::from_secs(61)).await;
-    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
 
     let changes = store.tenant_changes(0).await?;
     assert!(changes.items.len() <= 1);
@@ -1469,7 +1654,8 @@ async fn pg_change_retention_trims_changes() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_changes_monotonic_and_delete_not_found() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test prevents regressions in change ordering and delete-not-found behavior.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = &fixture.store;
@@ -1531,7 +1717,8 @@ async fn pg_changes_monotonic_and_delete_not_found() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()> {
-    let Some(fixture) = pg_store(Some(100)).await? else {
+    // This test ensures bootstrap initializes auth state and JWKS includes rotated keys.
+    let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
     let store = fixture.store.clone();
@@ -1548,7 +1735,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
             bridges: false,
         },
         store: store.clone(),
-        oidc_validator: OidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
         bootstrap_token: Some("token".to_string()),
     };

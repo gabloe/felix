@@ -51,7 +51,7 @@ Claims:
 - `perms`: array of permission strings
 
 Algorithm:
-- **RS256** (tenant-specific RSA keypair).
+- **EdDSA (Ed25519)** (tenant-specific signing key).
 - Header includes `kid`.
 
 ## Principal Normalization
@@ -132,7 +132,7 @@ Why it exists:
    - header `X-Felix-Bootstrap-Token: <token>`
 3) Control plane:
    - creates the tenant if missing
-   - generates signing keys (RS256)
+   - generates signing keys (EdDSA / Ed25519)
    - seeds IdP issuers
    - seeds RBAC policies + groupings
    - marks the tenant as bootstrapped
@@ -315,12 +315,12 @@ Response:
 {
   "keys": [
     {
-      "kty": "RSA",
+      "kty": "OKP",
       "kid": "k1",
-      "alg": "RS256",
+      "alg": "EdDSA",
       "use": "sig",
-      "n": "...",
-      "e": "AQAB"
+      "crv": "Ed25519",
+      "x": "..."
     }
   ]
 }

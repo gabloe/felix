@@ -289,6 +289,7 @@ Felix tokens are JWTs minted by the control plane and validated by brokers.
 - `tid`: tenant id
 - `exp`, `iat`
 - `perms`: effective permissions
+- **Algorithm**: EdDSA (Ed25519), with tenant key rotation published via JWKS.
 
 ### RBAC Model (Casbin)
 

@@ -1,8 +1,19 @@
 //! OpenAPI schema aggregation for the control-plane API.
 //!
-//! # Purpose
+//! # Purpose and responsibility
 //! Collects all routes and schema types into a single OpenAPI document for docs
 //! and client generation.
+//!
+//! # Where it fits in Felix
+//! Used by tooling and documentation systems to expose a machine-readable API
+//! description of the control-plane.
+//!
+//! # Key invariants and assumptions
+//! - All public API endpoints must be registered here for full coverage.
+//! - Schema types must match runtime payloads.
+//!
+//! # Security considerations
+//! - Avoid exposing internal-only endpoints in the public schema.
 use crate::api::{
     caches, namespaces, regions, streams, system, tenants,
     types::{
@@ -28,6 +39,13 @@ use crate::model::{
 };
 use utoipa::OpenApi;
 
+/// OpenAPI document for the control-plane API.
+///
+/// # What it does
+/// Aggregates paths, schemas, and tags into a single `OpenApi` document.
+///
+/// # Why it exists
+/// Enables consistent documentation and client generation.
 #[derive(OpenApi)]
 #[openapi(
     info(
