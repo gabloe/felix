@@ -176,6 +176,8 @@ cargo run --release -p broker --bin cache-demo
 cargo run --release -p broker --bin latency-demo
 cargo run --release -p broker --bin pubsub-demo-notifications
 cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
 ```
 
 See the [Demos Overview](demos/overview.md) or the [Quickstart Guide](getting-started/quickstart.md) for detailed instructions.

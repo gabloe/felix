@@ -9,10 +9,49 @@ QUIC server on a random local port, runs the scenario, and exits.
 
 - You do **not** need a separately running broker for these demos.
 - Demo auth helpers are enabled for convenience (not production-safe).
+- The RBAC live demo starts a control plane, broker, and fake IdP on local ports.
 - All commands are run from the repository root.
-- If you use Task, run `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, or `task demo:orders`.
+- If you use Task, run `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
 
 ## Demo catalog
+
+### Live RBAC Policy Change (`demo-rbac-live`)
+
+- Demonstrates live RBAC mutations via the control plane API and immediate
+  authorization changes in the broker without restarts.
+- Uses a fake ES256 OIDC IdP and the real Felix token exchange flow.
+- Exercises publish/subscribe/cache operations before and after RBAC updates.
+- Uses an in-memory control-plane store (no Postgres required).
+
+```bash
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+```
+
+Expected output includes step-by-step PASS/FAIL markers such as:
+
+```
+STEP 9 publish denied: PASS
+STEP 12 RBAC policies added: PASS
+STEP 15 publish allowed: PASS
+```
+
+### Cross-Tenant Isolation (`demo-cross-tenant-isolation`)
+
+- Proves tenant boundaries are enforced end-to-end by the broker.
+- Uses a Postgres-backed control plane, a fake ES256 IdP, and real token exchange.
+- Demonstrates that a `t1` token cannot access `t2` resources.
+
+```bash
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
+```
+
+Expected output includes step-by-step PASS/FAIL markers such as:
+
+```
+STEP 13 t1 publish allowed: PASS
+STEP 16 t1 token on t2 publish denied: PASS
+STEP 19 t2 token publish denied: PASS
+```
 
 ### Pub/Sub Demo (`pubsub-demo-simple`)
 **What it does**:

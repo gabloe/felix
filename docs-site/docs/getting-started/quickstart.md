@@ -81,9 +81,13 @@ cargo run --release -p broker --bin cache-demo
 cargo run --release -p broker --bin latency-demo
 cargo run --release -p broker --bin pubsub-demo-notifications
 cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --manifest-path demos/rbac-live/Cargo.toml
+cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
 ```
 
 See the [Demos Overview](../demos/overview.md) for details on what each demo does and what to expect.
+
+Note: the cross-tenant isolation demo uses a Postgres-backed control plane.
 
 ## Try the Cache
 
@@ -289,6 +293,8 @@ task demo:cache
 task demo:latency
 task demo:notifications
 task demo:orders
+task demo:rbac-live
+task demo:cross-tenant-isolation
 ```
 
 See `Taskfile.yml` in the repository root for all available tasks.

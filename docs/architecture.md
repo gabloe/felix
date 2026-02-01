@@ -270,8 +270,9 @@ features over time.
 ## Demos and Example Workflows
 
 Felix ships with runnable demo binaries under `demos/` that illustrate pub/sub,
-cache, latency benchmarking, and multi-tenant workflows. These demos are
-self-contained and start an in-process broker on a local QUIC endpoint.
+cache, latency benchmarking, multi-tenant workflows, live RBAC mutation, and
+cross-tenant isolation. These demos are self-contained and start an in-process
+broker or full control-plane/broker stack on local ports.
 
 See `docs/demos.md` and `demos/README.md` for details, run commands, and
 expected output.

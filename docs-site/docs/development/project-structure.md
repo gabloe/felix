@@ -265,12 +265,16 @@ services/
 └── agent/               # Infrastructure agent (future)
 
 demos/
-└── broker/              # Demo binaries for the broker crate
-    ├── pubsubdemo.rs
-    ├── cachedemo.rs
-    ├── latencydemo.rs
-    ├── notifications_demo.rs
-    └── orders_demo.rs
+├── broker/              # Demo binaries for the broker crate
+│   ├── pubsubdemo.rs
+│   ├── cachedemo.rs
+│   ├── latencydemo.rs
+│   ├── notifications_demo.rs
+│   └── orders_demo.rs
+├── rbac-live/            # End-to-end RBAC mutation demo crate
+│   └── src/main.rs
+└── cross_tenant_isolation/  # End-to-end tenant isolation demo crate
+    └── src/main.rs
 ```
 
 ### Broker Service
@@ -293,6 +297,8 @@ demos/
 - **`latencydemo.rs`**: Latency measurement tool
 - **`notifications_demo.rs`**: Multi-tenant notifications workflow demo
 - **`orders_demo.rs`**: Orders/payments pipeline demo
+- **`rbac-live/`**: Live RBAC policy change demo (control plane + broker + token exchange)
+- **`cross_tenant_isolation/`**: Cross-tenant isolation demo (Postgres + control plane + broker)
 
 ## Documentation
 
@@ -364,7 +370,7 @@ Docker build configuration:
 ```
 docker/
 ├── broker.Dockerfile           # Multi-stage broker build
-├── controlplane.Dockerfile     # Control plane (future)
+├── controlplane.Dockerfile     # Control plane build
 ├── prometheus/
 │   ├── prometheus.yml          # Prometheus config
 │   └── prometheus.Dockerfile

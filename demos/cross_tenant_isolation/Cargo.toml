@@ -1,0 +1,28 @@
+[package]
+name = "demo-cross-tenant-isolation"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+axum = "0.7"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+rcgen = "0.12"
+rustls = "0.23"
+quinn = "0.11"
+
+controlplane = { path = "../../services/controlplane" }
+broker = { path = "../../services/broker" }
+felix-broker = { path = "../../crates/felix-broker" }
+felix-client = { path = "../../crates/felix-client" }
+felix-storage = { path = "../../crates/felix-storage" }
+felix-transport = { path = "../../crates/felix-transport" }
+felix-wire = { path = "../../crates/felix-wire" }
+
+[workspace]
