@@ -100,15 +100,22 @@ Rust client SDK with:
 
 **Planned:** Thin adapters for Python, Go, and other languages.
 
-### Control Plane (Planned)
+### Control Plane (In Progress)
 
-Metadata and coordination layer (future):
+Metadata and coordination layer (in progress). Current capabilities include:
+
+- Control plane service with REST API and OpenAPI spec (`/v1/openapi.json`)
+- Tenant, namespace, stream, and cache management endpoints
+- Snapshot + changes feeds for metadata consumers
+- Auth bootstrap endpoints (JWKS + token exchange)
+- In-memory or Postgres-backed metadata storage
+
+Planned next steps:
 
 - RAFT-based consensus for cluster metadata
-- Stream definitions and placement
-- Tenant/namespace management
-- Quota and retention policies
-- Health monitoring and metrics aggregation
+- Placement and multi-node coordination
+- Quota and retention policy enforcement
+- Fleet-wide health aggregation
 
 ## Consistency & Delivery Guarantees
 
