@@ -343,22 +343,17 @@ impl PostgresStore {
         //
         // In production, prefer failing fast + surfacing health failures over hanging indefinitely.
         // Avoid logging `pg.url` because it may contain credentials.
-        let connect_options =
-            PgConnectOptions::from_str(&pg.url).map_err(|e| StoreError::Unexpected(e.into()))?;
+        let connect_options = PgConnectOptions::from_str(&pg.url)?;
         let pool = PgPoolOptions::new()
             .max_connections(pg.max_connections)
             .acquire_timeout(Duration::from_millis(pg.acquire_timeout_ms))
             .connect_with(connect_options)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
 
         if run_migrations {
             // Migrations run *before* serving requests so handlers can assume the schema exists.
             // If migrations fail, we fail startup rather than serving partially functional endpoints.
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))?;
+            sqlx::migrate!("./migrations").run(&pool).await?;
         }
 
         // Optional change-log retention: bounds append-only tables so they don't grow forever.
@@ -441,8 +436,7 @@ impl ControlPlaneStore for PostgresStore {
             "SELECT tenant_id, display_name FROM tenants ORDER BY tenant_id",
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         Ok(rows
             .into_iter()
             .map(|row| Tenant {
@@ -457,11 +451,7 @@ impl ControlPlaneStore for PostgresStore {
     /// Transactionality matters: we want the authoritative row and its change event to be consistent
     /// (no “created row without change” or “change without row” states).
     async fn create_tenant(&self, tenant: Tenant) -> StoreResult<Tenant> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let insert =
             sqlx::query(r#"INSERT INTO tenants (tenant_id, display_name) VALUES ($1, $2)"#)
                 .bind(&tenant.tenant_id)
@@ -481,12 +471,9 @@ impl ControlPlaneStore for PostgresStore {
             .bind(&tenant.tenant_id)
             .bind(serde_json::to_value(&tenant).ok())
             .execute(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         Ok(tenant)
     }
 
@@ -496,19 +483,14 @@ impl ControlPlaneStore for PostgresStore {
     /// change events with the prior payload. This is useful for caches/watchers that want tombstones
     /// with context (not just keys).
     async fn delete_tenant(&self, tenant_id: &str) -> StoreResult<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
 
         // Validate tenant exists to return a proper 404 semantics.
         let tenant_exists =
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tenants WHERE tenant_id = $1")
                 .bind(tenant_id)
                 .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))?
+                .await?
                 > 0;
         if !tenant_exists {
             return Err(StoreError::NotFound("tenant".into()));
@@ -520,8 +502,7 @@ impl ControlPlaneStore for PostgresStore {
         )
         .bind(tenant_id)
         .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
 
         let streams = sqlx::query_as::<_, DbStream>(
             r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
@@ -530,23 +511,21 @@ impl ControlPlaneStore for PostgresStore {
         .bind(tenant_id)
         .fetch_all(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
             r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1"#,
         )
         .bind(tenant_id)
         .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
 
         // Delete tenant (schema should cascade or you rely on application-level deletes; either way
         // we emit explicit change events below based on the prefetched rows).
         sqlx::query("DELETE FROM tenants WHERE tenant_id = $1")
             .bind(tenant_id)
             .execute(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
 
         // Emit cache deletion events (payload included).
         for cache in caches {
@@ -571,7 +550,7 @@ impl ControlPlaneStore for PostgresStore {
             .bind(serde_json::to_value(&payload).ok())
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            ?;
         }
 
         // Emit stream deletion events (payload included).
@@ -605,7 +584,7 @@ impl ControlPlaneStore for PostgresStore {
             .bind(serde_json::to_value(&payload).ok())
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            ?;
         }
 
         for namespace in namespaces {
@@ -627,7 +606,7 @@ impl ControlPlaneStore for PostgresStore {
             .bind(serde_json::to_value(&payload).ok())
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            ?;
         }
 
         sqlx::query(r#"INSERT INTO tenant_changes (op, tenant_id, payload) VALUES ($1, $2, $3)"#)
@@ -635,12 +614,9 @@ impl ControlPlaneStore for PostgresStore {
             .bind(tenant_id)
             .bind(Option::<Value>::None)
             .execute(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         self.refresh_counts().await?;
         Ok(())
     }
@@ -650,8 +626,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM tenant_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(Snapshot { items, next_seq })
     }
 
@@ -663,7 +638,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(self.limit())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
@@ -686,8 +661,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM tenant_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
 
         Ok(ChangeSet { items, next_seq })
     }
@@ -699,7 +673,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(tenant_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         Ok(rows
             .into_iter()
@@ -712,17 +686,12 @@ impl ControlPlaneStore for PostgresStore {
     }
 
     async fn create_namespace(&self, namespace: Namespace) -> StoreResult<Namespace> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE tenant_id = $1)")
                 .bind(&namespace.tenant_id)
                 .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))?;
+                .await?;
         if !exists {
             return Err(StoreError::NotFound("tenant".into()));
         }
@@ -751,20 +720,14 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&namespace).ok())
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         Ok(namespace)
     }
 
     async fn delete_namespace(&self, key: &NamespaceKey) -> StoreResult<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
 
         let ns_row = sqlx::query_as::<_, DbNamespace>(
             r#"SELECT tenant_id, namespace, display_name FROM namespaces WHERE tenant_id = $1 AND namespace = $2"#,
@@ -773,7 +736,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.namespace)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         if ns_row.is_none() {
             return Err(StoreError::NotFound("namespace".into()));
         }
@@ -791,7 +754,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.namespace)
         .fetch_all(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
             r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2"#,
@@ -800,14 +763,13 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.namespace)
         .fetch_all(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         sqlx::query(r#"DELETE FROM namespaces WHERE tenant_id = $1 AND namespace = $2"#)
             .bind(&key.tenant_id)
             .bind(&key.namespace)
             .execute(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
 
         for cache in caches {
             let key = CacheKey {
@@ -831,7 +793,7 @@ impl ControlPlaneStore for PostgresStore {
             .bind(serde_json::to_value(&payload).ok())
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            ?;
         }
 
         for stream in streams {
@@ -864,7 +826,7 @@ impl ControlPlaneStore for PostgresStore {
             .bind(serde_json::to_value(&payload).ok())
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            ?;
         }
 
         sqlx::query(
@@ -876,11 +838,9 @@ impl ControlPlaneStore for PostgresStore {
         .bind(namespace_payload.and_then(|ns| serde_json::to_value(&ns).ok()))
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         self.refresh_counts().await?;
         Ok(())
     }
@@ -891,7 +851,7 @@ impl ControlPlaneStore for PostgresStore {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?
+        ?
         .into_iter()
         .map(|row| Namespace {
             tenant_id: row.tenant_id,
@@ -902,8 +862,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM namespace_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(Snapshot { items, next_seq })
     }
 
@@ -915,7 +874,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(self.limit())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let op = match row.op.as_str() {
@@ -938,8 +897,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM namespace_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(ChangeSet { items, next_seq })
     }
 
@@ -952,7 +910,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(namespace)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         rows.into_iter()
             .map(stream_from_db)
             .collect::<Result<Vec<_>, StoreError>>()
@@ -968,7 +926,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.stream)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         match row {
             Some(row) => stream_from_db(row),
             None => Err(StoreError::NotFound("stream".into())),
@@ -976,11 +934,7 @@ impl ControlPlaneStore for PostgresStore {
     }
 
     async fn create_stream(&self, stream: Stream) -> StoreResult<Stream> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
 
         let ns_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM namespaces WHERE tenant_id = $1 AND namespace = $2)",
@@ -988,8 +942,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&stream.tenant_id)
         .bind(&stream.namespace)
         .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         if !ns_exists {
             return Err(StoreError::NotFound("namespace".into()));
         }
@@ -1027,11 +980,9 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&stream).ok())
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_stream_changes_total", "op" => "created").increment(1);
         self.refresh_counts().await?;
         Ok(stream)
@@ -1042,11 +993,7 @@ impl ControlPlaneStore for PostgresStore {
         key: &StreamKey,
         patch: StreamPatchRequest,
     ) -> StoreResult<Stream> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let current = sqlx::query_as::<_, DbStream>(
             r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 FOR UPDATE"#,
@@ -1056,7 +1003,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.stream)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let current = match current {
             Some(row) => row,
             None => return Err(StoreError::NotFound("stream".into())),
@@ -1092,7 +1039,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.stream)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         sqlx::query(
             r#"INSERT INTO stream_changes (op, tenant_id, namespace, stream, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -1104,21 +1051,15 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&updated).ok())
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_stream_changes_total", "op" => "updated").increment(1);
         Ok(updated)
     }
 
     async fn delete_stream(&self, key: &StreamKey) -> StoreResult<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let removed = sqlx::query(
             r#"DELETE FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3"#,
         )
@@ -1126,8 +1067,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.namespace)
         .bind(&key.stream)
         .execute(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         if removed.rows_affected() == 0 {
             return Err(StoreError::NotFound("stream".into()));
         }
@@ -1142,11 +1082,9 @@ impl ControlPlaneStore for PostgresStore {
         .bind(Option::<Value>::None)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_stream_changes_total", "op" => "deleted").increment(1);
         self.refresh_counts().await?;
         Ok(())
@@ -1158,7 +1096,7 @@ impl ControlPlaneStore for PostgresStore {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let items = rows
             .into_iter()
             .map(stream_from_db)
@@ -1166,8 +1104,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM stream_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(Snapshot { items, next_seq })
     }
 
@@ -1179,7 +1116,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(self.limit())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let op = match row.op.as_str() {
@@ -1204,8 +1141,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM stream_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(ChangeSet { items, next_seq })
     }
 
@@ -1217,7 +1153,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(namespace)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         Ok(rows
             .into_iter()
             .map(|row| Cache {
@@ -1238,7 +1174,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.cache)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         match row {
             Some(row) => Ok(Cache {
                 tenant_id: row.tenant_id,
@@ -1251,19 +1187,14 @@ impl ControlPlaneStore for PostgresStore {
     }
 
     async fn create_cache(&self, cache: Cache) -> StoreResult<Cache> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let ns_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM namespaces WHERE tenant_id = $1 AND namespace = $2)",
         )
         .bind(&cache.tenant_id)
         .bind(&cache.namespace)
         .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         if !ns_exists {
             return Err(StoreError::NotFound("namespace".into()));
         }
@@ -1294,22 +1225,16 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&cache).ok())
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_cache_changes_total", "op" => "created").increment(1);
         self.refresh_counts().await?;
         Ok(cache)
     }
 
     async fn patch_cache(&self, key: &CacheKey, patch: CachePatchRequest) -> StoreResult<Cache> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let current = sqlx::query_as::<_, DbCache>(
             r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3 FOR UPDATE"#,
         )
@@ -1318,7 +1243,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.cache)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let mut cache = match current {
             Some(row) => Cache {
                 tenant_id: row.tenant_id,
@@ -1342,7 +1267,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.cache)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
         sqlx::query(
             r#"INSERT INTO cache_changes (op, tenant_id, namespace, cache, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -1354,21 +1279,15 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&cache).ok())
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_cache_changes_total", "op" => "updated").increment(1);
         Ok(cache)
     }
 
     async fn delete_cache(&self, key: &CacheKey) -> StoreResult<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        let mut tx = self.pool.begin().await?;
         let removed = sqlx::query(
             r#"DELETE FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3"#,
         )
@@ -1376,8 +1295,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.namespace)
         .bind(&key.cache)
         .execute(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         if removed.rows_affected() == 0 {
             return Err(StoreError::NotFound("cache".into()));
         }
@@ -1392,11 +1310,9 @@ impl ControlPlaneStore for PostgresStore {
         .bind(Option::<Value>::None)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        tx.commit().await?;
         metrics::counter!("felix_cache_changes_total", "op" => "deleted").increment(1);
         self.refresh_counts().await?;
         Ok(())
@@ -1408,7 +1324,7 @@ impl ControlPlaneStore for PostgresStore {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let items = rows
             .into_iter()
             .map(|row| Cache {
@@ -1421,8 +1337,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM cache_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(Snapshot { items, next_seq })
     }
 
@@ -1434,7 +1349,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(self.limit())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        ?;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let op = match row.op.as_str() {
@@ -1459,8 +1374,7 @@ impl ControlPlaneStore for PostgresStore {
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM cache_changes")
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))? as u64;
+                .await? as u64;
         Ok(ChangeSet { items, next_seq })
     }
 
@@ -1469,8 +1383,7 @@ impl ControlPlaneStore for PostgresStore {
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE tenant_id = $1)")
                 .bind(tenant_id)
                 .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StoreError::Unexpected(e.into()))?;
+                .await?;
         Ok(exists)
     }
 
@@ -1481,16 +1394,12 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&key.tenant_id)
         .bind(&key.namespace)
         .fetch_one(&self.pool)
-        .await
-        .map_err(|e| StoreError::Unexpected(e.into()))?;
+        .await?;
         Ok(exists)
     }
 
     async fn health_check(&self) -> StoreResult<()> {
-        sqlx::query("SELECT 1")
-            .execute(&self.pool)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
     }
 
@@ -1604,14 +1513,12 @@ impl PostgresStore {
     async fn refresh_counts(&self) -> StoreResult<()> {
         let stream_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM streams")
             .fetch_one(&self.pool)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
         metrics::gauge!("felix_streams_total").set(stream_total as f64);
 
         let cache_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM caches")
             .fetch_one(&self.pool)
-            .await
-            .map_err(|e| StoreError::Unexpected(e.into()))?;
+            .await?;
         metrics::gauge!("felix_caches_total").set(cache_total as f64);
         Ok(())
     }
@@ -1626,8 +1533,7 @@ impl AuthStore for PostgresStore {
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        .await?;
 
         let mut issuers = Vec::with_capacity(rows.len());
         for row in rows {
@@ -1648,8 +1554,7 @@ impl AuthStore for PostgresStore {
     }
 
     async fn upsert_idp_issuer(&self, tenant_id: &str, issuer: IdpIssuerConfig) -> StoreResult<()> {
-        let audiences = serde_json::to_value(&issuer.audiences)
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        let audiences = serde_json::to_value(&issuer.audiences)?;
         sqlx::query(
             "INSERT INTO idp_issuers (tenant_id, issuer, audiences, discovery_url, jwks_url, subject_claim, groups_claim) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
@@ -1669,7 +1574,7 @@ impl AuthStore for PostgresStore {
         .bind(&issuer.claim_mappings.groups_claim)
         .execute(&self.pool)
         .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        ?;
         Ok(())
     }
 
@@ -1678,8 +1583,7 @@ impl AuthStore for PostgresStore {
             .bind(tenant_id)
             .bind(issuer)
             .execute(&self.pool)
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            .await?;
         Ok(())
     }
 
@@ -1689,8 +1593,7 @@ impl AuthStore for PostgresStore {
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        .await?;
         Ok(rows
             .into_iter()
             .map(|row| PolicyRule {
@@ -1706,8 +1609,7 @@ impl AuthStore for PostgresStore {
             sqlx::query_as("SELECT user_id, role FROM rbac_groupings WHERE tenant_id = $1")
                 .bind(tenant_id)
                 .fetch_all(&self.pool)
-                .await
-                .map_err(|err| StoreError::Unexpected(err.into()))?;
+                .await?;
         Ok(rows
             .into_iter()
             .map(|row| GroupingRule {
@@ -1728,8 +1630,7 @@ impl AuthStore for PostgresStore {
         .bind(&policy.object)
         .bind(&policy.action)
         .execute(&self.pool)
-        .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        .await?;
         Ok(())
     }
 
@@ -1743,8 +1644,7 @@ impl AuthStore for PostgresStore {
         .bind(&grouping.user)
         .bind(&grouping.role)
         .execute(&self.pool)
-        .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        .await?;
         Ok(())
     }
 
@@ -1756,8 +1656,7 @@ impl AuthStore for PostgresStore {
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        .await?;
 
         if rows.is_empty() {
             return Err(StoreError::NotFound("signing keys".into()));
@@ -1794,17 +1693,12 @@ impl AuthStore for PostgresStore {
         // This prevents accidental RSA reintroduction and corrupted key storage.
         keys.validate()
             .map_err(|err| StoreError::Unexpected(anyhow!(err)))?;
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        let mut tx = self.pool.begin().await?;
         // Replace all keys atomically to keep `current` and `previous` consistent.
         sqlx::query("DELETE FROM tenant_signing_keys WHERE tenant_id = $1")
             .bind(tenant_id)
             .execute(&mut *tx)
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            .await?;
 
         let current_alg = algorithm_to_str(keys.current.alg);
         // Store raw Ed25519 seeds; never serialize or log these values.
@@ -1819,7 +1713,7 @@ impl AuthStore for PostgresStore {
         .bind(keys.current.public_key.as_slice())
         .execute(&mut *tx)
         .await
-        .map_err(|err| StoreError::Unexpected(err.into()))?;
+        ?;
 
         for key in &keys.previous {
             let alg = algorithm_to_str(key.alg);
@@ -1835,12 +1729,10 @@ impl AuthStore for PostgresStore {
             .bind(key.public_key.as_slice())
             .execute(&mut *tx)
             .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            ?;
         }
 
-        tx.commit()
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        tx.commit().await?;
         // Invalidate derived key cache so new keys take effect immediately.
         crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
         Ok(())
@@ -1851,8 +1743,7 @@ impl AuthStore for PostgresStore {
             sqlx::query_as("SELECT auth_bootstrapped FROM tenants WHERE tenant_id = $1")
                 .bind(tenant_id)
                 .fetch_optional(&self.pool)
-                .await
-                .map_err(|err| StoreError::Unexpected(err.into()))?;
+                .await?;
         Ok(row.map(|(value,)| value).unwrap_or(false))
     }
 
@@ -1865,8 +1756,7 @@ impl AuthStore for PostgresStore {
             .bind(tenant_id)
             .bind(bootstrapped)
             .execute(&self.pool)
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            .await?;
         if result.rows_affected() == 0 {
             return Err(StoreError::NotFound("tenant".into()));
         }
@@ -1878,8 +1768,7 @@ impl AuthStore for PostgresStore {
         match self.get_tenant_signing_keys(tenant_id).await {
             Ok(keys) => Ok(keys),
             Err(StoreError::NotFound(_)) => {
-                let keys =
-                    crate::auth::keys::generate_signing_keys().map_err(StoreError::Unexpected)?;
+                let keys = crate::auth::keys::generate_signing_keys()?;
                 self.set_tenant_signing_keys(tenant_id, keys.clone())
                     .await?;
                 Ok(keys)
@@ -1895,11 +1784,7 @@ impl AuthStore for PostgresStore {
         groupings: Vec<GroupingRule>,
     ) -> StoreResult<()> {
         // Seed policy/grouping data atomically to avoid partial authorization state.
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        let mut tx = self.pool.begin().await?;
         for policy in policies {
             sqlx::query(
                 "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
@@ -1911,8 +1796,7 @@ impl AuthStore for PostgresStore {
             .bind(&policy.object)
             .bind(&policy.action)
             .execute(&mut *tx)
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            .await?;
         }
         for grouping in groupings {
             sqlx::query(
@@ -1924,12 +1808,9 @@ impl AuthStore for PostgresStore {
             .bind(&grouping.user)
             .bind(&grouping.role)
             .execute(&mut *tx)
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+            .await?;
         }
-        tx.commit()
-            .await
-            .map_err(|err| StoreError::Unexpected(err.into()))?;
+        tx.commit().await?;
         Ok(())
     }
 }
@@ -2042,5 +1923,28 @@ mod tests {
             crate::model::DeliveryGuarantee::AtLeastOnce
         ));
         assert!(stream.durable);
+    }
+
+    #[test]
+    fn algorithm_round_trip_and_rejects_unknown() {
+        assert!(matches!(
+            parse_algorithm("EdDSA").unwrap(),
+            Algorithm::EdDSA
+        ));
+        assert!(parse_algorithm("RS256").is_err());
+        assert_eq!(algorithm_to_str(Algorithm::EdDSA), "EdDSA");
+    }
+
+    #[test]
+    fn algorithm_to_str_defaults_to_eddsa() {
+        assert_eq!(algorithm_to_str(Algorithm::HS256), "EdDSA");
+    }
+
+    #[test]
+    fn decode_key_rejects_invalid_length() {
+        let err = decode_key(&[1, 2, 3], "key").unwrap_err();
+        assert!(err.to_string().contains("invalid key length"));
+        let ok = decode_key(&[0u8; 32], "key").unwrap();
+        assert_eq!(ok, [0u8; 32]);
     }
 }

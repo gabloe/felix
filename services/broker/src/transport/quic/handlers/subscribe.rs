@@ -673,6 +673,15 @@ pub(crate) async fn run_event_writer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::quic::handlers::publish::AckTimeoutState;
+    use anyhow::Context;
+    use bytes::{Bytes, BytesMut};
+    use felix_storage::EphemeralCache;
+    use felix_transport::{QuicClient, QuicServer, TransportConfig};
+    use rcgen::generate_simple_self_signed;
+    use rustls::RootCertStore;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    use std::net::SocketAddr;
 
     #[test]
     fn encode_event_json_frame_includes_base64_payload() {
@@ -695,5 +704,594 @@ mod tests {
         assert_eq!(json["namespace"], "ns");
         assert_eq!(json["stream"], "stream");
         assert_eq!(json["payload"], "cGF5bG9hZA==");
+    }
+
+    fn make_server_config() -> anyhow::Result<(quinn::ServerConfig, CertificateDer<'static>)> {
+        let cert = generate_simple_self_signed(vec!["localhost".into()])
+            .context("generate self-signed cert")?;
+        let cert_der = CertificateDer::from(cert.serialize_der()?);
+        let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+        let server_config = quinn::ServerConfig::with_single_cert(
+            vec![cert_der.clone()],
+            PrivateKeyDer::Pkcs8(key_der),
+        )?;
+        Ok((server_config, cert_der))
+    }
+
+    fn make_client_config(cert: CertificateDer<'static>) -> anyhow::Result<quinn::ClientConfig> {
+        let mut roots = RootCertStore::empty();
+        roots.add(cert).context("add root cert")?;
+        Ok(quinn::ClientConfig::with_root_certificates(
+            std::sync::Arc::new(roots),
+        )?)
+    }
+
+    fn test_config() -> crate::config::BrokerConfig {
+        crate::config::BrokerConfig {
+            quic_bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            controlplane_url: None,
+            controlplane_sync_interval_ms: 2000,
+            ack_on_commit: false,
+            max_frame_bytes: 16 * 1024 * 1024,
+            publish_queue_wait_timeout_ms: 2000,
+            ack_wait_timeout_ms: 2000,
+            disable_timings: false,
+            control_stream_drain_timeout_ms: 50,
+            cache_conn_recv_window: 256 * 1024 * 1024,
+            cache_stream_recv_window: 64 * 1024 * 1024,
+            cache_send_window: 256 * 1024 * 1024,
+            event_batch_max_events: 1,
+            event_batch_max_bytes: 64 * 1024,
+            event_batch_max_delay_us: 250,
+            fanout_batch_size: 1,
+            pub_workers_per_conn: 1,
+            pub_queue_depth: 8,
+            event_queue_depth: 8,
+            event_single_binary_enabled: false,
+            event_single_binary_min_bytes: 1,
+        }
+    }
+
+    fn make_envelope(payload: &[u8]) -> EventEnvelope {
+        EventEnvelope {
+            payload: Bytes::from(payload.to_vec()),
+            #[cfg(feature = "telemetry")]
+            enqueue_at: crate::transport::quic::telemetry::t_instant_now(),
+        }
+    }
+
+    async fn spawn_event_writer(
+        rx: mpsc::Receiver<EventEnvelope>,
+        config: EventWriterConfig,
+    ) -> Result<(
+        tokio::task::JoinHandle<Result<()>>,
+        felix_transport::QuicConnection,
+    )> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let event_send = connection.open_uni().await?;
+            run_event_writer(event_send, rx, config).await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        Ok((server_task, connection))
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_single_json_closes_on_channel_close() -> Result<()> {
+        crate::timings::enable_collection(1);
+        crate::timings::set_enabled(true);
+
+        let (tx, rx) = mpsc::channel(4);
+        let config = EventWriterConfig {
+            subscription_id: 1,
+            tenant_id: Arc::from("tenant"),
+            namespace: Arc::from("ns"),
+            stream: Arc::from("stream"),
+            batch_size: 1,
+            max_events: 1,
+            max_bytes: 1024,
+            flush_delay: Duration::from_millis(10),
+            binary_single_enabled: false,
+            binary_single_min_bytes: 1,
+        };
+
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        let accept_uni = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni());
+        tx.send(make_envelope(b"hello")).await?;
+        let mut event_recv = accept_uni.await.context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("event frame");
+        let json: serde_json::Value =
+            serde_json::from_slice(&frame.payload).context("decode event json")?;
+        assert_eq!(json["type"], "event");
+        assert_eq!(json["tenant_id"], "tenant");
+        assert_eq!(json["namespace"], "ns");
+        assert_eq!(json["stream"], "stream");
+        assert_eq!(json["payload"], "aGVsbG8=");
+
+        drop(tx);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_single_binary_uses_batch_encoding() -> Result<()> {
+        crate::timings::enable_collection(1);
+        crate::timings::set_enabled(true);
+
+        let (tx, rx) = mpsc::channel(4);
+        let config = EventWriterConfig {
+            subscription_id: 9,
+            tenant_id: Arc::from("tenant"),
+            namespace: Arc::from("ns"),
+            stream: Arc::from("stream"),
+            batch_size: 1,
+            max_events: 1,
+            max_bytes: 1024,
+            flush_delay: Duration::from_millis(10),
+            binary_single_enabled: true,
+            binary_single_min_bytes: 1,
+        };
+
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        let accept_uni = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni());
+        tx.send(make_envelope(b"bin")).await?;
+        let mut event_recv = accept_uni.await.context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("event frame");
+        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
+        assert_eq!(batch.subscription_id, 9);
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].as_ref(), b"bin");
+
+        drop(tx);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_batches_with_pending_payload() -> Result<()> {
+        crate::timings::enable_collection(1);
+        crate::timings::set_enabled(true);
+
+        let (tx, rx) = mpsc::channel(4);
+        let config = EventWriterConfig {
+            subscription_id: 7,
+            tenant_id: Arc::from("tenant"),
+            namespace: Arc::from("ns"),
+            stream: Arc::from("stream"),
+            batch_size: 10,
+            max_events: 10,
+            max_bytes: 5,
+            flush_delay: Duration::from_millis(50),
+            binary_single_enabled: false,
+            binary_single_min_bytes: 1,
+        };
+
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        let accept_uni = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni());
+        tx.send(make_envelope(b"aaaa")).await?;
+        tx.send(make_envelope(b"bbb")).await?;
+        tx.send(make_envelope(b"c")).await?;
+        let mut event_recv = accept_uni.await.context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).context("decode batch1")?;
+        assert_eq!(batch1.subscription_id, 7);
+        assert_eq!(batch1.payloads.len(), 1);
+        assert_eq!(batch1.payloads[0].as_ref(), b"aaaa");
+
+        let frame2 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame2");
+        let batch2 = felix_wire::binary::decode_event_batch(&frame2).context("decode batch2")?;
+        assert_eq!(batch2.subscription_id, 7);
+        assert_eq!(batch2.payloads.len(), 2);
+        assert_eq!(batch2.payloads[0].as_ref(), b"bbb");
+        assert_eq!(batch2.payloads[1].as_ref(), b"c");
+
+        drop(tx);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_sends_event_stream_json() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let handled = handle_subscribe_message(
+                broker_for_server,
+                connection,
+                test_config(),
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "orders".to_string(),
+                Some(7),
+            )
+            .await?;
+            Result::<bool>::Ok(handled)
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let ack = tokio::time::timeout(Duration::from_secs(1), out_ack_rx.recv())
+            .await
+            .context("ack timeout")?
+            .context("ack missing")?;
+        match ack {
+            Outgoing::Message(Message::Subscribed { subscription_id }) => {
+                assert_eq!(subscription_id, 7);
+            }
+            _ => panic!("unexpected ack"),
+        }
+
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let hello = crate::transport::quic::codec::read_message_limited(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("hello");
+        match hello {
+            Message::EventStreamHello { subscription_id } => {
+                assert_eq!(subscription_id, 7);
+            }
+            other => panic!("unexpected hello: {other:?}"),
+        }
+
+        broker
+            .publish(
+                "t1",
+                "default",
+                "orders",
+                bytes::Bytes::from_static(b"hello"),
+            )
+            .await?;
+
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("event frame");
+        let json: serde_json::Value =
+            serde_json::from_slice(&frame.payload).context("decode event json")?;
+        assert_eq!(json["type"], "event");
+        assert_eq!(json["tenant_id"], "t1");
+        assert_eq!(json["namespace"], "default");
+        assert_eq!(json["stream"], "orders");
+        assert_eq!(json["payload"], "aGVsbG8=");
+
+        let handled = server_task.await.context("server join")??;
+        assert!(handled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_binary_single_path() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let mut config = test_config();
+        config.event_single_binary_enabled = true;
+        config.event_single_binary_min_bytes = 1;
+
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            handle_subscribe_message(
+                broker_for_server,
+                connection,
+                config,
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "orders".to_string(),
+                Some(9),
+            )
+            .await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let _ = out_ack_rx.recv().await;
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let _ = crate::transport::quic::codec::read_message_limited(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("hello");
+
+        broker
+            .publish("t1", "default", "orders", bytes::Bytes::from_static(b"bin"))
+            .await?;
+
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("event frame");
+        let batch = felix_wire::binary::decode_event_batch(&frame).expect("decode batch");
+        assert_eq!(batch.subscription_id, 9);
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].as_ref(), b"bin");
+
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_errors_when_stream_missing() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            handle_subscribe_message(
+                broker_for_server,
+                connection,
+                test_config(),
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "missing".to_string(),
+                Some(11),
+            )
+            .await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let _connection = client.connect(addr, "localhost").await?;
+
+        let ack = tokio::time::timeout(Duration::from_secs(1), out_ack_rx.recv())
+            .await
+            .context("ack timeout")?
+            .context("ack missing")?;
+        match ack {
+            Outgoing::Message(Message::Error { message }) => {
+                assert!(message.contains("stream not found"));
+            }
+            _ => panic!("unexpected ack"),
+        }
+
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_batches_by_bytes() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let mut config = test_config();
+        config.fanout_batch_size = 10;
+        config.event_batch_max_events = 10;
+        config.event_batch_max_bytes = 6;
+
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            handle_subscribe_message(
+                broker_for_server,
+                connection,
+                config,
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "orders".to_string(),
+                Some(21),
+            )
+            .await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let _ = out_ack_rx.recv().await;
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let _ = crate::transport::quic::codec::read_message_limited(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("hello");
+
+        broker
+            .publish("t1", "default", "orders", bytes::Bytes::from_static(b"aa"))
+            .await?;
+        broker
+            .publish(
+                "t1",
+                "default",
+                "orders",
+                bytes::Bytes::from_static(b"bbbb"),
+            )
+            .await?;
+        broker
+            .publish(
+                "t1",
+                "default",
+                "orders",
+                bytes::Bytes::from_static(b"ccccc"),
+            )
+            .await?;
+
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).expect("batch1");
+        assert_eq!(batch1.subscription_id, 21);
+        assert_eq!(batch1.payloads.len(), 2);
+        assert_eq!(batch1.payloads[0].as_ref(), b"aa");
+        assert_eq!(batch1.payloads[1].as_ref(), b"bbbb");
+
+        let frame2 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame2");
+        let batch2 = felix_wire::binary::decode_event_batch(&frame2).expect("batch2");
+        assert_eq!(batch2.subscription_id, 21);
+        assert_eq!(batch2.payloads.len(), 1);
+        assert_eq!(batch2.payloads[0].as_ref(), b"ccccc");
+
+        server_task.await.context("server join")??;
+        Ok(())
     }
 }
