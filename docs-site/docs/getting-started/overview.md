@@ -133,11 +133,12 @@ Felix provides **tunable consistency** configured per stream:
 
 - TLS 1.3 for all QUIC connections
 - Transport-level encryption by default
+- OIDC token exchange via control plane with tenant-scoped Felix JWTs
+- Broker-side RBAC enforcement using Felix token permissions
 
 ### Planned
 
 - **mTLS:** Mutual authentication between brokers and clients
-- **RBAC:** Tenant/namespace/stream-level authorization
 - **Envelope Encryption:** Per-region and per-tenant key isolation
 - **End-to-End Encryption:** Optional client-to-client encryption
 - **Audit Logging:** Complete audit trail for compliance

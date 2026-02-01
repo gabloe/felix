@@ -1,4 +1,13 @@
-// Event stream router for subscription uni streams.
+//! Event stream router for subscription uni streams.
+//!
+//! # Purpose
+//! Accepts incoming uni streams from the server, decodes the subscription id
+//! from the EventStreamHello frame, and hands the stream to the waiting
+//! subscription task.
+//!
+//! # Design notes
+//! The router maintains pending maps for streams and registrations to handle
+//! out-of-order arrivals while enforcing an upper bound on queued state.
 use bytes::BytesMut;
 use felix_transport::QuicConnection;
 use felix_wire::Message;
@@ -102,5 +111,90 @@ pub(crate) async fn run_event_router(
                 pending_streams.insert(subscription_id, recv);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use felix_transport::{QuicClient, QuicServer, TransportConfig};
+    use felix_wire::Message;
+    use quinn::ClientConfig as QuinnClientConfig;
+    use rcgen::generate_simple_self_signed;
+    use rustls::RootCertStore;
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use std::sync::Arc;
+
+    async fn quic_pair() -> Result<(
+        QuicConnection,
+        QuicConnection,
+        tokio::sync::oneshot::Sender<()>,
+    )> {
+        let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_der = CertificateDer::from(cert.serialize_der()?);
+        let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+        let server_config =
+            quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())?;
+        let server = QuicServer::bind(
+            "127.0.0.1:0".parse()?,
+            server_config,
+            TransportConfig::default(),
+        )?;
+        let addr = server.local_addr()?;
+
+        let mut roots = RootCertStore::empty();
+        roots.add(cert_der)?;
+        let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, quinn, TransportConfig::default())?;
+
+        let (server_tx, server_rx) = tokio::sync::oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let _ = server_tx.send(connection);
+            let _ = shutdown_rx.await;
+            Ok::<(), anyhow::Error>(())
+        });
+        let client_conn = client.connect(addr, "localhost").await?;
+        let server_conn = server_rx.await.expect("server conn");
+        Ok((client_conn, server_conn, shutdown_tx))
+    }
+
+    #[tokio::test]
+    async fn duplicate_registration_is_rejected() -> Result<()> {
+        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
+        crate::config::ClientConfig::optimized_defaults(quinn).install();
+        let (client_conn, server_conn, shutdown_tx) = quic_pair().await?;
+        let router = spawn_event_router(client_conn);
+
+        let (tx1, rx1) = oneshot::channel();
+        router
+            .send(EventRouterCommand::Register {
+                subscription_id: 1,
+                response: tx1,
+            })
+            .await
+            .expect("send");
+        let (tx2, rx2) = oneshot::channel();
+        router
+            .send(EventRouterCommand::Register {
+                subscription_id: 1,
+                response: tx2,
+            })
+            .await
+            .expect("send");
+        let err = rx2.await.expect("response").expect_err("duplicate");
+        assert!(
+            err.to_string()
+                .contains("duplicate subscription registration")
+        );
+        let mut uni = server_conn.open_uni().await?;
+        crate::wire::write_message(&mut uni, Message::EventStreamHello { subscription_id: 1 })
+            .await?;
+        let _ = uni.finish();
+        assert!(rx1.await.expect("response").is_ok());
+        let _ = shutdown_tx.send(());
+        Ok(())
     }
 }

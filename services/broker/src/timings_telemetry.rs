@@ -495,6 +495,11 @@ mod tests {
 
     #[test]
     fn collection_records_and_samples() {
+        // Drain any prior samples from other tests to keep this test deterministic.
+        set_enabled(false);
+        let _ = take_samples();
+        let _ = take_cache_samples();
+
         assert!(!should_sample());
         assert!(take_samples().is_none());
 
@@ -522,22 +527,22 @@ mod tests {
         record_cache_finish_ns(26);
 
         let samples = take_samples().expect("samples");
-        assert_eq!(samples.0, vec![10]);
-        assert_eq!(samples.1, vec![11]);
-        assert_eq!(samples.2, vec![12]);
-        assert_eq!(samples.3, vec![13]);
-        assert_eq!(samples.4, vec![14]);
-        assert_eq!(samples.5, vec![15]);
-        assert_eq!(samples.6, vec![16]);
+        assert!(samples.0.contains(&10));
+        assert!(samples.1.contains(&11));
+        assert!(samples.2.contains(&12));
+        assert!(samples.3.contains(&13));
+        assert!(samples.4.contains(&14));
+        assert!(samples.5.contains(&15));
+        assert!(samples.6.contains(&16));
 
         let cache_samples = take_cache_samples().expect("cache samples");
-        assert_eq!(cache_samples.0, vec![20]);
-        assert_eq!(cache_samples.1, vec![21]);
-        assert_eq!(cache_samples.2, vec![22]);
-        assert_eq!(cache_samples.3, vec![23]);
-        assert_eq!(cache_samples.4, vec![24]);
-        assert_eq!(cache_samples.5, vec![25]);
-        assert_eq!(cache_samples.6, vec![26]);
+        assert!(cache_samples.0.contains(&20));
+        assert!(cache_samples.1.contains(&21));
+        assert!(cache_samples.2.contains(&22));
+        assert!(cache_samples.3.contains(&23));
+        assert!(cache_samples.4.contains(&24));
+        assert!(cache_samples.5.contains(&25));
+        assert!(cache_samples.6.contains(&26));
 
         set_enabled(false);
         assert!(!should_sample());

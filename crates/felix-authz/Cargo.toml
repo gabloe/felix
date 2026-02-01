@@ -6,3 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+base64 = "0.22"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+casbin = { version = "2.8.0", default-features = false, features = ["runtime-tokio", "logging", "incremental"] }
+tokio = { version = "1.10.0", features = ["fs", "io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1.10.0", features = ["macros", "rt"] }

@@ -5,15 +5,22 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "felix-broker"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.22"
 felix-broker = { path = "../../crates/felix-broker", version = "0.1.0" }
 felix-client = { path = "../../crates/felix-client", version = "0.1.0" }
+felix-authz = { path = "../../crates/felix-authz", version = "0.1.0" }
 felix-transport = { path = "../../crates/felix-transport", version = "0.1.0" }
 felix-wire = { path = "../../crates/felix-wire", version = "0.1.0" }
 felix-storage = { path = "../../crates/felix-storage", version = "0.1.0" }
 bytes = { workspace = true }
+dashmap = "6"
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
 futures = "0.3"
 axum = "0.7"
 metrics = "0.23"
@@ -21,6 +28,7 @@ metrics-exporter-prometheus = "0.15"
 opentelemetry = "0.24"
 opentelemetry-otlp = { version = "0.17", features = ["tonic"] }
 opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
 quinn = "0.11"
 rcgen = "0.12"
 rustls = "0.23"

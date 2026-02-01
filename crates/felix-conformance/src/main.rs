@@ -1,16 +1,33 @@
+//! Felix conformance test runner.
+//!
+//! # Purpose
+//! Exercises end-to-end broker and client behaviors (auth, QUIC, wire encoding)
+//! to validate protocol and security invariants outside unit tests.
+//!
+//! # Notes
+//! This binary is intended for CI and developer verification, not production use.
 use anyhow::{Context, Result, anyhow};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use broker::auth::{BrokerAuth, ControlPlaneKeyStore};
 use broker::quic;
 use bytes::{Bytes, BytesMut};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use felix_authz::{
+    FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
+    TenantKeyStore,
+};
 use felix_broker::{Broker, CacheMetadata};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use felix_wire::{AckMode, FLAG_BINARY_EVENT_BATCH, Frame, FrameHeader, Message};
+use jsonwebtoken::Algorithm;
 use quinn::{ClientConfig as QuinnClientConfig, ReadExactError, RecvStream};
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,9 +36,19 @@ use std::time::Duration;
 
 const MAX_TEST_FRAME_BYTES: usize = 64 * 1024;
 
+// Static test keypair used to make JWT/JWKS tests deterministic and self-contained.
+const TEST_PRIVATE_KEY: [u8; 32] = [21u8; 32];
+
+struct AuthFixture {
+    tenant_id: String,
+    token: String,
+    broker_auth: Arc<BrokerAuth>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("== Felix Conformance Runner ==");
+    let auth = build_auth_fixture()?;
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
@@ -43,6 +70,7 @@ async fn main() -> Result<()> {
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
+        Arc::clone(&auth.broker_auth),
     ));
 
     let client = QuicClient::bind(
@@ -52,10 +80,10 @@ async fn main() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
 
-    run_pubsub(&connection).await?;
-    run_cache(&connection).await?;
-    run_client_pubsub(addr, cert.clone()).await?;
-    run_client_cache(addr, cert).await?;
+    run_pubsub(&connection, &auth).await?;
+    run_cache(&connection, &auth).await?;
+    run_client_pubsub(addr, cert.clone(), &auth).await?;
+    run_client_cache(addr, cert, &auth).await?;
 
     drop(connection);
     server_task.abort();
@@ -63,10 +91,76 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> {
+fn build_auth_fixture() -> Result<AuthFixture> {
+    let tenant_id = "t1".to_string();
+    let signing_key = Ed25519SigningKey::from_bytes(&TEST_PRIVATE_KEY);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let x = URL_SAFE_NO_PAD.encode(public_key);
+    let jwks = Jwks {
+        keys: vec![Jwk {
+            kty: "OKP".to_string(),
+            kid: "k1".to_string(),
+            alg: "EdDSA".to_string(),
+            use_field: KeyUse::Sig,
+            crv: Some("Ed25519".to_string()),
+            x: Some(x),
+        }],
+    };
+    let key_material = TenantKeyMaterial {
+        kid: "k1".to_string(),
+        alg: Algorithm::EdDSA,
+        private_key: TEST_PRIVATE_KEY,
+        public_key,
+        jwks: jwks.clone(),
+    };
+    let mut keys = HashMap::new();
+    keys.insert(tenant_id.clone(), key_material);
+    let key_store: Arc<dyn TenantKeyStore> = Arc::new(keys);
+    let issuer = FelixTokenIssuer::new(
+        "felix-auth",
+        "felix-broker",
+        Duration::from_secs(900),
+        key_store,
+    );
+    let perms = vec![
+        "stream.publish:stream:default/*".to_string(),
+        "stream.subscribe:stream:default/*".to_string(),
+        "cache.read:cache:default/*".to_string(),
+        "cache.write:cache:default/*".to_string(),
+    ];
+    let token = issuer.mint(&TenantId::new(&tenant_id), "conformance", perms)?;
+
+    let key_store = Arc::new(ControlPlaneKeyStore::new(
+        "http://127.0.0.1:1".to_string(),
+        Arc::new(TenantKeyCache::default()),
+    ));
+    key_store.insert_jwks(&TenantId::new(&tenant_id), jwks);
+    let broker_auth = Arc::new(BrokerAuth::with_key_store(key_store));
+    Ok(AuthFixture {
+        tenant_id,
+        token,
+        broker_auth,
+    })
+}
+
+async fn run_pubsub(
+    connection: &felix_transport::QuicConnection,
+    auth: &AuthFixture,
+) -> Result<()> {
     println!("Running pub/sub checks...");
     let (mut sub_send, mut sub_recv) = connection.open_bi().await?;
     let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
+    quic::write_message(
+        &mut sub_send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let auth_response =
+        quic::read_message_limited(&mut sub_recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_ok_response(auth_response, "auth")?;
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
@@ -83,8 +177,8 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
     let expected_id = parse_subscribe_response(response)?;
     let mut event_recv = connection.accept_uni().await?;
 
-    publish(connection, b"alpha").await?;
-    publish(connection, b"beta").await?;
+    publish(connection, auth, b"alpha").await?;
+    publish(connection, auth, b"beta").await?;
 
     let mut pending = VecDeque::new();
     if let Some(frame) = read_frame(&mut event_recv).await? {
@@ -111,11 +205,26 @@ async fn run_pubsub(connection: &felix_transport::QuicConnection) -> Result<()> 
     Ok(())
 }
 
-async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -> Result<()> {
+async fn publish(
+    connection: &felix_transport::QuicConnection,
+    auth: &AuthFixture,
+    payload: &[u8],
+) -> Result<()> {
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let (mut send, mut recv) = connection.open_bi().await?;
     let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
+    quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let auth_response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_ok_response(auth_response, "auth")?;
     quic::write_message(
         &mut send,
         Message::Publish {
@@ -135,10 +244,21 @@ async fn publish(connection: &felix_transport::QuicConnection, payload: &[u8]) -
     Ok(())
 }
 
-async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
+async fn run_cache(connection: &felix_transport::QuicConnection, auth: &AuthFixture) -> Result<()> {
     println!("Running cache checks...");
     let (mut send, mut recv) = connection.open_bi().await?;
     let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
+    quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let auth_response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_ok_response(auth_response, "auth")?;
     quic::write_message(
         &mut send,
         Message::CachePut {
@@ -157,11 +277,11 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
         quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
     ensure_ok_response(response, "cache put")?;
 
-    let value = cache_get(connection, "conformance-key").await?;
+    let value = cache_get(connection, auth, "conformance-key").await?;
     ensure_cache_value(value.clone(), Bytes::from_static(b"value"), "cache get")?;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
-    let expired = cache_get(connection, "conformance-key").await?;
+    let expired = cache_get(connection, auth, "conformance-key").await?;
     ensure_cache_expired(expired, "cache entry should be expired")?;
     Ok(())
 }
@@ -169,9 +289,10 @@ async fn run_cache(connection: &felix_transport::QuicConnection) -> Result<()> {
 async fn run_client_pubsub(
     addr: std::net::SocketAddr,
     cert: CertificateDer<'static>,
+    auth: &AuthFixture,
 ) -> Result<()> {
     println!("Running client pub/sub checks...");
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client = Client::connect(addr, "localhost", build_client_config(cert, auth)?).await?;
     let mut subscription = client.subscribe("t1", "default", "conformance").await?;
     let publisher = client.publisher().await?;
     publisher
@@ -192,9 +313,13 @@ async fn run_client_pubsub(
     Ok(())
 }
 
-async fn run_client_cache(addr: std::net::SocketAddr, cert: CertificateDer<'static>) -> Result<()> {
+async fn run_client_cache(
+    addr: std::net::SocketAddr,
+    cert: CertificateDer<'static>,
+    auth: &AuthFixture,
+) -> Result<()> {
     println!("Running client cache checks...");
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client = Client::connect(addr, "localhost", build_client_config(cert, auth)?).await?;
     client
         .cache_put(
             "t1",
@@ -223,10 +348,22 @@ async fn run_client_cache(addr: std::net::SocketAddr, cert: CertificateDer<'stat
 
 async fn cache_get(
     connection: &felix_transport::QuicConnection,
+    auth: &AuthFixture,
     key: &str,
 ) -> Result<Option<Bytes>> {
     let (mut send, mut recv) = connection.open_bi().await?;
     let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
+    quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let auth_response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_ok_response(auth_response, "auth")?;
     quic::write_message(
         &mut send,
         Message::CacheGet {
@@ -261,9 +398,12 @@ fn build_quinn_client_config(cert: CertificateDer<'static>) -> Result<QuinnClien
     Ok(quinn)
 }
 
-fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+fn build_client_config(cert: CertificateDer<'static>, auth: &AuthFixture) -> Result<ClientConfig> {
     let quinn = build_quinn_client_config(cert)?;
-    ClientConfig::from_env_or_yaml(quinn, None)
+    let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
+    config.auth_tenant_id = Some(auth.tenant_id.clone());
+    config.auth_token = Some(auth.token.clone());
+    Ok(config)
 }
 
 trait FrameReader {

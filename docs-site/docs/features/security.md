@@ -189,98 +189,153 @@ publisher
 - **Team isolation**: team-a, team-b, team-c
 - **Application isolation**: app-1, app-2, app-3
 
-## Authorization (Planned)
+## Authentication and Authorization
 
-!!! warning "Not Yet Implemented"
-    Authorization is planned but not implemented in the MVP. Currently, any client with network access can perform any operation.
+Felix implements token-based authentication with upstream OIDC and tenant-scoped RBAC enforced by brokers using Felix tokens.
 
-### Role-Based Access Control (RBAC)
+### Bootstrap Mode (Day-0)
 
-**Planned authorization model**:
+New tenants need IdP issuers, signing keys, and initial RBAC before any admin tokens exist. Felix provides a **one-time bootstrap mode** for operators:
 
-```yaml
-apiVersion: felix.io/v1
-kind: ACL
-metadata:
-  tenant: acme-corp
-  namespace: production
-spec:
-  rules:
-    - principal: "service-account-publisher"
-      resource: "stream:orders"
-      permissions:
-        - publish
-        
-    - principal: "service-account-consumer"
-      resource: "stream:orders"
-      permissions:
-        - subscribe
-        
-    - principal: "service-account-admin"
-      resource: "*"
-      permissions:
-        - publish
-        - subscribe
-        - cache_read
-        - cache_write
-        - admin
+1. Enable bootstrap on the control plane (disabled by default):
+
+```
+FELIX_BOOTSTRAP_ENABLED=true
+FELIX_BOOTSTRAP_BIND_ADDR=127.0.0.1:9095
+FELIX_BOOTSTRAP_TOKEN=<random secret>
 ```
 
-### Authentication Methods
+2. Call the internal endpoint (bound to the bootstrap address):
 
-**Planned authentication mechanisms**:
+```
+POST /internal/bootstrap/tenants/{tenant_id}/initialize
+X-Felix-Bootstrap-Token: <secret>
+Content-Type: application/json
 
-1. **API keys**: Simple token-based authentication
-2. **mTLS**: Certificate-based authentication
-3. **JWT tokens**: OAuth2/OIDC integration
-4. **Kubernetes ServiceAccounts**: Native K8s identity
-
-**Example with API keys** (future — API key support is not yet implemented in the client):
-
-```rust
-use felix_client::{Client, ClientConfig};
-use std::net::SocketAddr;
-
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig::optimized_defaults(quinn);
-let addr: SocketAddr = "127.0.0.1:5000".parse()?;
-let client = Client::connect(addr, "localhost", config).await?;
+{
+  "display_name": "Tenant One",
+  "idp_issuers": [
+    {
+      "issuer": "https://login.microsoftonline.com/<tenant>/v2.0",
+      "audiences": ["api://felix-controlplane"],
+      "discovery_url": null,
+      "jwks_url": null,
+      "claim_mappings": {
+        "subject_claim": "sub",
+        "groups_claim": "groups"
+      }
+    }
+  ],
+  "initial_admin_principals": ["p:alice"]
+}
 ```
 
-### Permission Model
+3. Disable bootstrap after the initial setup.
 
-**Resource types**:
+After bootstrap, **all admin endpoints require a Felix token with `tenant.admin`** for the tenant.
 
-- `stream:{name}`: Specific stream
-- `stream:*`: All streams in namespace
-- `cache:{name}`: Specific cache
-- `cache:*`: All caches in namespace
+### Supported Identity Providers
 
-**Permissions**:
+Felix supports any OIDC-compliant IdP that issues **RS256** JWTs and exposes a JWKS endpoint (via discovery or direct JWKS URL). Common providers that work out of the box include:
 
-- `publish`: Publish messages to stream
-- `subscribe`: Subscribe to stream
-- `cache_read`: Read from cache
-- `cache_write`: Write to cache
-- `admin`: Administrative operations (create/delete streams, etc.)
+- Microsoft Entra ID
+- Okta
+- Auth0
+- Google
+- Apple
 
-**Enforcement points**:
+### Allowing Upstream IdPs Per Tenant
+
+IdP trust is configured per tenant in the control plane store. Each tenant has an allowlist of issuers and audiences, plus optional claim mappings.
+
+The control plane validates:
+- `iss` matches an allowed issuer for the tenant
+- `aud` matches one of the configured audiences
+- signature via JWKS (cached with TTL)
+- `exp/nbf` with clock skew
+
+### Token Exchange (OIDC -> Felix)
+
+Clients authenticate to the control plane with an upstream OIDC JWT and exchange it for a tenant-scoped Felix token.
+
+```text
+POST /v1/tenants/{tenant_id}/token/exchange
+Authorization: Bearer <oidc_jwt>
+Content-Type: application/json
+
+{
+  "requested": ["stream.publish", "cache.read"],
+  "resources": ["ns:payments", "stream:payments/orders/*"]
+}
+```
+
+Response:
+
+```json
+{
+  "felix_token": "<jwt>",
+  "expires_in": 900,
+  "token_type": "Bearer"
+}
+```
+
+### Felix Token Claims
+
+Felix tokens are JWTs minted by the control plane and validated by brokers.
+
+- `iss`: `felix-auth`
+- `aud`: `felix-broker`
+- `sub`: `principal_id` (sha256 of `iss|sub`)
+- `tid`: tenant id
+- `exp`, `iat`
+- `perms`: effective permissions
+- **Algorithm**: EdDSA (Ed25519), with tenant key rotation published via JWKS.
+
+### RBAC Model (Casbin)
+
+Casbin is used with domains for tenant scoping. Policies and groupings are stored per tenant.
+
+**Objects**:
+- `tenant:*` or `tenant:{tenant_id}`
+- `ns:{namespace}` or `ns:*`
+- `stream:{namespace}/{pattern}`
+- `cache:{namespace}/{pattern}`
+
+**Actions**:
+- `tenant.admin`, `tenant.observe`, `ns.manage`
+- `stream.publish`, `stream.subscribe`
+- `cache.read`, `cache.write`
+
+**Permission strings** embedded in Felix tokens:
+
+```
+stream.publish:stream:payments/orders/*
+cache.read:cache:payments/session/*
+ns.manage:ns:payments
+tenant.admin:tenant:*
+```
+
+### Inheritance Rules
+
+- `tenant.admin` implies namespace manage plus full stream and cache access across the tenant.
+- `ns.manage:ns:{X}` implies stream publish/subscribe and cache read/write for `ns:{X}`.
+
+### Broker Enforcement
+
+Brokers validate Felix tokens (signature + claims) using tenant JWKS published by the control plane and enforce permissions locally using wildcard matching (`keyMatch2` semantics).
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant A as Auth Layer
-    participant B as Broker Core
-    
-    C->>A: publish (with credentials)
-    A->>A: Validate credentials
-    A->>A: Check permissions
-    alt Authorized
-        A->>B: Forward request
-        B-->>C: Success
-    else Unauthorized
-        A-->>C: Error: Forbidden
-    end
+    participant CONTROLPLANE as Control Plane
+    participant B as Broker
+
+    C->>CONTROLPLANE: OIDC token exchange
+    CONTROLPLANE-->>C: Felix token (JWT)
+    C->>B: Connect with tenant_id + Felix token
+    B->>B: Verify JWT (iss/aud/exp/tid + signature)
+    B->>B: Match action+resource against perms
+    B-->>C: Allow or reject operation
 ```
 
 ## Encryption at Rest (Planned)

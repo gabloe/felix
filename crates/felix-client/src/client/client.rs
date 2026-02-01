@@ -1,12 +1,23 @@
-// QUIC network client and connection pool setup.
+//! QUIC network client and connection pool setup.
+//!
+//! # Purpose
+//! Establishes the pooled QUIC connections and streams used by the client for
+//! publish, cache, and subscription workloads, and wires them to background
+//! worker tasks that handle the wire protocol.
+//!
+//! # Design notes
+//! Publish, cache, and event streams are separated to avoid head-of-line
+//! blocking between workloads and to allow distinct transport tuning.
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_transport::{QuicClient, QuicConnection, TransportConfig};
 use felix_wire::Message;
+use quinn::{RecvStream, SendStream};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug;
 
 use crate::client::cache::{CacheRequest, CacheWorker, run_cache_worker};
 use crate::client::event_router::{EventRouterCommand, spawn_event_router};
@@ -56,6 +67,8 @@ pub struct Client {
     // reset a shared connection counter from one worker.
     cache_conn_counts: Arc<Vec<AtomicUsize>>,
     event_conn_counts: Arc<Vec<AtomicUsize>>,
+    auth_tenant_id: String,
+    auth_token: String,
 }
 
 impl Client {
@@ -75,6 +88,14 @@ impl Client {
         transport: TransportConfig,
     ) -> Result<Self> {
         client_config.install();
+        let auth_tenant_id = client_config
+            .auth_tenant_id
+            .clone()
+            .context("FELIX_AUTH_TENANT must be set")?;
+        let auth_token = client_config
+            .auth_token
+            .clone()
+            .context("FELIX_AUTH_TOKEN must be set")?;
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("bind addr");
         let publish_client =
             QuicClient::bind(bind_addr, client_config.quinn.clone(), transport.clone())?;
@@ -87,12 +108,16 @@ impl Client {
         let mut publish_connections = Vec::with_capacity(publish_pool_size);
         for _ in 0..publish_pool_size {
             let connection = publish_client.connect(addr, server_name).await?;
+            debug!("client established publish connection");
             publish_connections.push(connection);
         }
         let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
         for connection in &publish_connections {
             for _ in 0..publish_streams_per_conn {
-                let (send, recv) = connection.open_bi().await?;
+                let (mut send, mut recv) = connection.open_bi().await?;
+                debug!("client opened publish stream");
+                authenticate_stream(&mut send, &mut recv, &auth_tenant_id, &auth_token).await?;
+                debug!("client publish stream authenticated");
                 let (tx, rx) = mpsc::channel(PUBLISH_QUEUE_DEPTH);
                 let handle =
                     tokio::spawn(run_publisher_writer(send, recv, rx, publish_chunk_bytes));
@@ -116,6 +141,7 @@ impl Client {
         let mut cache_connections = Vec::with_capacity(cache_pool_size);
         for _ in 0..cache_pool_size {
             let connection = cache_client.connect(addr, server_name).await?;
+            debug!("client established cache connection");
             cache_connections.push(connection);
         }
         // Each cache connection runs multiple independent bi-directional streams.
@@ -131,7 +157,10 @@ impl Client {
         let cache_conn_counts = Arc::new(cache_conn_counts);
         for (conn_index, connection) in cache_connections.iter().enumerate() {
             for _ in 0..cache_streams_per_conn {
-                let (send, recv) = connection.open_bi().await?;
+                let (mut send, mut recv) = connection.open_bi().await?;
+                debug!(conn_index, "client opened cache stream");
+                authenticate_stream(&mut send, &mut recv, &auth_tenant_id, &auth_token).await?;
+                debug!(conn_index, "client cache stream authenticated");
                 let (tx, rx) = mpsc::channel(CACHE_WORKER_QUEUE_DEPTH);
                 tokio::spawn(run_cache_worker(
                     conn_index,
@@ -150,6 +179,7 @@ impl Client {
         let mut event_connections = Vec::with_capacity(event_pool_size);
         for _ in 0..event_pool_size {
             let connection = event_client.connect(addr, server_name).await?;
+            debug!("client established event connection");
             event_connections.push(connection);
         }
         let mut event_stream_routers = Vec::with_capacity(event_pool_size);
@@ -175,6 +205,8 @@ impl Client {
             cache_conn_counts,
             event_stream_routers,
             event_conn_counts: Arc::new(event_conn_counts),
+            auth_tenant_id,
+            auth_token,
         })
     }
 
@@ -194,11 +226,18 @@ impl Client {
         namespace: &str,
         stream: &str,
     ) -> Result<Subscription> {
+        if tenant_id != self.auth_tenant_id {
+            return Err(anyhow::anyhow!(
+                "tenant mismatch: client auth is scoped to {}",
+                self.auth_tenant_id
+            ));
+        }
         // Round-robin subscriptions across the event connection pool.
         let requested_id = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
         let connection_index = requested_id as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
         let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(&mut send, &mut recv, &self.auth_tenant_id, &self.auth_token).await?;
         let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
         write_message(
             &mut send,
@@ -370,5 +409,29 @@ impl Client {
             .iter()
             .map(|count| count.load(Ordering::Relaxed))
             .collect()
+    }
+}
+
+async fn authenticate_stream(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    tenant_id: &str,
+    token: &str,
+) -> Result<()> {
+    write_message(
+        send,
+        Message::Auth {
+            tenant_id: tenant_id.to_string(),
+            token: token.to_string(),
+        },
+    )
+    .await
+    .context("send auth")?;
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    match read_message(recv, &mut scratch).await? {
+        Some(Message::Ok) => Ok(()),
+        Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
+        Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
+        None => Err(anyhow::anyhow!("auth response missing")),
     }
 }

@@ -1,4 +1,12 @@
-// Simple wire format for framing bytes on the network.
+//! Wire format for framing Felix protocol messages.
+//!
+//! # Purpose
+//! Defines the frame header layout, message enums, and JSON/binary encoders
+//! used by broker and client transports to communicate over QUIC.
+//!
+//! # Design notes
+//! The format balances readability (JSON control frames) with throughput
+//! (binary batch frames) while enforcing size limits for safety.
 use base64::Engine;
 use bytes::{Buf, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -160,6 +168,11 @@ impl Frame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
+    // Authenticate a control stream for a specific tenant.
+    Auth {
+        tenant_id: String,
+        token: String,
+    },
     // Publish a single payload to a stream.
     Publish {
         tenant_id: String,

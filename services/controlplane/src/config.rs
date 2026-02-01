@@ -1,3 +1,11 @@
+//! Control-plane configuration and defaults.
+//!
+//! # Purpose
+//! Defines config structs, defaults, and env/YAML parsing for the control-plane
+//! service, including storage backend selection and bootstrap settings.
+//!
+//! # Notes
+//! Defaults are chosen to keep dev setups simple while still bounding resource use.
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use std::fs;
@@ -9,6 +17,7 @@ pub const DEFAULT_CHANGE_RETENTION_MAX_ROWS: i64 = 10_000;
 const DEFAULT_PG_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_PG_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_PG_ACQUIRE_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_BOOTSTRAP_BIND_ADDR: &str = "127.0.0.1:9095";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageBackend {
@@ -56,6 +65,7 @@ pub struct ControlPlaneConfig {
     pub postgres: Option<PostgresConfig>,
     pub changes_limit: u64,
     pub change_retention_max_rows: Option<i64>,
+    pub bootstrap: BootstrapConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +77,7 @@ struct ControlPlaneConfigOverride {
     postgres: Option<PostgresOverride>,
     changes_limit: Option<u64>,
     change_retention_max_rows: Option<i64>,
+    bootstrap: Option<BootstrapOverride>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +91,20 @@ struct PostgresOverride {
     max_connections: Option<u32>,
     connect_timeout_ms: Option<u64>,
     acquire_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapConfig {
+    pub enabled: bool,
+    pub bind_addr: SocketAddr,
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BootstrapOverride {
+    enabled: Option<bool>,
+    bind_addr: Option<String>,
+    token: Option<String>,
 }
 
 impl ControlPlaneConfig {
@@ -142,6 +167,17 @@ impl ControlPlaneConfig {
             postgres,
             changes_limit,
             change_retention_max_rows,
+            bootstrap: BootstrapConfig {
+                enabled: std::env::var("FELIX_BOOTSTRAP_ENABLED")
+                    .ok()
+                    .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
+                bind_addr: std::env::var("FELIX_BOOTSTRAP_BIND_ADDR")
+                    .unwrap_or_else(|_| DEFAULT_BOOTSTRAP_BIND_ADDR.to_string())
+                    .parse()
+                    .with_context(|| "parse FELIX_BOOTSTRAP_BIND_ADDR")?,
+                token: std::env::var("FELIX_BOOTSTRAP_TOKEN").ok(),
+            },
         };
         config.validate()?;
         Ok(config)
@@ -194,6 +230,18 @@ impl ControlPlaneConfig {
                     config.storage = StorageBackend::Postgres;
                 }
             }
+            if let Some(bootstrap_override) = override_cfg.bootstrap {
+                if let Some(enabled) = bootstrap_override.enabled {
+                    config.bootstrap.enabled = enabled;
+                }
+                if let Some(value) = bootstrap_override.bind_addr {
+                    config.bootstrap.bind_addr =
+                        value.parse().with_context(|| "parse bind_addr")?;
+                }
+                if let Some(token) = bootstrap_override.token {
+                    config.bootstrap.token = Some(token);
+                }
+            }
         }
         config.validate()?;
         Ok(config)
@@ -203,6 +251,11 @@ impl ControlPlaneConfig {
         if matches!(self.storage, StorageBackend::Postgres) && self.postgres.is_none() {
             return Err(anyhow!(
                 "postgres backend requested but FELIX_CONTROLPLANE_POSTGRES_URL / postgres.url is not set"
+            ));
+        }
+        if self.bootstrap.enabled && self.bootstrap.token.is_none() {
+            return Err(anyhow!(
+                "bootstrap enabled but FELIX_BOOTSTRAP_TOKEN / bootstrap.token is not set"
             ));
         }
         Ok(())

@@ -1,14 +1,95 @@
+//! Text publish-batch latency integration test.
+//!
+//! # Purpose
+//! Exercises the broker and client over QUIC using JSON (text) frames to ensure
+//! large publish batches do not drop and that auth/JWKS wiring works end-to-end.
 use anyhow::{Context, Result};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use broker::auth::{BrokerAuth, ControlPlaneKeyStore};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use felix_authz::{
+    FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
+};
 use felix_broker::{Broker, StreamMetadata};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
+use jsonwebtoken::Algorithm;
 use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
+
+// Static test keys keep JWT/JWKS generation deterministic for the test run.
+const TEST_PRIVATE_KEY: [u8; 32] = [12u8; 32];
+
+struct AuthFixture {
+    tenant_id: String,
+    token: String,
+    auth: Arc<BrokerAuth>,
+}
+
+fn auth_fixture(tenant_id: &str) -> AuthFixture {
+    let signing_key = Ed25519SigningKey::from_bytes(&TEST_PRIVATE_KEY);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let jwks = jwks_from_public_key(&public_key, "k1");
+    let mut key_materials = std::collections::HashMap::new();
+    key_materials.insert(
+        tenant_id.to_string(),
+        TenantKeyMaterial {
+            kid: "k1".to_string(),
+            alg: Algorithm::EdDSA,
+            private_key: TEST_PRIVATE_KEY,
+            public_key,
+            jwks: jwks.clone(),
+        },
+    );
+    let issuer = FelixTokenIssuer::new(
+        "felix-auth",
+        "felix-broker",
+        Duration::from_secs(900),
+        Arc::new(key_materials),
+    );
+    let token = issuer
+        .mint(
+            &TenantId::new(tenant_id),
+            "p:test",
+            vec![
+                "stream.publish:stream:*/*".to_string(),
+                "stream.subscribe:stream:*/*".to_string(),
+            ],
+        )
+        .expect("mint token");
+
+    let key_store = Arc::new(ControlPlaneKeyStore::new(
+        "http://localhost".to_string(),
+        Arc::new(TenantKeyCache::default()),
+    ));
+    key_store.insert_jwks(&TenantId::new(tenant_id), jwks);
+    let auth = Arc::new(BrokerAuth::with_key_store(key_store));
+    AuthFixture {
+        tenant_id: tenant_id.to_string(),
+        token,
+        auth,
+    }
+}
+
+fn jwks_from_public_key(public_key: &[u8], kid: &str) -> Jwks {
+    let x = URL_SAFE_NO_PAD.encode(public_key);
+    Jwks {
+        keys: vec![Jwk {
+            kty: "OKP".to_string(),
+            kid: kid.to_string(),
+            alg: "EdDSA".to_string(),
+            use_field: KeyUse::Sig,
+            crv: Some("Ed25519".to_string()),
+            x: Some(x),
+        }],
+    }
+}
 
 #[tokio::test]
 async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
@@ -35,13 +116,15 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
     let addr = server.local_addr()?;
 
     let broker_config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture("t1");
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
         broker,
         broker_config,
+        Arc::clone(&auth.auth),
     ));
 
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
     let mut sub = client.subscribe("t1", "default", "latency").await?;
     let publisher = client.publisher().await?;
 
@@ -109,9 +192,12 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
     Ok((server_config, cert_der))
 }
 
-fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
+fn build_client_config(cert: CertificateDer<'static>, auth: &AuthFixture) -> Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
-    ClientConfig::from_env_or_yaml(quinn, None)
+    let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
+    config.auth_tenant_id = Some(auth.tenant_id.clone());
+    config.auth_token = Some(auth.token.clone());
+    Ok(config)
 }

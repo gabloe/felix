@@ -1,83 +1,57 @@
-/// Authorization primitives for simple role-based checks. NOTE: This is a placeholder implementation and
-/// should be replaced with a more robust solution in the future.
-///
-/// ```
-/// use felix_authz::{Permission, Policy, Role};
-///
-/// let policy = Policy {
-///     roles: vec![Role::new("writer", vec![Permission::Publish])],
-/// };
-/// assert!(policy.allows(Permission::Publish));
-/// assert!(!policy.allows(Permission::Manage));
-/// ```
-// Authorization primitives for simple role-based checks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Permission {
-    Publish,
-    Subscribe,
-    Manage,
-}
+//! Felix authn/authz primitives shared by control-plane and broker services.
+//!
+//! # Purpose
+//! Centralizes the authorization model (Casbin), permission matching, and
+//! token/JWKS helpers used across services.
+//!
+//! # How it fits
+//! Control-plane services mint and publish tokens/JWKS, while brokers verify
+//! tokens and enforce permissions using shared types from this crate.
+//!
+//! # Key invariants
+//! - Felix tokens are EdDSA/Ed25519 only; RSA/HS algorithms are rejected.
+//! - Permission strings follow the `action:resource` pattern with wildcards.
+//!
+//! # Important configuration
+//! - Issuer/audience values must be consistent between token issuer and verifier.
+//! - JWKS endpoints must publish only public key material.
+//!
+//! # Examples
+//! ```rust
+//! use felix_authz::{Action, Permission};
+//!
+//! let perm = Permission::new(Action::StreamPublish, "stream:tenant-a/ns/stream");
+//! assert!(perm.as_string().contains("stream.publish"));
+//! ```
+//!
+//! # Common pitfalls
+//! - Skipping permission validation allows malformed patterns into policy stores.
+//! - Mixing issuer/audience across services causes token verification failures.
+//!
+//! # Future work
+//! - Consolidate token and JWKS caching across services for fewer cache invalidations.
 
-#[derive(Debug, Clone)]
-pub struct Role {
-    pub name: String,
-    pub permissions: Vec<Permission>,
-}
+mod action;
+mod casbin_model;
+mod errors;
+mod jwks;
+mod matcher;
+mod permission;
+mod resource;
+mod token;
+mod types;
 
-impl Role {
-    // Collect permissions under a named role.
-    pub fn new(name: impl Into<String>, permissions: Vec<Permission>) -> Self {
-        Self {
-            name: name.into(),
-            permissions,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Policy {
-    pub roles: Vec<Role>,
-}
-
-impl Policy {
-    pub fn allows(&self, permission: Permission) -> bool {
-        // Any role with the permission grants access.
-        self.roles
-            .iter()
-            .any(|role| role.permissions.contains(&permission))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn policy_allows_permission() {
-        // Writer role should grant publish.
-        let policy = Policy {
-            roles: vec![Role::new("writer", vec![Permission::Publish])],
-        };
-        assert!(policy.allows(Permission::Publish));
-    }
-
-    #[test]
-    fn policy_denies_missing_permission() {
-        // Missing permission should remain denied.
-        let policy = Policy {
-            roles: vec![Role::new("reader", vec![Permission::Subscribe])],
-        };
-        assert!(!policy.allows(Permission::Manage));
-    }
-
-    #[test]
-    fn policy_allows_when_any_role_matches() {
-        let policy = Policy {
-            roles: vec![
-                Role::new("reader", vec![Permission::Subscribe]),
-                Role::new("writer", vec![Permission::Publish]),
-            ],
-        };
-        assert!(policy.allows(Permission::Publish));
-    }
-}
+pub use action::Action;
+pub use casbin_model::{casbin_model, casbin_model_string};
+pub use errors::{AuthzError, AuthzResult};
+pub use jwks::{Jwk, Jwks, KeyUse};
+pub use matcher::{PermissionMatcher, wildcard_match};
+pub use permission::{Permission, PermissionPattern};
+pub use resource::{
+    cache_resource, namespace_resource, stream_resource, tenant_resource, tenant_wildcard,
+};
+pub use token::{
+    FelixClaims, FelixTokenIssuer, FelixTokenVerifier, TenantKeyCache, TenantKeyMaterial,
+    TenantKeyStore, TenantSigningKey, TenantVerificationKey,
+};
+pub use types::{CacheScope, Namespace, StreamName, TenantId};

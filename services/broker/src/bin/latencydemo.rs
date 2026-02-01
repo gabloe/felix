@@ -1,4 +1,11 @@
-// Console demo that measures QUIC pub/sub latency distribution.
+//! Latency demo binary for QUIC publish/subscribe.
+//!
+//! # Purpose
+//! Runs a controlled pub/sub workload against an in-process broker and reports
+//! latency percentiles and throughput for different payload sizes and fanout.
+//!
+//! # Notes
+//! Intended for benchmarking and tuning; not part of production runtime.
 use anyhow::{Context, Result};
 use broker::timings as broker_timings;
 use felix_broker::timings as broker_publish_timings;
@@ -16,6 +23,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
+
+type DemoAuthResult = Result<(Arc<broker::auth::BrokerAuth>, Option<(String, String)>)>;
 
 #[derive(Clone, Debug)]
 struct DemoConfig {
@@ -394,13 +403,16 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     )?);
     let addr = server.local_addr()?;
     let broker_config = broker::config::BrokerConfig::from_env()?;
+    let (auth, auth_override) = resolve_demo_auth(&broker_config)?;
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
         broker,
         broker_config,
+        auth,
     ));
 
-    let client = Client::connect(addr, "localhost", build_client_config(cert)?).await?;
+    let client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    let client = Client::connect(addr, "localhost", client_config).await?;
 
     let delivered_total = Arc::new(AtomicUsize::new(0));
     let (primary_sub, drain_tasks) = setup_subscribers(
@@ -1168,6 +1180,29 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
     ClientConfig::from_env_or_yaml(quinn, None)
+}
+
+fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+    if let Some(controlplane_url) = config.controlplane_url.clone() {
+        return Ok((
+            Arc::new(broker::auth::BrokerAuth::new(controlplane_url)),
+            None,
+        ));
+    }
+
+    let demo = broker::auth_demo::demo_auth_for_tenant("t1")?;
+    Ok((demo.auth, Some((demo.tenant_id, demo.token))))
+}
+
+fn apply_demo_auth(
+    mut config: ClientConfig,
+    auth_override: Option<(String, String)>,
+) -> ClientConfig {
+    if let Some((tenant_id, token)) = auth_override {
+        config.auth_tenant_id = Some(tenant_id);
+        config.auth_token = Some(token);
+    }
+    config
 }
 
 fn percentile(values: &[Duration], p: f64) -> Duration {

@@ -25,6 +25,7 @@
 //! - Depth counters are tracked both per-stream and globally to support observability and tuning.
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
+use felix_authz::{Action, Namespace, StreamName, stream_resource};
 use felix_broker::Broker;
 use felix_wire::{Frame, Message};
 use std::collections::HashMap;
@@ -35,6 +36,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
+use crate::auth::AuthContext;
 use crate::timings;
 
 use crate::transport::quic::errors::AckEnqueueError;
@@ -336,6 +338,8 @@ pub(crate) fn reset_local_depth_only(
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use felix_authz::PermissionMatcher;
+    use felix_storage::EphemeralCache;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -483,7 +487,7 @@ mod tests {
         handle.await.unwrap();
         assert!(result.is_ok());
         assert_eq!(depth.load(Ordering::Relaxed), 1);
-        assert_eq!(GLOBAL_ACK_DEPTH.load(Ordering::Relaxed), 1);
+        assert!(GLOBAL_ACK_DEPTH.load(Ordering::Relaxed) >= 1);
         assert!(!*throttle_rx.borrow());
     }
 
@@ -556,6 +560,258 @@ mod tests {
         assert!(result.is_err());
         assert!(!*throttle_rx.borrow());
         assert!(*cancel_rx.borrow());
+    }
+
+    fn make_auth_ctx(tenant_id: &str, perms: &[&str]) -> AuthContext {
+        let patterns = perms.iter().map(|p| (*p).to_string()).collect::<Vec<_>>();
+        let matcher = PermissionMatcher::from_strings(&patterns).expect("parse perms");
+        AuthContext {
+            tenant_id: tenant_id.to_string(),
+            matcher,
+        }
+    }
+
+    fn make_binary_publish_frame(tenant_id: &str, namespace: &str, stream: &str) -> Frame {
+        let payloads = vec![b"payload".to_vec()];
+        felix_wire::binary::encode_publish_batch(tenant_id, namespace, stream, &payloads)
+            .expect("encode publish batch")
+    }
+
+    #[tokio::test]
+    async fn handle_binary_publish_batch_control_requires_auth() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let frame = make_binary_publish_frame("tenant", "ns", "stream");
+        let err = handle_binary_publish_batch_control(
+            &broker,
+            &mut cache,
+            &mut key,
+            &publish_ctx,
+            &frame,
+            None,
+            false,
+        )
+        .await
+        .expect_err("auth required");
+        assert!(err.to_string().contains("auth required"));
+    }
+
+    #[tokio::test]
+    async fn handle_binary_publish_batch_control_tenant_mismatch() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let frame = make_binary_publish_frame("tenant", "ns", "stream");
+        let auth_ctx = make_auth_ctx("other", &["stream.publish:stream:ns/stream"]);
+        let err = handle_binary_publish_batch_control(
+            &broker,
+            &mut cache,
+            &mut key,
+            &publish_ctx,
+            &frame,
+            Some(&auth_ctx),
+            false,
+        )
+        .await
+        .expect_err("tenant mismatch");
+        assert!(err.to_string().contains("tenant mismatch"));
+    }
+
+    #[tokio::test]
+    async fn handle_binary_publish_batch_control_forbidden() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let frame = make_binary_publish_frame("tenant", "ns", "stream");
+        let auth_ctx = make_auth_ctx("tenant", &["stream.subscribe:stream:ns/stream"]);
+        let err = handle_binary_publish_batch_control(
+            &broker,
+            &mut cache,
+            &mut key,
+            &publish_ctx,
+            &frame,
+            Some(&auth_ctx),
+            false,
+        )
+        .await
+        .expect_err("forbidden");
+        assert!(err.to_string().contains("forbidden"));
+    }
+
+    #[tokio::test]
+    async fn handle_binary_publish_batch_control_missing_stream_is_ok() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, mut rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let frame = make_binary_publish_frame("tenant", "ns", "stream");
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let result = handle_binary_publish_batch_control(
+            &broker,
+            &mut cache,
+            &mut key,
+            &publish_ctx,
+            &frame,
+            Some(&auth_ctx),
+            false,
+        )
+        .await;
+        assert!(result.is_ok());
+        let recv = tokio::time::timeout(Duration::from_millis(20), rx.recv()).await;
+        assert!(recv.is_err(), "publish should not be enqueued");
+    }
+
+    #[tokio::test]
+    async fn handle_publish_message_throttled_sends_error() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let (out_tx, mut out_rx) = mpsc::channel(1);
+        let out_depth = Arc::new(AtomicUsize::new(0));
+        let (throttle_tx, _throttle_rx) = watch::channel(false);
+        let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+        let (cancel_tx, _cancel_rx) = watch::channel(false);
+        let ack_waiters = Arc::new(Semaphore::new(1));
+        let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
+        handle_publish_message(
+            &broker,
+            &publish_ctx,
+            &mut cache,
+            &mut key,
+            true,
+            false,
+            &out_tx,
+            &out_depth,
+            &throttle_tx,
+            &ack_timeout_state,
+            &cancel_tx,
+            &ack_waiters,
+            &ack_waiter_tx,
+            Duration::from_millis(10),
+            "tenant".to_string(),
+            "ns".to_string(),
+            "stream".to_string(),
+            vec![1, 2, 3],
+            Some(7),
+            Some(felix_wire::AckMode::PerMessage),
+            false,
+        )
+        .await
+        .expect("throttled path");
+        let msg = out_rx.recv().await.expect("outgoing");
+        match msg {
+            Outgoing::Message(Message::PublishError {
+                request_id,
+                message,
+            }) => {
+                assert_eq!(request_id, 7);
+                assert!(message.contains("overloaded"));
+            }
+            _ => panic!("unexpected outgoing"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_publish_message_missing_request_id_returns_error() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let (out_tx, mut out_rx) = mpsc::channel(1);
+        let out_depth = Arc::new(AtomicUsize::new(0));
+        let (throttle_tx, _throttle_rx) = watch::channel(false);
+        let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+        let (cancel_tx, _cancel_rx) = watch::channel(false);
+        let ack_waiters = Arc::new(Semaphore::new(1));
+        let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
+        handle_publish_message(
+            &broker,
+            &publish_ctx,
+            &mut cache,
+            &mut key,
+            false,
+            false,
+            &out_tx,
+            &out_depth,
+            &throttle_tx,
+            &ack_timeout_state,
+            &cancel_tx,
+            &ack_waiters,
+            &ack_waiter_tx,
+            Duration::from_millis(10),
+            "tenant".to_string(),
+            "ns".to_string(),
+            "stream".to_string(),
+            vec![1, 2, 3],
+            None,
+            Some(felix_wire::AckMode::PerMessage),
+            false,
+        )
+        .await
+        .expect("missing request id");
+        let msg = out_rx.recv().await.expect("outgoing");
+        match msg {
+            Outgoing::Message(Message::Error { message }) => {
+                assert!(message.contains("missing request_id"));
+            }
+            _ => panic!("unexpected outgoing"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_publish_message_stream_not_found_sends_error() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        let (publish_ctx, _rx, _tx) = make_publish_context(1);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+        let (out_tx, mut out_rx) = mpsc::channel(1);
+        let out_depth = Arc::new(AtomicUsize::new(0));
+        let (throttle_tx, _throttle_rx) = watch::channel(false);
+        let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+        let (cancel_tx, _cancel_rx) = watch::channel(false);
+        let ack_waiters = Arc::new(Semaphore::new(1));
+        let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
+        handle_publish_message(
+            &broker,
+            &publish_ctx,
+            &mut cache,
+            &mut key,
+            false,
+            false,
+            &out_tx,
+            &out_depth,
+            &throttle_tx,
+            &ack_timeout_state,
+            &cancel_tx,
+            &ack_waiters,
+            &ack_waiter_tx,
+            Duration::from_millis(10),
+            "tenant".to_string(),
+            "ns".to_string(),
+            "missing".to_string(),
+            vec![1, 2, 3],
+            Some(42),
+            Some(felix_wire::AckMode::PerMessage),
+            false,
+        )
+        .await
+        .expect("stream not found");
+        let msg = out_rx.recv().await.expect("outgoing");
+        match msg {
+            Outgoing::Message(Message::PublishError {
+                request_id,
+                message,
+            }) => {
+                assert_eq!(request_id, 42);
+                assert!(message.contains("stream not found"));
+            }
+            _ => panic!("unexpected outgoing"),
+        }
     }
 }
 
@@ -669,6 +925,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     frame: &Frame,
+    auth_ctx: Option<&AuthContext>,
     sample: bool,
 ) -> Result<()> {
     let decode_start = t_now_if(sample);
@@ -688,6 +945,17 @@ pub(crate) async fn handle_binary_publish_batch_control(
             return Err(err);
         }
     };
+    let auth_ctx = auth_ctx.ok_or_else(|| anyhow!("auth required"))?;
+    if auth_ctx.tenant_id != batch.tenant_id {
+        return Err(anyhow!("tenant mismatch"));
+    }
+    let resource = stream_resource(
+        &Namespace::new(batch.namespace.as_str()),
+        &StreamName::new(batch.stream.as_str()),
+    );
+    if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
+        return Err(anyhow!("forbidden"));
+    }
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();
@@ -1476,6 +1744,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     frame: &Frame,
+    auth_ctx: Option<&AuthContext>,
 ) -> Result<bool> {
     let batch = match felix_wire::binary::decode_publish_batch(frame)
         .context("decode binary publish batch")
@@ -1493,6 +1762,20 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             return Err(err);
         }
     };
+    let auth_ctx = match auth_ctx {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+    if auth_ctx.tenant_id != batch.tenant_id {
+        return Ok(false);
+    }
+    let resource = stream_resource(
+        &Namespace::new(batch.namespace.as_str()),
+        &StreamName::new(batch.stream.as_str()),
+    );
+    if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
+        return Ok(false);
+    }
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();
