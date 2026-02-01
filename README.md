@@ -14,6 +14,9 @@
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/rust-1.92.0-blue" alt="Rust 1.92.0" />
   </a>
+  <a href="https://gabloe.github.io/github">
+    <img src="https://img.shields.io/badge/Documentation-8A2BE2" alt="Documentation" />
+  </a>
 </p>
 
 ---
