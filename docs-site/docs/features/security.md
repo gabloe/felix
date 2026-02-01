@@ -236,7 +236,7 @@ After bootstrap, **all admin endpoints require a Felix token with `tenant.admin`
 
 ### Supported Identity Providers
 
-Felix supports any OIDC-compliant IdP that issues **RS256** JWTs and exposes a JWKS endpoint (via discovery or direct JWKS URL). Common providers that work out of the box include:
+Felix supports any OIDC-compliant IdP that issues **ES256** JWTs and exposes a JWKS endpoint (via discovery or direct JWKS URL). **RS256** support is available behind the `oidc-rsa` feature flag for environments that require RSA-signed IdP tokens. Common providers that work out of the box include:
 
 - Microsoft Entra ID
 - Okta
@@ -252,7 +252,7 @@ The control plane validates:
 - `iss` matches an allowed issuer for the tenant
 - `aud` matches one of the configured audiences
 - signature via JWKS (cached with TTL)
-- `exp/nbf` with clock skew
+- `exp` with clock skew and `iat` not in the future
 
 ### Token Exchange (OIDC -> Felix)
 
@@ -289,7 +289,8 @@ Felix tokens are JWTs minted by the control plane and validated by brokers.
 - `tid`: tenant id
 - `exp`, `iat`
 - `perms`: effective permissions
-- **Algorithm**: EdDSA (Ed25519), with tenant key rotation published via JWKS.
+- **Algorithm**: EdDSA (Ed25519) only; Felix-issued tokens never use RSA.
+  Tenant key rotation is published via JWKS.
 
 ### RBAC Model (Casbin)
 
