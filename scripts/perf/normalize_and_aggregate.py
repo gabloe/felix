@@ -6,10 +6,10 @@ import statistics
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RAW_JSONL = ROOT / "data" / "raw" / "latencydemo_runs.jsonl"
+RAW_JSONL = ROOT / "data" / "raw" / "latency_demo_runs.jsonl"
 DERIVED_DIR = ROOT / "data" / "derived"
-RUNS_CSV = DERIVED_DIR / "latencydemo_runs.csv"
-AGG_CSV = DERIVED_DIR / "latencydemo_agg.csv"
+RUNS_CSV = DERIVED_DIR / "latency_demo_runs.csv"
+AGG_CSV = DERIVED_DIR / "latency_demo_agg.csv"
 
 
 def percentile(values, pct):
@@ -188,7 +188,7 @@ def write_parquet(rows: list, path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Normalize and aggregate latencydemo JSONL.")
+    parser = argparse.ArgumentParser(description="Normalize and aggregate latency_demo JSONL.")
     parser.add_argument("--input", default=str(RAW_JSONL))
     args = parser.parse_args()
 

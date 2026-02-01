@@ -183,10 +183,10 @@ Run multiple clients connecting to the same broker:
 cargo run --release -p broker
 
 # Terminal 2: Run subscriber demo
-cargo run --release -p broker --bin pubsubdemo
+cargo run --release -p broker --bin pubsub-demo-simple
 
 # Terminal 3: Run another client
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 ### Scenario 4: Testing Control Plane Integration
@@ -244,10 +244,14 @@ cargo run --release -p broker
 
 Felix includes several demonstration programs:
 
+!!! note "Self-contained demos"
+    The demo binaries start an in-process broker and QUIC server on a random local port.
+    You do not need to run the broker separately for these demos.
+
 ### Pub/Sub Demo
 
 ```bash
-cargo run --release -p broker --bin pubsubdemo
+cargo run --release -p broker --bin pubsub-demo-simple
 ```
 
 Demonstrates:
@@ -258,7 +262,7 @@ Demonstrates:
 ### Cache Demo
 
 ```bash
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 Benchmarks cache operations:
@@ -270,10 +274,10 @@ Benchmarks cache operations:
 
 ```bash
 # Basic run
-cargo run --release -p broker --bin latencydemo
+cargo run --release -p broker --bin latency-demo
 
 # Custom configuration
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -290,6 +294,24 @@ cargo run --release -p broker --bin latencydemo -- \
 - `--payload N`: Payload size in bytes
 - `--total N`: Total messages to publish
 - `--warmup N`: Warmup messages before measurement
+
+### Scenario Demos
+
+#### Notifications (Multi-tenant alerts)
+
+```bash
+cargo run --release -p broker --bin pubsub-demo-notifications
+```
+
+Optional flags: `--alerts=10`, `--last-n=5`, `--drop-subscriber`.
+
+#### Orders/Payments Pipeline
+
+```bash
+cargo run --release -p broker --bin pubsub-demo-orders
+```
+
+Optional flags: `--orders=12`, `--duplicate-every=5`, `--kill-worker=payments`.
 
 ## Using Task Commands
 
@@ -309,9 +331,11 @@ task lint
 task fmt
 
 # Run demos
-task demo-pubsub
-task demo-cache
-task demo-latency
+task demo:pubsub
+task demo:cache
+task demo:latency
+task demo:notifications
+task demo:orders
 
 # Run conformance tests
 task conformance

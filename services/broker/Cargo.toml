@@ -9,6 +9,26 @@ rust-version.workspace = true
 name = "felix-broker"
 path = "src/main.rs"
 
+[[bin]]
+name = "pubsub-demo-simple"
+path = "../../demos/broker/pubsubdemo.rs"
+
+[[bin]]
+name = "cache-demo"
+path = "../../demos/broker/cachedemo.rs"
+
+[[bin]]
+name = "latency-demo"
+path = "../../demos/broker/latencydemo.rs"
+
+[[bin]]
+name = "pubsub-demo-notifications"
+path = "../../demos/broker/notifications_demo.rs"
+
+[[bin]]
+name = "pubsub-demo-orders"
+path = "../../demos/broker/orders_demo.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.22"

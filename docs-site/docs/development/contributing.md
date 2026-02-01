@@ -517,11 +517,11 @@ mkdocs build
 
 ```bash
 # Run latency benchmarks
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
     --binary --fanout 10 --batch 64 --payload 4096
 
 # Run cache benchmarks
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 ### Profiling

@@ -125,26 +125,36 @@ FELIX_QUIC_BIND=0.0.0.0:5001 cargo run --release -p broker
 ### Demo Applications
 
 ```bash
+# Demos are self-contained (in-process broker)
+
 # Pub/sub demo
-cargo run --release -p broker --bin pubsubdemo
+cargo run --release -p broker --bin pubsub-demo-simple
 
 # Cache demo
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 
 # Latency benchmark
-cargo run --release -p broker --bin latencydemo
+cargo run --release -p broker --bin latency-demo
+
+# Notifications demo
+cargo run --release -p broker --bin pubsub-demo-notifications
+
+# Orders/payments pipeline demo
+cargo run --release -p broker --bin pubsub-demo-orders
 
 # Or with Task
-task demo-pubsub
-task demo-cache
-task demo-latency
+task demo:pubsub
+task demo:cache
+task demo:latency
+task demo:notifications
+task demo:orders
 ```
 
 ### Custom Demo Arguments
 
 ```bash
 # Latency demo with custom settings
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -289,7 +299,7 @@ task coverage
 
 The coverage task skips demo binaries:
 ```bash
-cargo llvm-cov --ignore-filename-regex 'services/broker/src/bin/.*demo.*' \
+cargo llvm-cov --ignore-filename-regex 'demos/broker/.*demo.*' \
   --skip-functions --all-features --workspace
 ```
 
@@ -450,13 +460,13 @@ All PRs must pass:
 **Basic run**:
 
 ```bash
-cargo run --release -p broker --bin latencydemo
+cargo run --release -p broker --bin latency-demo
 ```
 
 **Custom configuration**:
 
 ```bash
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -482,10 +492,10 @@ python3 scripts/perf/render_markdown_snippets.py
 
 ```bash
 # Run cache benchmarks
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 
 # Or with Task
-task demo-cache
+task demo:cache
 ```
 
 **Configurable parameters**:
@@ -496,7 +506,7 @@ export FELIX_CACHE_STREAMS_PER_CONN=4
 export FELIX_CACHE_BENCH_CONCURRENCY=32
 export FELIX_CACHE_BENCH_KEYS=1024
 
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 ## Profiling
@@ -625,10 +635,11 @@ task coverage       # Generate coverage report
 task deny           # Audit dependencies
 
 # Demos
-task demo           # Run pubsub demo
-task demo-pubsub    # Run pubsub demo
-task demo-cache     # Run cache demo
-task demo-latency   # Run latency demo
+task demo:pubsub    # Run pubsub demo
+task demo:cache     # Run cache demo
+task demo:latency   # Run latency demo
+task demo:notifications  # Run notifications demo
+task demo:orders         # Run orders pipeline demo
 
 # Benchmarking
 task perf:latency-matrix  # Run full latency benchmark matrix

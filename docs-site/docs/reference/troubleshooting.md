@@ -685,7 +685,7 @@ cargo profdata run -p broker
 cargo run --release -p broker
 
 # In another terminal, run latency demo
-cargo run --release -p broker --bin latencydemo -- \
+cargo run --release -p broker --bin latency-demo -- \
   --binary \
   --fanout 1 \
   --batch 1 \

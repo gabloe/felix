@@ -60,7 +60,7 @@ FELIX_PUB_CONN_POOL=4
 FELIX_PUB_STREAMS_PER_CONN=2
 FELIX_PUBLISH_CHUNK_BYTES=16384
 FELIX_DISABLE_TIMINGS=1
-cargo run --release -p broker --bin latencydemo -- --binary --fanout 10 --batch 64 --payload 4096 --total 5000 --warmup 200
+cargo run --release -p broker --bin latency-demo -- --binary --fanout 10 --batch 64 --payload 4096 --total 5000 --warmup 200
 ```
   Median shape: p50 ~43 ms, ~70k msg/s effective throughput.
 
@@ -72,7 +72,7 @@ All charts are binary-only medians across 5 runs per profile.
 This benchmark matrix measures pub/sub event delivery (streaming), not cache.
 f1 = fanout 1, f10 = fanout 10.
 
-Reproducible latencydemo benchmarks
+Reproducible latency-demo benchmarks
 - Matrix config lives in `scripts/perf/presets.yml`.
 - Run the full pipeline:
 ```bash
@@ -88,7 +88,7 @@ task perf:latency-matrix
 
 Run it
 ```bash
-cargo run --release -p broker --bin latencydemo -- --all --binary
+cargo run --release -p broker --bin latency-demo -- --all --binary
 ```
 
 Charts are clipped at p95 to keep outliers from dominating the axes.
@@ -96,50 +96,50 @@ Charts are clipped at p95 to keep outliers from dominating the axes.
 Batch=1 (low batching): balanced
 
 fanout=1
-![](/docs/assets/latencydemo/balanced/f1_b1_p50.png)
-![](/docs/assets/latencydemo/balanced/f1_b1_p99.png)
-![](/docs/assets/latencydemo/balanced/f1_b1_throughput.png)
+![](/docs/assets/latency_demo/balanced/f1_b1_p50.png)
+![](/docs/assets/latency_demo/balanced/f1_b1_p99.png)
+![](/docs/assets/latency_demo/balanced/f1_b1_throughput.png)
 
 fanout=10
-![](/docs/assets/latencydemo/balanced/f10_b1_p50.png)
-![](/docs/assets/latencydemo/balanced/f10_b1_p99.png)
-![](/docs/assets/latencydemo/balanced/f10_b1_throughput.png)
+![](/docs/assets/latency_demo/balanced/f10_b1_p50.png)
+![](/docs/assets/latency_demo/balanced/f10_b1_p99.png)
+![](/docs/assets/latency_demo/balanced/f10_b1_throughput.png)
 
 Batch=1 (low batching): high-memory
 
 fanout=1
-![](/docs/assets/latencydemo/high_memory/f1_b1_p50.png)
-![](/docs/assets/latencydemo/high_memory/f1_b1_p99.png)
-![](/docs/assets/latencydemo/high_memory/f1_b1_throughput.png)
+![](/docs/assets/latency_demo/high_memory/f1_b1_p50.png)
+![](/docs/assets/latency_demo/high_memory/f1_b1_p99.png)
+![](/docs/assets/latency_demo/high_memory/f1_b1_throughput.png)
 
 fanout=10
-![](/docs/assets/latencydemo/high_memory/f10_b1_p50.png)
-![](/docs/assets/latencydemo/high_memory/f10_b1_p99.png)
-![](/docs/assets/latencydemo/high_memory/f10_b1_throughput.png)
+![](/docs/assets/latency_demo/high_memory/f10_b1_p50.png)
+![](/docs/assets/latency_demo/high_memory/f10_b1_p99.png)
+![](/docs/assets/latency_demo/high_memory/f10_b1_throughput.png)
 
 Batch=64 (high batching): balanced
 
 fanout=1
-![](/docs/assets/latencydemo/balanced/f1_b64_p50.png)
-![](/docs/assets/latencydemo/balanced/f1_b64_p99.png)
-![](/docs/assets/latencydemo/balanced/f1_b64_throughput.png)
+![](/docs/assets/latency_demo/balanced/f1_b64_p50.png)
+![](/docs/assets/latency_demo/balanced/f1_b64_p99.png)
+![](/docs/assets/latency_demo/balanced/f1_b64_throughput.png)
 
 fanout=10
-![](/docs/assets/latencydemo/balanced/f10_b64_p50.png)
-![](/docs/assets/latencydemo/balanced/f10_b64_p99.png)
-![](/docs/assets/latencydemo/balanced/f10_b64_throughput.png)
+![](/docs/assets/latency_demo/balanced/f10_b64_p50.png)
+![](/docs/assets/latency_demo/balanced/f10_b64_p99.png)
+![](/docs/assets/latency_demo/balanced/f10_b64_throughput.png)
 
 Batch=64 (high batching): high-memory
 
 fanout=1
-![](/docs/assets/latencydemo/high_memory/f1_b64_p50.png)
-![](/docs/assets/latencydemo/high_memory/f1_b64_p99.png)
-![](/docs/assets/latencydemo/high_memory/f1_b64_throughput.png)
+![](/docs/assets/latency_demo/high_memory/f1_b64_p50.png)
+![](/docs/assets/latency_demo/high_memory/f1_b64_p99.png)
+![](/docs/assets/latency_demo/high_memory/f1_b64_throughput.png)
 
 fanout=10
-![](/docs/assets/latencydemo/high_memory/f10_b64_p50.png)
-![](/docs/assets/latencydemo/high_memory/f10_b64_p99.png)
-![](/docs/assets/latencydemo/high_memory/f10_b64_throughput.png)
+![](/docs/assets/latency_demo/high_memory/f10_b64_p50.png)
+![](/docs/assets/latency_demo/high_memory/f10_b64_p99.png)
+![](/docs/assets/latency_demo/high_memory/f10_b64_throughput.png)
 
 ## Cache benchmark (localhost)
 
@@ -153,7 +153,7 @@ FELIX_CACHE_CONN_POOL=8
 FELIX_CACHE_STREAMS_PER_CONN=4
 FELIX_CACHE_BENCH_CONCURRENCY=32
 FELIX_CACHE_BENCH_KEYS=1024
-cargo run --release -p broker --bin cachedemo
+cargo run --release -p broker --bin cache-demo
 ```
 
 Cache put: p50 latency
