@@ -28,7 +28,7 @@ metrics-exporter-prometheus = "0.15"
 opentelemetry = "0.24"
 opentelemetry-otlp = { version = "0.17", features = ["tonic"] }
 opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 quinn = "0.11"
 rcgen = "0.12"
 rustls = "0.23"

@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }

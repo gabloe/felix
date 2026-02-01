@@ -36,7 +36,7 @@ dashmap = "6"
 base64 = "0.22"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 hex = "0.4"
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sha2 = "0.10"
 rand = "0.8"
@@ -56,3 +56,4 @@ path = "src/lib.rs"
 
 [features]
 pg-tests = []
+oidc-rsa = ["jsonwebtoken/use_pem"]

@@ -6,15 +6,16 @@
 //!
 //! # Architectural role
 //! Provides the IdP boundary for the control-plane: it verifies upstream tokens
-//! (typically RS256) before issuing Felix EdDSA tokens elsewhere.
+//! (typically RS256 or ES256) before issuing Felix EdDSA tokens elsewhere.
 //!
 //! # Callers / consumers
 //! - Token exchange endpoint (`/token/exchange`) validates IdP tokens.
 //! - Tests that exercise JWKS caching and issuer validation.
 //!
 //! # Key invariants
-//! - Only RS256 IdP tokens are accepted here; Felix tokens are EdDSA and handled
-//!   in a separate module.
+//! - Only ES256 is accepted by default; RS256 is allowed only when the
+//!   `oidc-rsa` feature is enabled. Felix tokens are EdDSA and handled in a
+//!   separate module.
 //! - Issuer and audience claims are validated against configuration.
 //! - JWKS and discovery caches are time-bounded and refreshed on demand.
 //!
@@ -28,7 +29,7 @@
 //!
 //! # Security model and threat assumptions
 //! - Attackers may craft tokens; we validate issuer, audience, and signature.
-//! - RS256 is used here because many IdPs publish RSA keys via JWKS.
+//! - RS256 is feature-gated because many IdPs publish RSA keys via JWKS.
 //! - We decode claims without verification only to locate the issuer; all other
 //!   validation happens after signature verification.
 //!
@@ -38,8 +39,9 @@
 use crate::auth::idp_registry::IdpIssuerConfig;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Utc;
 use dashmap::DashMap;
-use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
 use serde_json::Value;
@@ -50,7 +52,7 @@ use std::time::{Duration, Instant};
 ///
 /// # Overview
 /// Maintains HTTP client and in-memory caches for discovery and JWKS, enabling
-/// efficient RS256 validation for configured issuers.
+/// efficient validation for configured issuers.
 ///
 /// # Arguments
 /// - Constructed via [`UpstreamOidcValidator::new`] or `Default`.
@@ -73,7 +75,7 @@ use std::time::{Duration, Instant};
 /// ```
 ///
 /// # Security
-/// - Only RS256 is accepted here to match IdP JWKS expectations.
+/// - ES256 is accepted by default; RS256 is allowed only with `oidc-rsa`.
 #[derive(Debug, Clone)]
 pub struct UpstreamOidcValidator {
     client: reqwest::Client,
@@ -158,8 +160,12 @@ pub enum OidcError {
     IssuerNotAllowed,
     #[error("missing subject")]
     MissingSubject,
+    #[error("missing key id")]
+    MissingKeyId,
     #[error("unsupported algorithm")]
     UnsupportedAlgorithm,
+    #[error("invalid jwk: {0}")]
+    InvalidJwk(String),
     #[error("jwks key not found")]
     JwksKeyNotFound,
     #[error("http error: {0}")]
@@ -238,7 +244,7 @@ impl UpstreamOidcValidator {
     /// Validate an upstream OIDC bearer token against configured issuers.
     ///
     /// # Overview
-    /// Enforces RS256, resolves issuer configuration, fetches JWKS as needed,
+    /// Enforces allowed algorithms, resolves issuer configuration, fetches JWKS as needed,
     /// and validates issuer/audience/subject claims.
     ///
     /// # Arguments
@@ -249,9 +255,12 @@ impl UpstreamOidcValidator {
     /// - `Ok(ValidatedToken)` containing issuer, subject, and groups.
     ///
     /// # Errors
-    /// - `OidcError::UnsupportedAlgorithm` if token is not RS256.
+    /// - `OidcError::UnsupportedAlgorithm` if token is not an allowed algorithm.
     /// - `OidcError::IssuerNotAllowed` if `iss` is not configured.
+    /// - `OidcError::MissingKeyId` if the token header lacks a `kid`.
     /// - `OidcError::JwksKeyNotFound` if the signing key cannot be found.
+    /// - `OidcError::InvalidJwk` if the JWK metadata does not match the algorithm.
+    /// - `OidcError::InvalidClaim` if `iat` is missing or invalid.
     /// - `OidcError::Jwt` for signature/claim validation failures.
     ///
     /// # Panics
@@ -268,7 +277,7 @@ impl UpstreamOidcValidator {
     /// ```
     ///
     /// # Security
-    /// - The algorithm is pinned to RS256 for IdP validation only.
+    /// - The algorithm is pinned to the allowlist for IdP validation only.
     /// - `iss` and `aud` must match configured values.
     pub async fn validate(
         &self,
@@ -278,9 +287,10 @@ impl UpstreamOidcValidator {
         // Step 1: Check header algorithm before any heavy work.
         // This avoids accepting EdDSA Felix tokens or other algorithms here.
         let header = decode_header(token)?;
-        if header.alg != Algorithm::RS256 {
+        if !is_algorithm_allowed(header.alg) {
             return Err(OidcError::UnsupportedAlgorithm);
         }
+        let kid = header.kid.as_deref().ok_or(OidcError::MissingKeyId)?;
 
         // Step 2: Decode claims without verification to locate the issuer.
         // We only trust these claims after signature verification later.
@@ -292,27 +302,34 @@ impl UpstreamOidcValidator {
             .ok_or(OidcError::IssuerNotAllowed)?;
 
         // Step 3: Resolve and fetch JWKS, retrying once on a miss.
-        // This handles key rotation and missing `kid` scenarios.
+        // This handles key rotation and transient cache inconsistencies.
         let jwks_url = self.resolve_jwks_url(&issuer, issuer_cfg).await?;
         let jwks = self.get_jwks(&jwks_url).await?;
-        let decoding_key = match find_jwk(&jwks, header.kid.as_deref()) {
-            Some(key) => DecodingKey::from_jwk(key)?,
+        let decoding_key = match find_jwk(&jwks, kid) {
+            Some(key) => {
+                ensure_jwk_matches_algorithm(key, header.alg)?;
+                DecodingKey::from_jwk(key)?
+            }
             None => {
                 let refreshed = self.refresh_jwks(&jwks_url).await?;
-                let key = find_jwk(&refreshed, header.kid.as_deref())
-                    .ok_or(OidcError::JwksKeyNotFound)?;
+                let key = find_jwk(&refreshed, kid).ok_or(OidcError::JwksKeyNotFound)?;
+                ensure_jwk_matches_algorithm(key, header.alg)?;
                 DecodingKey::from_jwk(key)?
             }
         };
         // Step 4: Enforce issuer and audience validation.
         // This prevents token substitution across tenants or clients.
-        let mut validation = Validation::new(Algorithm::RS256);
+        let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[issuer_cfg.issuer.as_str()]);
         validation.set_audience(&issuer_cfg.audiences);
+        validation
+            .required_spec_claims
+            .extend(["iss".to_string(), "aud".to_string()]);
         validation.leeway = self.clock_skew_seconds;
 
         // Step 5: Verify the token signature and claims.
         let token = decode::<Value>(token, &decoding_key, &validation)?;
+        validate_iat(&token.claims, self.clock_skew_seconds)?;
         // Step 6: Extract mapped subject and groups for downstream RBAC.
         let subject = extract_string_claim(&token.claims, &issuer_cfg.claim_mappings.subject_claim)
             .ok_or(OidcError::MissingSubject)?;
@@ -391,15 +408,40 @@ impl UpstreamOidcValidator {
     }
 }
 
-fn find_jwk<'a>(jwks: &'a JwkSet, kid: Option<&str>) -> Option<&'a jsonwebtoken::jwk::Jwk> {
-    // Prefer matching `kid` to support key rotation; fall back to first key.
-    match kid {
-        Some(kid) => jwks
-            .keys
-            .iter()
-            .find(|key| key.common.key_id.as_deref() == Some(kid)),
-        None => jwks.keys.first(),
+fn is_algorithm_allowed(alg: Algorithm) -> bool {
+    matches!(alg, Algorithm::ES256)
+        || (cfg!(feature = "oidc-rsa") && matches!(alg, Algorithm::RS256))
+}
+
+fn ensure_jwk_matches_algorithm(
+    jwk: &jsonwebtoken::jwk::Jwk,
+    alg: Algorithm,
+) -> Result<(), OidcError> {
+    let key_alg = jwk
+        .common
+        .key_algorithm
+        .ok_or_else(|| OidcError::InvalidJwk("missing alg".to_string()))?;
+    match (key_alg, alg) {
+        (KeyAlgorithm::RS256, Algorithm::RS256) => {}
+        (KeyAlgorithm::ES256, Algorithm::ES256) => {}
+        _ => return Err(OidcError::InvalidJwk("alg mismatch".to_string())),
     }
+    match (&jwk.algorithm, alg) {
+        (AlgorithmParameters::RSA(_), Algorithm::RS256) => Ok(()),
+        (AlgorithmParameters::EllipticCurve(params), Algorithm::ES256) => {
+            if params.curve != EllipticCurve::P256 {
+                return Err(OidcError::InvalidJwk("unexpected EC curve".to_string()));
+            }
+            Ok(())
+        }
+        _ => Err(OidcError::InvalidJwk("kty mismatch".to_string())),
+    }
+}
+
+fn find_jwk<'a>(jwks: &'a JwkSet, kid: &str) -> Option<&'a jsonwebtoken::jwk::Jwk> {
+    jwks.keys
+        .iter()
+        .find(|key| key.common.key_id.as_deref() == Some(kid))
 }
 
 fn decode_unverified_claims(token: &str) -> Result<Value, OidcError> {
@@ -425,6 +467,20 @@ fn extract_string_claim(claims: &Value, name: &str) -> Option<String> {
         .map(|value| value.to_string())
 }
 
+fn validate_iat(claims: &Value, leeway_seconds: u64) -> Result<(), OidcError> {
+    // Require `iat` and ensure it is not unreasonably in the future.
+    let iat = claims
+        .get("iat")
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| OidcError::InvalidClaim("iat".to_string()))?;
+    let now = Utc::now().timestamp();
+    let leeway = leeway_seconds as i64;
+    if iat > now + leeway {
+        return Err(OidcError::InvalidClaim("iat in future".to_string()));
+    }
+    Ok(())
+}
+
 fn extract_groups_claim(claims: &Value, name: Option<&str>) -> Vec<String> {
     // Groups may be encoded as either a string or array of strings.
     let Some(name) = name else {
@@ -448,14 +504,18 @@ fn extract_groups_claim(claims: &Value, name: Option<&str>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "oidc-rsa")]
     use crate::auth::idp_registry::ClaimMappings;
     use ed25519_dalek::SigningKey as Ed25519SigningKey;
     use ed25519_dalek::pkcs8::EncodePrivateKey;
     use jsonwebtoken::EncodingKey;
     use serde_json::json;
+    #[cfg(feature = "oidc-rsa")]
     use std::net::SocketAddr;
+    #[cfg(feature = "oidc-rsa")]
     use tokio::task::JoinHandle;
 
+    #[cfg(feature = "oidc-rsa")]
     const TEST_PRIVATE_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEAyRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTL
 UTv4l4sggh5/CYYi/cvI+SXVT9kPWSKXxJXBXd/4LkvcPuUakBoAkfh+eiFVMh2V
@@ -484,9 +544,12 @@ UvrKS8WkuWRDuKrz1W/EQKApFjDGpdqToZqriUFQzwy7mR3ayIiogzNtHcvbDHx8
 oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
 -----END RSA PRIVATE KEY-----"#;
 
+    #[cfg(feature = "oidc-rsa")]
     const TEST_JWK_N: &str = "yRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4l4sggh5_CYYi_cvI-SXVT9kPWSKXxJXBXd_4LkvcPuUakBoAkfh-eiFVMh2VrUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG_AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4lQzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi-yUod-j8MtvIj812dkS4QMiRVN_by2h3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQ";
+    #[cfg(feature = "oidc-rsa")]
     const TEST_JWK_E: &str = "AQAB";
 
+    #[cfg(feature = "oidc-rsa")]
     #[tokio::test]
     async fn validates_against_mock_jwks() {
         // This test ensures our JWKS lookup + RS256 validation flow works end-to-end.
@@ -526,6 +589,7 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
         assert_eq!(validated.subject, "user-1");
     }
 
+    #[cfg(feature = "oidc-rsa")]
     #[tokio::test]
     async fn rejects_wrong_audience() {
         // This test prevents regressions where audience validation is skipped.
@@ -558,9 +622,9 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
     }
 
     #[tokio::test]
-    async fn rejects_non_rs256_tokens() {
+    async fn rejects_non_allowed_tokens() {
         // This test ensures Felix EdDSA tokens are rejected by the IdP validator.
-        // It prevents accidental acceptance of non-RS256 algorithms.
+        // It prevents accidental acceptance of non-allowed algorithms.
         let signing_key = Ed25519SigningKey::from_bytes(&[1u8; 32]);
         let der = signing_key.to_pkcs8_der().expect("pkcs8 der");
         let now = chrono::Utc::now().timestamp();
@@ -580,6 +644,7 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
         assert!(matches!(err, OidcError::UnsupportedAlgorithm));
     }
 
+    #[cfg(feature = "oidc-rsa")]
     async fn spawn_jwks_server(jwks: Value) -> (SocketAddr, JoinHandle<()>) {
         // We spawn a deterministic local JWKS server for tests to avoid flakiness.
         // Binding to 127.0.0.1:0 lets the OS choose a free port safely.
@@ -605,6 +670,7 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
         (addr, handle)
     }
 
+    #[cfg(feature = "oidc-rsa")]
     fn mint_upstream_token(private_pem: &str, issuer: &str, audience: &str, kid: &str) -> String {
         // This helper mints RS256 tokens for IdP validation tests only.
         // It must never be used for Felix-issued tokens (which are EdDSA).
