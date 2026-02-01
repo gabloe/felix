@@ -125,10 +125,16 @@ pub struct GroupingRequest {
 /// use axum::Json;
 /// use controlplane::app::AppState;
 /// use controlplane::auth::admin::upsert_idp_issuer;
-/// use controlplane::auth::idp_registry::IdpIssuerConfig;
+/// use controlplane::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 ///
 /// async fn handler(Path(tid): Path<String>, State(state): State<AppState>) {
-///     let cfg = IdpIssuerConfig::default();
+///     let cfg = IdpIssuerConfig {
+///         issuer: "https://issuer".to_string(),
+///         audiences: vec!["client-id".to_string()],
+///         discovery_url: None,
+///         jwks_url: Some("https://issuer/.well-known/jwks.json".to_string()),
+///         claim_mappings: ClaimMappings::default(),
+///     };
 ///     let _ = upsert_idp_issuer(Path(tid), State(state), Default::default(), Json(cfg)).await;
 /// }
 /// ```
