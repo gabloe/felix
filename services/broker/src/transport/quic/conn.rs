@@ -53,7 +53,7 @@ use super::streams::{handle_stream, handle_uni_stream};
 /// # Example
 /// ```rust,no_run
 /// use std::sync::Arc;
-/// use broker::transport::quic::conn::serve;
+/// use broker::transport::quic::serve;
 /// # async fn run(server: Arc<felix_transport::QuicServer>, broker: Arc<felix_broker::Broker>, config: broker::config::BrokerConfig, auth: Arc<broker::auth::BrokerAuth>) {
 /// let _ = serve(server, broker, config, auth).await;
 /// # }
