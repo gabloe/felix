@@ -82,6 +82,12 @@ The diagram below reflects the single-node in-process MVP.
 
 ```mermaid
 flowchart LR
+    subgraph OPS["Operators / Services"]
+        Op["Operators + Admin tooling"]
+        PubSvc["Publishers"]
+        SubSvc["Subscribers"]
+    end
+
     subgraph C["Client (felix-client)"]
         API["Publish / Subscribe / Cache APIs"]
 
@@ -107,14 +113,27 @@ flowchart LR
         Ingress["QUIC accept + stream registry<br/>felix-wire framing + stream-type routing"]
         PS["Pub/Sub core<br/>enqueue + batching + fanout"]
         Cache["Cache core<br/>lookup/insert + TTL"]
+        Sync["Control-plane sync<br/>tenants/namespaces/streams/caches"]
 
         Ingress --> PS
         Ingress --> Cache
+        Sync --> Ingress
     end
+
+    subgraph CP["Control plane (services/controlplane)"]
+        CPAPI["Admin + Auth APIs<br/>RBAC + tenancy + metadata"]
+        Store["Metadata store<br/>(in-memory / Postgres)"]
+        CPAPI --> Store
+    end
+
+    Op --> CPAPI
+    PubSvc --> API
+    SubSvc --> API
 
     Ctrl <--> Ingress
     Ingress --> SubU
     CacheS <--> Ingress
+    CPAPI <--> Sync
 ```
 
 ## Current Focus
