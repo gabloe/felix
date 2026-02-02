@@ -11,15 +11,15 @@ path = "src/main.rs"
 
 [[bin]]
 name = "pubsub-demo-simple"
-path = "../../demos/broker/pubsubdemo.rs"
+path = "../../demos/broker/simple_pubsub_demo.rs"
 
 [[bin]]
 name = "cache-demo"
-path = "../../demos/broker/cachedemo.rs"
+path = "../../demos/broker/cache_demo.rs"
 
 [[bin]]
 name = "latency-demo"
-path = "../../demos/broker/latencydemo.rs"
+path = "../../demos/broker/latency_demo.rs"
 
 [[bin]]
 name = "pubsub-demo-notifications"

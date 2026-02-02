@@ -22,8 +22,7 @@ use tokio::time::Duration;
 
 type DemoAuthResult = Result<(Arc<BrokerAuth>, Option<(String, String)>)>;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+async fn run_demo() -> Result<()> {
     // Keep the demo output readable and step-by-step.
     println!("== Felix QUIC Pub/Sub Demo ==");
     println!("Goal: demonstrate publish/subscribe over QUIC (not cache).");
@@ -113,6 +112,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_demo().await
+}
+
 fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = CertificateDer::from(cert.serialize_der()?);
@@ -148,4 +152,27 @@ fn apply_demo_auth(
         config.auth_token = Some(token);
     }
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn pubsub_demo_end_to_end() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), run_demo())
+            .await
+            .context("pubsub demo timeout")?
+    }
+
+    #[test]
+    fn pubsub_demo_resolve_auth_uses_controlplane_url() -> Result<()> {
+        let mut config = broker::config::BrokerConfig::from_env()?;
+        config.controlplane_url = Some("http://localhost:9999".to_string());
+        let result = resolve_demo_auth(&config)?;
+        assert!(result.1.is_none());
+        Ok(())
+    }
 }

@@ -11,7 +11,7 @@ use broker::timings as broker_timings;
 use felix_broker::timings as broker_publish_timings;
 use felix_broker::{Broker, StreamMetadata};
 use felix_client::timings as client_timings;
-use felix_client::{Client, ClientConfig, Publisher, Subscription};
+use felix_client::{Client, ClientConfig, PublishSharding, Publisher, Subscription};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use felix_wire::AckMode;
@@ -128,9 +128,13 @@ struct TimingSummary {
 #[derive(Clone, Copy, Debug, Default)]
 struct TimingSummary;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let (config, matrix, payloads, fanouts, all) = parse_args();
+async fn run_demo(
+    config: DemoConfig,
+    matrix: bool,
+    payloads: Vec<usize>,
+    fanouts: Vec<usize>,
+    all: bool,
+) -> Result<()> {
     println!("== Felix QUIC Pub/Sub Latency Demo ==");
     println!("Mode: QUIC broker protocol over felix-transport.");
 
@@ -155,8 +159,16 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
-    let mut args = std::env::args().skip(1);
+#[tokio::main]
+async fn main() -> Result<()> {
+    let (config, matrix, payloads, fanouts, all) = parse_args();
+    run_demo(config, matrix, payloads, fanouts, all).await
+}
+
+fn parse_args_from<I>(mut args: I) -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool)
+where
+    I: Iterator<Item = String>,
+{
     let mut warmup = 1000;
     let mut total = 10000;
     let mut payload_bytes = 0;
@@ -322,20 +334,11 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
     )
 }
 
+fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
+    parse_args_from(std::env::args().skip(1))
+}
+
 async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummary>)> {
-    unsafe {
-        std::env::set_var("FELIX_FANOUT_BATCH", config.batch_size.to_string());
-        std::env::set_var("FELIX_PUB_CONN_POOL", config.pub_conns.to_string());
-        std::env::set_var(
-            "FELIX_PUB_STREAMS_PER_CONN",
-            config.pub_streams_per_conn.to_string(),
-        );
-        if let Some(ref sharding) = config.pub_sharding {
-            std::env::set_var("FELIX_PUB_SHARDING", sharding);
-        } else {
-            std::env::set_var("FELIX_PUB_SHARDING", "hash_stream");
-        }
-    }
     println!(
         "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | binary {} | pub conns {} | pub streams/conn {} | pub stream count {}",
         config.warmup,
@@ -375,9 +378,6 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             .with_log_capacity(total_events.saturating_add(1))?,
     );
     let event_queue_depth = total_events.max(1024);
-    unsafe {
-        std::env::set_var("FELIX_EVENT_QUEUE_DEPTH", event_queue_depth.to_string());
-    }
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     for stream_index in 0..config.pub_stream_count.max(1) {
@@ -402,7 +402,9 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
-    let broker_config = broker::config::BrokerConfig::from_env()?;
+    let mut broker_config = broker::config::BrokerConfig::from_env()?;
+    broker_config.fanout_batch_size = config.batch_size.max(1);
+    broker_config.event_queue_depth = event_queue_depth;
     let (auth, auth_override) = resolve_demo_auth(&broker_config)?;
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
@@ -411,7 +413,12 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         auth,
     ));
 
-    let client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    let mut client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    client_config.publish_conn_pool = config.pub_conns.max(1);
+    client_config.publish_streams_per_conn = config.pub_streams_per_conn.max(1);
+    if let Some(sharding) = config.pub_sharding.as_deref().and_then(parse_sharding_mode) {
+        client_config.publish_sharding = sharding;
+    }
     let client = Client::connect(addr, "localhost", client_config).await?;
 
     let delivered_total = Arc::new(AtomicUsize::new(0));
@@ -1069,18 +1076,26 @@ fn expectation_note(config: &DemoConfig) -> String {
 }
 
 async fn run_all(base: DemoConfig) -> Result<()> {
+    let fast = std::env::var("FELIX_LATENCY_DEMO_FAST")
+        .ok()
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    run_all_with_mode(base, fast).await
+}
+
+async fn run_all_with_mode(base: DemoConfig, fast: bool) -> Result<()> {
     println!("Running --all (default): latency-focused then throughput-focused.");
-    let latency_payloads = [0, 256, 1024];
-    let latency_fanouts = [1, 10];
-    for payload in latency_payloads {
-        for fanout in latency_fanouts {
+    let latency_payloads: &[usize] = if fast { &[0] } else { &[0, 256, 1024] };
+    let latency_fanouts: &[usize] = if fast { &[1] } else { &[1, 10] };
+    for &payload in latency_payloads {
+        for &fanout in latency_fanouts {
             let mut case = base.clone();
             case.payload_bytes = payload;
             case.fanout = fanout;
             case.batch_size = 1;
             case.binary = base.binary;
-            case.warmup = 200;
-            case.total = 2000;
+            case.warmup = if fast { 1 } else { 200 };
+            case.total = if fast { 5 } else { 2000 };
             let (result, summary) = run_case(case.clone()).await?;
             print_result(&result);
             print_timing_summary(summary);
@@ -1089,19 +1104,19 @@ async fn run_all(base: DemoConfig) -> Result<()> {
         }
     }
 
-    let throughput_payloads = [0, 1024, 4096];
-    let throughput_fanouts = [1, 10];
+    let throughput_payloads: &[usize] = if fast { &[0] } else { &[0, 1024, 4096] };
+    let throughput_fanouts: &[usize] = if fast { &[1] } else { &[1, 10] };
     let binaries: &[bool] = if base.binary { &[true] } else { &[false, true] };
-    for payload in throughput_payloads {
-        for fanout in throughput_fanouts {
+    for &payload in throughput_payloads {
+        for &fanout in throughput_fanouts {
             for &binary in binaries {
                 let mut case = base.clone();
                 case.payload_bytes = payload;
                 case.fanout = fanout;
                 case.batch_size = 64;
                 case.binary = binary;
-                case.warmup = 200;
-                case.total = 5000;
+                case.warmup = if fast { 1 } else { 200 };
+                case.total = if fast { 5 } else { 5000 };
                 let (result, summary) = run_case(case.clone()).await?;
                 print_result(&result);
                 print_timing_summary(summary);
@@ -1115,8 +1130,8 @@ async fn run_all(base: DemoConfig) -> Result<()> {
     baseline.fanout = 1;
     baseline.batch_size = 64;
     baseline.binary = base.binary;
-    baseline.warmup = 200;
-    baseline.total = 5000;
+    baseline.warmup = if fast { 1 } else { 200 };
+    baseline.total = if fast { 5 } else { 5000 };
     baseline.pub_conns = 1;
     baseline.pub_streams_per_conn = 1;
     let (result, summary) = run_case(baseline.clone()).await?;
@@ -1137,6 +1152,14 @@ fn parse_csv_usize(input: &str) -> Vec<usize> {
         .split(',')
         .filter_map(|value| value.trim().parse::<usize>().ok())
         .collect()
+}
+
+fn parse_sharding_mode(value: &str) -> Option<PublishSharding> {
+    match value {
+        "rr" => Some(PublishSharding::RoundRobin),
+        "hash_stream" => Some(PublishSharding::HashStream),
+        _ => None,
+    }
 }
 
 fn encode_payload(payload_bytes: usize) -> Vec<u8> {
@@ -1237,5 +1260,173 @@ fn format_duration(duration: Duration) -> String {
         format!("{:.3} ms", micros as f64 / 1000.0)
     } else {
         format!("{micros} us")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn latency_demo_end_to_end() -> Result<()> {
+        let config = DemoConfig {
+            warmup: 1,
+            total: 5,
+            payload_bytes: 8,
+            fanout: 1,
+            batch_size: 1,
+            binary: false,
+            idle_ms: 10,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: None,
+            pub_stream_count: 1,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            run_demo(config, false, vec![8], vec![1], false),
+        )
+        .await
+        .context("latency demo timeout")?
+    }
+
+    #[tokio::test]
+    async fn latency_demo_matrix_small() -> Result<()> {
+        let config = DemoConfig {
+            warmup: 0,
+            total: 2,
+            payload_bytes: 0,
+            fanout: 1,
+            batch_size: 1,
+            binary: false,
+            idle_ms: 5,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: Some("rr".to_string()),
+            pub_stream_count: 1,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            run_demo(config, true, vec![0], vec![1], false),
+        )
+        .await
+        .context("latency demo matrix timeout")?
+    }
+
+    #[test]
+    fn latency_demo_parse_args_and_helpers() {
+        let args = vec![
+            "--matrix".to_string(),
+            "--warmup".to_string(),
+            "2".to_string(),
+            "--total".to_string(),
+            "4".to_string(),
+            "--payload".to_string(),
+            "8".to_string(),
+            "--fanout".to_string(),
+            "2".to_string(),
+            "--batch".to_string(),
+            "2".to_string(),
+            "--idle-ms".to_string(),
+            "5".to_string(),
+            "--pub-conns".to_string(),
+            "1".to_string(),
+            "--pub-streams-per-conn".to_string(),
+            "1".to_string(),
+            "--pub-sharding".to_string(),
+            "hash".to_string(),
+            "--pub-stream-count".to_string(),
+            "2".to_string(),
+            "--payloads".to_string(),
+            "1,2".to_string(),
+            "--fanouts".to_string(),
+            "1,3".to_string(),
+        ];
+        let (_config, matrix, payloads, fanouts, all) = parse_args_from(args.into_iter());
+        assert!(matrix);
+        assert_eq!(payloads, vec![1, 2]);
+        assert_eq!(fanouts, vec![1, 3]);
+        assert!(!all);
+
+        assert_eq!(parse_csv_usize("1,2,3"), vec![1, 2, 3]);
+        let payload = encode_payload(4);
+        let encoded = current_time_nanos();
+        assert!(encoded > 0);
+        let _decoded = decode_latency(&payload);
+        assert_eq!(format_duration(Duration::from_micros(5)), "5 us");
+        let _ = percentile(&[Duration::from_micros(1)], 0.5);
+        assert_eq!(stream_name(0, 1), "latency");
+        assert_eq!(stream_name(3, 2), "latency-1");
+        assert_eq!(per_stream_events(5, 2, 0), 3);
+        assert_eq!(per_stream_events(5, 2, 1), 2);
+        assert!(
+            expectation_note(&DemoConfig {
+                warmup: 1,
+                total: 1,
+                payload_bytes: 0,
+                fanout: 1,
+                batch_size: 1,
+                binary: false,
+                idle_ms: 1,
+                pub_conns: 1,
+                pub_streams_per_conn: 1,
+                pub_sharding: None,
+                pub_stream_count: 1,
+            })
+            .contains("latency-focused")
+        );
+        assert!(
+            expectation_note(&DemoConfig {
+                warmup: 1,
+                total: 1,
+                payload_bytes: 0,
+                fanout: 1,
+                batch_size: 2,
+                binary: false,
+                idle_ms: 1,
+                pub_conns: 1,
+                pub_streams_per_conn: 1,
+                pub_sharding: None,
+                pub_stream_count: 1,
+            })
+            .contains("throughput-focused")
+        );
+        assert_eq!(parse_sharding_mode("rr"), Some(PublishSharding::RoundRobin));
+        assert_eq!(
+            parse_sharding_mode("hash_stream"),
+            Some(PublishSharding::HashStream)
+        );
+        assert_eq!(parse_sharding_mode("nope"), None);
+        #[cfg(feature = "telemetry")]
+        {
+            let mut values = vec![100u64, 200, 300];
+            let _ = percentile_ns(&mut values, 0.5);
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            let _ = format_optional_duration(None);
+        }
+    }
+
+    #[tokio::test]
+    async fn latency_demo_run_all_fast() -> Result<()> {
+        let base = DemoConfig {
+            warmup: 1,
+            total: 5,
+            payload_bytes: 0,
+            fanout: 1,
+            batch_size: 1,
+            binary: false,
+            idle_ms: 5,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: None,
+            pub_stream_count: 1,
+        };
+        tokio::time::timeout(Duration::from_secs(20), run_all_with_mode(base, true))
+            .await
+            .context("latency demo fast run_all timeout")?
     }
 }

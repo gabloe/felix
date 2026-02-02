@@ -83,8 +83,21 @@ const EC_JWK_Y: &str = "uHAYZnwq7UbD2ylj8EKyJb7kCoipWU1WAaAkUxFtHVU";
 const ID_TOKEN_IAT: i64 = 1_700_000_000;
 const ID_TOKEN_EXP: i64 = 2_000_000_000;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn rbac_live_demo_end_to_end() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(25), run_demo())
+            .await
+            .context("rbac-live demo timeout")?
+    }
+}
+
+async fn run_demo() -> Result<()> {
     println!("== Felix Demo: Live RBAC Policy Change (Control Plane Mutation) ==");
 
     let http = reqwest::Client::builder()
@@ -195,6 +208,11 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_demo().await
 }
 
 /// # What it does

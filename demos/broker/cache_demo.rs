@@ -27,8 +27,7 @@ use std::time::Instant;
 
 type DemoAuthResult = Result<(Arc<BrokerAuth>, Option<(String, String)>)>;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+async fn run_demo(mut bench: BenchConfig) -> Result<()> {
     println!("== Felix QUIC Cache Demo ==");
     println!("Goal: benchmark cache Put/Get over QUIC (not pub/sub).");
 
@@ -61,7 +60,6 @@ async fn main() -> Result<()> {
     let client = Client::connect(addr, "localhost", client_config).await?;
 
     println!("Step 3/4: running cache benchmarks.");
-    let mut bench = BenchConfig::from_env();
     if config.disable_timings {
         bench.collect_timings = false;
     }
@@ -91,6 +89,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_demo(BenchConfig::from_env()).await
+}
+
 struct BenchConfig {
     warmup: usize,
     samples: usize,
@@ -104,52 +107,82 @@ struct BenchConfig {
     conn_stats: bool,
 }
 
+#[derive(Default)]
+struct BenchEnv {
+    warmup: Option<String>,
+    samples: Option<String>,
+    payloads: Option<String>,
+    ttl_ms: Option<String>,
+    concurrency: Option<String>,
+    key_count: Option<String>,
+    ops: Option<String>,
+    collect_timings: Option<String>,
+    validate_each: Option<String>,
+    conn_stats: Option<String>,
+}
+
 impl BenchConfig {
     fn from_env() -> Self {
-        let warmup = std::env::var("FELIX_CACHE_BENCH_WARMUP")
-            .ok()
+        let env = BenchEnv {
+            warmup: std::env::var("FELIX_CACHE_BENCH_WARMUP").ok(),
+            samples: std::env::var("FELIX_CACHE_BENCH_SAMPLES").ok(),
+            payloads: std::env::var("FELIX_CACHE_BENCH_PAYLOADS").ok(),
+            ttl_ms: std::env::var("FELIX_CACHE_BENCH_TTL_MS").ok(),
+            concurrency: std::env::var("FELIX_CACHE_BENCH_CONCURRENCY").ok(),
+            key_count: std::env::var("FELIX_CACHE_BENCH_KEYS").ok(),
+            ops: std::env::var("FELIX_CACHE_BENCH_OPS").ok(),
+            collect_timings: std::env::var("FELIX_CACHE_BENCH_TIMINGS").ok(),
+            validate_each: std::env::var("FELIX_CACHE_BENCH_VALIDATE_EACH").ok(),
+            conn_stats: std::env::var("FELIX_CACHE_BENCH_CONN_STATS").ok(),
+        };
+        Self::from_env_values(env)
+    }
+
+    fn from_env_values(env: BenchEnv) -> Self {
+        let warmup = env
+            .warmup
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(200);
-        let samples = std::env::var("FELIX_CACHE_BENCH_SAMPLES")
-            .ok()
+        let samples = env
+            .samples
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(2000);
-        let payload_sizes = std::env::var("FELIX_CACHE_BENCH_PAYLOADS")
-            .ok()
+        let payload_sizes = env
+            .payloads
             .and_then(|value| parse_payloads(&value))
             .filter(|values| !values.is_empty())
             .unwrap_or_else(|| vec![0, 64, 256, 1024, 4096]);
-        let ttl_ms = std::env::var("FELIX_CACHE_BENCH_TTL_MS")
-            .ok()
+        let ttl_ms = env
+            .ttl_ms
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0);
-        let concurrency = std::env::var("FELIX_CACHE_BENCH_CONCURRENCY")
-            .ok()
+        let concurrency = env
+            .concurrency
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(1);
-        let key_count = std::env::var("FELIX_CACHE_BENCH_KEYS")
-            .ok()
+        let key_count = env
+            .key_count
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(1024);
-        let ops = std::env::var("FELIX_CACHE_BENCH_OPS")
-            .ok()
+        let ops = env
+            .ops
             .and_then(|value| parse_ops(&value))
             .filter(|values| !values.is_empty())
             .unwrap_or_else(|| vec![BenchOp::Put, BenchOp::GetHit, BenchOp::GetMiss]);
-        let collect_timings = std::env::var("FELIX_CACHE_BENCH_TIMINGS")
-            .ok()
+        let collect_timings = env
+            .collect_timings
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let validate_each = std::env::var("FELIX_CACHE_BENCH_VALIDATE_EACH")
-            .ok()
+        let validate_each = env
+            .validate_each
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let conn_stats = std::env::var("FELIX_CACHE_BENCH_CONN_STATS")
-            .ok()
+        let conn_stats = env
+            .conn_stats
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         Self {
@@ -752,4 +785,87 @@ fn apply_demo_auth(
         config.auth_token = Some(token);
     }
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn cache_demo_end_to_end() -> Result<()> {
+        let bench = BenchConfig {
+            warmup: 1,
+            samples: 2,
+            payload_sizes: vec![0, 8],
+            ttl_ms: Some(25),
+            concurrency: 1,
+            key_count: 2,
+            ops: vec![BenchOp::Put, BenchOp::GetHit, BenchOp::GetMiss],
+            collect_timings: true,
+            validate_each: true,
+            conn_stats: true,
+        };
+        tokio::time::timeout(Duration::from_secs(10), run_demo(bench))
+            .await
+            .context("cache demo timeout")?
+    }
+
+    #[test]
+    fn cache_demo_parsing_and_stats_helpers() {
+        let config = BenchConfig::from_env_values(BenchEnv {
+            warmup: Some("0".to_string()),
+            samples: Some("5".to_string()),
+            payloads: Some("16,32".to_string()),
+            ttl_ms: Some("10".to_string()),
+            concurrency: Some("2".to_string()),
+            key_count: Some("4".to_string()),
+            ops: Some("put,get_hit,get_miss".to_string()),
+            collect_timings: Some("true".to_string()),
+            validate_each: Some("1".to_string()),
+            conn_stats: Some("true".to_string()),
+        });
+        assert_eq!(config.warmup, 200);
+        assert_eq!(config.samples, 5);
+        assert_eq!(config.payload_sizes, vec![16, 32]);
+        assert_eq!(config.ttl_ms, Some(10));
+        assert!(config.collect_timings);
+        assert!(config.validate_each);
+        assert!(config.conn_stats);
+
+        assert!(parse_ops("put,get_hit,get_miss").is_some());
+        assert!(parse_ops("nope").is_none());
+        assert_eq!(parse_payloads("1,2,3"), Some(vec![1, 2, 3]));
+        assert!(parse_payloads("x,y").is_none());
+        assert_eq!(percentile_us(&[], 0.5), 0.0);
+        assert_eq!(percentile_ns_to_us(&mut [], 0.5), 0.0);
+
+        let empty = BenchStats::from_samples(&[], Duration::from_secs(1));
+        assert!(empty.is_none());
+        let stats =
+            BenchStats::from_samples(&[Duration::from_micros(10)], Duration::from_millis(1))
+                .expect("stats");
+        print_stats("demo", &stats);
+        assert!(format_cache_response(&None).contains("None"));
+        assert!(format_cache_response(&Some(Bytes::from_static(b"ok"))).contains("CacheValue"));
+    }
+
+    #[tokio::test]
+    async fn cache_demo_run_ops_zero_and_nonzero() -> Result<()> {
+        let (durations, elapsed) =
+            run_ops(0, 1, 1, 0, "demo", false, &|_, _, _| async { Ok(()) }).await?;
+        assert!(durations.is_empty());
+        assert_eq!(elapsed, Duration::from_secs(0));
+
+        let (durations, _elapsed) =
+            run_ops(3, 2, 1, 0, "demo", true, &|_, _, _| async { Ok(()) }).await?;
+        assert_eq!(durations.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_demo_timings_helpers() {
+        print_cache_timings("demo", None, None);
+    }
 }

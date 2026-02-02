@@ -35,10 +35,7 @@ use tokio::task::JoinHandle;
 const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const LAST_ALERTS_CACHE: &str = "last_alerts";
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = DemoArgs::from_env();
-
+async fn run_demo(args: DemoArgs) -> Result<()> {
     println!("== Felix Demo: Multi-tenant Real-time Notifications ==");
     println!("Goal: show tenant isolation, fanout, cache snapshots, and failure handling.");
 
@@ -153,6 +150,11 @@ async fn main() -> Result<()> {
 
     server_task.abort();
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_demo(DemoArgs::from_env()).await
 }
 
 struct DemoArgs {
@@ -365,4 +367,35 @@ async fn print_cache_snapshot(client: &Client, tenant: &str) -> Result<()> {
     let alerts: Vec<String> = serde_json::from_slice(&bytes)?;
     println!("[{tenant}] last alerts: {:?}", alerts);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn notifications_demo_end_to_end() -> Result<()> {
+        let args = DemoArgs {
+            alerts: 2,
+            last_n: 2,
+            drop_subscriber: false,
+        };
+        tokio::time::timeout(Duration::from_secs(15), run_demo(args))
+            .await
+            .context("notifications demo timeout")?
+    }
+
+    #[tokio::test]
+    async fn notifications_demo_with_drop() -> Result<()> {
+        let args = DemoArgs {
+            alerts: 4,
+            last_n: 2,
+            drop_subscriber: true,
+        };
+        tokio::time::timeout(Duration::from_secs(15), run_demo(args))
+            .await
+            .context("notifications demo drop timeout")?
+    }
 }

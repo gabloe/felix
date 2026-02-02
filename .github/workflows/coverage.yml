@@ -64,7 +64,6 @@ jobs:
             --workspace \
             --lcov \
             --output-path lcov.info \
-            --ignore-filename-regex '(^|.*/)demos/.*' \
             --skip-functions
 
       - name: Generate coverage badge (coverage.svg)
