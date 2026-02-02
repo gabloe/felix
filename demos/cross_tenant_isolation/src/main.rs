@@ -70,6 +70,40 @@ const EC_JWK_Y: &str = "uHAYZnwq7UbD2ylj8EKyJb7kCoipWU1WAaAkUxFtHVU";
 const ID_TOKEN_IAT: i64 = 1_700_000_000;
 const ID_TOKEN_EXP: i64 = 2_000_000_000;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    async fn has_postgres() -> bool {
+        if std::env::var("FELIX_TEST_DATABASE_URL").is_ok()
+            || std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL").is_ok()
+            || std::env::var("DATABASE_URL").is_ok()
+        {
+            return true;
+        }
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::net::TcpStream::connect("127.0.0.1:55432"),
+        )
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn cross_tenant_demo_end_to_end() -> Result<()> {
+        if !has_postgres().await {
+            eprintln!("skipping cross-tenant demo: postgres not available");
+            return Ok(());
+        }
+        let mut report = DemoReport::new();
+        tokio::time::timeout(Duration::from_secs(30), run_demo(&mut report))
+            .await
+            .context("cross-tenant demo timeout")?
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut report = DemoReport::new();

@@ -266,9 +266,9 @@ services/
 
 demos/
 ├── broker/              # Demo binaries for the broker crate
-│   ├── pubsubdemo.rs
-│   ├── cachedemo.rs
-│   ├── latencydemo.rs
+│   ├── simple_pubsub_demo.rs
+│   ├── cache_demo.rs
+│   ├── latency_demo.rs
 │   ├── notifications_demo.rs
 │   └── orders_demo.rs
 ├── rbac-live/            # End-to-end RBAC mutation demo crate
@@ -292,9 +292,9 @@ demos/
 
 **Demo binaries** (see `demos/broker/`):
 
-- **`pubsubdemo.rs`**: Pub/sub demonstration
-- **`cachedemo.rs`**: Cache benchmark
-- **`latencydemo.rs`**: Latency measurement tool
+- **`simple_pubsub_demo.rs`**: Pub/sub demonstration
+- **`cache_demo.rs`**: Cache benchmark
+- **`latency_demo.rs`**: Latency measurement tool
 - **`notifications_demo.rs`**: Multi-tenant notifications workflow demo
 - **`orders_demo.rs`**: Orders/payments pipeline demo
 - **`rbac-live/`**: Live RBAC policy change demo (control plane + broker + token exchange)

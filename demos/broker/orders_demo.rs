@@ -33,10 +33,7 @@ const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const ORDER_CACHE: &str = "order_state";
 const ORDER_INDEX: &str = "order_index";
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = DemoArgs::from_env();
-
+async fn run_demo(args: DemoArgs) -> Result<()> {
     println!("== Felix Demo: Orders/Payments Pipeline ==");
     println!("Goal: show pub/sub pipeline + cache last-known state + idempotency.");
 
@@ -158,11 +155,47 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_demo(DemoArgs::from_env()).await
+}
+
 #[derive(Debug)]
 struct DemoArgs {
     orders: usize,
     duplicate_every: usize,
     kill_payments: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn orders_demo_end_to_end() -> Result<()> {
+        let args = DemoArgs {
+            orders: 3,
+            duplicate_every: 2,
+            kill_payments: false,
+        };
+        tokio::time::timeout(Duration::from_secs(15), run_demo(args))
+            .await
+            .context("orders demo timeout")?
+    }
+
+    #[tokio::test]
+    async fn orders_demo_kill_payments() -> Result<()> {
+        let args = DemoArgs {
+            orders: 4,
+            duplicate_every: 2,
+            kill_payments: true,
+        };
+        tokio::time::timeout(Duration::from_secs(15), run_demo(args))
+            .await
+            .context("orders demo kill payments timeout")?
+    }
 }
 
 impl DemoArgs {

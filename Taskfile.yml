@@ -25,7 +25,7 @@ tasks:
     cmds:
       - "task pg:down"
       - "task pg:up"
-      - "cargo llvm-cov --no-cfg-coverage --ignore-filename-regex '(^|.*/)demos/.*' --skip-functions --all-features --workspace"
+      - "cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace"
       - "task pg:down"
   build:
     cmds: ["cargo build --workspace --release"]
