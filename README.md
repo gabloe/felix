@@ -38,7 +38,9 @@ Core components
 - `felix-transport`: QUIC abstraction layer (client/server, pools, stream lifecycle).
 - `felix-broker`: pub/sub logic, cache storage, stream registry, fanout.
 - `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
-- `services/broker`: runnable broker node, demos, and benchmark harnesses.
+- `felix-storage`: storage layer for broker.
+- `services/broker`: runnable broker node.
+- `services/controlplane`: runnable control plane node.
 
 Pub/sub data flow (happy path)
 - Client opens a bidirectional control stream to publish/subscribe and receive acks.
