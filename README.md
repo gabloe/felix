@@ -88,6 +88,7 @@ flowchart LR
         Op["Operators + Admin tooling"]
         PubSvc["Publishers"]
         SubSvc["Subscribers"]
+        IdP["External IdP"]
     end
 
     subgraph C["Client (felix-client)"]
@@ -111,6 +112,12 @@ flowchart LR
         end
     end
 
+    subgraph CP["Control plane (services/controlplane)"]
+        CPAPI["Admin + Auth APIs<br/>RBAC + tenancy + metadata"]
+        Store["Metadata store<br/>(in-memory / Postgres)"]
+        CPAPI --> Store
+    end
+
     subgraph B["Broker (services/broker + felix-broker)"]
         Ingress["QUIC accept + stream registry<br/>felix-wire framing + stream-type routing"]
         PS["Pub/Sub core<br/>enqueue + batching + fanout"]
@@ -122,20 +129,22 @@ flowchart LR
         Sync --> Ingress
     end
 
-    subgraph CP["Control plane (services/controlplane)"]
-        CPAPI["Admin + Auth APIs<br/>RBAC + tenancy + metadata"]
-        Store["Metadata store<br/>(in-memory / Postgres)"]
-        CPAPI --> Store
+    subgraph BS["Broker storage backend"]
+        StoreB["In-memory / durable"]
     end
 
-    Op --> CPAPI
-    PubSvc --> API
-    SubSvc --> API
+    Op --> |admin/config| CPAPI
+    PubSvc --> |publish| API
+    SubSvc --> |subscribe| API
 
-    Ctrl <--> Ingress
-    Ingress --> SubU
-    CacheS <--> Ingress
-    CPAPI <--> Sync
+    Ctrl <--> |broker protocol + acks| Ingress
+    Ingress --> |events| SubU
+    CacheS <--> |cache ops| Ingress
+    IdP <--> |OIDC/JWKS| CPAPI
+    API <--> |token exchange / auth| CPAPI
+    Sync --> |poll metadata| CPAPI
+    PS <--> |event log / retention| StoreB
+    Cache <--> |cache storage| StoreB
 ```
 
 ## Current Focus
