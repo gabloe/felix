@@ -1,11 +1,11 @@
 mod data_file;
 mod index_file;
 
+use futures::AsyncSeekExt;
 use futures::io::BufWriter;
 use log::debug;
 use std::io::SeekFrom;
 use tokio::fs::File;
-use futures::AsyncSeekExt;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 mod simple_file;
@@ -18,22 +18,22 @@ where
     T: DeserializeFromBytes,
 {
     let file = file.try_clone().await?;
-    let mut writer = BufWriter::new(file.compat());
-    writer.seek(SeekFrom::Start(offset)).await?;
-    T::read(&mut writer).await
+    let mapped_file = unsafe { memmap2::Mmap::map(&file) }?;
+    let offset = &mapped_file[offset as usize..];
+    T::read(offset).await
 }
 
-async fn write_to_file<T>(file: &File, entry: &T, offset: u64) -> anyhow::Result<()>
+async fn write_to_file<T>(file: &File, entry: &T, offset: u64) -> anyhow::Result<u64>
 where
     T: SerializeToStream,
 {
     let file = file.try_clone().await?;
+    #[cfg(debug_assertions)]
     let mut writer = BufWriter::new(file.compat());
     writer.seek(SeekFrom::Start(offset)).await?;
-    let compat = entry.write(&mut writer).await?;
+    let bytes = entry.write(&mut writer).await? as u64;
 
-    let pos = compat.stream_position().await?;
-    debug!("Wrote {} bytes", pos - offset);
+    debug!("Wrote {bytes} bytes");
 
-    Ok(())
+    Ok(bytes)
 }

@@ -2,25 +2,25 @@ use crate::derive_serialization;
 use crate::storage_backends::serializers::{DeserializeFromBytes, SerializeToStream};
 use anyhow::{Error, Result};
 use base64::prelude::*;
-use futures::AsyncReadExt;
-use futures::AsyncSeekExt;
-use futures::io::BufReader;
 use log::{debug, error, info};
 use std::fmt::{Debug, Formatter};
-use std::io::SeekFrom;
 use std::ops::Deref;
 use std::path::PathBuf;
 use tokio::fs::File;
+
 // Serialization
 use rkyv::{Archive, Deserialize, Serialize, with::Skip};
-use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio::io::AsyncReadExt;
+
 const INDEX_FILE_IDENTIFIER: u64 = 0x49445846494C45; // "IDXFILE" in ASCII
 
+const ZERO: Identifier = [0; IDENTIFIER_SIZE];
+
 // Using 16 bits because you never know.
-#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[repr(u16)]
 pub(crate) enum IndexVersion {
-    V0,
+    V0 = 0,
 }
 
 /// The identifier size.
@@ -30,8 +30,6 @@ const IDENTIFIER_SIZE: usize = 256;
 const IDENTIFIER_SIZE: usize = 1024;
 
 type Identifier = [u8; IDENTIFIER_SIZE];
-
-const ZERO: Identifier = [0; IDENTIFIER_SIZE];
 
 struct IdentifierWrapper(Identifier);
 
@@ -56,7 +54,7 @@ impl Debug for IdentifierWrapper {
     }
 }
 
-#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum IndexState {
     Free = 0,
@@ -154,9 +152,10 @@ pub(crate) struct IndexFile {
 
 impl IndexFile {
     pub async fn open(file_path: PathBuf) -> Result<Self> {
+        debug!("Opening index file {}", file_path.to_string_lossy());
         let parent = file_path.parent().unwrap();
 
-        let exists = !std::fs::exists(parent)?;
+        let exists = std::fs::exists(parent)?;
         if !exists {
             info!("Creating parent index directory.");
             std::fs::create_dir_all(parent)?;
@@ -166,6 +165,7 @@ impl IndexFile {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(file_path.clone())
             .await?;
 
@@ -399,27 +399,35 @@ async fn read_header(file: &File) -> Result<(IndexHeader, Vec<IndexEntry>, Vec<I
             current_update_offset: 0,
         };
 
-        super::write_to_file(file, &header, 0).await?;
+        let bytes = super::write_to_file(file, &header, 0).await?;
 
+        #[cfg(debug_assertions)]
+        {
+            let len = file.metadata().await?.len();
+            debug_assert_eq!(len, bytes);
+
+            let header2 = super::read_from_file::<IndexHeader>(file, 0).await?;
+            debug_assert_eq!(header.identifier, header2.identifier);
+            debug_assert_eq!(header.version, header2.version);
+            debug_assert_eq!(header.free_list_count, header2.free_list_count);
+            debug_assert_eq!(
+                header.free_list_start_offset,
+                header2.free_list_start_offset
+            );
+            debug_assert_eq!(header.current_update_offset, header2.current_update_offset);
+            debug_assert_eq!(header.used_list_count, header2.used_list_count);
+            debug_assert_eq!(
+                header.used_list_start_offset,
+                header2.used_list_start_offset
+            );
+        }
         Ok((header, vec![], vec![]))
     } else {
         debug!("Loading previous file.");
         // Read the first u64 to ensure it has the correct value
 
-        let mut identifier_bytes = [0u8; 8];
-
-        let f = file.try_clone().await?;
-        let mut reader = BufReader::new(f.compat());
-        reader.seek(SeekFrom::Start(1)).await?;
-        reader.read_exact(&mut identifier_bytes[0..7]).await?;
-        let identifier = u64::from_le_bytes(identifier_bytes);
-
-        let bytes = INDEX_FILE_IDENTIFIER.to_le_bytes();
-        debug_assert_eq!(8, bytes.len());
-
-        for (i, v) in bytes.iter().enumerate() {
-            debug!("file[{i}] = {f}, ID[{i}]={v}", f = identifier_bytes[i]);
-        }
+        let mut f = file.try_clone().await?;
+        let identifier = f.read_u64_le().await?;
 
         if identifier != INDEX_FILE_IDENTIFIER {
             error!(
@@ -467,10 +475,10 @@ mod test {
     use env_logger::{Builder, Target};
     use futures::io::BufWriter;
     use log::info;
-    use rkyv::from_bytes;
-    use rkyv::rancor::Error;
     use std::io::Write;
     use std::sync::Once;
+
+    const ONE: Identifier = [1; IDENTIFIER_SIZE];
 
     static INIT: Once = Once::new();
 
@@ -552,10 +560,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn validate_serialization() {
+    async fn validate_serialization() -> anyhow::Result<()> {
         initialize();
         let entry = IndexEntry {
-            identifier: ZERO,
+            identifier: ONE,
             data_offset: 50,
             previous_offset: 100,
             current_offset: 105,
@@ -563,13 +571,30 @@ mod test {
             state: IndexState::Used,
         };
 
+        unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
+
         let bytes = vec![];
         let mut writer = BufWriter::new(bytes);
 
-        entry.write(&mut writer).await.unwrap();
-        let new_entry = from_bytes::<IndexEntry, Error>(writer.buffer()).unwrap();
+        let written = entry.write(&mut writer).await?;
+        assert_ne!(0, written, "written bytes should not be 0.");
 
-        assert_eq!(entry.identifier, new_entry.identifier);
+        let bytes = writer.into_inner();
+        assert_eq!(bytes.len(), written);
+
+        let deserialized = IndexEntry::read(&bytes).await?;
+
+        assert_eq!(entry.identifier, deserialized.identifier, "identifier");
+        assert_eq!(entry.data_offset, deserialized.data_offset, "data_offset");
+        assert_eq!(
+            entry.previous_offset, deserialized.previous_offset,
+            "previous_offset"
+        );
+        assert_eq!(0, deserialized.current_offset, "current_offset");
+        assert_eq!(entry.next_offset, deserialized.next_offset, "next_offset");
+        assert_eq!(entry.state as u8, deserialized.state as u8, "state");
+
+        Ok(())
     }
 
     #[tokio::test]

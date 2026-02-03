@@ -6,17 +6,16 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bytes = { workspace = true }
-tokio = { workspace = true, version = "1.0.0", features = ["fs"] }
+tokio = { workspace = true, version = "1.0.0", features = ["fs", "io-util"] }
 async-trait = "0.1.89"
 rkyv = {version = "0.8.14", features = ["bytecheck"]}
 anyhow = "1.0.100"
 log = "0.4.29"
 base64 = "0.22.1"
-rkyv_codec = "0.5.0"
-asynchronous-codec = "0.7.0"
 futures = "0.3.31"
 tokio-util = { version = "0.7.18", features = ["compat"] }
+memmap2 = "0.9.9"
+bytes = "1.11.0"
 
 [dev-dependencies]
 tokio = { workspace = true }
