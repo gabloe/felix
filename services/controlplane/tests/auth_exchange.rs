@@ -5,7 +5,7 @@
 //! correct tenant scoping and RBAC-derived permissions.
 //!
 //! # Key invariants
-//! - Upstream IdP tokens are RS256 test fixtures only (behind `oidc-rsa`).
+//! - Upstream IdP algorithms are controlled by OIDC allowlist config; these tests use RS256 fixtures.
 //! - Felix-issued tokens must be EdDSA and include `iss`, `aud`, and `tid`.
 //! - Exchange never widens permissions beyond RBAC policies.
 //!
@@ -18,8 +18,7 @@
 //! - Async ordering is controlled by awaiting server bind before requests.
 //!
 //! # How to use
-//! Run with `cargo test -p controlplane --features oidc-rsa auth_exchange` to execute these tests.
-#![cfg(feature = "oidc-rsa")]
+//! Run with `cargo test -p controlplane auth_exchange` to execute these tests.
 mod common;
 
 use axum::body::Body;
@@ -219,7 +218,12 @@ async fn exchange_returns_tenant_scoped_token() {
             bridges: false,
         },
         store: Arc::new(store),
-        oidc_validator: UpstreamOidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            vec![Algorithm::ES256, Algorithm::RS256],
+        ),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };
@@ -322,7 +326,12 @@ async fn exchange_forbidden_without_policies() {
             bridges: false,
         },
         store: Arc::new(store),
-        oidc_validator: UpstreamOidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            vec![Algorithm::ES256, Algorithm::RS256],
+        ),
         bootstrap_enabled: false,
         bootstrap_token: None,
     };

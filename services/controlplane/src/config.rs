@@ -7,6 +7,7 @@
 //! # Notes
 //! Defaults are chosen to keep dev setups simple while still bounding resource use.
 use anyhow::{Context, Result, anyhow};
+use jsonwebtoken::Algorithm;
 use serde::Deserialize;
 use std::fs;
 use std::net::SocketAddr;
@@ -18,6 +19,7 @@ const DEFAULT_PG_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_PG_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_PG_ACQUIRE_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_BOOTSTRAP_BIND_ADDR: &str = "127.0.0.1:9095";
+const DEFAULT_OIDC_ALLOWED_ALGORITHMS: [Algorithm; 1] = [Algorithm::ES256];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageBackend {
@@ -65,6 +67,7 @@ pub struct ControlPlaneConfig {
     pub postgres: Option<PostgresConfig>,
     pub changes_limit: u64,
     pub change_retention_max_rows: Option<i64>,
+    pub oidc_allowed_algorithms: Vec<Algorithm>,
     pub bootstrap: BootstrapConfig,
 }
 
@@ -77,6 +80,7 @@ struct ControlPlaneConfigOverride {
     postgres: Option<PostgresOverride>,
     changes_limit: Option<u64>,
     change_retention_max_rows: Option<i64>,
+    oidc_allowed_algorithms: Option<Vec<String>>,
     bootstrap: Option<BootstrapOverride>,
 }
 
@@ -167,6 +171,11 @@ impl ControlPlaneConfig {
             postgres,
             changes_limit,
             change_retention_max_rows,
+            oidc_allowed_algorithms: std::env::var("FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS")
+                .ok()
+                .map(|value| parse_oidc_allowed_algorithms_csv(&value))
+                .transpose()?
+                .unwrap_or_else(|| DEFAULT_OIDC_ALLOWED_ALGORITHMS.to_vec()),
             bootstrap: BootstrapConfig {
                 enabled: std::env::var("FELIX_BOOTSTRAP_ENABLED")
                     .ok()
@@ -205,6 +214,9 @@ impl ControlPlaneConfig {
             }
             if let Some(value) = override_cfg.change_retention_max_rows {
                 config.change_retention_max_rows = Some(value);
+            }
+            if let Some(values) = override_cfg.oidc_allowed_algorithms {
+                config.oidc_allowed_algorithms = parse_oidc_allowed_algorithms(values)?;
             }
             if let Some(storage_override) = override_cfg.storage
                 && let Some(backend) = storage_override.backend
@@ -258,7 +270,52 @@ impl ControlPlaneConfig {
                 "bootstrap enabled but FELIX_BOOTSTRAP_TOKEN / bootstrap.token is not set"
             ));
         }
+        if self.oidc_allowed_algorithms.is_empty() {
+            return Err(anyhow!(
+                "oidc_allowed_algorithms cannot be empty; include at least ES256"
+            ));
+        }
         Ok(())
+    }
+}
+
+fn parse_oidc_allowed_algorithms_csv(value: &str) -> Result<Vec<Algorithm>> {
+    parse_oidc_allowed_algorithms(
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+    )
+}
+
+fn parse_oidc_allowed_algorithms(values: Vec<String>) -> Result<Vec<Algorithm>> {
+    let mut algorithms = Vec::new();
+    for raw in values {
+        let alg = parse_oidc_algorithm(&raw).ok_or_else(|| {
+            anyhow!(
+                "invalid OIDC algorithm '{}'; supported: ES256, RS256, RS384, RS512, PS256, PS384, PS512",
+                raw
+            )
+        })?;
+        if !algorithms.contains(&alg) {
+            algorithms.push(alg);
+        }
+    }
+    Ok(algorithms)
+}
+
+fn parse_oidc_algorithm(value: &str) -> Option<Algorithm> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "ES256" => Some(Algorithm::ES256),
+        "RS256" => Some(Algorithm::RS256),
+        "RS384" => Some(Algorithm::RS384),
+        "RS512" => Some(Algorithm::RS512),
+        "PS256" => Some(Algorithm::PS256),
+        "PS384" => Some(Algorithm::PS384),
+        "PS512" => Some(Algorithm::PS512),
+        _ => None,
     }
 }
 
@@ -289,6 +346,7 @@ mod tests {
         assert_eq!(config.metrics_bind.to_string(), "0.0.0.0:8080");
         assert_eq!(config.region_id, "local");
         assert_eq!(config.changes_limit, DEFAULT_CHANGES_LIMIT);
+        assert_eq!(config.oidc_allowed_algorithms, vec![Algorithm::ES256]);
         assert!(matches!(config.storage, StorageBackend::Memory));
         clear_felix_env();
     }
@@ -302,6 +360,10 @@ mod tests {
             env::set_var("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:9090");
             env::set_var("FELIX_REGION_ID", "us-west-2");
             env::set_var("FELIX_CONTROLPLANE_CHANGES_LIMIT", "5000");
+            env::set_var(
+                "FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS",
+                "ES256,RS256,PS256,RS256",
+            );
         }
 
         let config = ControlPlaneConfig::from_env().expect("from_env");
@@ -309,6 +371,10 @@ mod tests {
         assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:9090");
         assert_eq!(config.region_id, "us-west-2");
         assert_eq!(config.changes_limit, 5000);
+        assert_eq!(
+            config.oidc_allowed_algorithms,
+            vec![Algorithm::ES256, Algorithm::RS256, Algorithm::PS256]
+        );
 
         clear_felix_env();
     }
@@ -378,6 +444,7 @@ bind_addr: "127.0.0.1:7443"
 metrics_bind: "127.0.0.1:7070"
 region_id: "eu-central-1"
 changes_limit: 2000
+oidc_allowed_algorithms: ["ES256", "RS384", "PS512"]
 storage:
   backend: "memory"
 "#,
@@ -392,6 +459,10 @@ storage:
         assert_eq!(config.metrics_bind.to_string(), "127.0.0.1:7070");
         assert_eq!(config.region_id, "eu-central-1");
         assert_eq!(config.changes_limit, 2000);
+        assert_eq!(
+            config.oidc_allowed_algorithms,
+            vec![Algorithm::ES256, Algorithm::RS384, Algorithm::PS512]
+        );
 
         clear_felix_env();
     }
@@ -427,6 +498,21 @@ storage:
         let result = ControlPlaneConfig::from_env_or_yaml();
         assert!(result.is_err());
 
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_rejects_invalid_oidc_algorithm() {
+        clear_felix_env();
+        unsafe {
+            env::set_var(
+                "FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS",
+                "ES256,INVALID",
+            );
+        }
+        let result = ControlPlaneConfig::from_env();
+        assert!(result.is_err());
         clear_felix_env();
     }
 }

@@ -236,7 +236,18 @@ After bootstrap, **all admin endpoints require a Felix token with `tenant.admin`
 
 ### Supported Identity Providers
 
-Felix supports any OIDC-compliant IdP that issues **ES256** JWTs and exposes a JWKS endpoint (via discovery or direct JWKS URL). **RS256** support is available behind the `oidc-rsa` feature flag for environments that require RSA-signed IdP tokens. Common providers that work out of the box include:
+Felix supports any OIDC-compliant IdP that exposes a JWKS endpoint (via discovery or direct JWKS URL) and uses an allowed upstream OIDC signing algorithm.
+
+Supported upstream OIDC JWT signing algorithms:
+- `ES256` (default)
+- `RS256`, `RS384`, `RS512`
+- `PS256`, `PS384`, `PS512`
+
+Control plane configuration:
+- YAML: `oidc_allowed_algorithms: ["ES256"]`
+- Env: `FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS=ES256,RS256,...`
+
+Common providers that work out of the box include:
 
 - Microsoft Entra ID
 - Okta

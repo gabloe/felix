@@ -62,30 +62,8 @@ jobs:
       - name: cargo-deny
         run: cargo deny check
 
-      - name: RSA dependency check (default)
+      - name: RSA dependency check (non-controlplane crates)
         run: |
-          set +e
-          tree=$(cargo tree -i rsa 2>/dev/null)
-          status=$?
-          set -e
-          if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
-            echo "$tree"
-            echo "rsa crate detected in default dependency tree"
-            exit 1
-          fi
-
-      - name: RSA dependency check (oidc-rsa)
-        run: |
-          set +e
-          tree=$(cargo tree -i rsa -p controlplane --features oidc-rsa 2>/dev/null)
-          status=$?
-          set -e
-          if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
-            echo "$tree"
-            echo "rsa crate detected for oidc-rsa build (expected if RS256 is enabled)"
-          else
-            echo "rsa crate not detected for oidc-rsa build"
-          fi
           for pkg in broker felix-authz felix-client felix-broker felix-transport felix-wire; do
             set +e
             tree=$(cargo tree -i rsa -p "$pkg" 2>/dev/null)
