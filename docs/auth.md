@@ -17,7 +17,18 @@ This document describes the current Felix authentication and authorization desig
 
 ## Supported Identity Providers
 
-Felix supports any OIDC-compliant IdP that issues **RS256-signed** JWTs and exposes a JWKS endpoint (either via OIDC discovery or a direct `jwks_url`). This includes common providers like:
+Felix supports any OIDC-compliant IdP that exposes a JWKS endpoint (either via OIDC discovery or a direct `jwks_url`) and uses an allowed upstream OIDC signing algorithm.
+
+Supported upstream OIDC JWT signing algorithms:
+- `ES256` (default)
+- `RS256`, `RS384`, `RS512`
+- `PS256`, `PS384`, `PS512`
+
+Control plane configuration:
+- YAML: `oidc_allowed_algorithms: ["ES256"]`
+- Env: `FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS=ES256,RS256,...`
+
+This includes common providers like:
 
 - Microsoft Entra ID
 - Okta
