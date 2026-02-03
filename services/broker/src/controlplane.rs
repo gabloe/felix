@@ -24,7 +24,7 @@
 //! NOTE: This file is a *client* of the control-plane. Persisting control-plane data
 //! (e.g., in Postgres) is implemented on the **control-plane service**, not here.
 use anyhow::{Context, Result};
-use felix_broker::{Broker, CacheMetadata, StreamMetadata};
+use felix_broker::{Broker, BrokerError, CacheMetadata, StreamMetadata};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -277,14 +277,19 @@ struct Cache {
 ///
 /// - It is safe to run as a background task (spawns no additional tasks).
 /// - It intentionally sleeps for `interval` between change feed polls.
-/// - It only returns on unrecoverable local errors (e.g., broker rejects a registration),
-///   which indicate a true invariant violation or corrupted input.
+/// - Apply-time errors are logged and retried on the next iteration so transient
+///   ordering races (for example namespace before tenant) do not stop sync.
 pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
     let client = reqwest::Client::new();
     // Sequence cursors for each change feed; 0 means "not yet seeded".
     let mut state = SyncState::new();
     loop {
-        state = sync_once(&broker, &client, &base_url, state).await?;
+        match sync_once(&broker, &client, &base_url, state).await {
+            Ok(next_state) => state = next_state,
+            Err(err) => {
+                tracing::warn!(error = %err, "control plane sync iteration failed; retrying")
+            }
+        }
         // Polling interval between change feed reads.
         tokio::time::sleep(interval).await;
     }
@@ -340,8 +345,7 @@ async fn sync_once(
         match fetch_namespace_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for namespace in snapshot.items {
-                    broker
-                        .register_namespace(namespace.tenant_id, namespace.namespace)
+                    apply_namespace_create(broker, namespace.tenant_id, namespace.namespace)
                         .await?;
                 }
                 state.next_namespace_seq = snapshot.next_seq;
@@ -361,13 +365,7 @@ async fn sync_once(
         match fetch_cache_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for cache in snapshot.items {
-                    broker
-                        .register_cache(
-                            cache.tenant_id,
-                            cache.namespace,
-                            cache.cache,
-                            CacheMetadata,
-                        )
+                    apply_cache_upsert(broker, cache.tenant_id, cache.namespace, cache.cache)
                         .await?;
                 }
                 state.next_cache_seq = snapshot.next_seq;
@@ -388,17 +386,17 @@ async fn sync_once(
         match fetch_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for stream in snapshot.items {
-                    broker
-                        .register_stream(
-                            stream.tenant_id,
-                            stream.namespace,
-                            stream.stream,
-                            StreamMetadata {
-                                durable: stream.durable,
-                                shards: stream.shards,
-                            },
-                        )
-                        .await?;
+                    apply_stream_upsert(
+                        broker,
+                        stream.tenant_id,
+                        stream.namespace,
+                        stream.stream,
+                        StreamMetadata {
+                            durable: stream.durable,
+                            shards: stream.shards,
+                        },
+                    )
+                    .await?;
                 }
                 state.next_stream_seq = snapshot.next_seq;
             }
@@ -446,15 +444,23 @@ async fn sync_once(
                 match change.op {
                     NamespaceChangeOp::Created => {
                         if let Some(namespace) = change.namespace {
-                            broker
-                                .register_namespace(namespace.tenant_id, namespace.namespace)
-                                .await?;
+                            apply_namespace_create(
+                                broker,
+                                namespace.tenant_id,
+                                namespace.namespace,
+                            )
+                            .await?;
                         }
                     }
                     NamespaceChangeOp::Deleted => {
-                        let _ = broker
+                        match broker
                             .remove_namespace(&change.key.tenant_id, &change.key.namespace)
-                            .await?;
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(BrokerError::TenantNotFound(_)) => {}
+                            Err(err) => return Err(err.into()),
+                        }
                     }
                 }
             }
@@ -477,24 +483,29 @@ async fn sync_once(
                 match change.op {
                     CacheChangeOp::Created | CacheChangeOp::Updated => {
                         if let Some(cache) = change.cache {
-                            broker
-                                .register_cache(
-                                    cache.tenant_id,
-                                    cache.namespace,
-                                    cache.cache,
-                                    CacheMetadata,
-                                )
-                                .await?;
+                            apply_cache_upsert(
+                                broker,
+                                cache.tenant_id,
+                                cache.namespace,
+                                cache.cache,
+                            )
+                            .await?;
                         }
                     }
                     CacheChangeOp::Deleted => {
-                        let _ = broker
+                        match broker
                             .remove_cache(
                                 &change.key.tenant_id,
                                 &change.key.namespace,
                                 &change.key.cache,
                             )
-                            .await?;
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(BrokerError::TenantNotFound(_)) => {}
+                            Err(BrokerError::NamespaceNotFound { .. }) => {}
+                            Err(err) => return Err(err.into()),
+                        }
                     }
                 }
             }
@@ -516,27 +527,33 @@ async fn sync_once(
                 match change.op {
                     StreamChangeOp::Created | StreamChangeOp::Updated => {
                         if let Some(stream) = change.stream {
-                            broker
-                                .register_stream(
-                                    stream.tenant_id,
-                                    stream.namespace,
-                                    stream.stream,
-                                    StreamMetadata {
-                                        durable: stream.durable,
-                                        shards: stream.shards,
-                                    },
-                                )
-                                .await?;
+                            apply_stream_upsert(
+                                broker,
+                                stream.tenant_id,
+                                stream.namespace,
+                                stream.stream,
+                                StreamMetadata {
+                                    durable: stream.durable,
+                                    shards: stream.shards,
+                                },
+                            )
+                            .await?;
                         }
                     }
                     StreamChangeOp::Deleted => {
-                        let _ = broker
+                        match broker
                             .remove_stream(
                                 &change.key.tenant_id,
                                 &change.key.namespace,
                                 &change.key.stream,
                             )
-                            .await?;
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(BrokerError::TenantNotFound(_)) => {}
+                            Err(BrokerError::NamespaceNotFound { .. }) => {}
+                            Err(err) => return Err(err.into()),
+                        }
                     }
                 }
             }
@@ -551,6 +568,104 @@ async fn sync_once(
         }
     }
     Ok(state)
+}
+
+async fn apply_namespace_create(
+    broker: &Arc<Broker>,
+    tenant_id: String,
+    namespace: String,
+) -> Result<()> {
+    match broker
+        .register_namespace(tenant_id.clone(), namespace.clone())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(BrokerError::TenantNotFound(_)) => {
+            broker.register_tenant(tenant_id.clone()).await?;
+            broker.register_namespace(tenant_id, namespace).await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn apply_cache_upsert(
+    broker: &Arc<Broker>,
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+) -> Result<()> {
+    match broker
+        .register_cache(
+            tenant_id.clone(),
+            namespace.clone(),
+            cache.clone(),
+            CacheMetadata,
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(BrokerError::TenantNotFound(_)) => {
+            broker.register_tenant(tenant_id.clone()).await?;
+            broker
+                .register_namespace(tenant_id.clone(), namespace.clone())
+                .await?;
+            broker
+                .register_cache(tenant_id, namespace, cache, CacheMetadata)
+                .await?;
+            Ok(())
+        }
+        Err(BrokerError::NamespaceNotFound { .. }) => {
+            broker
+                .register_namespace(tenant_id.clone(), namespace.clone())
+                .await?;
+            broker
+                .register_cache(tenant_id, namespace, cache, CacheMetadata)
+                .await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn apply_stream_upsert(
+    broker: &Arc<Broker>,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    metadata: StreamMetadata,
+) -> Result<()> {
+    match broker
+        .register_stream(
+            tenant_id.clone(),
+            namespace.clone(),
+            stream.clone(),
+            metadata.clone(),
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(BrokerError::TenantNotFound(_)) => {
+            broker.register_tenant(tenant_id.clone()).await?;
+            broker
+                .register_namespace(tenant_id.clone(), namespace.clone())
+                .await?;
+            broker
+                .register_stream(tenant_id, namespace, stream, metadata)
+                .await?;
+            Ok(())
+        }
+        Err(BrokerError::NamespaceNotFound { .. }) => {
+            broker
+                .register_namespace(tenant_id.clone(), namespace.clone())
+                .await?;
+            broker
+                .register_stream(tenant_id, namespace, stream, metadata)
+                .await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Fetches the full stream snapshot from `/v1/streams/snapshot`.
@@ -719,6 +834,8 @@ mod tests {
     use axum::{Json, Router, http::StatusCode, routing::get};
     use felix_storage::EphemeralCache;
     use std::net::SocketAddr;
+    use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::net::TcpListener;
 
@@ -1156,6 +1273,136 @@ mod tests {
             let result = fetch_changes(&client, &base_url, 0).await;
             assert!(result.is_err());
 
+            let _ = shutdown_tx.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle)
+                .await
+                .expect("server shutdown");
+            Ok(())
+        })
+        .await
+        .expect("test timeout")
+    }
+
+    #[tokio::test]
+    async fn start_sync_retries_after_transient_parent_ordering_error() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+            let namespace_polls = StdArc::new(AtomicUsize::new(0));
+            let namespace_polls_clone = StdArc::clone(&namespace_polls);
+            let router = Router::new()
+                .route(
+                    "/v1/tenants/snapshot",
+                    get(|| async {
+                        Json(TenantSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/snapshot",
+                    get(|| async {
+                        Json(NamespaceSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/snapshot",
+                    get(|| async {
+                        Json(CacheSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/snapshot",
+                    get(|| async {
+                        Json(StreamSnapshotResponse {
+                            items: vec![],
+                            next_seq: 1,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/tenants/changes",
+                    get(move || {
+                        let namespace_polls = StdArc::clone(&namespace_polls_clone);
+                        async move {
+                            let poll = namespace_polls.fetch_add(1, Ordering::SeqCst);
+                            let items = if poll == 0 {
+                                vec![]
+                            } else {
+                                vec![TenantChange {
+                                    op: TenantChangeOp::Created,
+                                    tenant_id: "t1".to_string(),
+                                    tenant: Some(Tenant {
+                                        tenant_id: "t1".to_string(),
+                                    }),
+                                }]
+                            };
+                            Json(TenantChangesResponse { items, next_seq: 2 })
+                        }
+                    }),
+                )
+                .route(
+                    "/v1/namespaces/changes",
+                    get(|| async {
+                        Json(NamespaceChangesResponse {
+                            items: vec![NamespaceChange {
+                                op: NamespaceChangeOp::Created,
+                                key: NamespaceKey {
+                                    tenant_id: "t1".to_string(),
+                                    namespace: "ns1".to_string(),
+                                },
+                                namespace: Some(Namespace {
+                                    tenant_id: "t1".to_string(),
+                                    namespace: "ns1".to_string(),
+                                }),
+                            }],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/caches/changes",
+                    get(|| async {
+                        Json(CacheChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/streams/changes",
+                    get(|| async {
+                        Json(StreamChangesResponse {
+                            items: vec![],
+                            next_seq: 2,
+                        })
+                    }),
+                );
+
+            let (addr, shutdown_tx, handle) = serve_router(router).await?;
+            let base_url = format!("http://{}", addr);
+            let sync_task = tokio::spawn(start_sync(
+                Arc::clone(&broker),
+                base_url,
+                Duration::from_millis(10),
+            ));
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while tokio::time::Instant::now() < deadline {
+                if broker.namespace_exists("t1", "ns1").await {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(broker.namespace_exists("t1", "ns1").await);
+
+            sync_task.abort();
             let _ = shutdown_tx.send(());
             let _ = tokio::time::timeout(Duration::from_secs(1), handle)
                 .await

@@ -132,7 +132,7 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
     wait_for_controlplane(&http, &cp_base).await?;
     report.pass("STEP 2 control plane up", format!("addr={cp_addr}"));
 
-    let (broker_addr, broker_cert, broker_handles) = spawn_broker(&cp_base).await?;
+    let (broker_addr, broker_cert, broker, broker_handles) = spawn_broker(&cp_base).await?;
     report.pass("STEP 3 broker up", format!("addr={broker_addr}"));
 
     let admin_principal = principal_id(&idp_base, ADMIN_SUB);
@@ -182,6 +182,7 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
         create_cache(&http, &cp_base, TENANT_T2).await?,
         StatusCode::CREATED,
     )?;
+    wait_for_broker_metadata(&broker, Duration::from_secs(12)).await?;
 
     let alice_id_token = mint_id_token(&idp_base, ALICE_SUB, &[])?;
     let t1_token = exchange_token(&http, &cp_base, TENANT_T1, &alice_id_token).await?;
@@ -454,7 +455,12 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
 /// Starts a real broker QUIC server and a control-plane sync loop.
 async fn spawn_broker(
     controlplane_url: &str,
-) -> Result<(SocketAddr, CertificateDer<'static>, Vec<JoinHandle<()>>)> {
+) -> Result<(
+    SocketAddr,
+    CertificateDer<'static>,
+    Arc<Broker>,
+    Vec<JoinHandle<()>>,
+)> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let mut config = broker::config::BrokerConfig::from_env()?;
     config.controlplane_url = Some(controlplane_url.to_string());
@@ -492,7 +498,24 @@ async fn spawn_broker(
         }
     });
 
-    Ok((addr, cert, vec![broker_task, sync_task]))
+    Ok((addr, cert, broker, vec![broker_task, sync_task]))
+}
+
+async fn wait_for_broker_metadata(broker: &Broker, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let t1_ready = broker.namespace_exists(TENANT_T1, NAMESPACE).await
+            && broker.stream_exists(TENANT_T1, NAMESPACE, STREAM).await
+            && broker.cache_exists(TENANT_T1, NAMESPACE, CACHE).await;
+        let t2_ready = broker.namespace_exists(TENANT_T2, NAMESPACE).await
+            && broker.stream_exists(TENANT_T2, NAMESPACE, STREAM).await
+            && broker.cache_exists(TENANT_T2, NAMESPACE, CACHE).await;
+        if t1_ready && t2_ready {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!("broker metadata sync timeout");
 }
 
 fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
