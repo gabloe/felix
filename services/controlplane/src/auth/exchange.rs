@@ -217,7 +217,7 @@ pub async fn exchange_token(
     }
 
     // Step 4: Validate the upstream token against configured issuers.
-    // This uses the OIDC allowlist (ES256 by default; RS*/PS* behind `oidc-rsa`).
+    // This uses the configured OIDC allowlist (ES256 by default; optional RS*/PS*).
     let validated = match state.oidc_validator.validate(bearer, &issuers).await {
         Ok(token) => token,
         Err(OidcError::IssuerNotAllowed) => return Err(api_forbidden("issuer not allowed")),

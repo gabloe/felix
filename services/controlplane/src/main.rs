@@ -92,7 +92,12 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
             bridges: false,
         },
         store,
-        oidc_validator: UpstreamOidcValidator::default(),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            config.oidc_allowed_algorithms,
+        ),
         bootstrap_enabled: config.bootstrap.enabled,
         bootstrap_token: config.bootstrap.token,
     })
@@ -112,6 +117,7 @@ mod tests {
             postgres: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
+            oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
             bootstrap: config::BootstrapConfig {
                 enabled: false,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
@@ -133,6 +139,7 @@ mod tests {
             postgres: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
+            oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
             bootstrap: config::BootstrapConfig {
                 enabled: false,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
