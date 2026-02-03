@@ -5,7 +5,7 @@
 //! correct tenant scoping and RBAC-derived permissions.
 //!
 //! # Key invariants
-//! - Upstream IdP tokens are RS256 test fixtures only (behind `oidc-rsa`).
+//! - Upstream IdP RSA/PS token support is behind `oidc-rsa`; these tests use RS256 fixtures.
 //! - Felix-issued tokens must be EdDSA and include `iss`, `aud`, and `tid`.
 //! - Exchange never widens permissions beyond RBAC policies.
 //!
