@@ -700,4 +700,14 @@ mod tests {
             Err(AuthzError::MissingSigningKey(_))
         ));
     }
+
+    #[test]
+    fn broker_auth_new_builds_shared_store_and_normalizes_url() {
+        let auth = BrokerAuth::new("http://controlplane/".to_string());
+        assert_eq!(auth.key_store.base_url, "http://controlplane");
+
+        let clone = auth.clone();
+        assert!(Arc::ptr_eq(&auth.key_store, &clone.key_store));
+        assert!(Arc::ptr_eq(&auth.verifier, &clone.verifier));
+    }
 }

@@ -162,3 +162,109 @@ async fn bootstrap_initializes_tenant_and_auth() {
     let payload = read_json(response).await;
     assert_eq!(payload["code"], "already_initialized");
 }
+
+#[tokio::test]
+async fn bootstrap_rejects_invalid_token_and_validation_errors() {
+    let (_store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let app = build_bootstrap_router(state).into_service();
+
+    let invalid_token = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "wrong")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(invalid_token).await.expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let empty_name = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "   ",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(empty_name).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let empty_admins = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": []
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(empty_admins).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let empty_issuer = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [{
+                    "issuer": "   ",
+                    "audiences": ["felix-controlplane"],
+                    "discovery_url": null,
+                    "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+                    "claim_mappings": {
+                        "subject_claim": "sub",
+                        "groups_claim": "groups"
+                    }
+                }],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(empty_issuer).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn bootstrap_missing_configured_token_returns_internal_error() {
+    let (_store, state) = bootstrap_state(true, None);
+    let app = build_bootstrap_router(state).into_service();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

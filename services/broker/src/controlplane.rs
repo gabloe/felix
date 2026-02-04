@@ -1259,6 +1259,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_namespace_create_registers_missing_tenant() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        apply_namespace_create(&broker, "t1".to_string(), "ns1".to_string()).await?;
+        assert!(broker.namespace_exists("t1", "ns1").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_cache_upsert_recovers_from_missing_parents() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        apply_cache_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "c1".to_string(),
+        )
+        .await?;
+        assert!(broker.cache_exists("t1", "ns1", "c1").await);
+
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t2".to_string()).await?;
+        apply_cache_upsert(
+            &broker,
+            "t2".to_string(),
+            "ns2".to_string(),
+            "c2".to_string(),
+        )
+        .await?;
+        assert!(broker.cache_exists("t2", "ns2", "c2").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_stream_upsert_recovers_from_missing_parents() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: true,
+                shards: 2,
+            },
+        )
+        .await?;
+        assert!(broker.stream_exists("t1", "ns1", "orders").await);
+
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t2".to_string()).await?;
+        apply_stream_upsert(
+            &broker,
+            "t2".to_string(),
+            "ns2".to_string(),
+            "events".to_string(),
+            StreamMetadata {
+                durable: false,
+                shards: 1,
+            },
+        )
+        .await?;
+        assert!(broker.stream_exists("t2", "ns2", "events").await);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn fetch_stream_changes_rejects_invalid_json() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
             let router = Router::new().route(

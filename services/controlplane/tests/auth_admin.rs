@@ -69,9 +69,13 @@ async fn setup() -> (
 }
 
 fn token(keys: &TenantSigningKeys, perms: Vec<&str>) -> String {
+    token_for_tenant(keys, "t1", perms)
+}
+
+fn token_for_tenant(keys: &TenantSigningKeys, tenant_id: &str, perms: Vec<&str>) -> String {
     mint_token(
         keys,
-        "t1",
+        tenant_id,
         "p:admin",
         perms.into_iter().map(|value| value.to_string()).collect(),
         Duration::from_secs(900),
@@ -244,6 +248,197 @@ async fn tenant_rbac_admin_can_grant_tenant_rules_but_tenant_star_is_rejected() 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let payload = read_json(response).await;
     assert_eq!(payload["code"], "validation_error");
+}
+
+#[tokio::test]
+async fn tenant_manage_can_upsert_and_delete_idp_issuer() {
+    let (app, store, keys) = setup().await;
+    let t = token(&keys, vec!["tenant.manage:tenant:t1"]);
+
+    let upsert = json_request(
+        "POST",
+        "/v1/tenants/t1/idp-issuers",
+        serde_json::json!({
+            "issuer": "https://issuer.example.com",
+            "audiences": ["felix-controlplane"],
+            "discovery_url": null,
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "claim_mappings": {
+                "subject_claim": "sub",
+                "groups_claim": "groups"
+            }
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(add_auth(upsert, &t))
+        .await
+        .expect("upsert issuer");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        store.list_idp_issuers("t1").await.expect("issuers").len(),
+        1
+    );
+
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri("/v1/tenants/t1/idp-issuers/https:%2F%2Fissuer.example.com")
+        .header("authorization", format!("Bearer {t}"))
+        .body(Body::empty())
+        .expect("delete issuer");
+    let response = app.oneshot(delete).await.expect("delete issuer");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        store
+            .list_idp_issuers("t1")
+            .await
+            .expect("issuers")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn idp_issuer_endpoints_require_correct_scope() {
+    let (app, _store, keys) = setup().await;
+    let ns_scope = token(&keys, vec!["tenant.manage:namespace:t1/payments"]);
+
+    let upsert = json_request(
+        "POST",
+        "/v1/tenants/t1/idp-issuers",
+        serde_json::json!({
+            "issuer": "https://issuer.example.com",
+            "audiences": ["felix-controlplane"],
+            "discovery_url": null,
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "claim_mappings": {
+                "subject_claim": "sub",
+                "groups_claim": "groups"
+            }
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(add_auth(upsert, &ns_scope))
+        .await
+        .expect("upsert issuer");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let no_auth = json_request(
+        "POST",
+        "/v1/tenants/t1/idp-issuers",
+        serde_json::json!({
+            "issuer": "https://issuer.example.com",
+            "audiences": ["felix-controlplane"],
+            "discovery_url": null,
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "claim_mappings": {
+                "subject_claim": "sub",
+                "groups_claim": "groups"
+            }
+        }),
+    );
+    let response = app.clone().oneshot(no_auth).await.expect("upsert no auth");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn add_policy_rejects_invalid_action_and_tenant_mismatch() {
+    let (app, _store, keys) = setup().await;
+
+    let t = token(&keys, vec!["rbac.policy.manage:tenant:t1"]);
+    let invalid_action = json_request(
+        "POST",
+        "/v1/tenants/t1/rbac/policies",
+        serde_json::json!({
+            "subject": "role:writer",
+            "object": "stream:t1/payments/orders",
+            "action": "stream.fly"
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(add_auth(invalid_action, &t))
+        .await
+        .expect("invalid action");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let wrong_tid = token_for_tenant(&keys, "t2", vec!["rbac.policy.manage:tenant:t1"]);
+    let valid_policy = json_request(
+        "POST",
+        "/v1/tenants/t1/rbac/policies",
+        serde_json::json!({
+            "subject": "role:writer",
+            "object": "stream:t1/payments/orders",
+            "action": "stream.publish"
+        }),
+    );
+    let response = app
+        .oneshot(add_auth(valid_policy, &wrong_tid))
+        .await
+        .expect("tenant mismatch");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn add_grouping_enforces_scope_and_role_policies() {
+    let (app, store, keys) = setup().await;
+    store
+        .add_rbac_policy(
+            "t1",
+            PolicyRule {
+                subject: "role:payments-reader".to_string(),
+                object: "stream:t1/payments/orders".to_string(),
+                action: "stream.subscribe".to_string(),
+            },
+        )
+        .await
+        .expect("seed role policy");
+
+    let allowed = token(&keys, vec!["rbac.assignment.manage:namespace:t1/payments"]);
+    let add = json_request(
+        "POST",
+        "/v1/tenants/t1/rbac/groupings",
+        serde_json::json!({
+            "user": "group:payments",
+            "role": "role:payments-reader"
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(add_auth(add, &allowed))
+        .await
+        .expect("add grouping");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let out_of_scope = token(&keys, vec!["rbac.assignment.manage:namespace:t1/orders"]);
+    let add_out_of_scope = json_request(
+        "POST",
+        "/v1/tenants/t1/rbac/groupings",
+        serde_json::json!({
+            "user": "group:payments",
+            "role": "role:payments-reader"
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(add_auth(add_out_of_scope, &out_of_scope))
+        .await
+        .expect("add grouping out of scope");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let role_without_policies = json_request(
+        "POST",
+        "/v1/tenants/t1/rbac/groupings",
+        serde_json::json!({
+            "user": "group:payments",
+            "role": "role:missing"
+        }),
+    );
+    let response = app
+        .oneshot(add_auth(role_without_policies, &allowed))
+        .await
+        .expect("add grouping missing role policies");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 fn add_auth(mut request: Request<Body>, token: &str) -> Request<Body> {

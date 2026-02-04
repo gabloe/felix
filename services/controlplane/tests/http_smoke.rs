@@ -1029,3 +1029,65 @@ async fn system_health_reports_internal_error_on_store_failure() {
     let response = app.clone().oneshot(health).await.expect("health");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn tenant_endpoints_report_internal_error_on_store_failure() {
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(FailingStore),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let list = Request::builder()
+        .uri("/v1/tenants")
+        .body(Body::empty())
+        .expect("list tenants");
+    let response = app.clone().oneshot(list).await.expect("list tenants");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let create = json_request(
+        "POST",
+        "/v1/tenants",
+        serde_json::json!({
+            "tenant_id": "t1",
+            "display_name": "Tenant One"
+        }),
+    );
+    let response = app.clone().oneshot(create).await.expect("create tenant");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri("/v1/tenants/t1")
+        .body(Body::empty())
+        .expect("delete tenant");
+    let response = app.clone().oneshot(delete).await.expect("delete tenant");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let snapshot = Request::builder()
+        .uri("/v1/tenants/snapshot")
+        .body(Body::empty())
+        .expect("snapshot");
+    let response = app.clone().oneshot(snapshot).await.expect("snapshot");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let changes = Request::builder()
+        .uri("/v1/tenants/changes?since=0")
+        .body(Body::empty())
+        .expect("changes");
+    let response = app.clone().oneshot(changes).await.expect("changes");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
