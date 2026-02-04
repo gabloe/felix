@@ -52,6 +52,10 @@ use felix_wire::Message;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+#[cfg(any(
+    not(any(test, debug_assertions)),
+    all(feature = "telemetry", debug_assertions)
+))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -66,6 +70,7 @@ use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::write_message;
 use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
 
+#[cfg(not(any(test, debug_assertions)))]
 static WRITER_LANE_MANAGER: OnceLock<Arc<WriterLaneManager>> = OnceLock::new();
 #[cfg(all(feature = "telemetry", debug_assertions))]
 static CONNECTION_LANE_ASSERT: OnceLock<DashMap<u64, usize>> = OnceLock::new();
@@ -226,6 +231,7 @@ pub(crate) async fn handle_subscribe_message(
             lane_idx,
             LaneCommand::Register {
                 subscriber_id: subscription_id,
+                connection,
                 connection_id: Some(connection_id),
                 event_send,
                 guard: unsubscribe_guard,
@@ -318,6 +324,8 @@ async fn write_parts(
 #[derive(Debug)]
 struct LaneSubscriber {
     event_send: quinn::SendStream,
+    // Keep the connection alive as long as this subscriber is registered.
+    _connection: felix_transport::QuicConnection,
     _connection_id: Option<u64>,
     _unsubscribe_guard: felix_broker::SubscriptionGuard,
 }
@@ -326,6 +334,7 @@ struct LaneSubscriber {
 enum LaneCommand {
     Register {
         subscriber_id: u64,
+        connection: felix_transport::QuicConnection,
         connection_id: Option<u64>,
         event_send: quinn::SendStream,
         guard: felix_broker::SubscriptionGuard,
@@ -353,9 +362,17 @@ struct WriterLaneManager {
 
 impl WriterLaneManager {
     fn init(config: &crate::config::BrokerConfig) -> Arc<Self> {
-        WRITER_LANE_MANAGER
-            .get_or_init(|| Arc::new(Self::new(config)))
-            .clone()
+        #[cfg(any(test, debug_assertions))]
+        {
+            Arc::new(Self::new(config))
+        }
+
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            WRITER_LANE_MANAGER
+                .get_or_init(|| Arc::new(Self::new(config)))
+                .clone()
+        }
     }
 
     fn new(config: &crate::config::BrokerConfig) -> Self {
@@ -484,6 +501,7 @@ async fn run_writer_lane(lane_id: usize, mut rx: mpsc::Receiver<LaneCommand>) {
         match cmd {
             LaneCommand::Register {
                 subscriber_id,
+                connection,
                 connection_id,
                 event_send,
                 guard,
@@ -492,6 +510,7 @@ async fn run_writer_lane(lane_id: usize, mut rx: mpsc::Receiver<LaneCommand>) {
                     subscriber_id,
                     LaneSubscriber {
                         event_send,
+                        _connection: connection,
                         _connection_id: connection_id,
                         _unsubscribe_guard: guard,
                     },
