@@ -242,6 +242,8 @@ async fn cache_worker_exits_on_stream_error() -> Result<()> {
 #[serial_test::serial]
 async fn quic_publish_subscribe_cache_success() -> Result<()> {
     let _env_guard = set_client_env();
+    crate::timings::enable_collection(1);
+    crate::timings::set_enabled(true);
 
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
@@ -403,6 +405,7 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
     assert_eq!(value, Bytes::from_static(b"value"));
 
     server_task.abort();
+    crate::timings::set_enabled(false);
     Ok(())
 }
 
@@ -780,6 +783,453 @@ async fn subscription_decode_error_on_invalid_frame() -> Result<()> {
 
     let _ = shutdown_tx.send(());
     server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn subscription_legacy_event_paths_and_unexpected_message_error() -> Result<()> {
+    let _env_guard = set_client_env();
+    crate::timings::enable_collection(1);
+    crate::timings::set_enabled(true);
+
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+            let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                return Ok(());
+            };
+            let _ = read_message(&mut recv, &mut frame_scratch).await?;
+            write_message(&mut send, Message::Ok).await?;
+            loop {
+                let next = read_message(&mut recv, &mut frame_scratch).await?;
+                match next {
+                    Some(Message::Subscribe {
+                        subscription_id, ..
+                    }) => {
+                        let sub_id = subscription_id.unwrap_or(1);
+                        write_message(
+                            &mut send,
+                            Message::Subscribed {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+
+                        let mut uni = connection.open_uni().await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventStreamHello {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        write_message(
+                            &mut uni,
+                            Message::Event {
+                                tenant_id: "t1".to_string(),
+                                namespace: "default".to_string(),
+                                stream: "updates".to_string(),
+                                payload: b"legacy-one".to_vec(),
+                            },
+                        )
+                        .await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventBatch {
+                                tenant_id: "t1".to_string(),
+                                namespace: "default".to_string(),
+                                stream: "updates".to_string(),
+                                payloads: vec![b"legacy-two".to_vec(), b"legacy-three".to_vec()],
+                            },
+                        )
+                        .await?;
+                        // Force the "unexpected message" branch in Subscription::next_event.
+                        write_message(&mut uni, Message::Ok).await?;
+                        let _ = uni.finish();
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            Ok(())
+        }
+
+        let mut tasks = Vec::new();
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= accept_deadline {
+                break;
+            }
+            let remaining = accept_deadline.saturating_duration_since(now);
+            let result = timeout(remaining, server.accept()).await;
+            let Ok(Ok(connection)) = result else {
+                break;
+            };
+            tasks.push(tokio::spawn(handle_connection(connection)));
+        }
+        for task in tasks {
+            drop(task);
+        }
+        let _ = shutdown_rx.await;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let client = Client::connect_with_transport(
+        addr,
+        "localhost",
+        build_client_config_with_overrides(cert, 1)?,
+        TransportConfig::default(),
+    )
+    .await?;
+    let mut subscription = client.subscribe("t1", "default", "updates").await?;
+
+    let first = subscription.next_event().await?.expect("first event");
+    assert_eq!(first.payload, Bytes::from_static(b"legacy-one"));
+
+    let second = subscription.next_event().await?.expect("second event");
+    assert_eq!(second.payload, Bytes::from_static(b"legacy-two"));
+
+    // This one comes from the cached batch path.
+    let third = subscription.next_event().await?.expect("third event");
+    assert_eq!(third.payload, Bytes::from_static(b"legacy-three"));
+
+    let err = match subscription.next_event().await {
+        Ok(_) => anyhow::bail!("expected unexpected-message error"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string()
+            .contains("unexpected message on subscription stream")
+    );
+
+    let _ = shutdown_tx.send(());
+    server_task.abort();
+    crate::timings::set_enabled(false);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn subscription_empty_event_batch_returns_none() -> Result<()> {
+    let _env_guard = set_client_env();
+
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+            let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                return Ok(());
+            };
+            let _ = read_message(&mut recv, &mut frame_scratch).await?;
+            write_message(&mut send, Message::Ok).await?;
+            loop {
+                let next = read_message(&mut recv, &mut frame_scratch).await?;
+                match next {
+                    Some(Message::Subscribe {
+                        subscription_id, ..
+                    }) => {
+                        let sub_id = subscription_id.unwrap_or(1);
+                        write_message(
+                            &mut send,
+                            Message::Subscribed {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+
+                        let mut uni = connection.open_uni().await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventStreamHello {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventBatch {
+                                tenant_id: "t1".to_string(),
+                                namespace: "default".to_string(),
+                                stream: "updates".to_string(),
+                                payloads: Vec::new(),
+                            },
+                        )
+                        .await?;
+                        let _ = uni.finish();
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            Ok(())
+        }
+
+        let mut tasks = Vec::new();
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= accept_deadline {
+                break;
+            }
+            let remaining = accept_deadline.saturating_duration_since(now);
+            let result = timeout(remaining, server.accept()).await;
+            let Ok(Ok(connection)) = result else {
+                break;
+            };
+            tasks.push(tokio::spawn(handle_connection(connection)));
+        }
+        for task in tasks {
+            drop(task);
+        }
+        let _ = shutdown_rx.await;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let client = Client::connect_with_transport(
+        addr,
+        "localhost",
+        build_client_config_with_overrides(cert, 1)?,
+        TransportConfig::default(),
+    )
+    .await?;
+    let mut subscription = client.subscribe("t1", "default", "updates").await?;
+    let value = timeout(Duration::from_secs(1), subscription.next_event()).await??;
+    assert!(value.is_none());
+
+    let _ = shutdown_tx.send(());
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn subscription_binary_batch_decode_error_on_invalid_payload() -> Result<()> {
+    let _env_guard = set_client_env();
+    crate::timings::enable_collection(1);
+    crate::timings::set_enabled(true);
+
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+            let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                return Ok(());
+            };
+            let _ = read_message(&mut recv, &mut frame_scratch).await?;
+            write_message(&mut send, Message::Ok).await?;
+            loop {
+                let next = read_message(&mut recv, &mut frame_scratch).await?;
+                match next {
+                    Some(Message::Subscribe {
+                        subscription_id, ..
+                    }) => {
+                        let sub_id = subscription_id.unwrap_or(1);
+                        write_message(
+                            &mut send,
+                            Message::Subscribed {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        let mut uni = connection.open_uni().await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventStreamHello {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        // Set the binary event-batch flag with an invalid payload to force
+                        // decode_event_batch failure in Subscription::next_event.
+                        let header = FrameHeader::new(felix_wire::FLAG_BINARY_EVENT_BATCH, 2);
+                        let mut header_bytes = [0u8; FrameHeader::LEN];
+                        header.encode_into(&mut header_bytes);
+                        uni.write_all(&header_bytes).await?;
+                        uni.write_all(&[0, 0]).await?;
+                        let _ = uni.finish();
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            Ok(())
+        }
+
+        let mut tasks = Vec::new();
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= accept_deadline {
+                break;
+            }
+            let remaining = accept_deadline.saturating_duration_since(now);
+            let result = timeout(remaining, server.accept()).await;
+            let Ok(Ok(connection)) = result else {
+                break;
+            };
+            tasks.push(tokio::spawn(handle_connection(connection)));
+        }
+        for task in tasks {
+            drop(task);
+        }
+        let _ = shutdown_rx.await;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let client = Client::connect_with_transport(
+        addr,
+        "localhost",
+        build_client_config_with_overrides(cert, 1)?,
+        TransportConfig::default(),
+    )
+    .await?;
+    let mut subscription = client.subscribe("t1", "default", "updates").await?;
+    let err = match subscription.next_event().await {
+        Ok(_) => anyhow::bail!("expected binary batch decode error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("decode binary event batch"));
+
+    let _ = shutdown_tx.send(());
+    server_task.abort();
+    crate::timings::set_enabled(false);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn subscription_binary_batch_success_records_decode_timing() -> Result<()> {
+    let _env_guard = set_client_env();
+    crate::timings::enable_collection(1);
+    crate::timings::set_enabled(true);
+
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+            let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                return Ok(());
+            };
+            let _ = read_message(&mut recv, &mut frame_scratch).await?;
+            write_message(&mut send, Message::Ok).await?;
+            loop {
+                let next = read_message(&mut recv, &mut frame_scratch).await?;
+                match next {
+                    Some(Message::Subscribe {
+                        subscription_id, ..
+                    }) => {
+                        let sub_id = subscription_id.unwrap_or(42);
+                        write_message(
+                            &mut send,
+                            Message::Subscribed {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        let mut uni = connection.open_uni().await?;
+                        write_message(
+                            &mut uni,
+                            Message::EventStreamHello {
+                                subscription_id: sub_id,
+                            },
+                        )
+                        .await?;
+                        let payloads = vec![
+                            Bytes::from_static(b"binary-a"),
+                            Bytes::from_static(b"binary-b"),
+                        ];
+                        let encoded =
+                            felix_wire::binary::encode_event_batch_bytes(sub_id, &payloads)?;
+                        uni.write_all(&encoded).await?;
+                        let _ = uni.finish();
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            Ok(())
+        }
+
+        let mut tasks = Vec::new();
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= accept_deadline {
+                break;
+            }
+            let remaining = accept_deadline.saturating_duration_since(now);
+            let result = timeout(remaining, server.accept()).await;
+            let Ok(Ok(connection)) = result else {
+                break;
+            };
+            tasks.push(tokio::spawn(handle_connection(connection)));
+        }
+        for task in tasks {
+            drop(task);
+        }
+        let _ = shutdown_rx.await;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let client = Client::connect_with_transport(
+        addr,
+        "localhost",
+        build_client_config_with_overrides(cert, 1)?,
+        TransportConfig::default(),
+    )
+    .await?;
+    let mut subscription = client.subscribe("t1", "default", "updates").await?;
+    let first = subscription.next_event().await?.expect("first");
+    assert_eq!(first.payload, Bytes::from_static(b"binary-a"));
+    let second = subscription.next_event().await?.expect("second");
+    assert_eq!(second.payload, Bytes::from_static(b"binary-b"));
+
+    let _ = shutdown_tx.send(());
+    server_task.abort();
+    crate::timings::set_enabled(false);
     Ok(())
 }
 
