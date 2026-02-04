@@ -23,12 +23,8 @@
 //! - This keeps backpressure localized to the subscriber rather than stalling the broker.
 //!
 //! ## Encoding / batching
-//! Events can be framed as:
-//! - JSON `Frame` (`encode_event_json_frame`) for compatibility/debuggability.
-//! - Binary fast-path `EventBatch` (`felix_wire::binary::encode_event_batch_bytes`) for throughput.
-//!
-//! In single mode (`batch_size <= 1`), we can optionally still use the binary event-batch
-//! encoding as a micro-optimization to avoid `payload.to_vec()` on the hot path (gated via config).
+//! Events are framed as binary `EventBatch` using
+//! `felix_wire::binary::encode_event_batch_bytes`.
 //!
 //! In batch mode, we coalesce by whichever triggers first:
 //! - max events (`max_events`)
@@ -46,8 +42,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::Broker;
-use felix_wire::{Frame, FrameHeader, Message};
-use serde::Serialize;
+use felix_wire::Message;
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "telemetry")]
@@ -58,7 +53,7 @@ use crate::timings;
 
 use super::publish::{Outgoing, send_outgoing_critical};
 use crate::transport::quic::SUBSCRIPTION_ID;
-use crate::transport::quic::codec::{write_frame, write_frame_bytes, write_message};
+use crate::transport::quic::codec::{write_frame_bytes, write_message};
 #[cfg(feature = "telemetry")]
 use crate::transport::quic::telemetry::t_instant_now;
 use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
@@ -236,32 +231,16 @@ pub(crate) async fn handle_subscribe_message(
     let max_bytes = config.event_batch_max_bytes.max(1);
     let flush_delay = Duration::from_micros(config.event_batch_max_delay_us);
 
-    // Optional micro-optimization: still use binary event-batch encoding when "single mode",
-    // gated to avoid breaking older clients and to let you control the behavior.
-    let binary_single_enabled = config.event_single_binary_enabled;
-    let binary_single_min_bytes = config.event_single_binary_min_bytes.max(1);
-
-    // Convert identifiers to `Arc<str>` so the writer can cheaply reference them without cloning
-    // large owned Strings per message when encoding JSON frames.
-    let tenant_id = Arc::<str>::from(tenant_id);
-    let namespace = Arc::<str>::from(namespace);
-    let stream = Arc::<str>::from(stream);
-
     // Event writer task:
     // Owns the uni SendStream and is the *only* writer to it.
     // It drains `event_rx`, frames/batches, and writes to QUIC.
     tokio::spawn(async move {
         let writer_config = EventWriterConfig {
             subscription_id,
-            tenant_id,
-            namespace,
-            stream,
             batch_size,
             max_events,
             max_bytes,
             flush_delay,
-            binary_single_enabled,
-            binary_single_min_bytes,
         };
         if let Err(err) = run_event_writer(event_send, event_rx, writer_config).await {
             tracing::info!(error = %err, "subscription event stream closed");
@@ -276,8 +255,7 @@ pub(crate) async fn handle_subscribe_message(
 /// it doesn’t need the broker, only identifiers and batching policy.
 ///
 /// Batching behavior:
-/// - If `batch_size <= 1`, we operate in single-event mode (no coalescing), but may still use
-///   binary encoding if `binary_single_enabled` and payload >= `binary_single_min_bytes`.
+/// - If `batch_size <= 1`, we operate in single-event mode (no coalescing).
 /// - Otherwise, we coalesce into a binary EventBatch and flush based on:
 ///   - `max_events`
 ///   - `max_bytes`
@@ -287,11 +265,6 @@ pub(crate) async fn handle_subscribe_message(
 pub(crate) struct EventWriterConfig {
     /// Stable identifier for this subscription; used by the client to route events.
     subscription_id: u64,
-
-    /// Logical scope identifiers carried on JSON events (and useful for diagnostics).
-    tenant_id: Arc<str>,
-    namespace: Arc<str>,
-    stream: Arc<str>,
 
     /// Controls whether we’re in “single” vs “batch” mode.
     batch_size: usize,
@@ -304,12 +277,6 @@ pub(crate) struct EventWriterConfig {
 
     /// Deadline for flushing a partially-filled batch.
     flush_delay: Duration,
-
-    /// In single mode, allow using binary EventBatch encoding to reduce overhead.
-    binary_single_enabled: bool,
-
-    /// Minimum payload size to prefer binary encoding in single mode.
-    binary_single_min_bytes: usize,
 }
 
 /// Wrapper around event payload that can carry extra metadata.
@@ -322,56 +289,10 @@ pub(crate) struct EventEnvelope {
     enqueue_at: crate::transport::quic::telemetry::TelemetryInstant,
 }
 
-/// Borrowed JSON shape for an event message.
-///
-/// We use borrowed references to avoid allocating/copying strings and payload slices
-/// before `serde_json::to_vec` writes the final payload.
-///
-/// Note: payload is base64-encoded (see `base64_bytes_slice`) to keep JSON clean and portable.
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-struct EventMessageRef<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    tenant_id: &'a str,
-    namespace: &'a str,
-    stream: &'a str,
-    #[serde(with = "base64_bytes_slice")]
-    payload: &'a [u8],
-}
-
-mod base64_bytes_slice {
-    use base64::Engine;
-
-    pub fn serialize<S>(value: &[u8], serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(value);
-        serializer.serialize_str(&encoded)
-    }
-}
-
-/// Encode a single event as a JSON `Frame`.
-///
-/// JSON is retained for compatibility/debugging and as a fallback when binary encoding is not desired.
-/// The payload is base64-encoded so arbitrary bytes can be carried safely in JSON.
-fn encode_event_json_frame(config: &EventWriterConfig, payload: &[u8]) -> Result<Frame> {
-    let message = EventMessageRef {
-        kind: "event",
-        tenant_id: config.tenant_id.as_ref(),
-        namespace: config.namespace.as_ref(),
-        stream: config.stream.as_ref(),
-        payload,
-    };
-    let payload = serde_json::to_vec(&message).context("encode event message")?;
-    Frame::new(0, Bytes::from(payload)).context("encode event frame")
-}
-
 /// Drain subscriber events from an `mpsc` queue and write them onto a uni QUIC stream.
 ///
 /// Modes:
-/// - **Single mode** (`config.batch_size <= 1`): write each event immediately (JSON or binary fast path).
+/// - **Single mode** (`config.batch_size <= 1`): write each event immediately as a binary batch.
 /// - **Batch mode**: coalesce into a binary EventBatch with flush triggers:
 ///   - count (`max_events`)
 ///   - bytes (`max_bytes`)
@@ -416,23 +337,12 @@ pub(crate) async fn run_event_writer(
             #[cfg(not(feature = "telemetry"))]
             let _ = write_start;
 
-            // Optional: use binary EventBatch encoding even for single events.
-            // This avoids extra allocations/copies on some paths and is gated by config
-            // to avoid breaking older clients.
-            if config.binary_single_enabled && payload.len() >= config.binary_single_min_bytes {
-                let batch = vec![payload];
-                let frame_bytes =
-                    felix_wire::binary::encode_event_batch_bytes(config.subscription_id, &batch)
-                        .context("encode binary event batch")?;
-                t_histogram!("broker_sub_frame_bytes").record(frame_bytes.len() as f64);
-                write_frame_bytes(&mut event_send, frame_bytes).await?;
-            } else {
-                // JSON fallback / compatibility path.
-                let frame = encode_event_json_frame(&config, &payload)?;
-                t_histogram!("broker_sub_frame_bytes")
-                    .record((FrameHeader::LEN + frame.payload.len()) as f64);
-                write_frame(&mut event_send, &frame).await?;
-            }
+            let batch = vec![payload];
+            let frame_bytes =
+                felix_wire::binary::encode_event_batch_bytes(config.subscription_id, &batch)
+                    .context("encode binary event batch")?;
+            t_histogram!("broker_sub_frame_bytes").record(frame_bytes.len() as f64);
+            write_frame_bytes(&mut event_send, frame_bytes).await?;
 
             // Telemetry: end-to-end delivery for this subscriber (enqueue -> write completion).
             #[cfg(feature = "telemetry")]
@@ -683,29 +593,6 @@ mod tests {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::net::SocketAddr;
 
-    #[test]
-    fn encode_event_json_frame_includes_base64_payload() {
-        let config = EventWriterConfig {
-            subscription_id: 7,
-            tenant_id: Arc::from("tenant"),
-            namespace: Arc::from("ns"),
-            stream: Arc::from("stream"),
-            batch_size: 1,
-            max_events: 1,
-            max_bytes: 1024,
-            flush_delay: Duration::from_millis(1),
-            binary_single_enabled: false,
-            binary_single_min_bytes: 1,
-        };
-        let frame = encode_event_json_frame(&config, b"payload").expect("frame");
-        let json: serde_json::Value = serde_json::from_slice(&frame.payload).expect("json");
-        assert_eq!(json["type"], "event");
-        assert_eq!(json["tenant_id"], "tenant");
-        assert_eq!(json["namespace"], "ns");
-        assert_eq!(json["stream"], "stream");
-        assert_eq!(json["payload"], "cGF5bG9hZA==");
-    }
-
     fn make_server_config() -> anyhow::Result<(quinn::ServerConfig, CertificateDer<'static>)> {
         let cert = generate_simple_self_signed(vec!["localhost".into()])
             .context("generate self-signed cert")?;
@@ -748,8 +635,6 @@ mod tests {
             pub_workers_per_conn: 1,
             pub_queue_depth: 8,
             event_queue_depth: 8,
-            event_single_binary_enabled: false,
-            event_single_binary_min_bytes: 1,
         }
     }
 
@@ -785,22 +670,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_event_writer_single_json_closes_on_channel_close() -> Result<()> {
+    async fn run_event_writer_single_closes_on_channel_close() -> Result<()> {
         crate::timings::enable_collection(1);
         crate::timings::set_enabled(true);
 
         let (tx, rx) = mpsc::channel(4);
         let config = EventWriterConfig {
             subscription_id: 1,
-            tenant_id: Arc::from("tenant"),
-            namespace: Arc::from("ns"),
-            stream: Arc::from("stream"),
             batch_size: 1,
             max_events: 1,
             max_bytes: 1024,
             flush_delay: Duration::from_millis(10),
-            binary_single_enabled: false,
-            binary_single_min_bytes: 1,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -815,13 +695,10 @@ mod tests {
         )
         .await?
         .expect("event frame");
-        let json: serde_json::Value =
-            serde_json::from_slice(&frame.payload).context("decode event json")?;
-        assert_eq!(json["type"], "event");
-        assert_eq!(json["tenant_id"], "tenant");
-        assert_eq!(json["namespace"], "ns");
-        assert_eq!(json["stream"], "stream");
-        assert_eq!(json["payload"], "aGVsbG8=");
+        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
+        assert_eq!(batch.subscription_id, 1);
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].as_ref(), b"hello");
 
         drop(tx);
         server_task.await.context("server join")??;
@@ -836,15 +713,10 @@ mod tests {
         let (tx, rx) = mpsc::channel(4);
         let config = EventWriterConfig {
             subscription_id: 9,
-            tenant_id: Arc::from("tenant"),
-            namespace: Arc::from("ns"),
-            stream: Arc::from("stream"),
             batch_size: 1,
             max_events: 1,
             max_bytes: 1024,
             flush_delay: Duration::from_millis(10),
-            binary_single_enabled: true,
-            binary_single_min_bytes: 1,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -877,15 +749,10 @@ mod tests {
         let (tx, rx) = mpsc::channel(4);
         let config = EventWriterConfig {
             subscription_id: 7,
-            tenant_id: Arc::from("tenant"),
-            namespace: Arc::from("ns"),
-            stream: Arc::from("stream"),
             batch_size: 10,
             max_events: 10,
             max_bytes: 5,
             flush_delay: Duration::from_millis(50),
-            binary_single_enabled: false,
-            binary_single_min_bytes: 1,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -926,7 +793,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_subscribe_message_sends_event_stream_json() -> Result<()> {
+    async fn handle_subscribe_message_sends_event_stream_binary_batch() -> Result<()> {
         let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
@@ -1021,103 +888,13 @@ mod tests {
         )
         .await?
         .expect("event frame");
-        let json: serde_json::Value =
-            serde_json::from_slice(&frame.payload).context("decode event json")?;
-        assert_eq!(json["type"], "event");
-        assert_eq!(json["tenant_id"], "t1");
-        assert_eq!(json["namespace"], "default");
-        assert_eq!(json["stream"], "orders");
-        assert_eq!(json["payload"], "aGVsbG8=");
+        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
+        assert_eq!(batch.subscription_id, 7);
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].as_ref(), b"hello");
 
         let handled = server_task.await.context("server join")??;
         assert!(handled);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn handle_subscribe_message_binary_single_path() -> Result<()> {
-        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-        broker.register_tenant("t1").await?;
-        broker.register_namespace("t1", "default").await?;
-        broker
-            .register_stream(
-                "t1",
-                "default",
-                "orders",
-                felix_broker::StreamMetadata::default(),
-            )
-            .await?;
-
-        let (server_config, cert) = make_server_config()?;
-        let transport = TransportConfig::default();
-        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
-        let addr = server.local_addr()?;
-
-        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
-        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
-        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
-            std::time::Instant::now(),
-        )));
-        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
-
-        let mut config = test_config();
-        config.event_single_binary_enabled = true;
-        config.event_single_binary_min_bytes = 1;
-
-        let broker_for_server = broker.clone();
-        let server_task = tokio::spawn(async move {
-            let connection = server.accept().await?;
-            handle_subscribe_message(
-                broker_for_server,
-                connection,
-                config,
-                &out_ack_tx,
-                &out_ack_depth,
-                &ack_throttle_tx,
-                &ack_timeout_state,
-                &cancel_tx,
-                "t1".to_string(),
-                "default".to_string(),
-                "orders".to_string(),
-                Some(9),
-            )
-            .await
-        });
-
-        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
-        let connection = client.connect(addr, "localhost").await?;
-
-        let _ = out_ack_rx.recv().await;
-        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
-            .await
-            .context("accept uni timeout")??;
-        let mut scratch = BytesMut::new();
-        let _ = crate::transport::quic::codec::read_message_limited(
-            &mut event_recv,
-            16 * 1024,
-            &mut scratch,
-        )
-        .await?
-        .expect("hello");
-
-        broker
-            .publish("t1", "default", "orders", bytes::Bytes::from_static(b"bin"))
-            .await?;
-
-        let frame = crate::transport::quic::codec::read_frame_limited_into(
-            &mut event_recv,
-            16 * 1024,
-            &mut scratch,
-        )
-        .await?
-        .expect("event frame");
-        let batch = felix_wire::binary::decode_event_batch(&frame).expect("decode batch");
-        assert_eq!(batch.subscription_id, 9);
-        assert_eq!(batch.payloads.len(), 1);
-        assert_eq!(batch.payloads[0].as_ref(), b"bin");
-
-        server_task.await.context("server join")??;
         Ok(())
     }
 

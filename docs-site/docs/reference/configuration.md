@@ -51,8 +51,6 @@ fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 1024
 event_queue_depth: 1024
-event_single_binary_enabled: false
-event_single_binary_min_bytes: 512
 ```
 
 ## Network Configuration
@@ -302,44 +300,9 @@ fanout_batch_size: 64
 - **Medium fanout (10-100)**: `64-128`
 - **High fanout (100+)**: `128-256`
 
-### `event_single_binary_enabled`
+### Event Frame Encoding
 
-**Description**: Use binary encoding for single events (non-batched).
-
-**Type**: `bool`
-
-**Default**: `false`
-
-**Environment**: `FELIX_BINARY_SINGLE_EVENT` (`1`, `true`, `yes`, `TRUE`, `YES` = enabled)
-
-**Example**:
-```yaml
-event_single_binary_enabled: true
-```
-
-**Benefits**:
-- Lower serialization overhead
-- Higher throughput for large payloads
-- Reduced latency when payload > threshold
-
-### `event_single_binary_min_bytes`
-
-**Description**: Minimum payload size to use binary encoding for single events.
-
-**Type**: `usize` (bytes)
-
-**Default**: `512`
-
-**Environment**: `FELIX_BINARY_SINGLE_EVENT_MIN_BYTES`
-
-**Example**:
-```yaml
-event_single_binary_min_bytes: 512
-```
-
-**Tuning**:
-- Small messages benefit less from binary encoding
-- Recommended: `256-1024` bytes
+Subscription event delivery uses binary `EventBatch` frames.
 
 ## Cache Configuration
 
@@ -572,7 +535,6 @@ event_batch_max_events: 1
 event_batch_max_delay_us: 50
 fanout_batch_size: 16
 disable_timings: true
-event_single_binary_enabled: false
 ```
 
 ### Balanced (recommended)
@@ -592,7 +554,6 @@ event_batch_max_events: 256
 event_batch_max_bytes: 1048576
 event_batch_max_delay_us: 1000
 fanout_batch_size: 128
-event_single_binary_enabled: true
 disable_timings: true
 ```
 

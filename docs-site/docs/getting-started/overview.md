@@ -64,8 +64,7 @@ Felix does **not** reimplement scheduling or node membership—it leverages what
 Language-neutral framed protocol over QUIC:
 
 - Fixed header with magic number, version, and flags
-- JSON payloads for control plane (v1)
-- Binary batch format for high-throughput data plane
+- Binary frame encoding across the data plane
 - Forward-compatible versioning scheme
 
 See the [Wire Protocol](../architecture/wire-protocol.md) documentation for full specification.

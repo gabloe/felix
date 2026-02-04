@@ -80,20 +80,11 @@ This is the byte count of the payload following the header. The maximum practica
 
 ### Frame Payload
 
-The payload encoding depends on the flags:
-
-**Standard JSON Encoding (flags = 0x0000)**:
-- Payload is a UTF-8 encoded JSON object
-- Must be valid JSON per RFC 8259
-- No trailing whitespace required
-
-**Binary Batch Encoding (flags & 0x0001)**:
-- Payload is a binary-encoded publish batch (see Binary Encoding section)
-- Used for high-throughput publish workloads
+Payloads are binary-encoded felix-wire frames. Flag bits indicate binary sub-formats such as batched event/publish payloads.
 
 ## Message Types
 
-All JSON payloads are objects with a `type` discriminator field. The type determines the message schema and semantics.
+Message schemas below are shown in JSON-like notation for readability; on the wire, frames are binary-encoded.
 
 ### Client → Server Messages
 
@@ -323,7 +314,7 @@ Error response.
 
 ## Binary Publish Batch Encoding
 
-For high-throughput publish workloads, Felix supports a binary encoding that eliminates JSON parsing overhead.
+For high-throughput publish workloads, Felix supports binary encodings that reduce parsing overhead.
 
 ### When to Use Binary Mode
 
@@ -335,7 +326,7 @@ Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). Use when:
 - You've validated the binary encoding implementation
 
 !!! tip "Performance Impact"
-    Binary batches can achieve 30-40% higher throughput than JSON batches, especially with large payloads and high fanout. Enable with `event_single_binary_enabled: true` in broker config.
+    Binary batches can achieve 30-40% higher throughput, especially with large payloads and high fanout.
 
 ### Binary Format Specification
 
@@ -509,7 +500,7 @@ Felix uses different QUIC stream patterns for different workload characteristics
 - Close connection with QUIC error code
 - Log protocol violation
 
-**Invalid JSON payload**:
+**Invalid payload encoding**:
 - Send `error` message on same stream
 - Close stream if error is unrecoverable
 
@@ -555,7 +546,6 @@ cargo run -p felix-conformance
 
 **What it tests**:
 - Frame header encoding/decoding
-- JSON message serialization/deserialization
 - Binary batch encoding/decoding
 - Error handling for malformed inputs
 - Round-trip serialization stability
@@ -594,8 +584,7 @@ Deprecated protocol features will:
 ### Client Implementation Checklist
 
 - [ ] Implement frame header encoding/decoding
-- [ ] Implement JSON message serialization
-- [ ] Implement binary batch encoding (optional but recommended)
+- [ ] Implement binary frame encoding
 - [ ] Handle all standard message types
 - [ ] Implement proper error handling
 - [ ] Pass conformance test suite
@@ -606,7 +595,6 @@ Deprecated protocol features will:
 ### Server Implementation Checklist
 
 - [ ] Implement frame header decoding/encoding
-- [ ] Implement JSON message deserialization
 - [ ] Implement binary batch decoding
 - [ ] Route messages to appropriate handlers
 - [ ] Implement proper error responses
@@ -618,7 +606,7 @@ Deprecated protocol features will:
 ### Performance Optimization Tips
 
 1. **Avoid per-message allocation**: Pre-allocate buffers for frame headers
-2. **Use binary batches**: 30-40% throughput improvement for large batches
+2. **Use larger batches**: Improve throughput for larger payloads and fanout
 3. **Pool connections**: Amortize connection setup costs
 4. **Pipeline cache requests**: Don't wait for responses before sending next request
 5. **Batch events**: Reduce framing overhead by batching event deliveries

@@ -47,10 +47,6 @@ pub struct BrokerConfig {
     pub pub_queue_depth: usize,
     // Subscription event queue depth.
     pub event_queue_depth: usize,
-    // Use binary encoding for single events when enabled.
-    pub event_single_binary_enabled: bool,
-    // Min payload size to use binary encoding for single events.
-    pub event_single_binary_min_bytes: usize,
 }
 
 const DEFAULT_BROKER_CONFIG_PATH: &str = "/usr/local/felix/config.yml";
@@ -66,8 +62,6 @@ const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 1024;
 const DEFAULT_EVENT_QUEUE_DEPTH: usize = 1024;
-const DEFAULT_EVENT_SINGLE_BINARY_ENABLED: bool = false;
-const DEFAULT_EVENT_SINGLE_BINARY_MIN_BYTES: usize = 512;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -91,8 +85,6 @@ struct BrokerConfigOverride {
     pub_workers_per_conn: Option<usize>,
     pub_queue_depth: Option<usize>,
     event_queue_depth: Option<usize>,
-    event_single_binary_enabled: Option<bool>,
-    event_single_binary_min_bytes: Option<usize>,
 }
 
 impl BrokerConfig {
@@ -190,15 +182,6 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_EVENT_QUEUE_DEPTH);
-        let event_single_binary_enabled = std::env::var("FELIX_BINARY_SINGLE_EVENT")
-            .ok()
-            .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "TRUE" | "YES"))
-            .unwrap_or(DEFAULT_EVENT_SINGLE_BINARY_ENABLED);
-        let event_single_binary_min_bytes = std::env::var("FELIX_BINARY_SINGLE_EVENT_MIN_BYTES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_EVENT_SINGLE_BINARY_MIN_BYTES);
         Ok(Self {
             quic_bind,
             metrics_bind,
@@ -220,8 +203,6 @@ impl BrokerConfig {
             pub_workers_per_conn,
             pub_queue_depth,
             event_queue_depth,
-            event_single_binary_enabled,
-            event_single_binary_min_bytes,
         })
     }
 
@@ -330,14 +311,6 @@ impl BrokerConfig {
             {
                 config.event_queue_depth = value;
             }
-            if let Some(value) = override_cfg.event_single_binary_enabled {
-                config.event_single_binary_enabled = value;
-            }
-            if let Some(value) = override_cfg.event_single_binary_min_bytes
-                && value > 0
-            {
-                config.event_single_binary_min_bytes = value;
-            }
         }
         Ok(config)
     }
@@ -406,8 +379,6 @@ mod tests {
             env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "128");
             env::set_var("FELIX_EVENT_BATCH_MAX_BYTES", "512000");
             env::set_var("FELIX_FANOUT_BATCH", "256");
-            env::set_var("FELIX_BINARY_SINGLE_EVENT", "TRUE");
-            env::set_var("FELIX_BINARY_SINGLE_EVENT_MIN_BYTES", "1024");
         }
 
         let config = BrokerConfig::from_env().expect("from_env");
@@ -427,8 +398,6 @@ mod tests {
         assert_eq!(config.event_batch_max_events, 128);
         assert_eq!(config.event_batch_max_bytes, 512000);
         assert_eq!(config.fanout_batch_size, 256);
-        assert!(config.event_single_binary_enabled);
-        assert_eq!(config.event_single_binary_min_bytes, 1024);
 
         clear_felix_env();
     }
@@ -527,7 +496,6 @@ controlplane_sync_interval_ms: 5000
 ack_on_commit: true
 max_frame_bytes: 32000000
 event_batch_max_events: 128
-event_single_binary_enabled: true
 "#,
         )
         .unwrap();
@@ -546,7 +514,6 @@ event_single_binary_enabled: true
         assert!(config.ack_on_commit);
         assert_eq!(config.max_frame_bytes, 32000000);
         assert_eq!(config.event_batch_max_events, 128);
-        assert!(config.event_single_binary_enabled);
 
         clear_felix_env();
     }

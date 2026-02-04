@@ -39,8 +39,6 @@ mod tests {
             pub_workers_per_conn: 4,
             pub_queue_depth: 1024,
             event_queue_depth: 1024,
-            event_single_binary_enabled: false,
-            event_single_binary_min_bytes: 512,
         };
 
         let base = TransportConfig::default();

@@ -381,7 +381,6 @@ async fn sync_once(
     }
 
     // 4. Seed streams after caches.
-    // Note: fetch_snapshot is the streams snapshot (legacy naming).
     if state.next_stream_seq == 0 {
         match fetch_snapshot(client, base_url).await {
             Ok(snapshot) => {

@@ -35,11 +35,11 @@ Field definitions:
 - `length` (u32, big-endian): payload length in bytes
 
 Payload:
-- v1 payload is a UTF-8 JSON document representing a `Message` (see below).
+- v1 payload is a binary-encoded Felix wire frame representing a `Message` (see below).
 - Encoders MUST NOT exceed `u32::MAX` bytes.
 
 ## Message Types (v1)
-Message payloads are JSON objects with a `type` discriminator.
+Message schemas below are shown in JSON-like notation for readability; on the wire they are binary-encoded.
 
 ### Publish
 ```

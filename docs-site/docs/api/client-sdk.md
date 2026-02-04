@@ -748,7 +748,7 @@ async fn test_cache_ttl() {
 
 ## Performance Tips
 
-1. **Use binary mode** for payloads > 512 bytes
+1. **Tune batching** for your workload (events per batch + flush delay)
 2. **Batch publishes** when latency permits (10-100x improvement)
 3. **Pool connections** appropriately for your workload
 4. **Pipeline cache requests** to amortize round-trip latency

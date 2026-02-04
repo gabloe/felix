@@ -258,8 +258,7 @@ struct ActionScope {
 
 /// Load and parse caller permissions from the Felix bearer token.
 ///
-/// Legacy permission/object forms are accepted in read mode so existing tokens
-/// and stored data remain evaluable while writes stay strict.
+/// Invalid permissions are ignored so malformed entries cannot escalate access.
 async fn load_permissions(
     state: &AppState,
     tenant_id: &str,

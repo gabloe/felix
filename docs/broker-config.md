@@ -35,8 +35,6 @@ fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 1024
 event_queue_depth: 1024
-event_single_binary_enabled: false
-event_single_binary_min_bytes: 512
 ```
 
 ## Latency Optimized
@@ -55,8 +53,6 @@ fanout_batch_size: 8
 pub_workers_per_conn: 2
 pub_queue_depth: 512
 event_queue_depth: 512
-event_single_binary_enabled: true
-event_single_binary_min_bytes: 256
 ```
 
 ## Throughput Optimized
@@ -75,8 +71,6 @@ fanout_batch_size: 256
 pub_workers_per_conn: 8
 pub_queue_depth: 4096
 event_queue_depth: 4096
-event_single_binary_enabled: true
-event_single_binary_min_bytes: 512
 ```
 
 ## Client-Side Parallelism (Important)
@@ -101,8 +95,6 @@ A single connection with a single publish stream will bottleneck regardless of b
 - Tune `pub_workers_per_conn` and `pub_queue_depth` together; deep queues trade latency for throughput.
 - Increasing `pub_workers_per_conn` only helps if publish load is spread across multiple streams or
   connections. Oversubscribing workers relative to streams can degrade performance.
-- `event_single_binary_enabled` reduces per-event framing overhead by encoding single events with
-  the binary EventBatch format once payloads exceed `event_single_binary_min_bytes`. This improves
-  throughput and fanout efficiency for medium-to-large payloads.
+- Event delivery uses binary `EventBatch` frames.
 - Queue depths directly impact memory usage. Large queue depths combined with large batch sizes and
   high fanout can significantly increase resident memory usage.

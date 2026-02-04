@@ -34,7 +34,7 @@ The `felix-wire` crate defines the language-neutral wire protocol that all Felix
 ### Responsibilities
 
 - **Frame encoding/decoding**: Fixed header format with magic number, version, flags, and length
-- **Message serialization**: JSON-based message payload with type discriminators
+- **Message serialization**: Binary message payloads with typed variants
 - **Binary optimizations**: Binary batch encoding for high-throughput publish operations
 - **Protocol versioning**: Version negotiation and forward compatibility
 - **Conformance testing**: Test vectors for validating implementations
@@ -60,15 +60,10 @@ Every Felix message is wrapped in a fixed 12-byte header:
 
 ### Design Decisions
 
-The wire protocol deliberately uses JSON for v1 messages to prioritize:
-
-1. **Debuggability**: Human-readable messages during development
-2. **Ecosystem compatibility**: Easy to implement in any language
-3. **Schema evolution**: Flexible field additions without breaking changes
-4. **Binary escape hatch**: Binary batch mode available when throughput matters
+The wire protocol uses binary framing for performance and consistency across publish and subscribe paths.
 
 !!! note "Binary Mode Performance"
-    Binary publish batches eliminate JSON parsing overhead and can achieve 30-40% higher throughput for large batches. They're automatically used for high-throughput workloads when `event_single_binary_enabled` is configured.
+    Binary publish batches reduce parsing overhead and can achieve 30-40% higher throughput for large batches.
 
 ## felix-transport: QUIC Abstraction
 
@@ -444,7 +439,7 @@ Each component exposes its own configuration surface:
 
 | Component | Configuration Scope |
 |-----------|---------------------|
-| **felix-wire** | Protocol version, frame limits, binary mode thresholds |
+| **felix-wire** | Protocol version and frame limits |
 | **felix-transport** | Connection pools, window sizes, TLS settings |
 | **felix-broker** | Queue depths, worker counts, batching parameters |
 | **felix-storage** | Retention policies, cache sizes, durability modes |

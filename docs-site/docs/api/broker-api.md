@@ -158,7 +158,7 @@ publisher
 
 - **Latency**: ~100-500 µs for ack mode (localhost)
 - **Throughput**: ~50-100k messages/sec per connection (single message publishes)
-- **Bottleneck**: JSON serialization and per-message framing overhead
+- **Bottleneck**: per-message framing overhead
 
 !!! note "When to Use Single Publish"
     Use single publish for:
@@ -667,11 +667,11 @@ cache_send_window: 268435456         # 256 MiB send window
 ```json
 {
   "type": "error",
-  "message": "Invalid JSON payload"
+  "message": "Invalid payload encoding"
 }
 ```
 
-**Resolution**: Validate request JSON schema.
+**Resolution**: Validate request payload format.
 
 **Timeout**:
 
@@ -816,7 +816,7 @@ cache_conn_recv_window: 134217728  # Smaller windows for lower memory
 ### Publish Patterns
 
 1. **Batch when possible**: 10-100x throughput improvement
-2. **Use binary mode for large payloads**: 30-40% improvement
+2. **Tune batch thresholds for payload size**: Better throughput/latency balance
 3. **Don't block on acks for high throughput**: Use `ack: none`
 4. **Spread across connections**: Use connection pooling for parallelism
 

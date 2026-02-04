@@ -245,46 +245,9 @@ export FELIX_FANOUT_BATCH="16"   # Low fanout
 - Higher values for high-fanout streams
 - Lower values reduce concurrency overhead
 
-### `FELIX_BINARY_SINGLE_EVENT`
+### Event Frame Encoding
 
-**Description**: Enable binary encoding for single (non-batched) events.
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Accepted values**: `1`, `true`, `yes`, `TRUE`, `YES` = enabled
-
-**Example**:
-```bash
-export FELIX_BINARY_SINGLE_EVENT="true"
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
-export FELIX_BINARY_SINGLE_EVENT="1"
-```
-
-**Benefits**:
-- Lower serialization overhead
-- Better for large payloads
-- Works with `FELIX_BINARY_SINGLE_EVENT_MIN_BYTES`
-
-### `FELIX_BINARY_SINGLE_EVENT_MIN_BYTES`
-
-**Description**: Minimum payload size for binary encoding.
-
-**Type**: Positive integer (bytes)
-
-**Default**: `512`
-
-**Example**:
-```bash
-export FELIX_BINARY_SINGLE_EVENT_MIN_BYTES="512"
-export FELIX_BINARY_SINGLE_EVENT_MIN_BYTES="256"
-export FELIX_BINARY_SINGLE_EVENT_MIN_BYTES="1024"
-```
-
-**Notes**:
-- Only used when `FELIX_BINARY_SINGLE_EVENT=true`
-- Small messages may not benefit from binary encoding
+Subscription event delivery uses binary `EventBatch` frames by default.
 
 ## Cache Configuration
 
@@ -676,7 +639,6 @@ export FELIX_EVENT_BATCH_MAX_EVENTS="256"
 export FELIX_EVENT_BATCH_MAX_BYTES="1048576"
 export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
 export FELIX_FANOUT_BATCH="128"
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
 export FELIX_DISABLE_TIMINGS="1"
 ```
 

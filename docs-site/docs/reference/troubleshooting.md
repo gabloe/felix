@@ -256,23 +256,18 @@ export FELIX_EVENT_BATCH_MAX_BYTES="1048576"
 export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
 ```
 
-2. **Enable binary encoding**:
-```bash
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
-```
-
-3. **Increase connection pools**:
+2. **Increase connection pools**:
 ```bash
 export FELIX_EVENT_CONN_POOL="16"
 export FELIX_CACHE_CONN_POOL="16"
 ```
 
-4. **Check network bandwidth**:
+3. **Check network bandwidth**:
 ```bash
 iperf3 -c <broker-ip> -u -b 1G
 ```
 
-5. **Verify CPU affinity**:
+4. **Verify CPU affinity**:
 ```bash
 # Pin broker to specific cores
 taskset -c 0-7 cargo run --release -p broker
@@ -725,16 +720,11 @@ export FELIX_CACHE_CONN_RECV_WINDOW="268435456"
 export FELIX_CACHE_SEND_WINDOW="268435456"
 ```
 
-### Wrong Binary Format Settings
+### Wrong Frame Format Assumptions
 
-**Issue**: Client/broker disagree on binary encoding.
+**Issue**: Client assumes JSON event frames.
 
-**Solution**: Ensure both enable or disable together.
-
-```bash
-# Enable on both client and broker
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
-```
+**Solution**: Ensure clients decode binary `EventBatch` on subscription event streams.
 
 ### Insufficient Resources
 

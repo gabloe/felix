@@ -128,10 +128,6 @@ pub_workers_per_conn: 4
 pub_queue_depth: 1024
 event_queue_depth: 1024
 
-# Binary encoding for single events
-event_single_binary_enabled: false
-event_single_binary_min_bytes: 512
-
 # Performance
 disable_timings: false
 ```
@@ -169,7 +165,6 @@ export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
 export FELIX_EVENT_BATCH_MAX_EVENTS="256"
 export FELIX_EVENT_BATCH_MAX_BYTES="1048576"  # 1 MiB
 export FELIX_FANOUT_BATCH="128"
-export FELIX_BINARY_SINGLE_EVENT="true"
 
 cargo run --release -p broker
 ```
