@@ -342,8 +342,8 @@ async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
             "t1",
             PolicyRule {
                 subject: "role:admin".to_string(),
-                object: "tenant:*".to_string(),
-                action: "tenant.admin".to_string(),
+                object: "tenant:t1".to_string(),
+                action: "tenant.manage".to_string(),
             },
         )
         .await?;

@@ -76,7 +76,7 @@ use utoipa::ToSchema;
 ///
 /// let req = TokenExchangeRequest {
 ///     requested: Some(vec!["stream.publish".to_string()]),
-///     resources: Some(vec!["stream:payments/*".to_string()]),
+///     resources: Some(vec!["stream:t1/payments/*".to_string()]),
 /// };
 /// assert!(req.requested.is_some());
 /// ```
@@ -378,8 +378,8 @@ mod tests {
         // This test prevents a regression where requested actions are ignored,
         // which would unintentionally broaden permissions.
         let perms = vec![
-            "stream.publish:stream:payments/*".to_string(),
-            "stream.subscribe:stream:payments/*".to_string(),
+            "stream.publish:stream:t1/payments/*".to_string(),
+            "stream.subscribe:stream:t1/payments/*".to_string(),
         ];
         let request = TokenExchangeRequest {
             requested: Some(vec!["stream.publish".to_string()]),
@@ -387,7 +387,7 @@ mod tests {
         };
         let filtered = filter_permissions(perms, &request);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0], "stream.publish:stream:payments/*");
+        assert_eq!(filtered[0], "stream.publish:stream:t1/payments/*");
     }
 
     #[test]

@@ -636,8 +636,8 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             "t1",
             PolicyRule {
                 subject: "role:admin".to_string(),
-                object: "tenant:*".to_string(),
-                action: "tenant.admin".to_string(),
+                object: "tenant:t1".to_string(),
+                action: "tenant.manage".to_string(),
             },
         )
         .await?;
@@ -891,8 +891,8 @@ async fn pg_store_additional_paths() -> Result<()> {
 
     let policy = PolicyRule {
         subject: "role:admin".to_string(),
-        object: "tenant:*".to_string(),
-        action: "tenant.admin".to_string(),
+        object: "tenant:t1".to_string(),
+        action: "tenant.manage".to_string(),
     };
     let grouping = GroupingRule {
         user: "p:admin".to_string(),
@@ -1444,8 +1444,8 @@ async fn pg_store_full_surface_area() -> Result<()> {
             "t1",
             PolicyRule {
                 subject: "role:admin".to_string(),
-                object: "tenant:*".to_string(),
-                action: "tenant.admin".to_string(),
+                object: "tenant:t1".to_string(),
+                action: "tenant.manage".to_string(),
             },
         )
         .await?;

@@ -159,7 +159,7 @@ async fn quic_subscribe_unauthorized_and_stream_missing() -> Result<()> {
     let addr = server.local_addr()?;
 
     let config = broker::config::BrokerConfig::from_env()?;
-    let auth = auth_fixture("t1", vec!["stream.publish:stream:*/*".to_string()]);
+    let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
@@ -182,7 +182,7 @@ async fn quic_subscribe_unauthorized_and_stream_missing() -> Result<()> {
         "unexpected subscribe auth error: {err_msg}"
     );
 
-    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:*/*".to_string()]);
+    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:t1/*/*".to_string()]);
     let client = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
     let err = match client.subscribe("t1", "default", "missing").await {
         Ok(_) => anyhow::bail!("expected missing stream"),
@@ -223,8 +223,8 @@ async fn quic_subscribe_batch_receive_and_cancel() -> Result<()> {
     let auth = auth_fixture(
         "t1",
         vec![
-            "stream.publish:stream:*/*".to_string(),
-            "stream.subscribe:stream:*/*".to_string(),
+            "stream.publish:stream:t1/*/*".to_string(),
+            "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
     let server_task = tokio::spawn(broker::quic::serve(
@@ -292,8 +292,8 @@ async fn quic_subscribe_fanout_and_drop_cleanup() -> Result<()> {
     let auth = auth_fixture(
         "t1",
         vec![
-            "stream.publish:stream:*/*".to_string(),
-            "stream.subscribe:stream:*/*".to_string(),
+            "stream.publish:stream:t1/*/*".to_string(),
+            "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
     let server_task = tokio::spawn(broker::quic::serve(
@@ -366,7 +366,7 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
     let addr = server.local_addr()?;
 
     let config = broker::config::BrokerConfig::from_env()?;
-    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:*/*".to_string()]);
+    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:t1/*/*".to_string()]);
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),

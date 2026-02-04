@@ -58,8 +58,8 @@ fn auth_fixture(tenant_id: &str) -> AuthFixture {
             &TenantId::new(tenant_id),
             "p:test",
             vec![
-                "stream.publish:stream:*/*".to_string(),
-                "stream.subscribe:stream:*/*".to_string(),
+                "stream.publish:stream:t1/*/*".to_string(),
+                "stream.subscribe:stream:t1/*/*".to_string(),
             ],
         )
         .expect("mint token");

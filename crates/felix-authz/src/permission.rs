@@ -18,7 +18,7 @@
 //! ```rust
 //! use felix_authz::{Action, Permission};
 //!
-//! let permission = Permission::new(Action::StreamPublish, "stream:payments/*");
+//! let permission = Permission::new(Action::StreamPublish, "stream:tenant-a/payments/*");
 //! assert!(permission.as_string().starts_with("stream.publish:"));
 //! ```
 //!
@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 /// ```rust
 /// use felix_authz::{Action, Permission};
 ///
-/// let permission = Permission::new(Action::CacheRead, "cache:payments/session/1");
+/// let permission = Permission::new(Action::CacheRead, "cache:tenant-a/payments/session/1");
 /// assert_eq!(permission.action, Action::CacheRead);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -93,7 +93,7 @@ impl Permission {
 /// ```rust
 /// use felix_authz::{Action, PermissionPattern};
 ///
-/// let pattern = PermissionPattern::new(Action::StreamSubscribe, "stream:payments/*");
+/// let pattern = PermissionPattern::new(Action::StreamSubscribe, "stream:tenant-a/payments/*");
 /// assert_eq!(pattern.action, Action::StreamSubscribe);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -175,22 +175,23 @@ mod tests {
 
     #[test]
     fn permission_string_rendering() {
-        let permission = Permission::new(Action::StreamPublish, "stream:payments/orders.*");
+        let permission =
+            Permission::new(Action::StreamPublish, "stream:tenant-a/payments/orders.*");
         assert_eq!(
             permission.as_string(),
-            "stream.publish:stream:payments/orders.*"
+            "stream.publish:stream:tenant-a/payments/orders.*"
         );
     }
 
     #[test]
     fn permission_pattern_parse_roundtrip() {
-        let parsed = PermissionPattern::parse("stream.subscribe:stream:payments/orders.*")
+        let parsed = PermissionPattern::parse("stream.subscribe:stream:tenant-a/payments/orders.*")
             .expect("parse permission");
         assert_eq!(parsed.action, Action::StreamSubscribe);
-        assert_eq!(parsed.resource_pattern, "stream:payments/orders.*");
+        assert_eq!(parsed.resource_pattern, "stream:tenant-a/payments/orders.*");
         assert_eq!(
             parsed.to_string(),
-            "stream.subscribe:stream:payments/orders.*"
+            "stream.subscribe:stream:tenant-a/payments/orders.*"
         );
     }
 
@@ -202,7 +203,7 @@ mod tests {
 
     #[test]
     fn permission_pattern_parse_invalid_action() {
-        let err = PermissionPattern::parse("stream.write:stream:payments/orders")
+        let err = PermissionPattern::parse("stream.write:stream:tenant-a/payments/orders")
             .expect_err("bad action");
         assert!(matches!(err, AuthzError::InvalidAction(_)));
     }

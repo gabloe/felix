@@ -104,14 +104,14 @@ async fn jwks_refresh_and_authenticate() -> Result<()> {
     let token = issuer.mint(
         &TenantId::new("t1"),
         "p:test",
-        vec!["stream.publish:stream:*/*".to_string()],
+        vec!["stream.publish:stream:t1/*/*".to_string()],
     )?;
 
     let auth = BrokerAuth::new(format!("http://{addr}"));
     let ctx = auth.authenticate("t1", &token).await?;
-    assert!(
-        ctx.matcher
-            .allows(felix_authz::Action::StreamPublish, "stream:default/orders")
-    );
+    assert!(ctx.matcher.allows(
+        felix_authz::Action::StreamPublish,
+        "stream:t1/default/orders"
+    ));
     Ok(())
 }
