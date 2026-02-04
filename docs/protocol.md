@@ -39,7 +39,7 @@ Payload:
 - Encoders MUST NOT exceed `u32::MAX` bytes.
 
 ## Message Types (v1)
-Message schemas below are shown in JSON-like notation for readability; on the wire they are binary-encoded.
+Message schemas below are shown in pseudo-struct notation for readability; on the wire they are binary-encoded.
 
 ### Publish
 ```

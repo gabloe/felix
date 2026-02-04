@@ -729,7 +729,7 @@ async fn subscription_decode_error_on_invalid_frame() -> Result<()> {
                             },
                         )
                         .await?;
-                        // Send an invalid JSON frame to trigger decode error handling.
+                        // Send an invalid binary message frame to trigger decode error handling.
                         let header = FrameHeader::new(0, 2);
                         let mut header_bytes = [0u8; FrameHeader::LEN];
                         header.encode_into(&mut header_bytes);
