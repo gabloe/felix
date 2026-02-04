@@ -431,7 +431,8 @@ async fn bootstrap_tenant(
 
     let policies = vec![PolicyRule {
         subject: "role:reader".to_string(),
-        object: format!("stream:{NAMESPACE}/other"),
+        // Canonical RBAC objects are tenant-qualified.
+        object: format!("stream:{TENANT_ID}/{NAMESPACE}/other"),
         action: "stream.subscribe".to_string(),
     }];
 
@@ -561,22 +562,24 @@ async fn add_rbac_policies(
     let policies = [
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("stream:{NAMESPACE}/{STREAM}"),
+            // Canonical stream scope: stream:{tenant}/{namespace}/{stream_or_*}
+            object: format!("stream:{TENANT_ID}/{NAMESPACE}/{STREAM}"),
             action: "stream.publish".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("stream:{NAMESPACE}/{STREAM}"),
+            object: format!("stream:{TENANT_ID}/{NAMESPACE}/{STREAM}"),
             action: "stream.subscribe".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("cache:{NAMESPACE}/{CACHE}"),
+            // Canonical cache scope: cache:{tenant}/{namespace}/{cache_or_*}
+            object: format!("cache:{TENANT_ID}/{NAMESPACE}/{CACHE}"),
             action: "cache.read".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("cache:{NAMESPACE}/{CACHE}"),
+            object: format!("cache:{TENANT_ID}/{NAMESPACE}/{CACHE}"),
             action: "cache.write".to_string(),
         },
     ];

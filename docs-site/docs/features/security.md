@@ -11,7 +11,7 @@ Felix's security model is built on three pillars:
 3. **Auditable operations**: All actions logged and traceable
 
 !!! note "Security Maturity"
-    Felix is in early development. Core transport security is implemented. Authorization, encryption-at-rest, and advanced features are planned. This document describes both current and planned security features.
+    Felix is in early development. Core transport security and tenant-scoped RBAC are implemented. Encryption-at-rest and some advanced hardening features are still planned.
 
 ## Transport Security
 
@@ -161,8 +161,7 @@ Example:
 
 1. **Resource quotas**: Per-tenant CPU, memory, bandwidth limits
 2. **Rate limiting**: Per-tenant publish/subscribe rate limits
-3. **Authorization**: RBAC per tenant/namespace/stream
-4. **Audit logging**: All tenant operations logged
+3. **Audit logging**: All tenant operations logged
 
 ### Namespace Isolation
 
@@ -232,7 +231,26 @@ Content-Type: application/json
 
 3. Disable bootstrap after the initial setup.
 
-After bootstrap, **all admin endpoints require a Felix token with `tenant.admin`** for the tenant.
+After bootstrap, admin actions require explicit Felix permissions:
+- IdP issuer admin: `tenant.manage:tenant:{tenant_id}`
+- RBAC list: `rbac.view:<scoped object>`
+- RBAC policy writes: `rbac.policy.manage:<scoped object>`
+- RBAC assignment writes: `rbac.assignment.manage:<scoped object>`
+
+### RBAC Object Grammar and Delegation
+
+Canonical RBAC object formats:
+- `tenant:{tenant_id}`
+- `namespace:{tenant_id}/{namespace}`
+- `stream:{tenant_id}/{namespace}/{stream_or_*}`
+- `cache:{tenant_id}/{namespace}/{cache_or_*}`
+
+Write-time protections:
+- `tenant:*` is rejected
+- non-tenant-scoped wildcards are rejected
+- policy/assignment writes are rejected if target scope is broader than caller scope
+
+This prevents common privilege-escalation footguns when delegating namespace or stream admins.
 
 ### Supported Identity Providers
 
@@ -276,7 +294,7 @@ Content-Type: application/json
 
 {
   "requested": ["stream.publish", "cache.read"],
-  "resources": ["ns:payments", "stream:payments/orders/*"]
+  "resources": ["namespace:t1/payments", "stream:t1/payments/orders/*"]
 }
 ```
 
@@ -308,29 +326,42 @@ Felix tokens are JWTs minted by the control plane and validated by brokers.
 Casbin is used with domains for tenant scoping. Policies and groupings are stored per tenant.
 
 **Objects**:
-- `tenant:*` or `tenant:{tenant_id}`
-- `ns:{namespace}` or `ns:*`
-- `stream:{namespace}/{pattern}`
-- `cache:{namespace}/{pattern}`
+- `tenant:{tenant_id}`
+- `namespace:{tenant_id}/{namespace}` or `namespace:{tenant_id}/*`
+- `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
+- `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
 
 **Actions**:
-- `tenant.admin`, `tenant.observe`, `ns.manage`
+- `rbac.view`, `rbac.policy.manage`, `rbac.assignment.manage`
+- `tenant.manage`, `ns.manage`, `stream.manage`, `cache.manage`
 - `stream.publish`, `stream.subscribe`
 - `cache.read`, `cache.write`
 
 **Permission strings** embedded in Felix tokens:
 
 ```
-stream.publish:stream:payments/orders/*
-cache.read:cache:payments/session/*
-ns.manage:ns:payments
-tenant.admin:tenant:*
+stream.publish:stream:t1/payments/orders
+cache.read:cache:t1/payments/session
+ns.manage:namespace:t1/payments
+tenant.manage:tenant:t1
 ```
 
 ### Inheritance Rules
 
-- `tenant.admin` implies namespace manage plus full stream and cache access across the tenant.
-- `ns.manage:ns:{X}` implies stream publish/subscribe and cache read/write for `ns:{X}`.
+- `tenant.manage:tenant:{T}` implies tenant-scoped namespace/stream/cache permissions.
+- `ns.manage:namespace:{T}/{N}` implies stream/cache manage + read/write within `{N}`.
+
+### Group-Based RBAC from IdP Claims
+
+If tenant issuer config sets `groups_claim`, exchange maps each incoming group
+to `group:<name>` (preserving `group:` prefix when already present) and adds a
+transient grouping edge for evaluation:
+
+```text
+g, <principal_id>, group:<name>, <tenant>
+```
+
+This enables role assignment by group without per-user policy writes.
 
 ### Broker Enforcement
 

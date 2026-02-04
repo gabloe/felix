@@ -572,22 +572,24 @@ async fn bootstrap_tenant_t1(
     let policies = vec![
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("stream:{NAMESPACE}/{STREAM}"),
+            // Canonical tenant-qualified stream object.
+            object: format!("stream:{TENANT_T1}/{NAMESPACE}/{STREAM}"),
             action: "stream.publish".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("stream:{NAMESPACE}/{STREAM}"),
+            object: format!("stream:{TENANT_T1}/{NAMESPACE}/{STREAM}"),
             action: "stream.subscribe".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("cache:{NAMESPACE}/{CACHE}"),
+            // Canonical tenant-qualified cache object.
+            object: format!("cache:{TENANT_T1}/{NAMESPACE}/{CACHE}"),
             action: "cache.read".to_string(),
         },
         PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("cache:{NAMESPACE}/{CACHE}"),
+            object: format!("cache:{TENANT_T1}/{NAMESPACE}/{CACHE}"),
             action: "cache.write".to_string(),
         },
     ];
@@ -640,7 +642,8 @@ async fn bootstrap_tenant_t2(
         // permission on an unrelated resource so the token can be minted.
         policies: vec![PolicyRule {
             subject: "role:reader".to_string(),
-            object: format!("stream:{NAMESPACE}/other"),
+            // Keep this tenant-qualified so cross-tenant checks stay explicit.
+            object: format!("stream:{TENANT_T2}/{NAMESPACE}/other"),
             action: "stream.subscribe".to_string(),
         }],
         groupings: vec![GroupingRule {

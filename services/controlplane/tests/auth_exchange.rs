@@ -171,7 +171,7 @@ async fn exchange_returns_tenant_scoped_token() {
             "t1",
             PolicyRule {
                 subject: "role:ns-admin".to_string(),
-                object: "ns:payments".to_string(),
+                object: "namespace:t1/payments".to_string(),
                 action: "ns.manage".to_string(),
             },
         )
@@ -258,7 +258,7 @@ async fn exchange_returns_tenant_scoped_token() {
     assert!(
         claims
             .perms
-            .contains(&"stream.publish:stream:payments/*".to_string())
+            .contains(&"stream.publish:stream:t1/payments/*".to_string())
     );
 }
 
@@ -349,6 +349,374 @@ async fn exchange_forbidden_without_policies() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn exchange_supports_group_claim_based_rbac() {
+    let jwks = jwks_for_key("kid-1");
+    let (addr, _handle) = spawn_jwks_server(jwks).await;
+
+    let issuer = format!("http://{addr}");
+    let token = mint_upstream_token_with_claims(
+        IDP_PRIVATE_KEY_PEM,
+        &issuer,
+        "aud-1",
+        "kid-1",
+        json!({ "groups": ["g1"] }),
+    );
+
+    let store = InMemoryStore::new(StoreConfig {
+        changes_limit: 200,
+        change_retention_max_rows: Some(200),
+    });
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "Tenant One".to_string(),
+        })
+        .await
+        .expect("tenant");
+
+    store
+        .upsert_idp_issuer(
+            "t1",
+            IdpIssuerConfig {
+                issuer: issuer.clone(),
+                audiences: vec!["aud-1".to_string()],
+                discovery_url: None,
+                jwks_url: Some(format!("{issuer}/jwks")),
+                claim_mappings: ClaimMappings {
+                    subject_claim: "sub".to_string(),
+                    groups_claim: Some("groups".to_string()),
+                },
+            },
+        )
+        .await
+        .expect("issuer");
+
+    store
+        .add_rbac_policy(
+            "t1",
+            PolicyRule {
+                subject: "role:stream-reader".to_string(),
+                object: "stream:t1/payments/*".to_string(),
+                action: "stream.subscribe".to_string(),
+            },
+        )
+        .await
+        .expect("policy");
+    store
+        .add_rbac_grouping(
+            "t1",
+            GroupingRule {
+                user: "group:g1".to_string(),
+                role: "role:stream-reader".to_string(),
+            },
+        )
+        .await
+        .expect("grouping");
+
+    store
+        .set_tenant_signing_keys(
+            "t1",
+            TenantSigningKeys {
+                current: SigningKey {
+                    kid: "k1".to_string(),
+                    alg: Algorithm::EdDSA,
+                    private_key: FELIX_PRIVATE_KEY,
+                    public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                        .verifying_key()
+                        .to_bytes(),
+                },
+                previous: vec![],
+            },
+        )
+        .await
+        .expect("keys");
+
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(store),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            vec![Algorithm::ES256, Algorithm::RS256],
+        ),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/tenants/t1/token/exchange")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .expect("request");
+    let response = app.oneshot(req).await.expect("exchange");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload = read_json(response).await;
+    let felix_token = payload["felix_token"].as_str().expect("token");
+    let keys = TenantSigningKeys {
+        current: SigningKey {
+            kid: "k1".to_string(),
+            alg: Algorithm::EdDSA,
+            private_key: FELIX_PRIVATE_KEY,
+            public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                .verifying_key()
+                .to_bytes(),
+        },
+        previous: vec![],
+    };
+    let claims = verify_token(&keys, "t1", felix_token).expect("verify");
+    assert!(
+        claims
+            .perms
+            .contains(&"stream.subscribe:stream:t1/payments/*".to_string())
+    );
+}
+
+#[tokio::test]
+async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
+    let jwks = jwks_for_key("kid-1");
+    let (addr, _handle) = spawn_jwks_server(jwks).await;
+
+    let issuer = format!("http://{addr}");
+    let token = mint_upstream_token_with_claims(
+        IDP_PRIVATE_KEY_PEM,
+        &issuer,
+        "aud-1",
+        "kid-1",
+        json!({ "groups": ["g1"] }),
+    );
+
+    let store = InMemoryStore::new(StoreConfig {
+        changes_limit: 200,
+        change_retention_max_rows: Some(200),
+    });
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "Tenant One".to_string(),
+        })
+        .await
+        .expect("tenant");
+
+    // Intentionally leave groups_claim unset.
+    store
+        .upsert_idp_issuer(
+            "t1",
+            IdpIssuerConfig {
+                issuer: issuer.clone(),
+                audiences: vec!["aud-1".to_string()],
+                discovery_url: None,
+                jwks_url: Some(format!("{issuer}/jwks")),
+                claim_mappings: ClaimMappings::default(),
+            },
+        )
+        .await
+        .expect("issuer");
+
+    store
+        .add_rbac_policy(
+            "t1",
+            PolicyRule {
+                subject: "role:stream-reader".to_string(),
+                object: "stream:t1/payments/*".to_string(),
+                action: "stream.subscribe".to_string(),
+            },
+        )
+        .await
+        .expect("policy");
+    store
+        .add_rbac_grouping(
+            "t1",
+            GroupingRule {
+                user: "group:g1".to_string(),
+                role: "role:stream-reader".to_string(),
+            },
+        )
+        .await
+        .expect("grouping");
+    store
+        .set_tenant_signing_keys(
+            "t1",
+            TenantSigningKeys {
+                current: SigningKey {
+                    kid: "k1".to_string(),
+                    alg: Algorithm::EdDSA,
+                    private_key: FELIX_PRIVATE_KEY,
+                    public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                        .verifying_key()
+                        .to_bytes(),
+                },
+                previous: vec![],
+            },
+        )
+        .await
+        .expect("keys");
+
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(store),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            vec![Algorithm::ES256, Algorithm::RS256],
+        ),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/tenants/t1/token/exchange")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .expect("request");
+    let response = app.oneshot(req).await.expect("exchange");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn exchange_supports_group_claim_values_with_group_prefix() {
+    let jwks = jwks_for_key("kid-1");
+    let (addr, _handle) = spawn_jwks_server(jwks).await;
+
+    let issuer = format!("http://{addr}");
+    let token = mint_upstream_token_with_claims(
+        IDP_PRIVATE_KEY_PEM,
+        &issuer,
+        "aud-1",
+        "kid-1",
+        json!({ "groups": ["group:g1"] }),
+    );
+
+    let store = InMemoryStore::new(StoreConfig {
+        changes_limit: 200,
+        change_retention_max_rows: Some(200),
+    });
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "Tenant One".to_string(),
+        })
+        .await
+        .expect("tenant");
+    store
+        .upsert_idp_issuer(
+            "t1",
+            IdpIssuerConfig {
+                issuer: issuer.clone(),
+                audiences: vec!["aud-1".to_string()],
+                discovery_url: None,
+                jwks_url: Some(format!("{issuer}/jwks")),
+                claim_mappings: ClaimMappings {
+                    subject_claim: "sub".to_string(),
+                    groups_claim: Some("groups".to_string()),
+                },
+            },
+        )
+        .await
+        .expect("issuer");
+    store
+        .add_rbac_policy(
+            "t1",
+            PolicyRule {
+                subject: "role:stream-reader".to_string(),
+                object: "stream:t1/payments/*".to_string(),
+                action: "stream.subscribe".to_string(),
+            },
+        )
+        .await
+        .expect("policy");
+    store
+        .add_rbac_grouping(
+            "t1",
+            GroupingRule {
+                user: "group:g1".to_string(),
+                role: "role:stream-reader".to_string(),
+            },
+        )
+        .await
+        .expect("grouping");
+    store
+        .set_tenant_signing_keys(
+            "t1",
+            TenantSigningKeys {
+                current: SigningKey {
+                    kid: "k1".to_string(),
+                    alg: Algorithm::EdDSA,
+                    private_key: FELIX_PRIVATE_KEY,
+                    public_key: Ed25519SigningKey::from_bytes(&FELIX_PRIVATE_KEY)
+                        .verifying_key()
+                        .to_bytes(),
+                },
+                previous: vec![],
+            },
+        )
+        .await
+        .expect("keys");
+
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(store),
+        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            60,
+            vec![Algorithm::ES256, Algorithm::RS256],
+        ),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/tenants/t1/token/exchange")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .expect("request");
+    let response = app.oneshot(req).await.expect("exchange");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn spawn_jwks_server(jwks: serde_json::Value) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     // Deterministic local JWKS server to avoid flakiness and external dependencies.
     // Binding to 127.0.0.1:0 lets the OS choose an available port.
@@ -389,18 +757,31 @@ fn jwks_for_key(kid: &str) -> serde_json::Value {
 }
 
 fn mint_upstream_token(pem: &str, issuer: &str, audience: &str, kid: &str) -> String {
+    mint_upstream_token_with_claims(pem, issuer, audience, kid, serde_json::Value::Null)
+}
+
+fn mint_upstream_token_with_claims(
+    pem: &str,
+    issuer: &str,
+    audience: &str,
+    kid: &str,
+    extra_claims: serde_json::Value,
+) -> String {
     // Test-only RS256 token minting to simulate an external IdP.
     // Felix tokens must always be EdDSA.
     let mut header = jsonwebtoken::Header::new(Algorithm::RS256);
     header.kid = Some(kid.to_string());
     let now = chrono::Utc::now().timestamp();
-    let claims = json!({
+    let mut claims = json!({
         "iss": issuer,
         "sub": "user-1",
         "aud": audience,
         "iat": now,
         "exp": now + 300
     });
+    if let (Some(target), Some(extra)) = (claims.as_object_mut(), extra_claims.as_object()) {
+        target.extend(extra.clone());
+    }
     jsonwebtoken::encode(
         &header,
         &claims,

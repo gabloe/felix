@@ -15,6 +15,7 @@
 //! # Security considerations
 //! - RBAC rules directly control access; treat policy changes as privileged.
 //! - The embedded model must not be modified without updating tests.
+pub mod authorize;
 pub mod enforcer;
 pub mod permissions;
 pub mod policy_store;

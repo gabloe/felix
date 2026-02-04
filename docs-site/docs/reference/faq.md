@@ -89,6 +89,16 @@ Felix complements Redis rather than replacing it:
 
 ## Architecture Questions
 
+### Can I grant stream access by IdP group instead of per-user?
+
+Yes. Configure `groups_claim` for the tenant issuer, then bind RBAC roles to
+`group:<name>` subjects. During token exchange, Felix maps incoming group claims
+to those group subjects and evaluates role permissions.
+
+Example:
+- grouping: `g, group:g1, role:reader, tenant-a`
+- policy: `p, role:reader, tenant-a, stream:tenant-a/payments/*, stream.subscribe`
+
 ### Why QUIC instead of TCP?
 
 QUIC provides several advantages for Felix's use case:

@@ -126,7 +126,12 @@ async fn bootstrap_initializes_tenant_and_auth() {
     assert!(
         policies
             .iter()
-            .any(|policy| policy.action == "tenant.admin")
+            .any(|policy| policy.action == "tenant.manage")
+    );
+    assert!(
+        policies
+            .iter()
+            .any(|policy| policy.action == "rbac.policy.manage")
     );
     let groupings = store.list_rbac_groupings("t1").await.expect("groupings");
     assert!(groupings.iter().any(|g| g.user == "p:admin"));

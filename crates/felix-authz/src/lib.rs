@@ -47,9 +47,7 @@ pub use errors::{AuthzError, AuthzResult};
 pub use jwks::{Jwk, Jwks, KeyUse};
 pub use matcher::{PermissionMatcher, wildcard_match};
 pub use permission::{Permission, PermissionPattern};
-pub use resource::{
-    cache_resource, namespace_resource, stream_resource, tenant_resource, tenant_wildcard,
-};
+pub use resource::{cache_resource, namespace_resource, stream_resource, tenant_resource};
 pub use token::{
     FelixClaims, FelixTokenIssuer, FelixTokenVerifier, TenantKeyCache, TenantKeyMaterial,
     TenantKeyStore, TenantSigningKey, TenantVerificationKey,

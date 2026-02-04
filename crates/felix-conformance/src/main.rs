@@ -123,10 +123,10 @@ fn build_auth_fixture() -> Result<AuthFixture> {
         key_store,
     );
     let perms = vec![
-        "stream.publish:stream:default/*".to_string(),
-        "stream.subscribe:stream:default/*".to_string(),
-        "cache.read:cache:default/*".to_string(),
-        "cache.write:cache:default/*".to_string(),
+        format!("stream.publish:stream:{tenant_id}/default/*"),
+        format!("stream.subscribe:stream:{tenant_id}/default/*"),
+        format!("cache.read:cache:{tenant_id}/default/*"),
+        format!("cache.write:cache:{tenant_id}/default/*"),
     ];
     let token = issuer.mint(&TenantId::new(&tenant_id), "conformance", perms)?;
 
