@@ -29,12 +29,16 @@ cache_conn_recv_window: 268435456
 cache_stream_recv_window: 67108864
 cache_send_window: 268435456
 event_batch_max_events: 64
-event_batch_max_bytes: 262144
+event_batch_max_bytes: 65536
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 1024
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
+subscriber_writer_lanes: 4
+subscriber_lane_queue_depth: 8192
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 ```
 
 ## Latency Optimized
@@ -52,7 +56,11 @@ event_batch_max_delay_us: 100
 fanout_batch_size: 8
 pub_workers_per_conn: 2
 pub_queue_depth: 512
-event_queue_depth: 512
+subscriber_queue_capacity: 64
+subscriber_writer_lanes: 2
+subscriber_lane_queue_depth: 4096
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 ```
 
 ## Throughput Optimized
@@ -70,7 +78,11 @@ event_batch_max_delay_us: 2000
 fanout_batch_size: 256
 pub_workers_per_conn: 8
 pub_queue_depth: 4096
-event_queue_depth: 4096
+subscriber_queue_capacity: 256
+subscriber_writer_lanes: 4
+subscriber_lane_queue_depth: 16384
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 ```
 
 ## Client-Side Parallelism (Important)
@@ -95,6 +107,11 @@ A single connection with a single publish stream will bottleneck regardless of b
 - Tune `pub_workers_per_conn` and `pub_queue_depth` together; deep queues trade latency for throughput.
 - Increasing `pub_workers_per_conn` only helps if publish load is spread across multiple streams or
   connections. Oversubscribing workers relative to streams can degrade performance.
+- `subscriber_queue_capacity` controls broker-core per-subscriber buffering and drop behavior.
+- `subscriber_writer_lanes` and `subscriber_lane_shard` control outbound event write parallelism.
+- `subscriber_lane_shard: auto` is the default and is usually the best starting point.
+- Lanes often help high fanout + large payload workloads, but gains can plateau; do not assume
+  that more than 8 lanes will improve performance.
 - Event delivery uses binary `EventBatch` frames.
 - Queue depths directly impact memory usage. Large queue depths combined with large batch sizes and
   high fanout can significantly increase resident memory usage.

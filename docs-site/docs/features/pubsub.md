@@ -220,8 +220,10 @@ pub struct Subscription {
 **Buffer configuration**:
 
 ```yaml
-# Broker: per-subscription buffer
-event_queue_depth: 1024  # Default
+# Broker: per-subscriber buffer and outbound lanes
+subscriber_queue_capacity: 128  # Default
+subscriber_writer_lanes: 4
+subscriber_lane_shard: auto
 
 # Client: additional client-side buffer
 event_router_max_pending: 1024  # Default
@@ -291,7 +293,7 @@ When publish queue full:
 **Subscriber queue**:
 
 ```yaml
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
 ```
 
 When subscriber queue full:
@@ -380,7 +382,8 @@ ack_on_commit: true
 
 # Minimal buffering
 pub_queue_depth: 512
-event_queue_depth: 512
+subscriber_queue_capacity: 64
+subscriber_writer_lanes: 2
 ```
 
 **Client config**:
@@ -416,7 +419,8 @@ ack_on_commit: false
 
 # Deep buffering
 pub_queue_depth: 4096
-event_queue_depth: 4096
+subscriber_queue_capacity: 256
+subscriber_writer_lanes: 8
 ```
 
 **Client config**:
@@ -448,7 +452,8 @@ event_batch_max_events: 64
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
 pub_queue_depth: 1024
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
+subscriber_writer_lanes: 4
 ```
 
 **Client config**:

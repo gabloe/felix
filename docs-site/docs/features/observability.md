@@ -295,7 +295,12 @@ felix_subscriber_lag_messages{subscription_id}              # Gauge
 
 # Queue depths
 felix_publish_queue_depth                                   # Gauge
-felix_event_queue_depth{subscription_id}                    # Gauge
+felix_broker_ingress_queue_depth                            # Gauge
+broker_sub_lane_queue_len_highwater{lane}                  # Counter-like highwater updates
+broker_sub_lane_enqueued_total{lane}                        # Counter
+broker_sub_lane_dropped_total{lane}                         # Counter
+broker_sub_lane_write_calls_total{lane}                     # Counter
+broker_sub_lane_write_errors_total{lane}                    # Counter
 ```
 
 **Cache metrics**:
@@ -487,7 +492,7 @@ Total: 470 µs
 1. Identify which subscriptions are dropping
 2. Check subscriber lag for those subscriptions
 3. Check subscriber application logs - slow processing?
-4. Consider increasing `event_queue_depth` or fixing subscriber performance
+4. Consider increasing `subscriber_queue_capacity` or fixing subscriber performance
 
 **Memory pressure**:
 

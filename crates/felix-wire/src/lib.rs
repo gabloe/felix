@@ -805,8 +805,40 @@ pub mod binary {
         pub payloads: Vec<Bytes>,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct EncodedEventBatchParts {
+        frame_len: usize,
+        segments: Vec<Bytes>,
+    }
+
+    impl EncodedEventBatchParts {
+        pub fn frame_len(&self) -> usize {
+            self.frame_len
+        }
+
+        pub fn segments(&self) -> &[Bytes] {
+            &self.segments
+        }
+
+        pub fn into_segments(self) -> Vec<Bytes> {
+            self.segments
+        }
+    }
+
     // Encode binary event batch into a full framed payload.
     pub fn encode_event_batch_bytes(subscription_id: u64, payloads: &[Bytes]) -> Result<Bytes> {
+        let parts = encode_event_batch_parts(subscription_id, payloads)?;
+        let mut buf = BytesMut::with_capacity(parts.frame_len());
+        for segment in parts.segments() {
+            buf.extend_from_slice(segment.as_ref());
+        }
+        Ok(buf.freeze())
+    }
+
+    pub fn encode_event_batch_parts(
+        subscription_id: u64,
+        payloads: &[Bytes],
+    ) -> Result<EncodedEventBatchParts> {
         let mut payload_len = 8usize + 4;
         for payload in payloads {
             let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
@@ -817,17 +849,32 @@ pub mod binary {
         if payload_len > u32::MAX as usize {
             return Err(Error::FrameTooLarge);
         }
-        let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+
+        // Segment 0 is the frame header + fixed event-batch prefix. Remaining segments
+        // alternate between [payload_len_prefix, payload_bytes] so writers can stream
+        // payload Bytes directly without copying into a contiguous buffer.
+        let mut frame_prefix = [0u8; FrameHeader::LEN + 12];
         let header = FrameHeader::new(FLAG_BINARY_EVENT_BATCH, payload_len as u32);
-        header.encode(&mut buf);
-        buf.put_u64(subscription_id);
-        buf.put_u32(payloads.len() as u32);
+        let mut header_bytes = [0u8; FrameHeader::LEN];
+        header.encode_into(&mut header_bytes);
+        frame_prefix[..FrameHeader::LEN].copy_from_slice(&header_bytes);
+        frame_prefix[FrameHeader::LEN..FrameHeader::LEN + 8]
+            .copy_from_slice(&subscription_id.to_be_bytes());
+        frame_prefix[FrameHeader::LEN + 8..FrameHeader::LEN + 12]
+            .copy_from_slice(&(payloads.len() as u32).to_be_bytes());
+
+        let mut segments = Vec::with_capacity(1 + (payloads.len() * 2));
+        segments.push(Bytes::copy_from_slice(&frame_prefix));
         for payload in payloads {
             let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
-            buf.put_u32(len);
-            buf.extend_from_slice(payload.as_ref());
+            segments.push(Bytes::copy_from_slice(&len.to_be_bytes()));
+            segments.push(payload.clone());
         }
-        Ok(buf.freeze())
+
+        Ok(EncodedEventBatchParts {
+            frame_len: FrameHeader::LEN + payload_len,
+            segments,
+        })
     }
 
     // Decode binary event batch frame into its structured form.
@@ -931,6 +978,49 @@ mod tests {
             Frame::new(FLAG_BINARY_EVENT_BATCH, Bytes::from_static(b"short")).expect("frame");
         let err = binary::decode_event_batch(&frame).expect_err("incomplete");
         assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn binary_event_batch_parts_match_full_encoding_single() {
+        let payloads = vec![Bytes::from_static(b"hello world")];
+        let encoded = binary::encode_event_batch_bytes(42, &payloads).expect("encode");
+        let parts = binary::encode_event_batch_parts(42, &payloads).expect("parts");
+
+        let mut flattened = BytesMut::with_capacity(parts.frame_len());
+        for segment in parts.segments() {
+            flattened.extend_from_slice(segment.as_ref());
+        }
+
+        assert_eq!(flattened.freeze(), encoded);
+    }
+
+    #[test]
+    fn binary_event_batch_parts_match_full_encoding_multi_payload() {
+        fn payload(seed: u8, len: usize) -> Bytes {
+            let mut out = Vec::with_capacity(len);
+            for i in 0..len {
+                out.push((i as u8).wrapping_mul(31) ^ seed);
+            }
+            Bytes::from(out)
+        }
+
+        for case in 0..16u8 {
+            let payloads = vec![
+                payload(case, (case as usize) * 7),
+                payload(case.wrapping_add(3), 17 + case as usize),
+                payload(case.wrapping_add(9), 257 + (case as usize * 13)),
+            ];
+            let encoded =
+                binary::encode_event_batch_bytes(10_000 + case as u64, &payloads).expect("encode");
+            let parts =
+                binary::encode_event_batch_parts(10_000 + case as u64, &payloads).expect("parts");
+
+            let mut flattened = BytesMut::with_capacity(parts.frame_len());
+            for segment in parts.segments() {
+                flattened.extend_from_slice(segment.as_ref());
+            }
+            assert_eq!(flattened.freeze(), encoded);
+        }
     }
 
     #[test]

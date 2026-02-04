@@ -11,6 +11,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 metrics = "0.23"
 felix-storage = { path = "../felix-storage", version = "0.1.0" }
+arc-swap = "1.7"
+slab = "0.4"
+parking_lot = "0.12"
 
 [features]
 default = []
@@ -18,3 +21,4 @@ telemetry = []
 
 [dev-dependencies]
 serial_test = "3"
+felix-wire = { path = "../felix-wire", version = "0.1.0" }

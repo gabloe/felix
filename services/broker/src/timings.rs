@@ -13,6 +13,8 @@ mod telemetry {
         Vec<u64>,
         Vec<u64>,
         Vec<u64>,
+        Vec<u64>,
+        Vec<u64>,
     );
 
     pub type BrokerCacheTimingSamples = (
@@ -38,7 +40,9 @@ mod telemetry {
     pub fn record_ack_write_ns(_value: u64) {}
     pub fn record_quic_write_ns(_value: u64) {}
     pub fn record_sub_queue_wait_ns(_value: u64) {}
+    pub fn record_sub_prefix_ns(_value: u64) {}
     pub fn record_sub_write_ns(_value: u64) {}
+    pub fn record_sub_write_await_ns(_value: u64) {}
     pub fn record_sub_delivery_ns(_value: u64) {}
 
     pub fn record_cache_encode_ns(_value: u64) {}
@@ -87,7 +91,9 @@ mod tests {
         record_ack_write_ns(300);
         record_quic_write_ns(400);
         record_sub_queue_wait_ns(500);
+        record_sub_prefix_ns(550);
         record_sub_write_ns(600);
+        record_sub_write_await_ns(650);
         record_sub_delivery_ns(700);
         record_cache_encode_ns(800);
         record_cache_write_ns(900);

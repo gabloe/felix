@@ -191,11 +191,11 @@ export FELIX_EVENT_BATCH_MAX_EVENTS="256"  # Large batches
 
 **Type**: Positive integer (bytes)
 
-**Default**: `262144` (256 KiB)
+**Default**: `65536` (64 KiB)
 
 **Example**:
 ```bash
-export FELIX_EVENT_BATCH_MAX_BYTES="262144"   # 256 KiB
+export FELIX_EVENT_BATCH_MAX_BYTES="65536"    # 64 KiB (default)
 export FELIX_EVENT_BATCH_MAX_BYTES="524288"   # 512 KiB
 export FELIX_EVENT_BATCH_MAX_BYTES="1048576"  # 1 MiB
 ```
@@ -248,6 +248,72 @@ export FELIX_FANOUT_BATCH="16"   # Low fanout
 ### Event Frame Encoding
 
 Subscription event delivery uses binary `EventBatch` frames by default.
+
+### `FELIX_SUBSCRIBER_QUEUE_CAPACITY`
+
+**Description**: Per-subscriber queue capacity in broker core.
+
+**Type**: Positive integer (count)
+
+**Default**: `128`
+
+```bash
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="128"
+```
+
+### `FELIX_SUB_WRITER_LANES`
+
+**Description**: Requested outbound subscriber writer lanes.
+
+**Type**: Positive integer (count)
+
+**Default**: `4`
+
+```bash
+export FELIX_SUB_WRITER_LANES="4"
+```
+
+### `FELIX_SUB_LANE_QUEUE_DEPTH`
+
+**Description**: Queue depth per outbound writer lane.
+
+**Type**: Positive integer (count)
+
+**Default**: `8192`
+
+```bash
+export FELIX_SUB_LANE_QUEUE_DEPTH="8192"
+```
+
+### `FELIX_MAX_SUB_WRITER_LANES`
+
+**Description**: Safety clamp for writer lanes.
+
+**Type**: Positive integer (count)
+
+**Default**: `8`
+
+```bash
+export FELIX_MAX_SUB_WRITER_LANES="8"
+```
+
+### `FELIX_SUB_LANE_SHARD`
+
+**Description**: Outbound lane sharding policy.
+
+**Type**: Enum (`auto`, `subscriber_id_hash`, `connection_id_hash`, `round_robin_pin`)
+
+**Default**: `auto`
+
+```bash
+export FELIX_SUB_LANE_SHARD="auto"
+```
+
+**Policy notes**:
+- `auto`: prefers connection-aware routing when connection id is known.
+- `subscriber_id_hash`: stable by subscriber id.
+- `connection_id_hash`: stable by connection id.
+- `round_robin_pin`: pinned RR assignment per subscriber.
 
 ## Cache Configuration
 
@@ -500,21 +566,6 @@ export FELIX_BROKER_PUB_WORKERS_PER_CONN="2"   # Lower overhead
 export FELIX_BROKER_PUB_QUEUE_DEPTH="1024"
 export FELIX_BROKER_PUB_QUEUE_DEPTH="2048"  # More buffering
 export FELIX_BROKER_PUB_QUEUE_DEPTH="512"   # Less memory
-```
-
-### `FELIX_EVENT_QUEUE_DEPTH`
-
-**Description**: Subscription event queue depth (broker).
-
-**Type**: Positive integer (count)
-
-**Default**: `1024`
-
-**Example**:
-```bash
-export FELIX_EVENT_QUEUE_DEPTH="1024"
-export FELIX_EVENT_QUEUE_DEPTH="2048"  # High fanout
-export FELIX_EVENT_QUEUE_DEPTH="512"   # Memory-constrained
 ```
 
 ## Performance and Monitoring

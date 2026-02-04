@@ -297,14 +297,18 @@ data:
     metrics_bind: "0.0.0.0:8080"
     event_batch_max_events: 64
     event_batch_max_delay_us: 250
-    event_batch_max_bytes: 262144
+    event_batch_max_bytes: 65536
     fanout_batch_size: 64
     cache_conn_recv_window: 268435456
     cache_stream_recv_window: 67108864
     cache_send_window: 268435456
     pub_workers_per_conn: 4
     pub_queue_depth: 1024
-    event_queue_depth: 1024
+    subscriber_queue_capacity: 128
+    subscriber_writer_lanes: 4
+    subscriber_lane_queue_depth: 8192
+    max_subscriber_writer_lanes: 8
+    subscriber_lane_shard: auto
     disable_timings: false
 
 ---

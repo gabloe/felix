@@ -48,8 +48,12 @@ struct TimingCollector {
     quic_write_ns: Mutex<Vec<u64>>,
     /// Broker timing samples for subscriber queue wait stage.
     sub_queue_wait_ns: Mutex<Vec<u64>>,
+    /// Broker timing samples for subscriber frame-prefix build stage.
+    sub_prefix_ns: Mutex<Vec<u64>>,
     /// Broker timing samples for subscriber write stage.
     sub_write_ns: Mutex<Vec<u64>>,
+    /// Broker timing samples for subscriber write-await stage.
+    sub_write_await_ns: Mutex<Vec<u64>>,
     /// Broker timing samples for subscriber delivery stage.
     sub_delivery_ns: Mutex<Vec<u64>>,
     /// Cache timing samples for cache read stage.
@@ -83,8 +87,10 @@ static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
 /// Tuple of broker timing sample vectors.
 ///
 /// The order corresponds to:
-/// (decode_ns, fanout_ns, ack_write_ns, quic_write_ns, sub_queue_wait_ns, sub_write_ns, sub_delivery_ns)
+/// (decode_ns, fanout_ns, ack_write_ns, quic_write_ns, sub_queue_wait_ns, sub_prefix_ns, sub_write_ns, sub_write_await_ns, sub_delivery_ns)
 pub type BrokerTimingSamples = (
+    Vec<u64>,
+    Vec<u64>,
     Vec<u64>,
     Vec<u64>,
     Vec<u64>,
@@ -132,7 +138,9 @@ pub fn enable_collection(sample_every: usize) {
         ack_write_ns: Mutex::new(Vec::new()),
         quic_write_ns: Mutex::new(Vec::new()),
         sub_queue_wait_ns: Mutex::new(Vec::new()),
+        sub_prefix_ns: Mutex::new(Vec::new()),
         sub_write_ns: Mutex::new(Vec::new()),
+        sub_write_await_ns: Mutex::new(Vec::new()),
         sub_delivery_ns: Mutex::new(Vec::new()),
         cache_read_ns: Mutex::new(Vec::new()),
         cache_decode_ns: Mutex::new(Vec::new()),
@@ -272,6 +280,14 @@ pub fn record_sub_queue_wait_ns(value: u64) {
     }
 }
 
+/// Records a subscriber frame-prefix build timing sample in nanoseconds.
+pub fn record_sub_prefix_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector.sub_prefix_ns.lock().expect("sub prefix lock");
+        guard.push(value);
+    }
+}
+
 /// Records a subscriber write stage timing sample in nanoseconds.
 ///
 /// # Costs
@@ -284,6 +300,17 @@ pub fn record_sub_queue_wait_ns(value: u64) {
 pub fn record_sub_write_ns(value: u64) {
     if let Some(collector) = COLLECTOR.get() {
         let mut guard = collector.sub_write_ns.lock().expect("sub write lock");
+        guard.push(value);
+    }
+}
+
+/// Records a subscriber write-await timing sample in nanoseconds.
+pub fn record_sub_write_await_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_write_await_ns
+            .lock()
+            .expect("sub write await lock");
         guard.push(value);
     }
 }
@@ -440,7 +467,12 @@ pub fn take_samples() -> Option<BrokerTimingSamples> {
         .sub_queue_wait_ns
         .lock()
         .expect("sub queue wait lock");
+    let mut sub_prefix = collector.sub_prefix_ns.lock().expect("sub prefix lock");
     let mut sub_write = collector.sub_write_ns.lock().expect("sub write lock");
+    let mut sub_write_await = collector
+        .sub_write_await_ns
+        .lock()
+        .expect("sub write await lock");
     let mut sub_delivery = collector.sub_delivery_ns.lock().expect("sub delivery lock");
     Some((
         // Replace vectors with empty ones, returning the collected samples.
@@ -449,7 +481,9 @@ pub fn take_samples() -> Option<BrokerTimingSamples> {
         std::mem::take(&mut *ack_write),
         std::mem::take(&mut *quic_write),
         std::mem::take(&mut *sub_queue_wait),
+        std::mem::take(&mut *sub_prefix),
         std::mem::take(&mut *sub_write),
+        std::mem::take(&mut *sub_write_await),
         std::mem::take(&mut *sub_delivery),
     ))
 }
@@ -509,6 +543,8 @@ mod tests {
             assert!(samples.4.is_empty());
             assert!(samples.5.is_empty());
             assert!(samples.6.is_empty());
+            assert!(samples.7.is_empty());
+            assert!(samples.8.is_empty());
         }
 
         enable_collection(2);
@@ -524,8 +560,10 @@ mod tests {
         record_ack_write_ns(12);
         record_quic_write_ns(13);
         record_sub_queue_wait_ns(14);
-        record_sub_write_ns(15);
-        record_sub_delivery_ns(16);
+        record_sub_prefix_ns(15);
+        record_sub_write_ns(16);
+        record_sub_write_await_ns(17);
+        record_sub_delivery_ns(18);
 
         record_cache_read_ns(20);
         record_cache_decode_ns(21);
@@ -543,6 +581,8 @@ mod tests {
         assert!(samples.4.contains(&14));
         assert!(samples.5.contains(&15));
         assert!(samples.6.contains(&16));
+        assert!(samples.7.contains(&17));
+        assert!(samples.8.contains(&18));
 
         let cache_samples = take_cache_samples().expect("cache samples");
         assert!(cache_samples.0.contains(&20));

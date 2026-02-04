@@ -407,9 +407,13 @@ let config = ClientConfig {
 Broker-side configuration:
 
 ```yaml
-event_queue_depth: 1024              # Per-subscription buffer
+subscriber_queue_capacity: 128       # Per-subscriber broker-core buffer
+subscriber_writer_lanes: 4           # Outbound writer lanes
+subscriber_lane_queue_depth: 8192    # Per-lane queue depth
+max_subscriber_writer_lanes: 8       # Safety clamp
+subscriber_lane_shard: auto          # auto|subscriber_id_hash|connection_id_hash|round_robin_pin
 event_batch_max_events: 64           # Max events per batch
-event_batch_max_bytes: 262144        # Max batch size (256 KB)
+event_batch_max_bytes: 65536         # Max batch size (64 KB)
 event_batch_max_delay_us: 250        # Max batching delay (250 µs)
 ```
 
@@ -773,7 +777,9 @@ publisher
 **High fanout tuning**:
 
 ```yaml
-event_queue_depth: 4096           # Larger buffer for burst tolerance
+subscriber_queue_capacity: 256    # Larger per-subscriber burst buffer
+subscriber_writer_lanes: 4        # Start with 4, benchmark before increasing
+subscriber_lane_shard: auto
 fanout_batch_size: 128            # Batch fanout operations
 event_batch_max_events: 128       # Larger event batches
 ```
@@ -781,7 +787,9 @@ event_batch_max_events: 128       # Larger event batches
 **Low latency tuning**:
 
 ```yaml
-event_queue_depth: 512
+subscriber_queue_capacity: 64
+subscriber_writer_lanes: 2
+subscriber_lane_shard: auto
 event_batch_max_events: 8
 event_batch_max_delay_us: 100
 ```

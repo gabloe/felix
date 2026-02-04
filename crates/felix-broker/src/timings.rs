@@ -5,7 +5,7 @@ mod telemetry {
 
 #[cfg(not(feature = "telemetry"))]
 mod telemetry {
-    pub type BrokerPublishSamples = (Vec<u64>, Vec<u64>, Vec<u64>);
+    pub type BrokerPublishSamples = (Vec<u64>, Vec<u64>, Vec<u64>, Vec<u64>, Vec<u64>);
 
     pub fn enable_collection(_sample_every: usize) {}
 
@@ -17,6 +17,8 @@ mod telemetry {
 
     pub fn record_lookup_ns(_value: u64) {}
     pub fn record_append_ns(_value: u64) {}
+    pub fn record_fanout_ns(_value: u64) {}
+    pub fn record_enqueue_ns(_value: u64) {}
     pub fn record_send_ns(_value: u64) {}
 
     pub fn take_samples() -> Option<BrokerPublishSamples> {
@@ -51,6 +53,8 @@ mod tests {
     fn record_functions_do_not_panic() {
         record_lookup_ns(100);
         record_append_ns(200);
+        record_fanout_ns(250);
+        record_enqueue_ns(275);
         record_send_ns(300);
     }
 

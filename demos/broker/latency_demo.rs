@@ -39,6 +39,8 @@ struct DemoConfig {
     pub_streams_per_conn: usize,
     pub_sharding: Option<String>,
     pub_stream_count: usize,
+    sub_writer_lanes: Option<usize>,
+    sub_lane_shard: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,8 +113,12 @@ struct TimingSummary {
     broker_quic_write_p99: Option<Duration>,
     broker_sub_queue_wait_p50: Option<Duration>,
     broker_sub_queue_wait_p99: Option<Duration>,
+    broker_sub_prefix_build_p50: Option<Duration>,
+    broker_sub_prefix_build_p99: Option<Duration>,
     broker_sub_write_p50: Option<Duration>,
     broker_sub_write_p99: Option<Duration>,
+    broker_sub_write_await_p50: Option<Duration>,
+    broker_sub_write_await_p99: Option<Duration>,
     broker_sub_delivery_p50: Option<Duration>,
     broker_sub_delivery_p99: Option<Duration>,
     broker_sub_delivery_p999: Option<Duration>,
@@ -120,6 +126,10 @@ struct TimingSummary {
     broker_publish_lookup_p99: Option<Duration>,
     broker_publish_append_p50: Option<Duration>,
     broker_publish_append_p99: Option<Duration>,
+    broker_publish_fanout_p50: Option<Duration>,
+    broker_publish_fanout_p99: Option<Duration>,
+    broker_publish_enqueue_p50: Option<Duration>,
+    broker_publish_enqueue_p99: Option<Duration>,
     broker_publish_send_p50: Option<Duration>,
     broker_publish_send_p99: Option<Duration>,
 }
@@ -137,6 +147,9 @@ async fn run_demo(
 ) -> Result<()> {
     println!("== Felix QUIC Pub/Sub Latency Demo ==");
     println!("Mode: QUIC broker protocol over felix-transport.");
+    println!(
+        "Note: subscriber/event delivery is always binary; publish_fastpath toggles publish encoding path."
+    );
 
     if all {
         run_all(config).await?;
@@ -180,6 +193,8 @@ where
     let mut pub_streams_per_conn = 2;
     let mut pub_sharding = None;
     let mut pub_stream_count = 1;
+    let mut sub_writer_lanes = None;
+    let mut sub_lane_shard = None;
     let mut matrix = false;
     let mut all = true;
     let mut all_set = false;
@@ -196,6 +211,8 @@ where
     let mut pub_streams_set = false;
     let mut pub_sharding_set = false;
     let mut pub_stream_count_set = false;
+    let mut sub_writer_lanes_set = false;
+    let mut sub_lane_shard_set = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -271,6 +288,18 @@ where
                     pub_stream_count_set = true;
                 }
             }
+            "--sub-writer-lanes" => {
+                if let Some(value) = args.next() {
+                    sub_writer_lanes = value.parse().ok();
+                    sub_writer_lanes_set = true;
+                }
+            }
+            "--sub-lane-shard" => {
+                if let Some(value) = args.next() {
+                    sub_lane_shard = Some(value);
+                    sub_lane_shard_set = true;
+                }
+            }
             "--payloads" => {
                 payloads = args.next();
             }
@@ -299,7 +328,9 @@ where
             || pub_conns_set
             || pub_streams_set
             || pub_sharding_set
-            || pub_stream_count_set)
+            || pub_stream_count_set
+            || sub_writer_lanes_set
+            || sub_lane_shard_set)
     {
         all = false;
     }
@@ -326,6 +357,8 @@ where
             pub_streams_per_conn,
             pub_sharding,
             pub_stream_count,
+            sub_writer_lanes,
+            sub_lane_shard,
         },
         matrix,
         payloads,
@@ -340,7 +373,7 @@ fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
 
 async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummary>)> {
     println!(
-        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | binary {} | pub conns {} | pub streams/conn {} | pub stream count {}",
+        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | publish_fastpath {} | pub conns {} | pub streams/conn {} | pub stream count {} | sub lanes {} | sub shard {}",
         config.warmup,
         config.total,
         config.payload_bytes,
@@ -349,7 +382,9 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.binary,
         config.pub_conns,
         config.pub_streams_per_conn,
-        config.pub_stream_count
+        config.pub_stream_count,
+        config.sub_writer_lanes.unwrap_or(0),
+        config.sub_lane_shard.as_deref().unwrap_or("default")
     );
     println!("{}", expectation_note(&config));
     let use_ack = config.batch_size <= 1 && !config.binary;
@@ -377,7 +412,6 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             .with_topic_capacity(total_events.saturating_add(1))?
             .with_log_capacity(total_events.saturating_add(1))?,
     );
-    let event_queue_depth = total_events.max(1024);
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     for stream_index in 0..config.pub_stream_count.max(1) {
@@ -404,7 +438,18 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let addr = server.local_addr()?;
     let mut broker_config = broker::config::BrokerConfig::from_env()?;
     broker_config.fanout_batch_size = config.batch_size.max(1);
-    broker_config.event_queue_depth = event_queue_depth;
+    if let Some(lanes) = config.sub_writer_lanes {
+        broker_config.subscriber_writer_lanes = lanes.max(1);
+    }
+    if let Some(shard) = config.sub_lane_shard.as_deref() {
+        broker_config.subscriber_lane_shard = match shard {
+            "auto" => broker::config::SubscriberLaneShard::Auto,
+            "subscriber_id_hash" => broker::config::SubscriberLaneShard::SubscriberIdHash,
+            "connection_id_hash" => broker::config::SubscriberLaneShard::ConnectionIdHash,
+            "round_robin_pin" => broker::config::SubscriberLaneShard::RoundRobinPin,
+            _ => broker_config.subscriber_lane_shard,
+        };
+    }
     let (auth, auth_override) = resolve_demo_auth(&broker_config)?;
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
@@ -704,7 +749,7 @@ fn per_stream_events(total: usize, stream_count: usize, stream_index: usize) -> 
 
 fn print_result(result: &DemoResult) {
     println!(
-        "Results (publish n = {}, sampled {}, received {}, dropped {}) payload={}B fanout={} batch={} binary={}:",
+        "Results (publish n = {}, sampled {}, received {}, dropped {}) payload={}B fanout={} batch={} publish_fastpath={}:",
         result.publish_total,
         result.sample_total,
         result.received,
@@ -739,7 +784,7 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         return;
     };
     println!(
-        "  timings: client_pub_enqueue_wait p50={} p99={} p999={} client_encode p50={} p99={} client_binary_encode p50={} p99={} p999={} client_text_encode p50={} p99={} p999={} client_text_batch_build p50={} p99={} p999={} client_write p50={} p99={} client_send_await p50={} p99={} p999={} client_sub_read p50={} p99={} client_sub_read_await p50={} p99={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_sub_consumer_gap p50={} p99={} p999={} client_e2e_latency p50={} p99={} p999={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_write p50={} p99={} broker_sub_delivery p50={} p99={} p999={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_send p50={} p99={}",
+        "  timings: client_pub_enqueue_wait p50={} p99={} p999={} client_encode p50={} p99={} client_binary_encode p50={} p99={} p999={} client_text_encode p50={} p99={} p999={} client_text_batch_build p50={} p99={} p999={} client_write p50={} p99={} client_send_await p50={} p99={} p999={} client_sub_read p50={} p99={} client_sub_read_await p50={} p99={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_sub_consumer_gap p50={} p99={} p999={} client_e2e_latency p50={} p99={} p999={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_prefix_build p50={} p99={} broker_sub_write p50={} p99={} broker_sub_write_await p50={} p99={} broker_sub_delivery p50={} p99={} p999={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_fanout p50={} p99={} broker_publish_enqueue p50={} p99={} broker_publish_send p50={} p99={}",
         format_optional_duration(summary.client_pub_enqueue_wait_p50),
         format_optional_duration(summary.client_pub_enqueue_wait_p99),
         format_optional_duration(summary.client_pub_enqueue_wait_p999),
@@ -787,8 +832,12 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         format_optional_duration(summary.broker_quic_write_p99),
         format_optional_duration(summary.broker_sub_queue_wait_p50),
         format_optional_duration(summary.broker_sub_queue_wait_p99),
+        format_optional_duration(summary.broker_sub_prefix_build_p50),
+        format_optional_duration(summary.broker_sub_prefix_build_p99),
         format_optional_duration(summary.broker_sub_write_p50),
         format_optional_duration(summary.broker_sub_write_p99),
+        format_optional_duration(summary.broker_sub_write_await_p50),
+        format_optional_duration(summary.broker_sub_write_await_p99),
         format_optional_duration(summary.broker_sub_delivery_p50),
         format_optional_duration(summary.broker_sub_delivery_p99),
         format_optional_duration(summary.broker_sub_delivery_p999),
@@ -796,6 +845,10 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         format_optional_duration(summary.broker_publish_lookup_p99),
         format_optional_duration(summary.broker_publish_append_p50),
         format_optional_duration(summary.broker_publish_append_p99),
+        format_optional_duration(summary.broker_publish_fanout_p50),
+        format_optional_duration(summary.broker_publish_fanout_p99),
+        format_optional_duration(summary.broker_publish_enqueue_p50),
+        format_optional_duration(summary.broker_publish_enqueue_p99),
         format_optional_duration(summary.broker_publish_send_p50),
         format_optional_duration(summary.broker_publish_send_p99),
     );
@@ -981,7 +1034,9 @@ fn build_timing_summary(
         mut broker_ack,
         mut broker_quic_write,
         mut broker_sub_queue,
+        mut broker_sub_prefix,
         mut broker_sub_write,
+        mut broker_sub_write_await,
         mut broker_sub_delivery,
     ) = broker_samples.unwrap_or_else(|| {
         (
@@ -992,10 +1047,18 @@ fn build_timing_summary(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
     });
-    let (mut broker_publish_lookup, mut broker_publish_append, mut broker_publish_send) =
-        broker_publish_samples.unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
+    let (
+        mut broker_publish_lookup,
+        mut broker_publish_append,
+        mut broker_publish_fanout,
+        mut broker_publish_enqueue,
+        mut broker_publish_send,
+    ) = broker_publish_samples
+        .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()));
     TimingSummary {
         client_pub_enqueue_wait_p50: percentile_ns(&mut client_pub_enqueue_wait, 0.50),
         client_pub_enqueue_wait_p99: percentile_ns(&mut client_pub_enqueue_wait, 0.99),
@@ -1044,8 +1107,12 @@ fn build_timing_summary(
         broker_quic_write_p99: percentile_ns(&mut broker_quic_write, 0.99),
         broker_sub_queue_wait_p50: percentile_ns(&mut broker_sub_queue, 0.50),
         broker_sub_queue_wait_p99: percentile_ns(&mut broker_sub_queue, 0.99),
+        broker_sub_prefix_build_p50: percentile_ns(&mut broker_sub_prefix, 0.50),
+        broker_sub_prefix_build_p99: percentile_ns(&mut broker_sub_prefix, 0.99),
         broker_sub_write_p50: percentile_ns(&mut broker_sub_write, 0.50),
         broker_sub_write_p99: percentile_ns(&mut broker_sub_write, 0.99),
+        broker_sub_write_await_p50: percentile_ns(&mut broker_sub_write_await, 0.50),
+        broker_sub_write_await_p99: percentile_ns(&mut broker_sub_write_await, 0.99),
         broker_sub_delivery_p50: percentile_ns(&mut broker_sub_delivery, 0.50),
         broker_sub_delivery_p99: percentile_ns(&mut broker_sub_delivery, 0.99),
         broker_sub_delivery_p999: percentile_ns(&mut broker_sub_delivery, 0.999),
@@ -1053,6 +1120,10 @@ fn build_timing_summary(
         broker_publish_lookup_p99: percentile_ns(&mut broker_publish_lookup, 0.99),
         broker_publish_append_p50: percentile_ns(&mut broker_publish_append, 0.50),
         broker_publish_append_p99: percentile_ns(&mut broker_publish_append, 0.99),
+        broker_publish_fanout_p50: percentile_ns(&mut broker_publish_fanout, 0.50),
+        broker_publish_fanout_p99: percentile_ns(&mut broker_publish_fanout, 0.99),
+        broker_publish_enqueue_p50: percentile_ns(&mut broker_publish_enqueue, 0.50),
+        broker_publish_enqueue_p99: percentile_ns(&mut broker_publish_enqueue, 0.99),
         broker_publish_send_p50: percentile_ns(&mut broker_publish_send, 0.50),
         broker_publish_send_p99: percentile_ns(&mut broker_publish_send, 0.99),
     }
@@ -1283,6 +1354,8 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: None,
             pub_stream_count: 1,
+            sub_writer_lanes: None,
+            sub_lane_shard: None,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -1306,6 +1379,8 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: Some("rr".to_string()),
             pub_stream_count: 1,
+            sub_writer_lanes: None,
+            sub_lane_shard: None,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -1339,16 +1414,22 @@ mod tests {
             "hash".to_string(),
             "--pub-stream-count".to_string(),
             "2".to_string(),
+            "--sub-writer-lanes".to_string(),
+            "8".to_string(),
+            "--sub-lane-shard".to_string(),
+            "connection_id_hash".to_string(),
             "--payloads".to_string(),
             "1,2".to_string(),
             "--fanouts".to_string(),
             "1,3".to_string(),
         ];
-        let (_config, matrix, payloads, fanouts, all) = parse_args_from(args.into_iter());
+        let (config, matrix, payloads, fanouts, all) = parse_args_from(args.into_iter());
         assert!(matrix);
         assert_eq!(payloads, vec![1, 2]);
         assert_eq!(fanouts, vec![1, 3]);
         assert!(!all);
+        assert_eq!(config.sub_writer_lanes, Some(8));
+        assert_eq!(config.sub_lane_shard.as_deref(), Some("connection_id_hash"));
 
         assert_eq!(parse_csv_usize("1,2,3"), vec![1, 2, 3]);
         let payload = encode_payload(4);
@@ -1374,6 +1455,8 @@ mod tests {
                 pub_streams_per_conn: 1,
                 pub_sharding: None,
                 pub_stream_count: 1,
+                sub_writer_lanes: None,
+                sub_lane_shard: None,
             })
             .contains("latency-focused")
         );
@@ -1390,6 +1473,8 @@ mod tests {
                 pub_streams_per_conn: 1,
                 pub_sharding: None,
                 pub_stream_count: 1,
+                sub_writer_lanes: None,
+                sub_lane_shard: None,
             })
             .contains("throughput-focused")
         );
@@ -1424,6 +1509,8 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: None,
             pub_stream_count: 1,
+            sub_writer_lanes: None,
+            sub_lane_shard: None,
         };
         tokio::time::timeout(Duration::from_secs(20), run_all_with_mode(base, true))
             .await

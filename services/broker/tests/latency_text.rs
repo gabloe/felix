@@ -93,9 +93,6 @@ fn jwks_from_public_key(public_key: &[u8], kid: &str) -> Jwks {
 
 #[tokio::test]
 async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
-    unsafe {
-        std::env::set_var("FELIX_EVENT_QUEUE_DEPTH", "10000");
-    }
     let broker = Arc::new(
         Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(6000)?

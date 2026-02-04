@@ -45,12 +45,16 @@ cache_conn_recv_window: 268435456
 cache_stream_recv_window: 67108864
 cache_send_window: 268435456
 event_batch_max_events: 64
-event_batch_max_bytes: 262144
+event_batch_max_bytes: 65536
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 1024
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
+subscriber_writer_lanes: 4
+subscriber_lane_queue_depth: 8192
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 ```
 
 ## Network Configuration
@@ -244,13 +248,13 @@ event_batch_max_events: 64
 
 **Type**: `usize` (bytes)
 
-**Default**: `262144` (256 KiB)
+**Default**: `65536` (64 KiB)
 
 **Environment**: `FELIX_EVENT_BATCH_MAX_BYTES`
 
 **Example**:
 ```yaml
-event_batch_max_bytes: 262144
+event_batch_max_bytes: 65536
 ```
 
 **Notes**:
@@ -282,7 +286,7 @@ event_batch_max_delay_us: 250
 
 ### `fanout_batch_size`
 
-**Description**: Number of subscribers to send to in parallel during fanout.
+**Description**: Publish-side fanout batching hint and subscribe delivery batch cap.
 
 **Type**: `usize` (count)
 
@@ -303,6 +307,87 @@ fanout_batch_size: 64
 ### Event Frame Encoding
 
 Subscription event delivery uses binary `EventBatch` frames.
+
+### Outbound Writer Lanes
+
+Broker outbound subscribe delivery uses lane-sharded writer tasks to reduce contention under
+high fanout / large payload workloads.
+
+#### `subscriber_queue_capacity`
+
+**Description**: Per-subscriber queue capacity in broker core (drop-on-full boundary).
+
+**Type**: `usize` (count)
+
+**Default**: `128`
+
+**Environment**: `FELIX_SUBSCRIBER_QUEUE_CAPACITY`
+
+```yaml
+subscriber_queue_capacity: 128
+```
+
+#### `subscriber_writer_lanes`
+
+**Description**: Requested number of outbound writer lanes.
+
+**Type**: `usize` (count)
+
+**Default**: `4`
+
+**Environment**: `FELIX_SUB_WRITER_LANES`
+
+```yaml
+subscriber_writer_lanes: 4
+```
+
+#### `subscriber_lane_queue_depth`
+
+**Description**: Bounded command queue depth per writer lane.
+
+**Type**: `usize` (count)
+
+**Default**: `8192`
+
+**Environment**: `FELIX_SUB_LANE_QUEUE_DEPTH`
+
+```yaml
+subscriber_lane_queue_depth: 8192
+```
+
+#### `max_subscriber_writer_lanes`
+
+**Description**: Safety clamp for `subscriber_writer_lanes` to avoid oversubscription regressions.
+
+**Type**: `usize` (count)
+
+**Default**: `8`
+
+**Environment**: `FELIX_MAX_SUB_WRITER_LANES`
+
+```yaml
+max_subscriber_writer_lanes: 8
+```
+
+#### `subscriber_lane_shard`
+
+**Description**: Lane assignment policy for subscriber outbound writes.
+
+**Type**: `enum` (`auto`, `subscriber_id_hash`, `connection_id_hash`, `round_robin_pin`)
+
+**Default**: `auto`
+
+**Environment**: `FELIX_SUB_LANE_SHARD`
+
+```yaml
+subscriber_lane_shard: auto
+```
+
+Policy guidance:
+- `auto`: Prefer connection-aware routing when connection id is available; fallback to subscriber id.
+- `subscriber_id_hash`: Good general distribution independent of connection topology.
+- `connection_id_hash`: Useful when many subscribers share connections and connection-local contention dominates.
+- `round_robin_pin`: Pins lane at subscribe-time; preserves ordering, but can underperform in skewed workloads.
 
 ## Cache Configuration
 
@@ -406,26 +491,6 @@ pub_queue_depth: 1024
 - Larger values allow more buffering under burst
 - Affects memory usage per worker
 - Consider with `publish_queue_wait_timeout_ms`
-
-### `event_queue_depth`
-
-**Description**: Subscription event queue depth.
-
-**Type**: `usize` (count)
-
-**Default**: `1024`
-
-**Environment**: `FELIX_EVENT_QUEUE_DEPTH`
-
-**Example**:
-```yaml
-event_queue_depth: 1024
-```
-
-**Recommendations**:
-- Sufficient to absorb bursts without blocking fanout
-- Larger values for high-fanout scenarios
-- Balance with memory constraints
 
 ## Performance Configuration
 
@@ -534,6 +599,9 @@ FELIX_BROKER_CONFIG=/path/to/config.yml cargo run --release -p broker
 event_batch_max_events: 1
 event_batch_max_delay_us: 50
 fanout_batch_size: 16
+subscriber_writer_lanes: 2
+subscriber_lane_shard: auto
+subscriber_queue_capacity: 64
 disable_timings: true
 ```
 
@@ -541,8 +609,12 @@ disable_timings: true
 
 ```yaml
 event_batch_max_events: 64
+event_batch_max_bytes: 65536
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
+subscriber_writer_lanes: 4
+subscriber_lane_shard: auto
+subscriber_queue_capacity: 128
 disable_timings: false
 cache_conn_recv_window: 268435456
 ```
@@ -554,6 +626,10 @@ event_batch_max_events: 256
 event_batch_max_bytes: 1048576
 event_batch_max_delay_us: 1000
 fanout_batch_size: 128
+subscriber_writer_lanes: 8
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
+subscriber_queue_capacity: 256
 disable_timings: true
 ```
 
@@ -563,7 +639,8 @@ disable_timings: true
 cache_conn_recv_window: 536870912
 cache_stream_recv_window: 134217728
 cache_send_window: 536870912
-event_queue_depth: 2048
+subscriber_queue_capacity: 2048
+subscriber_lane_queue_depth: 16384
 pub_queue_depth: 2048
 ```
 
@@ -587,6 +664,8 @@ ack_on_commit: true
 disable_timings: true
 event_batch_max_events: 64
 event_batch_max_delay_us: 250
+subscriber_writer_lanes: 4
+subscriber_lane_shard: auto
 cache_conn_recv_window: 268435456
 ```
 
@@ -600,8 +679,10 @@ controlplane_sync_interval_ms: 2000
 ack_on_commit: true
 disable_timings: true
 event_batch_max_events: 128
-event_batch_max_bytes: 524288
+event_batch_max_bytes: 262144
 fanout_batch_size: 128
+subscriber_writer_lanes: 4
+subscriber_lane_shard: auto
 ```
 
 ## Next Steps
