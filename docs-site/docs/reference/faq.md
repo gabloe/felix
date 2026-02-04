@@ -215,8 +215,9 @@ High fanout (100+ subscribers):
 # Increase fanout batch size
 export FELIX_FANOUT_BATCH="128"
 
-# Increase event queue depth
-export FELIX_EVENT_QUEUE_DEPTH="2048"
+# Increase per-subscriber buffering
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="256"
+export FELIX_SUB_WRITER_LANES="4"
 
 # Enable batching
 export FELIX_EVENT_BATCH_MAX_EVENTS="128"
@@ -318,7 +319,7 @@ export FELIX_EVENT_CONN_POOL="4"
 3. **Reduce queue depths**:
 ```bash
 export FELIX_BROKER_PUB_QUEUE_DEPTH="512"
-export FELIX_EVENT_QUEUE_DEPTH="512"
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="64"
 ```
 
 4. **Limit concurrent connections**: Configure client connection limits.

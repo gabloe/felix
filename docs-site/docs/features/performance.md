@@ -11,6 +11,7 @@ Felix performance is determined by several interconnected factors:
 3. **Parallelism**: Connection pools and worker threads
 4. **Buffering**: Queue depths and flow control windows
 5. **Encoding**: Binary wire framing efficiency
+6. **Outbound lanes**: Subscriber writer lane count and lane sharding policy
 
 ## Performance Profiles
 
@@ -37,12 +38,17 @@ event_send_window: 268435456           # 256 MiB
 
 # Batching
 event_batch_max_events: 64
+event_batch_max_bytes: 65536
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
 
 # Queue depths
 pub_queue_depth: 1024
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
+subscriber_writer_lanes: 4
+subscriber_lane_queue_depth: 8192
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 
 publish_chunk_bytes: 16384
 ```
@@ -79,6 +85,7 @@ event_send_window: 67108864            # 64 MiB
 
 # Minimal batching
 event_batch_max_events: 8
+event_batch_max_bytes: 32768
 event_batch_max_delay_us: 100
 fanout_batch_size: 8
 
@@ -87,7 +94,9 @@ ack_on_commit: true
 
 # Shallow queues
 pub_queue_depth: 512
-event_queue_depth: 512
+subscriber_queue_capacity: 64
+subscriber_writer_lanes: 2
+subscriber_lane_shard: auto
 
 ```
 
@@ -125,6 +134,7 @@ event_send_window: 536870912           # 512 MiB
 
 # Aggressive batching
 event_batch_max_events: 256
+event_batch_max_bytes: 1048576
 event_batch_max_delay_us: 2000
 fanout_batch_size: 256
 
@@ -133,7 +143,10 @@ ack_on_commit: false
 
 # Deep queues
 pub_queue_depth: 4096
-event_queue_depth: 4096
+subscriber_queue_capacity: 256
+subscriber_writer_lanes: 8
+max_subscriber_writer_lanes: 8
+subscriber_lane_shard: auto
 
 publish_chunk_bytes: 32768
 ```
@@ -248,7 +261,8 @@ event_batch_max_delay_us: 2000
 
 ```yaml
 pub_queue_depth: 1024                  # Publish pipeline queue
-event_queue_depth: 1024                # Per-subscriber event queue
+subscriber_queue_capacity: 128         # Per-subscriber broker-core queue
+subscriber_lane_queue_depth: 8192      # Per-lane outbound writer queue
 pub_workers_per_conn: 4                # Publish workers per connection
 ```
 
@@ -263,9 +277,34 @@ pub_workers_per_conn: 4                # Publish workers per connection
 ```
 Queue memory ≈ queue_depth × avg_message_size
 
-Example: 1024 × 4KB = 4MB per queue
-With 100 subscribers: 100 × 4MB = 400MB
+Example: 128 × 4KB = 512KB per subscriber queue
+With 100 subscribers: 100 × 512KB = 50MB
 ```
+
+#### Outbound Writer Lanes and Sharding
+
+Writer lanes parallelize outbound subscriber writes while preserving per-subscriber ordering.
+
+```yaml
+subscriber_writer_lanes: 4
+max_subscriber_writer_lanes: 8
+subscriber_lane_queue_depth: 8192
+subscriber_lane_shard: auto  # auto | subscriber_id_hash | connection_id_hash | round_robin_pin
+```
+
+Recent release-mode sweeps (`payload=4096`, `batch=64`, `pub_conns=4`, `pub_streams_per_conn=2`):
+
+| Workload | Key Result |
+|----------|------------|
+| fanout=10 | lanes improved throughput from ~54.9k (1 lane) to ~68.2k (4 lanes); gains plateaued at higher lanes |
+| fanout=20 | lanes improved throughput from ~38.1k (1 lane) to ~44.8k (16 lanes); p99 improved with tuned lanes |
+| lanes=4 shard sweep | `auto` / `subscriber_id_hash` outperformed `connection_id_hash` / `round_robin_pin` in this workload |
+
+Start here:
+1. `subscriber_lane_shard: auto`
+2. `subscriber_writer_lanes: 4`
+3. Increase to `8` only if throughput is still lane-bound
+4. Avoid assuming larger lane counts always help; watch p99/p999
 
 ### Cache Parameters
 
@@ -297,25 +336,27 @@ Subscription event delivery uses binary `EventBatch` framing by default.
 
 ## Benchmark Results
 
-### Pub/Sub Latency (Localhost)
+### Pub/Sub Latency and Throughput (Release, Localhost)
 
-**Configuration**: Balanced profile, fanout=10, batch=64, payload=4KB
+Reference stress profile:
+- `payload=4096`
+- `batch=64`
+- `pub_conns=4`
+- `pub_streams_per_conn=2`
 
-| Metric | p50 | p95 | p99 | p999 |
-|--------|-----|-----|-----|------|
-| Publish ack | 200 µs | 380 µs | 520 µs | 850 µs |
-| End-to-end | 450 µs | 980 µs | 1.8 ms | 3.2 ms |
-| Fanout processing | 120 µs | 240 µs | 380 µs | 680 µs |
+Observed with writer lanes:
 
-### Pub/Sub Throughput
+| Workload | Result |
+|----------|--------|
+| fanout=10, lanes=1, shard=auto | ~54.9k msg/s, p99 ~67.4ms |
+| fanout=10, lanes=4, shard=auto | ~68.2k msg/s, p99 ~51.2ms |
+| fanout=20, lanes=1, shard=auto | ~38.1k msg/s, p99 ~65.4ms |
+| fanout=20, lanes=16, shard=auto | ~44.8k msg/s, p99 ~54.4ms |
+| fanout=10, lanes=4 shard sweep | `auto` / `subscriber_id_hash` best in this workload |
 
-| Fanout | Batch | Payload | Throughput | Notes |
-|--------|-------|---------|------------|-------|
-| 1 | 1 | 256 B | 85k msg/sec | Single publishes |
-| 1 | 64 | 256 B | 240k msg/sec | Batched |
-| 1 | 64 | 4 KB | 180k msg/sec | Large payloads |
-| 10 | 64 | 4 KB | 170k msg/sec | High fanout |
-| 100 | 64 | 4 KB | 120k msg/sec | Very high fanout |
+Takeaway:
+- Writer lanes materially improve heavy fanout/payload workloads.
+- Gains plateau; more lanes can stop helping depending on workload and host.
 
 ### Cache Performance (Localhost)
 
@@ -369,8 +410,8 @@ disable_timings: false                 # Enable timing measurements
 
 **High subscribe latency**:
 
-1. Check `event_queue_depth` - subscribers falling behind?
-2. Check `event_batch_delay_us` - batching too aggressive?
+1. Check `subscriber_queue_capacity` and lane drop counters - subscribers falling behind?
+2. Check `event_batch_max_delay_us` - batching too aggressive?
 3. Check QUIC flow control - windows exhausted?
 4. Check subscriber processing time - bottleneck in application?
 
@@ -401,7 +442,8 @@ event_conn_pool: 4
 cache_conn_pool: 4
 event_batch_max_events: 32
 pub_queue_depth: 512
-event_queue_depth: 512
+subscriber_queue_capacity: 64
+subscriber_writer_lanes: 2
 ```
 
 **Expected resources**: 2 CPU cores, 2-4 GB RAM
@@ -414,7 +456,8 @@ event_conn_pool: 8
 cache_conn_pool: 8
 event_batch_max_events: 64
 pub_queue_depth: 1024
-event_queue_depth: 1024
+subscriber_queue_capacity: 128
+subscriber_writer_lanes: 4
 ```
 
 **Expected resources**: 4-8 CPU cores, 4-8 GB RAM
@@ -427,7 +470,8 @@ event_conn_pool: 16
 cache_conn_pool: 16
 event_batch_max_events: 128
 pub_queue_depth: 2048
-event_queue_depth: 2048
+subscriber_queue_capacity: 256
+subscriber_writer_lanes: 8
 ```
 
 **Expected resources**: 16-32 CPU cores, 16-32 GB RAM
@@ -451,6 +495,7 @@ event_queue_depth: 2048
 - Publish rate and latency (p50, p99, p999)
 - Subscribe rate and latency
 - Queue depths (publish, event)
+- Lane queue pressure (per-lane enqueue/drop/highwater)
 - Connection count
 - CPU and memory usage
 - Network bandwidth

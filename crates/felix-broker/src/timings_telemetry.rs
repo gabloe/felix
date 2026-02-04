@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 struct TimingCollector {
     lookup_ns: Mutex<Vec<u64>>,
     append_ns: Mutex<Vec<u64>>,
+    fanout_ns: Mutex<Vec<u64>>,
+    enqueue_ns: Mutex<Vec<u64>>,
     send_ns: Mutex<Vec<u64>>,
     sample_every: usize,
     enabled: AtomicBool,
@@ -12,13 +14,15 @@ struct TimingCollector {
 
 static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
 
-pub type BrokerPublishSamples = (Vec<u64>, Vec<u64>, Vec<u64>);
+pub type BrokerPublishSamples = (Vec<u64>, Vec<u64>, Vec<u64>, Vec<u64>, Vec<u64>);
 
 pub fn enable_collection(sample_every: usize) {
     let sample_every = sample_every.max(1);
     let _ = COLLECTOR.set(TimingCollector {
         lookup_ns: Mutex::new(Vec::new()),
         append_ns: Mutex::new(Vec::new()),
+        fanout_ns: Mutex::new(Vec::new()),
+        enqueue_ns: Mutex::new(Vec::new()),
         send_ns: Mutex::new(Vec::new()),
         sample_every,
         enabled: AtomicBool::new(true),
@@ -57,6 +61,20 @@ pub fn record_append_ns(value: u64) {
     }
 }
 
+pub fn record_fanout_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector.fanout_ns.lock().expect("fanout lock");
+        guard.push(value);
+    }
+}
+
+pub fn record_enqueue_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector.enqueue_ns.lock().expect("enqueue lock");
+        guard.push(value);
+    }
+}
+
 pub fn record_send_ns(value: u64) {
     if let Some(collector) = COLLECTOR.get() {
         let mut guard = collector.send_ns.lock().expect("send lock");
@@ -68,10 +86,14 @@ pub fn take_samples() -> Option<BrokerPublishSamples> {
     let collector = COLLECTOR.get()?;
     let mut lookup = collector.lookup_ns.lock().expect("lookup lock");
     let mut append = collector.append_ns.lock().expect("append lock");
+    let mut fanout = collector.fanout_ns.lock().expect("fanout lock");
+    let mut enqueue = collector.enqueue_ns.lock().expect("enqueue lock");
     let mut send = collector.send_ns.lock().expect("send lock");
     Some((
         std::mem::take(&mut *lookup),
         std::mem::take(&mut *append),
+        std::mem::take(&mut *fanout),
+        std::mem::take(&mut *enqueue),
         std::mem::take(&mut *send),
     ))
 }
@@ -169,7 +191,7 @@ mod tests {
         enable_collection(1);
         record_lookup_ns(100);
         record_lookup_ns(200);
-        let (lookup, _, _) = take_samples().expect("samples");
+        let (lookup, _, _, _, _) = take_samples().expect("samples");
         assert_eq!(lookup, vec![100, 200]);
     }
 
@@ -180,8 +202,20 @@ mod tests {
         enable_collection(1);
         record_append_ns(300);
         record_append_ns(400);
-        let (_, append, _) = take_samples().expect("samples");
+        let (_, append, _, _, _) = take_samples().expect("samples");
         assert_eq!(append, vec![300, 400]);
+    }
+
+    #[test]
+    #[serial]
+    fn record_fanout_enqueue_ns_stores_value() {
+        reset_collector();
+        enable_collection(1);
+        record_fanout_ns(410);
+        record_enqueue_ns(420);
+        let (_, _, fanout, enqueue, _) = take_samples().expect("samples");
+        assert_eq!(fanout, vec![410]);
+        assert_eq!(enqueue, vec![420]);
     }
 
     #[test]
@@ -191,7 +225,7 @@ mod tests {
         enable_collection(1);
         record_send_ns(500);
         record_send_ns(600);
-        let (_, _, send) = take_samples().expect("samples");
+        let (_, _, _, _, send) = take_samples().expect("samples");
         assert_eq!(send, vec![500, 600]);
     }
 
@@ -202,17 +236,23 @@ mod tests {
         enable_collection(1);
         record_lookup_ns(100);
         record_append_ns(200);
+        record_fanout_ns(250);
+        record_enqueue_ns(275);
         record_send_ns(300);
-        
-        let (lookup1, append1, send1) = take_samples().expect("samples");
+
+        let (lookup1, append1, fanout1, enqueue1, send1) = take_samples().expect("samples");
         assert_eq!(lookup1.len(), 1);
         assert_eq!(append1.len(), 1);
+        assert_eq!(fanout1.len(), 1);
+        assert_eq!(enqueue1.len(), 1);
         assert_eq!(send1.len(), 1);
-        
+
         // Second take should return empty vectors
-        let (lookup2, append2, send2) = take_samples().expect("samples");
+        let (lookup2, append2, fanout2, enqueue2, send2) = take_samples().expect("samples");
         assert!(lookup2.is_empty());
         assert!(append2.is_empty());
+        assert!(fanout2.is_empty());
+        assert!(enqueue2.is_empty());
         assert!(send2.is_empty());
     }
 
@@ -230,6 +270,8 @@ mod tests {
         // Should not crash
         record_lookup_ns(100);
         record_append_ns(200);
+        record_fanout_ns(250);
+        record_enqueue_ns(275);
         record_send_ns(300);
         assert!(take_samples().is_none());
     }

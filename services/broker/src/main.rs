@@ -67,15 +67,17 @@ where
     let metrics_handle = observability::init_observability("felix-broker");
     // Observability is initialized first so any subsequent startup logs/metrics are captured.
 
-    // Start an in-process broker.
-    // For the MVP we use an in-memory cache backend; production will typically select a
-    // durable/clustered backend via configuration.
-    let broker = Broker::new(EphemeralCache::new().into());
-    tracing::info!("broker started");
-
     let config = config::BrokerConfig::from_env_or_yaml()?;
     // Configuration is resolved from environment variables (and optionally a YAML file).
     // Keep this early so the remainder of startup is entirely driven by `config`.
+
+    // Start an in-process broker.
+    // For the MVP we use an in-memory cache backend; production will typically select a
+    // durable/clustered backend via configuration.
+    let broker = Broker::new(EphemeralCache::new().into())
+        .with_topic_capacity(config.subscriber_queue_capacity.max(1))
+        .context("configure subscriber queue depth")?;
+    tracing::info!("broker started");
     let controlplane_url = config
         .controlplane_url
         .clone()

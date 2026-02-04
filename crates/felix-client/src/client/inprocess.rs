@@ -1,9 +1,8 @@
 // In-process broker client wrapper.
 use anyhow::Result;
 use bytes::Bytes;
-use felix_broker::Broker;
+use felix_broker::{Broker, Subscription};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 /// Client wrapper that talks to an in-process broker.
 ///
@@ -65,13 +64,13 @@ impl InProcessClient {
             .map_err(Into::into)
     }
 
-    // Subscribe to a topic and return a broadcast receiver.
+    // Subscribe to a topic and return a managed subscription.
     pub async fn subscribe(
         &self,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-    ) -> Result<broadcast::Receiver<Bytes>> {
+    ) -> Result<Subscription> {
         self.broker
             .subscribe(tenant_id, namespace, stream)
             .await

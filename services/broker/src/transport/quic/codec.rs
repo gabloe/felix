@@ -93,22 +93,3 @@ pub async fn write_frame(send: &mut SendStream, frame: &Frame) -> Result<()> {
     }
     Ok(())
 }
-
-// Write raw pre-encoded bytes (used for cached responses).
-pub async fn write_frame_bytes(send: &mut SendStream, bytes: Bytes) -> Result<()> {
-    send.write_all(&bytes)
-        .await
-        .context("write frame")
-        .map(|_| {
-            #[cfg(feature = "telemetry")]
-            {
-                let counters = telemetry::frame_counters();
-                counters
-                    .frames_out_ok
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                counters
-                    .bytes_out
-                    .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            }
-        })
-}

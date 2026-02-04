@@ -178,7 +178,7 @@ pub struct Subscription {
 
 **Buffer behavior**:
 
-- Each subscriber has `event_queue_depth` buffer slots (default: 1024)
+- Each subscriber has `subscriber_queue_capacity` buffer slots (default: 128)
 - When buffer fills, new events are **dropped for that subscriber only**
 - Other subscribers continue receiving events normally
 - No explicit notification of drops in MVP (future: lag metrics)
@@ -187,14 +187,16 @@ pub struct Subscription {
 
 ```yaml
 # Broker config
-event_queue_depth: 1024  # Per-subscriber buffer size
+subscriber_queue_capacity: 128  # Per-subscriber buffer size
+subscriber_writer_lanes: 4
+subscriber_lane_shard: auto
 
 # Larger buffer tolerates more bursty subscribers
-event_queue_depth: 4096  # Trade memory for burst tolerance
+subscriber_queue_capacity: 256  # Trade memory for burst tolerance
 ```
 
 !!! tip "Sizing Buffer Depth"
-    Choose `event_queue_depth` based on:
+    Choose `subscriber_queue_capacity` based on:
     - Expected subscriber processing latency variance
     - Memory budget (depth × average event size × subscriber count)
     - Tolerance for temporary slowdowns

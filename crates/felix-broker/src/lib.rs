@@ -1,12 +1,15 @@
 // In-process pub/sub broker with a tiny cache hook.
 // The broker enforces tenant/namespace/stream existence via local registries
 // that are kept in sync by the control plane watcher.
+use arc_swap::ArcSwap;
 use bytes::Bytes;
 use felix_storage::StorageApi;
+use parking_lot::Mutex;
+use slab::Slab;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Weak};
 use std::time::Instant;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, mpsc};
 
 pub mod timings;
 
@@ -102,10 +105,25 @@ struct LogEntry {
 
 #[derive(Debug)]
 struct StreamState {
-    // Broadcast channel for live subscribers.
-    sender: broadcast::Sender<Bytes>,
+    // Snapshot used by publish hot path: lock-free read, no per-publish allocation.
+    subscribers_snapshot: ArcSwap<Vec<SubscriberEntry>>,
+    // Inner registry mutated only on subscribe/unsubscribe paths.
+    subscribers: Mutex<SubscriberRegistry>,
     // In-memory log for cursor-based replay.
     log_state: Mutex<LogState>,
+    // Per-subscriber bounded queue depth.
+    subscriber_queue_capacity: usize,
+}
+
+#[derive(Debug, Default)]
+struct SubscriberRegistry {
+    senders: Slab<mpsc::Sender<Bytes>>,
+}
+
+#[derive(Debug, Clone)]
+struct SubscriberEntry {
+    id: usize,
+    sender: mpsc::Sender<Bytes>,
 }
 
 #[derive(Debug)]
@@ -117,56 +135,109 @@ struct LogState {
 }
 
 impl StreamState {
-    fn new(topic_capacity: usize) -> Self {
-        // We throw away the receiver because you should subscribe to the
-        // sender. You can see this in the subscribe and subscribe_with_cursor
-        // functions.
-        let (sender, _) = broadcast::channel(topic_capacity);
+    fn new(subscriber_queue_capacity: usize) -> Self {
         Self {
-            sender,
+            subscribers_snapshot: ArcSwap::from_pointee(Vec::new()),
+            subscribers: Mutex::new(SubscriberRegistry::default()),
             log_state: Mutex::new(LogState {
                 log: VecDeque::new(),
                 next_seq: 0,
             }),
+            subscriber_queue_capacity,
         }
     }
 
-    fn append(&self, payload: Bytes, log_capacity: usize) -> u64 {
-        let mut validate_data = false;
-        let mut state = self.log_state.lock().unwrap_or_else(|poisoned| {
-            #[cfg(debug_assertions)]
-            println!("The lock was poisoned, attempting to fix data corruption.");
-            validate_data = true;
-            poisoned.into_inner()
-        });
+    fn register_subscriber(&self) -> (u64, mpsc::Receiver<Bytes>) {
+        let mut state = self.subscribers.lock();
+        let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
+        let id = state.senders.insert(tx);
+        self.rebuild_subscriber_snapshot(&state);
+        (id as u64, rx)
+    }
 
-        let seq = state.next_seq;
+    fn remove_subscriber(&self, id: u64) {
+        let mut state = self.subscribers.lock();
+        let id = id as usize;
+        if state.senders.contains(id) {
+            state.senders.remove(id);
+            self.rebuild_subscriber_snapshot(&state);
+        }
+    }
 
-        // TODO : Figure out if this is enough, or even correct.
-        // Can only validate the data if we have some.
-        if validate_data && !state.log.is_empty() {
-            let top_seq = state.log.back().unwrap().seq;
-            if top_seq < seq {
-                // We updated the next_seq before the push, we could leave it but, it would leave
-                // a potential gap if we ever flush to persistent storage.
-                state.next_seq -= 1;
-            } else if top_seq > seq {
-                // This seems impossible to me.
-                panic!("seq {seq} is less than the current items seq {top_seq}")
+    fn remove_subscribers(&self, subscriber_ids: &[u64]) {
+        let mut state = self.subscribers.lock();
+        let mut removed = false;
+        for subscriber_id in subscriber_ids {
+            let id = *subscriber_id as usize;
+            if state.senders.contains(id) {
+                state.senders.remove(id);
+                removed = true;
+            }
+        }
+        if removed {
+            self.rebuild_subscriber_snapshot(&state);
+        }
+    }
+
+    #[inline]
+    fn subscriber_snapshot(&self) -> Arc<Vec<SubscriberEntry>> {
+        self.subscribers_snapshot.load_full()
+    }
+
+    fn rebuild_subscriber_snapshot(&self, state: &SubscriberRegistry) {
+        let snapshot = state
+            .senders
+            .iter()
+            .map(|(id, sender)| SubscriberEntry {
+                id,
+                sender: sender.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.subscribers_snapshot.store(Arc::new(snapshot));
+    }
+
+    #[cfg(test)]
+    fn subscriber_count(&self) -> usize {
+        let state = self.subscribers.lock();
+        state.senders.len()
+    }
+
+    fn append_batch(&self, payloads: &[Bytes], log_capacity: usize) {
+        if payloads.is_empty() {
+            return;
+        }
+
+        // Hot path: one lock per publish batch (instead of per payload).
+        let mut state = self.log_state.lock();
+        #[cfg(debug_assertions)]
+        {
+            // Debug-only invariant check kept outside the append loop.
+            if let Some(last) = state.log.back() {
+                debug_assert!(last.seq < state.next_seq);
             }
         }
 
-        state.next_seq += 1;
-        state.log.push_back(LogEntry { seq, payload });
-        // Keep only the newest entries up to the configured capacity.
-        while state.log.len() > log_capacity {
-            state.log.pop_front();
+        for payload in payloads {
+            let seq = state.next_seq;
+            state.next_seq = state
+                .next_seq
+                .checked_add(1)
+                .expect("log sequence overflow");
+            state.log.push_back(LogEntry {
+                seq,
+                payload: payload.clone(),
+            });
         }
-        seq
+
+        // Trim once after append to keep the newest `log_capacity` entries.
+        let overflow = state.log.len().saturating_sub(log_capacity);
+        if overflow > 0 {
+            state.log.drain(..overflow);
+        }
     }
 
     fn snapshot_range(&self, from_seq: u64, to_seq: u64) -> (u64, Vec<Bytes>) {
-        let state = self.log_state.lock().expect("log lock");
+        let state = self.log_state.lock();
 
         // We return this to let the caller know if they need to indicate
         // they are requesting entries which are too far back in time.
@@ -190,9 +261,45 @@ impl StreamState {
     }
 
     fn tail_seq(&self) -> u64 {
-        let state = self.log_state.lock().expect("log lock");
+        let state = self.log_state.lock();
         // The cursor tail points to the next sequence to be published.
         state.next_seq
+    }
+}
+
+/// RAII handle that unregisters a stream subscriber on drop.
+#[derive(Debug)]
+pub struct SubscriptionGuard {
+    stream_state: Weak<StreamState>,
+    subscriber_id: u64,
+}
+
+impl Drop for SubscriptionGuard {
+    fn drop(&mut self) {
+        if let Some(stream_state) = self.stream_state.upgrade() {
+            stream_state.remove_subscriber(self.subscriber_id);
+        }
+    }
+}
+
+/// Receiver wrapper that keeps the unsubscribe guard alive for the receiver lifetime.
+#[derive(Debug)]
+pub struct Subscription {
+    receiver: mpsc::Receiver<Bytes>,
+    guard: SubscriptionGuard,
+}
+
+impl Subscription {
+    pub async fn recv(&mut self) -> Option<Bytes> {
+        self.receiver.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> std::result::Result<Bytes, mpsc::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
+
+    pub fn into_parts(self) -> (mpsc::Receiver<Bytes>, SubscriptionGuard) {
+        (self.receiver, self.guard)
     }
 }
 
@@ -232,7 +339,7 @@ impl StreamState {
 /// ```
 #[derive(Debug)]
 pub struct Broker {
-    // Map of stream key -> stream state (broadcast + log).
+    // Map of stream key -> stream state (subscriber registry + log).
     topics: RwLock<HashMap<StreamKey, Arc<StreamState>>>,
     // Map of stream key -> metadata for existence checks.
     streams: RwLock<HashMap<StreamKey, StreamMetadata>>,
@@ -244,7 +351,7 @@ pub struct Broker {
     namespaces: RwLock<HashMap<NamespaceKey, ()>>,
     // Ephemeral cache used by demos and simple workflows.
     cache: Box<dyn StorageApi + Send>,
-    // Broadcast channel capacity for each topic.
+    // Per-subscriber queue capacity for each stream.
     topic_capacity: usize,
     // Per-topic in-memory log capacity.
     log_capacity: usize,
@@ -382,7 +489,9 @@ impl Broker {
             .await?;
 
         // Fan-out to current subscribers.
-        // TODO: handle backpressure issues gracefully. Too much backpressure will cause performance degradation and possibly send errors.
+        // We intentionally avoid a global broadcast channel here:
+        // each subscriber has a bounded queue and publish uses try_send so a slow consumer
+        // drops locally instead of stalling all publishers.
         let sample = t_should_sample();
         let lookup_start = t_now_if(sample);
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
@@ -395,9 +504,7 @@ impl Broker {
 
         let append_start = t_now_if(sample);
         // Append to the in-memory log first so cursors can replay.
-        for payload in payloads {
-            stream_state.append(payload.clone(), self.log_capacity);
-        }
+        stream_state.append_batch(payloads, self.log_capacity);
 
         if let Some(start) = append_start {
             let append_ns = start.elapsed().as_nanos() as u64;
@@ -406,15 +513,67 @@ impl Broker {
         }
 
         let send_start = t_now_if(sample);
+        let senders = stream_state.subscriber_snapshot();
+        let fanout = senders.len();
+        let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+        let _fanout_label = fanout.to_string();
+        let _payload_bytes_label = payload_bytes.to_string();
+
+        let fanout_start = t_now_if(sample);
+        let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
-        // Broadcast to current subscribers; lagging receivers may drop.
-        for payload in payloads {
-            sent += stream_state.sender.send(payload.clone()).unwrap_or(0);
+        let enqueue_start = t_now_if(sample);
+        for subscriber in senders.iter() {
+            for payload in payloads {
+                match subscriber.sender.try_send(payload.clone()) {
+                    Ok(()) => {
+                        sent += 1;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        metrics::counter!("felix_subscribe_dropped_total").increment(1);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        closed_subscribers.push(subscriber.id as u64);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_enqueue_ns(enqueue_ns);
+            t_histogram!(
+                "broker_publish_enqueue_ns",
+                "fanout" => _fanout_label.clone(),
+                "payload_bytes" => _payload_bytes_label.clone()
+            )
+            .record(enqueue_ns as f64);
+        }
+
+        if !closed_subscribers.is_empty() {
+            closed_subscribers.sort_unstable();
+            closed_subscribers.dedup();
+            stream_state.remove_subscribers(&closed_subscribers);
+        }
+        if let Some(start) = fanout_start {
+            let fanout_ns = start.elapsed().as_nanos() as u64;
+            timings::record_fanout_ns(fanout_ns);
+            t_histogram!(
+                "broker_publish_fanout_total_ns",
+                "fanout" => _fanout_label.clone(),
+                "payload_bytes" => _payload_bytes_label.clone()
+            )
+            .record(fanout_ns as f64);
         }
         if let Some(start) = send_start {
             let send_ns = start.elapsed().as_nanos() as u64;
             timings::record_send_ns(send_ns);
-            t_histogram!("broker_publish_send_ns").record(send_ns as f64);
+            t_histogram!(
+                "broker_publish_send_ns",
+                "fanout" => _fanout_label,
+                "payload_bytes" => _payload_bytes_label
+            )
+            .record(send_ns as f64);
         }
         Ok(sent)
     }
@@ -424,13 +583,20 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-    ) -> Result<broadcast::Receiver<Bytes>> {
+    ) -> Result<Subscription> {
         // Fast-path guard: reject unknown scopes before opening a receiver.
         self.assert_stream_exists(tenant_id, namespace, stream)
             .await?;
 
         let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
-        Ok(stream_state.sender.subscribe())
+        let (subscriber_id, receiver) = stream_state.register_subscriber();
+        Ok(Subscription {
+            receiver,
+            guard: SubscriptionGuard {
+                stream_state: Arc::downgrade(&stream_state),
+                subscriber_id,
+            },
+        })
     }
 
     // Return a cursor positioned at the tail of the stream log.
@@ -458,7 +624,7 @@ impl Broker {
         namespace: &str,
         stream: &str,
         cursor: Cursor,
-    ) -> Result<(Vec<Bytes>, broadcast::Receiver<Bytes>)> {
+    ) -> Result<(Vec<Bytes>, Subscription)> {
         // Fast-path guard: reject unknown scopes before touching the stream map.
         self.assert_stream_exists(tenant_id, namespace, stream)
             .await?;
@@ -474,7 +640,17 @@ impl Broker {
             });
         }
         // Return backlog for replay plus a live subscription for new events.
-        Ok((backlog, stream_state.sender.subscribe()))
+        let (subscriber_id, receiver) = stream_state.register_subscriber();
+        Ok((
+            backlog,
+            Subscription {
+                receiver,
+                guard: SubscriptionGuard {
+                    stream_state: Arc::downgrade(&stream_state),
+                    subscriber_id,
+                },
+            },
+        ))
     }
 
     pub fn cache(&self) -> &(dyn StorageApi + Send) {
@@ -735,6 +911,7 @@ impl Broker {
 mod tests {
     use super::*;
     use felix_storage::EphemeralCache;
+    use std::time::Instant;
 
     #[tokio::test]
     async fn publish_delivers_to_subscriber() {
@@ -808,8 +985,42 @@ mod tests {
         assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"two"));
     }
 
+    #[test]
+    fn append_batch_keeps_monotonic_sequences_and_trims_once() {
+        let stream = StreamState::new(8);
+        let first = vec![
+            Bytes::from_static(b"a"),
+            Bytes::from_static(b"b"),
+            Bytes::from_static(b"c"),
+            Bytes::from_static(b"d"),
+            Bytes::from_static(b"e"),
+        ];
+        stream.append_batch(&first, 3);
+        let second = vec![Bytes::from_static(b"f"), Bytes::from_static(b"g")];
+        stream.append_batch(&second, 3);
+
+        let state = stream.log_state.lock();
+        let seqs = state.log.iter().map(|entry| entry.seq).collect::<Vec<_>>();
+        let payloads = state
+            .log
+            .iter()
+            .map(|entry| entry.payload.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(state.next_seq, 7);
+        assert_eq!(seqs, vec![4, 5, 6]);
+        assert_eq!(
+            payloads,
+            vec![
+                Bytes::from_static(b"e"),
+                Bytes::from_static(b"f"),
+                Bytes::from_static(b"g")
+            ]
+        );
+    }
+
     #[tokio::test]
-    async fn lagging_subscriber_drops_messages() {
+    async fn slow_subscriber_drops_messages_without_blocking_publish() {
         let broker = Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(1)
             .expect("capacity");
@@ -830,14 +1041,13 @@ mod tests {
             .publish("t1", "default", "laggy", Bytes::from_static(b"one"))
             .await
             .expect("publish");
-        broker
+        let delivered = broker
             .publish("t1", "default", "laggy", Bytes::from_static(b"two"))
             .await
             .expect("publish");
-        match sub.recv().await {
-            Err(broadcast::error::RecvError::Lagged(_)) => {}
-            other => panic!("expected lagged error, got {other:?}"),
-        }
+        assert_eq!(delivered, 0);
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"one"));
+        assert!(sub.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -871,6 +1081,109 @@ mod tests {
         assert_eq!(
             sub_b.recv().await.expect("recv"),
             Bytes::from_static(b"fanout")
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_drop_unregisters_subscriber() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("register");
+
+        let stream_state = broker
+            .get_stream_state("t1", "default", "orders")
+            .await
+            .expect("stream state");
+        assert_eq!(stream_state.subscriber_count(), 0);
+
+        let sub = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
+        assert_eq!(stream_state.subscriber_count(), 1);
+        drop(sub);
+        assert_eq!(stream_state.subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "microbenchmark: run explicitly for perf validation"]
+    async fn perf_hot_path_payload_4096_fanout_1_batch_64_binary() {
+        let broker = Broker::new(EphemeralCache::new().into())
+            .with_topic_capacity(16_384)
+            .expect("capacity");
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("stream");
+
+        let mut sub = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
+        let iterations = 200usize;
+        let payloads: Vec<Bytes> = (0..64).map(|_| Bytes::from(vec![0xAB; 4096])).collect();
+        let expected = iterations * payloads.len();
+
+        let drain = tokio::spawn(async move {
+            for _ in 0..expected {
+                let _ = sub.recv().await;
+            }
+        });
+
+        let stream_state = broker
+            .get_stream_state("t1", "default", "orders")
+            .await
+            .expect("stream_state");
+
+        let mut snapshot_ns = 0u128;
+        let mut publish_ns = 0u128;
+        let mut encode_ns = 0u128;
+        let mut write_ns = 0u128;
+
+        for _ in 0..iterations {
+            let start = Instant::now();
+            let _ = stream_state.subscriber_snapshot();
+            snapshot_ns += start.elapsed().as_nanos();
+
+            let start = Instant::now();
+            broker
+                .publish_batch("t1", "default", "orders", &payloads)
+                .await
+                .expect("publish");
+            publish_ns += start.elapsed().as_nanos();
+
+            let start = Instant::now();
+            let frame = felix_wire::binary::encode_event_batch_bytes(1, &payloads)
+                .expect("encode binary event batch");
+            encode_ns += start.elapsed().as_nanos();
+
+            let start = Instant::now();
+            let mut io_buf = Vec::with_capacity(frame.len());
+            io_buf.extend_from_slice(frame.as_ref());
+            write_ns += start.elapsed().as_nanos();
+        }
+
+        drain.await.expect("drain");
+
+        println!(
+            "perf payload=4096 fanout=1 batch=64 binary=true iterations={} snapshot_avg_us={:.2} publish_avg_us={:.2} encode_avg_us={:.2} write_avg_us={:.2}",
+            iterations,
+            snapshot_ns as f64 / iterations as f64 / 1_000.0,
+            publish_ns as f64 / iterations as f64 / 1_000.0,
+            encode_ns as f64 / iterations as f64 / 1_000.0,
+            write_ns as f64 / iterations as f64 / 1_000.0,
         );
     }
 

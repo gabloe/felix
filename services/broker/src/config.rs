@@ -45,8 +45,39 @@ pub struct BrokerConfig {
     pub pub_workers_per_conn: usize,
     // Per-worker publish queue depth.
     pub pub_queue_depth: usize,
-    // Subscription event queue depth.
-    pub event_queue_depth: usize,
+    // Per-subscriber queue capacity in broker core.
+    pub subscriber_queue_capacity: usize,
+    // Number of outbound subscriber writer lanes.
+    pub subscriber_writer_lanes: usize,
+    // Bounded queue depth per writer lane.
+    pub subscriber_lane_queue_depth: usize,
+    // Upper bound to prevent over-sharding lane counts that can regress p99/p999 under load.
+    pub max_subscriber_writer_lanes: usize,
+    // Deterministic policy for assigning subscribers to writer lanes.
+    pub subscriber_lane_shard: SubscriberLaneShard,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriberLaneShard {
+    // Prefer connection-aware routing when a connection id is known, else fallback to subscriber id.
+    Auto,
+    SubscriberIdHash,
+    ConnectionIdHash,
+    // Assign once at subscribe time and keep lane pinned (ordering-safe RR variant).
+    RoundRobinPin,
+}
+
+impl SubscriberLaneShard {
+    fn parse_env(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "subscriber_id_hash" => Some(Self::SubscriberIdHash),
+            "connection_id_hash" => Some(Self::ConnectionIdHash),
+            "round_robin_pin" => Some(Self::RoundRobinPin),
+            _ => None,
+        }
+    }
 }
 
 const DEFAULT_BROKER_CONFIG_PATH: &str = "/usr/local/felix/config.yml";
@@ -61,7 +92,11 @@ const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 1024;
-const DEFAULT_EVENT_QUEUE_DEPTH: usize = 1024;
+const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
+const DEFAULT_SUBSCRIBER_WRITER_LANES: usize = 4;
+const DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH: usize = 8192;
+const DEFAULT_MAX_SUBSCRIBER_WRITER_LANES: usize = 8;
+const DEFAULT_SUBSCRIBER_LANE_SHARD: SubscriberLaneShard = SubscriberLaneShard::Auto;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -84,7 +119,11 @@ struct BrokerConfigOverride {
     fanout_batch_size: Option<usize>,
     pub_workers_per_conn: Option<usize>,
     pub_queue_depth: Option<usize>,
-    event_queue_depth: Option<usize>,
+    subscriber_queue_capacity: Option<usize>,
+    subscriber_writer_lanes: Option<usize>,
+    subscriber_lane_queue_depth: Option<usize>,
+    max_subscriber_writer_lanes: Option<usize>,
+    subscriber_lane_shard: Option<SubscriberLaneShard>,
 }
 
 impl BrokerConfig {
@@ -157,7 +196,7 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
-            .unwrap_or(256 * 1024);
+            .unwrap_or(64 * 1024);
         let event_batch_max_delay_us = std::env::var("FELIX_EVENT_BATCH_MAX_DELAY_US")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -177,11 +216,30 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_PUB_QUEUE_DEPTH);
-        let event_queue_depth = std::env::var("FELIX_EVENT_QUEUE_DEPTH")
+        let subscriber_queue_capacity = std::env::var("FELIX_SUBSCRIBER_QUEUE_CAPACITY")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_EVENT_QUEUE_DEPTH);
+            .unwrap_or(DEFAULT_SUBSCRIBER_QUEUE_CAPACITY);
+        let subscriber_writer_lanes = std::env::var("FELIX_SUB_WRITER_LANES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SUBSCRIBER_WRITER_LANES);
+        let subscriber_lane_queue_depth = std::env::var("FELIX_SUB_LANE_QUEUE_DEPTH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH);
+        let max_subscriber_writer_lanes = std::env::var("FELIX_MAX_SUB_WRITER_LANES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_SUBSCRIBER_WRITER_LANES);
+        let subscriber_lane_shard = std::env::var("FELIX_SUB_LANE_SHARD")
+            .ok()
+            .and_then(|value| SubscriberLaneShard::parse_env(value.as_str()))
+            .unwrap_or(DEFAULT_SUBSCRIBER_LANE_SHARD);
         Ok(Self {
             quic_bind,
             metrics_bind,
@@ -202,7 +260,11 @@ impl BrokerConfig {
             fanout_batch_size,
             pub_workers_per_conn,
             pub_queue_depth,
-            event_queue_depth,
+            subscriber_queue_capacity,
+            subscriber_writer_lanes,
+            subscriber_lane_queue_depth,
+            max_subscriber_writer_lanes,
+            subscriber_lane_shard,
         })
     }
 
@@ -306,10 +368,28 @@ impl BrokerConfig {
             {
                 config.pub_queue_depth = value;
             }
-            if let Some(value) = override_cfg.event_queue_depth
+            if let Some(value) = override_cfg.subscriber_queue_capacity
                 && value > 0
             {
-                config.event_queue_depth = value;
+                config.subscriber_queue_capacity = value;
+            }
+            if let Some(value) = override_cfg.subscriber_writer_lanes
+                && value > 0
+            {
+                config.subscriber_writer_lanes = value;
+            }
+            if let Some(value) = override_cfg.subscriber_lane_queue_depth
+                && value > 0
+            {
+                config.subscriber_lane_queue_depth = value;
+            }
+            if let Some(value) = override_cfg.max_subscriber_writer_lanes
+                && value > 0
+            {
+                config.max_subscriber_writer_lanes = value;
+            }
+            if let Some(value) = override_cfg.subscriber_lane_shard {
+                config.subscriber_lane_shard = value;
             }
         }
         Ok(config)
@@ -356,6 +436,23 @@ mod tests {
             config.control_stream_drain_timeout_ms,
             DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS
         );
+        assert_eq!(
+            config.subscriber_queue_capacity,
+            DEFAULT_SUBSCRIBER_QUEUE_CAPACITY
+        );
+        assert_eq!(
+            config.subscriber_writer_lanes,
+            DEFAULT_SUBSCRIBER_WRITER_LANES
+        );
+        assert_eq!(
+            config.subscriber_lane_queue_depth,
+            DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH
+        );
+        assert_eq!(
+            config.max_subscriber_writer_lanes,
+            DEFAULT_MAX_SUBSCRIBER_WRITER_LANES
+        );
+        assert_eq!(config.subscriber_lane_shard, DEFAULT_SUBSCRIBER_LANE_SHARD);
     }
 
     #[serial]
@@ -379,6 +476,10 @@ mod tests {
             env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "128");
             env::set_var("FELIX_EVENT_BATCH_MAX_BYTES", "512000");
             env::set_var("FELIX_FANOUT_BATCH", "256");
+            env::set_var("FELIX_SUB_WRITER_LANES", "8");
+            env::set_var("FELIX_SUB_LANE_QUEUE_DEPTH", "4096");
+            env::set_var("FELIX_MAX_SUB_WRITER_LANES", "16");
+            env::set_var("FELIX_SUB_LANE_SHARD", "connection_id_hash");
         }
 
         let config = BrokerConfig::from_env().expect("from_env");
@@ -398,6 +499,13 @@ mod tests {
         assert_eq!(config.event_batch_max_events, 128);
         assert_eq!(config.event_batch_max_bytes, 512000);
         assert_eq!(config.fanout_batch_size, 256);
+        assert_eq!(config.subscriber_writer_lanes, 8);
+        assert_eq!(config.subscriber_lane_queue_depth, 4096);
+        assert_eq!(config.max_subscriber_writer_lanes, 16);
+        assert_eq!(
+            config.subscriber_lane_shard,
+            SubscriberLaneShard::ConnectionIdHash
+        );
 
         clear_felix_env();
     }
@@ -639,13 +747,13 @@ max_frame_bytes: 8000000
         unsafe {
             env::set_var("FELIX_BROKER_PUB_WORKERS_PER_CONN", "8");
             env::set_var("FELIX_BROKER_PUB_QUEUE_DEPTH", "2048");
-            env::set_var("FELIX_EVENT_QUEUE_DEPTH", "4096");
+            env::set_var("FELIX_SUBSCRIBER_QUEUE_CAPACITY", "256");
         }
 
         let config = BrokerConfig::from_env().expect("from_env");
         assert_eq!(config.pub_workers_per_conn, 8);
         assert_eq!(config.pub_queue_depth, 2048);
-        assert_eq!(config.event_queue_depth, 4096);
+        assert_eq!(config.subscriber_queue_capacity, 256);
 
         clear_felix_env();
     }
@@ -682,7 +790,7 @@ cache_stream_recv_window: 32000000
 cache_send_window: 128000000
 pub_workers_per_conn: 16
 pub_queue_depth: 4096
-event_queue_depth: 8192
+subscriber_queue_capacity: 96
 "#,
         )
         .unwrap();
@@ -696,7 +804,7 @@ event_queue_depth: 8192
         assert_eq!(config.cache_send_window, 128000000);
         assert_eq!(config.pub_workers_per_conn, 16);
         assert_eq!(config.pub_queue_depth, 4096);
-        assert_eq!(config.event_queue_depth, 8192);
+        assert_eq!(config.subscriber_queue_capacity, 96);
 
         clear_felix_env();
     }

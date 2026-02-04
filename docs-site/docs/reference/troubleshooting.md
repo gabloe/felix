@@ -299,7 +299,7 @@ export FELIX_EVENT_CONN_RECV_WINDOW="134217728"
 3. **Reduce queue depths**:
 ```bash
 export FELIX_BROKER_PUB_QUEUE_DEPTH="512"
-export FELIX_EVENT_QUEUE_DEPTH="512"
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="64"
 ```
 
 4. **Limit connection pools** (client-side):
