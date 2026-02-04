@@ -42,6 +42,7 @@ use crate::auth::oidc::OidcError;
 use crate::auth::principal;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::permissions::effective_permissions;
+use crate::auth::rbac::policy_store::GroupingRule;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -75,7 +76,7 @@ use utoipa::ToSchema;
 ///
 /// let req = TokenExchangeRequest {
 ///     requested: Some(vec!["stream.publish".to_string()]),
-///     resources: Some(vec!["stream:payments/*".to_string()]),
+///     resources: Some(vec!["stream:t1/payments/*".to_string()]),
 /// };
 /// assert!(req.requested.is_some());
 /// ```
@@ -235,11 +236,12 @@ pub async fn exchange_token(
         .list_rbac_policies(&tenant_id)
         .await
         .map_err(|err| api_internal("failed to load policies", &err))?;
-    let groupings = state
+    let mut groupings = state
         .store
         .list_rbac_groupings(&tenant_id)
         .await
         .map_err(|err| api_internal("failed to load groupings", &err))?;
+    add_group_claim_groupings(&mut groupings, &principal.principal_id, &principal.groups);
 
     // Step 7: Build the RBAC enforcer with explicit tenant scoping.
     // This guarantees we only evaluate policies within the tenant boundary.
@@ -329,6 +331,32 @@ fn filter_permissions(perms: Vec<String>, request: &TokenExchangeRequest) -> Vec
         .collect()
 }
 
+fn add_group_claim_groupings(
+    groupings: &mut Vec<GroupingRule>,
+    principal_id: &str,
+    groups: &[String],
+) {
+    // Materialize claim-based group memberships into ephemeral Casbin groupings
+    // for this exchange request only.
+    for group in groups {
+        let membership = GroupingRule {
+            user: principal_id.to_string(),
+            role: group_subject(group),
+        };
+        if !groupings.contains(&membership) {
+            groupings.push(membership);
+        }
+    }
+}
+
+fn group_subject(group: &str) -> String {
+    // Accept either raw group values or already-prefixed `group:*` subjects.
+    if group.starts_with("group:") {
+        return group.to_string();
+    }
+    format!("group:{group}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,8 +378,8 @@ mod tests {
         // This test prevents a regression where requested actions are ignored,
         // which would unintentionally broaden permissions.
         let perms = vec![
-            "stream.publish:stream:payments/*".to_string(),
-            "stream.subscribe:stream:payments/*".to_string(),
+            "stream.publish:stream:t1/payments/*".to_string(),
+            "stream.subscribe:stream:t1/payments/*".to_string(),
         ];
         let request = TokenExchangeRequest {
             requested: Some(vec!["stream.publish".to_string()]),
@@ -359,7 +387,44 @@ mod tests {
         };
         let filtered = filter_permissions(perms, &request);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0], "stream.publish:stream:payments/*");
+        assert_eq!(filtered[0], "stream.publish:stream:t1/payments/*");
+    }
+
+    #[test]
+    fn adds_group_claim_groupings_with_group_prefix() {
+        let mut groupings = Vec::new();
+        let principal = "p:user-1";
+        let groups = vec!["g1".to_string(), "group:ops".to_string()];
+        add_group_claim_groupings(&mut groupings, principal, &groups);
+
+        assert!(groupings.contains(&GroupingRule {
+            user: principal.to_string(),
+            role: "group:g1".to_string(),
+        }));
+        assert!(groupings.contains(&GroupingRule {
+            user: principal.to_string(),
+            role: "group:ops".to_string(),
+        }));
+    }
+
+    #[test]
+    fn dedupes_group_claim_groupings_against_existing_and_duplicates() {
+        let principal = "p:user-1";
+        let mut groupings = vec![GroupingRule {
+            user: principal.to_string(),
+            role: "group:g1".to_string(),
+        }];
+        let groups = vec!["g1".to_string(), "g1".to_string()];
+
+        add_group_claim_groupings(&mut groupings, principal, &groups);
+
+        assert_eq!(
+            groupings
+                .iter()
+                .filter(|grouping| grouping.user == principal && grouping.role == "group:g1")
+                .count(),
+            1
+        );
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {

@@ -22,7 +22,7 @@ Content-Type: application/json
 
 {
   "requested": ["stream.publish", "stream.subscribe", "cache.read"],
-  "resources": ["ns:payments", "stream:payments/orders/*"]
+  "resources": ["namespace:t1/payments", "stream:t1/payments/orders/*"]
 }
 ```
 
@@ -53,7 +53,7 @@ Required fields:
 
 ### Admin API: IdP Issuers
 
-Admin endpoints require a Felix token with `tenant.admin` for the tenant.
+IdP issuer admin endpoints require `tenant.manage` on `tenant:{tenant_id}`.
 
 Create or update an issuer for a tenant:
 
@@ -78,6 +78,28 @@ Delete an issuer:
 ```http
 DELETE /v1/tenants/{tenant_id}/idp-issuers/{issuer}
 ```
+
+### Admin API: RBAC
+
+RBAC endpoints are split by capability:
+
+- `GET /v1/tenants/{tenant_id}/rbac/policies` -> requires `rbac.view`
+- `GET /v1/tenants/{tenant_id}/rbac/groupings` -> requires `rbac.view`
+- `POST /v1/tenants/{tenant_id}/rbac/policies` -> requires `rbac.policy.manage`
+- `POST /v1/tenants/{tenant_id}/rbac/groupings` -> requires `rbac.assignment.manage`
+
+Scope is enforced server-side. Callers can only mutate rules/assignments within
+their own RBAC scope (tenant/namespace/stream/cache).
+
+Canonical object grammar for RBAC policy payloads:
+- `tenant:{tenant_id}`
+- `namespace:{tenant_id}/{namespace}` or `namespace:{tenant_id}/*`
+- `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
+- `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
+
+Rejected on write:
+- `tenant:*`
+- non-tenant-scoped wildcards such as `stream:*/*`
 
 ### Internal Bootstrap API (Day-0)
 

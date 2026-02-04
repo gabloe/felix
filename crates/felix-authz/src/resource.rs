@@ -8,19 +8,23 @@
 //! consistent across broker and control-plane code.
 //!
 //! # Key invariants
-//! - Resource strings are prefixed by a stable kind (`tenant`, `ns`, `stream`, `cache`).
-//! - `stream` and `cache` resources are `kind:{namespace}/{name}`.
+//! - Resource strings are prefixed by a stable kind (`tenant`, `namespace`, `stream`, `cache`).
+//! - Namespace, stream, and cache resources are always tenant-qualified.
 //!
 //! # Important configuration
 //! - None.
 //!
 //! # Examples
 //! ```rust
-//! use felix_authz::{Namespace, StreamName, stream_resource};
+//! use felix_authz::{Namespace, StreamName, TenantId, stream_resource};
 //!
+//! let tenant = TenantId::new("tenant-a");
 //! let ns = Namespace::new("payments");
 //! let stream = StreamName::new("orders.v1");
-//! assert_eq!(stream_resource(&ns, &stream), "stream:payments/orders.v1");
+//! assert_eq!(
+//!     stream_resource(&tenant, &ns, &stream),
+//!     "stream:tenant-a/payments/orders.v1"
+//! );
 //! ```
 //!
 //! # Common pitfalls
@@ -42,47 +46,48 @@ pub fn tenant_resource(tenant_id: &TenantId) -> String {
     format!("tenant:{}", tenant_id.as_str())
 }
 
-/// Return the wildcard resource string for all tenants.
-///
-/// # Returns
-/// - The string `tenant:*`.
-pub fn tenant_wildcard() -> String {
-    "tenant:*".to_string()
-}
-
 /// Build the canonical namespace resource string.
 ///
-/// # Parameters
-/// - `namespace`: namespace identifier.
-///
 /// # Returns
-/// - Resource string in the form `ns:{namespace}`.
-pub fn namespace_resource(namespace: &Namespace) -> String {
-    format!("ns:{}", namespace.as_str())
+/// - `namespace:{tenant_id}/{namespace}`.
+pub fn namespace_resource(tenant_id: &TenantId, namespace: &Namespace) -> String {
+    format!("namespace:{}/{}", tenant_id.as_str(), namespace.as_str())
 }
 
 /// Build the canonical stream resource string.
 ///
 /// # Parameters
+/// - `tenant_id`: tenant identifier.
 /// - `namespace`: namespace identifier.
 /// - `stream`: stream name.
 ///
 /// # Returns
-/// - Resource string in the form `stream:{namespace}/{stream}`.
-pub fn stream_resource(namespace: &Namespace, stream: &StreamName) -> String {
-    format!("stream:{}/{}", namespace.as_str(), stream.as_str())
+/// - `stream:{tenant_id}/{namespace}/{stream}`.
+pub fn stream_resource(tenant_id: &TenantId, namespace: &Namespace, stream: &StreamName) -> String {
+    format!(
+        "stream:{}/{}/{}",
+        tenant_id.as_str(),
+        namespace.as_str(),
+        stream.as_str()
+    )
 }
 
 /// Build the canonical cache resource string.
 ///
 /// # Parameters
+/// - `tenant_id`: tenant identifier.
 /// - `namespace`: namespace identifier.
 /// - `cache`: cache scope identifier.
 ///
 /// # Returns
-/// - Resource string in the form `cache:{namespace}/{cache}`.
-pub fn cache_resource(namespace: &Namespace, cache: &CacheScope) -> String {
-    format!("cache:{}/{}", namespace.as_str(), cache.as_str())
+/// - `cache:{tenant_id}/{namespace}/{cache}`.
+pub fn cache_resource(tenant_id: &TenantId, namespace: &Namespace, cache: &CacheScope) -> String {
+    format!(
+        "cache:{}/{}/{}",
+        tenant_id.as_str(),
+        namespace.as_str(),
+        cache.as_str()
+    )
 }
 
 #[cfg(test)]
@@ -97,12 +102,17 @@ mod tests {
         let cache = CacheScope::new("session");
 
         assert_eq!(tenant_resource(&tenant), "tenant:tenant-a");
-        assert_eq!(tenant_wildcard(), "tenant:*");
-        assert_eq!(namespace_resource(&namespace), "ns:payments");
         assert_eq!(
-            stream_resource(&namespace, &stream),
-            "stream:payments/orders.v1"
+            namespace_resource(&tenant, &namespace),
+            "namespace:tenant-a/payments"
         );
-        assert_eq!(cache_resource(&namespace, &cache), "cache:payments/session");
+        assert_eq!(
+            stream_resource(&tenant, &namespace, &stream),
+            "stream:tenant-a/payments/orders.v1"
+        );
+        assert_eq!(
+            cache_resource(&tenant, &namespace, &cache),
+            "cache:tenant-a/payments/session"
+        );
     }
 }

@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use felix_authz::{Action, Namespace, StreamName, stream_resource};
+use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::collections::HashMap;
@@ -164,6 +164,7 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
                     break;
                 }
                 let resource = stream_resource(
+                    &TenantId::new(tenant_id.as_str()),
                     &Namespace::new(namespace.as_str()),
                     &StreamName::new(stream.as_str()),
                 );
@@ -205,6 +206,7 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
                     break;
                 }
                 let resource = stream_resource(
+                    &TenantId::new(tenant_id.as_str()),
                     &Namespace::new(namespace.as_str()),
                     &StreamName::new(stream.as_str()),
                 );

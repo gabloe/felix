@@ -171,12 +171,12 @@ fn demo_auth_for_tenants(tenants: &[&str], ttl: Duration) -> Result<DemoAuthBund
     let issuer = FelixTokenIssuer::new("felix-auth", "felix-broker", ttl, Arc::new(key_store));
     for tenant in tenants {
         let perms = vec![
-            "tenant.admin:tenant:*".to_string(),
-            "ns.manage:ns:*".to_string(),
-            "stream.publish:stream:*/*".to_string(),
-            "stream.subscribe:stream:*/*".to_string(),
-            "cache.read:cache:*/*".to_string(),
-            "cache.write:cache:*/*".to_string(),
+            format!("tenant.manage:tenant:{tenant}"),
+            format!("ns.manage:namespace:{tenant}/*"),
+            format!("stream.publish:stream:{tenant}/*/*"),
+            format!("stream.subscribe:stream:{tenant}/*/*"),
+            format!("cache.read:cache:{tenant}/*/*"),
+            format!("cache.write:cache:{tenant}/*/*"),
         ];
         let token = issuer.mint(&TenantId::new(*tenant), "p:demo", perms)?;
         tokens.insert((*tenant).to_string(), token);

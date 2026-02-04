@@ -150,15 +150,7 @@ gantt
 
 #### Binary Batching
 
-For maximum throughput, use binary batch encoding:
-
-```yaml
-# Broker configuration
-event_single_binary_enabled: true
-event_single_binary_min_bytes: 512
-```
-
-When enabled, events exceeding `event_single_binary_min_bytes` are encoded with the binary batch format, even for single events.
+Subscription event delivery uses binary `EventBatch` framing by default.
 
 **Performance gain**: 30-40% throughput improvement for large payloads.
 
@@ -425,10 +417,6 @@ ack_on_commit: false
 # Deep buffering
 pub_queue_depth: 4096
 event_queue_depth: 4096
-
-# Binary mode
-event_single_binary_enabled: true
-event_single_binary_min_bytes: 256
 ```
 
 **Client config**:
@@ -640,7 +628,7 @@ println!("Total delivered: {}", stats.total_delivered);
 ### Publishing
 
 1. **Batch when possible**: 10-100x throughput improvement
-2. **Use binary mode**: For payloads > 512 bytes
+2. **Tune batch size and delay together**: Optimize for your latency/throughput target
 3. **Monitor queue depth**: High depth indicates overload
 4. **Handle errors**: Implement retry logic for important messages
 5. **Spread across connections**: Use connection pooling

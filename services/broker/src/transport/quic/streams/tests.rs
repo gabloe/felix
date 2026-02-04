@@ -127,10 +127,10 @@ fn jwks_from_public_key(public_key: &[u8], kid: &str) -> Jwks {
 fn default_perms() -> Vec<String> {
     // Broad permissions simplify transport tests without exercising RBAC.
     vec![
-        "stream.publish:stream:*/*".to_string(),
-        "stream.subscribe:stream:*/*".to_string(),
-        "cache.read:cache:*/*".to_string(),
-        "cache.write:cache:*/*".to_string(),
+        "stream.publish:stream:t1/*/*".to_string(),
+        "stream.subscribe:stream:t1/*/*".to_string(),
+        "cache.read:cache:t1/*/*".to_string(),
+        "cache.write:cache:t1/*/*".to_string(),
     ]
 }
 
@@ -819,7 +819,7 @@ async fn control_loop_rejects_publish_batch_forbidden() -> Result<()> {
     broker
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
-    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:*/*".to_string()]);
+    let auth = auth_fixture("t1", vec!["stream.subscribe:stream:t1/*/*".to_string()]);
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::PublishBatch {

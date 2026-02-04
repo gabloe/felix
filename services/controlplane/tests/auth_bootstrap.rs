@@ -126,7 +126,12 @@ async fn bootstrap_initializes_tenant_and_auth() {
     assert!(
         policies
             .iter()
-            .any(|policy| policy.action == "tenant.admin")
+            .any(|policy| policy.action == "tenant.manage")
+    );
+    assert!(
+        policies
+            .iter()
+            .any(|policy| policy.action == "rbac.policy.manage")
     );
     let groupings = store.list_rbac_groupings("t1").await.expect("groupings");
     assert!(groupings.iter().any(|g| g.user == "p:admin"));
@@ -156,4 +161,190 @@ async fn bootstrap_initializes_tenant_and_auth() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let payload = read_json(response).await;
     assert_eq!(payload["code"], "already_initialized");
+}
+
+#[tokio::test]
+async fn bootstrap_rejects_invalid_token_and_validation_errors() {
+    let (_store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let app = build_bootstrap_router(state).into_service();
+
+    let invalid_token = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "wrong")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(invalid_token).await.expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let empty_name = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "   ",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(empty_name).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let empty_admins = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": []
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.clone().oneshot(empty_admins).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let empty_issuer = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [{
+                    "issuer": "   ",
+                    "audiences": ["felix-controlplane"],
+                    "discovery_url": null,
+                    "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+                    "claim_mappings": {
+                        "subject_claim": "sub",
+                        "groups_claim": "groups"
+                    }
+                }],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(empty_issuer).await.expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn bootstrap_missing_configured_token_returns_internal_error() {
+    let (_store, state) = bootstrap_state(true, None);
+    let app = build_bootstrap_router(state).into_service();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn bootstrap_existing_unbootstrapped_tenant_initializes_without_conflict() {
+    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    store
+        .create_tenant(controlplane::model::Tenant {
+            tenant_id: "t-existing".to_string(),
+            display_name: "Existing".to_string(),
+        })
+        .await
+        .expect("seed tenant");
+
+    let app = build_bootstrap_router(state).into_service();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t-existing/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Existing",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn bootstrap_respects_preseeded_admin_policies_matching_required_scopes() {
+    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let app = build_bootstrap_router(state).into_service();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t2/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant Two",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"],
+                "policies": [
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "tenant.manage" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.view" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.policy.manage" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.assignment.manage" },
+                    { "subject": "role:tenant-admin", "object": "namespace:t2/*", "action": "ns.manage" }
+                ]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let policies = store.list_rbac_policies("t2").await.expect("policies");
+    let tenant_manage = policies
+        .iter()
+        .filter(|policy| {
+            policy.subject == "role:tenant-admin"
+                && policy.object == "tenant:t2"
+                && policy.action == "tenant.manage"
+        })
+        .count();
+    assert_eq!(tenant_manage, 1);
+
+    let ns_manage = policies
+        .iter()
+        .filter(|policy| {
+            policy.subject == "role:tenant-admin"
+                && policy.object == "namespace:t2/*"
+                && policy.action == "ns.manage"
+        })
+        .count();
+    assert_eq!(ns_manage, 1);
 }

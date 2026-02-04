@@ -347,7 +347,7 @@ async fn pg_auth_store_idp_and_rbac_roundtrip() {
 
     let policy = PolicyRule {
         subject: "role:reader".to_string(),
-        object: "stream:default/orders".to_string(),
+        object: "stream:t1/default/orders".to_string(),
         action: "stream.subscribe".to_string(),
     };
     let grouping = GroupingRule {
@@ -416,7 +416,7 @@ async fn pg_auth_bootstrap_and_signing_keys() {
 
     let policy = PolicyRule {
         subject: "role:admin".to_string(),
-        object: "stream:default/*".to_string(),
+        object: "stream:t1/default/*".to_string(),
         action: "stream.publish".to_string(),
     };
     let grouping = GroupingRule {

@@ -44,12 +44,12 @@ pub fn demo_auth_for_tenant(tenant_id: &str) -> Result<DemoAuth> {
     );
 
     let perms = vec![
-        "tenant.admin:tenant:*".to_string(),
-        "ns.manage:ns:*".to_string(),
-        "stream.publish:stream:*/*".to_string(),
-        "stream.subscribe:stream:*/*".to_string(),
-        "cache.read:cache:*/*".to_string(),
-        "cache.write:cache:*/*".to_string(),
+        format!("tenant.manage:tenant:{tenant_id}"),
+        format!("ns.manage:namespace:{tenant_id}/*"),
+        format!("stream.publish:stream:{tenant_id}/*/*"),
+        format!("stream.subscribe:stream:{tenant_id}/*/*"),
+        format!("cache.read:cache:{tenant_id}/*/*"),
+        format!("cache.write:cache:{tenant_id}/*/*"),
     ];
 
     let token = issuer
@@ -105,11 +105,11 @@ mod tests {
         let ctx = demo.auth.authenticate(&demo.tenant_id, &demo.token).await?;
         assert!(
             ctx.matcher
-                .allows(Action::StreamPublish, "stream:default/orders")
+                .allows(Action::StreamPublish, "stream:t1/default/orders")
         );
         assert!(
             ctx.matcher
-                .allows(Action::CacheRead, "cache:default/primary")
+                .allows(Action::CacheRead, "cache:t1/default/primary")
         );
         Ok(())
     }

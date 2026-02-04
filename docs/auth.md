@@ -2,6 +2,8 @@
 
 This document describes the current Felix authentication and authorization design as implemented in the control plane and the broker. It aligns with the `felix-authz` crate, Casbin RBAC model, and the token exchange flow in the control plane.
 
+Detailed RBAC mutation/delegation rules and canonical grammar are documented in `docs/security/rbac.md`.
+
 ## Goals
 
 - Multi-tenant authentication and authorization.
@@ -69,6 +71,9 @@ Algorithm:
 
 - `principal_id = sha256(iss + "|" + sub)` (hex encoding).
 - Groups/roles are extracted from a configured claim (optional).
+- During token exchange, each extracted group is added as a transient role link:
+  - `g, <principal_id>, group:<group_name>, <tenant>`
+  - This allows RBAC bindings like `g, group:g1, role:reader, <tenant>`.
 
 ## RBAC Model (Casbin)
 
@@ -80,30 +85,48 @@ Casbin is used with domains for tenant scoping.
 - **Matcher**: `keyMatch2` for object pattern matching
 
 Objects:
-- Tenant: `tenant:*` or `tenant:{tenant_id}`
-- Namespace: `ns:{namespace}` or `ns:*`
-- Stream: `stream:{namespace}/{stream_pattern}`
-- Cache: `cache:{namespace}/{cache_pattern}`
+- Tenant: `tenant:{tenant_id}`
+- Namespace: `namespace:{tenant_id}/{namespace}` or `namespace:{tenant_id}/*`
+- Stream: `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
+- Cache: `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
 
 Actions:
-- `tenant.admin`, `tenant.observe`, `ns.manage`
+- `rbac.view`, `rbac.policy.manage`, `rbac.assignment.manage`
+- `tenant.manage`, `ns.manage`, `stream.manage`, `cache.manage`
 - `stream.publish`, `stream.subscribe`
 - `cache.read`, `cache.write`
+
+### RBAC Security Model
+
+- RBAC mutation is **not** authorized by resource-management actions.
+  - Example: `ns.manage` does not permit policy/grouping writes.
+- RBAC APIs are split by intent:
+  - list policies/groupings: `rbac.view`
+  - mutate policy rules: `rbac.policy.manage`
+  - mutate assignments/groupings: `rbac.assignment.manage`
+- Delegation is scope-bound:
+  - callers can only create/delete rules within their own object scope
+  - callers cannot assign a role if any role policy exceeds caller scope
+- Write-time validation rejects broad or malformed wildcards (for example `tenant:*`).
 
 ### Inheritance Expansion
 
 When building effective permissions for a principal:
-- `tenant.admin` implies:
-  - `ns.manage:ns:*`
-  - `stream.publish:stream:*/*`
-  - `stream.subscribe:stream:*/*`
-  - `cache.read:cache:*/*`
-  - `cache.write:cache:*/*`
-- `ns.manage:ns:{X}` implies:
-  - `stream.publish:stream:{X}/*`
-  - `stream.subscribe:stream:{X}/*`
-  - `cache.read:cache:{X}/*`
-  - `cache.write:cache:{X}/*`
+- `tenant.manage:tenant:{T}` implies tenant-scoped namespace/stream/cache manage + read/write actions.
+- `ns.manage:namespace:{T}/{X}` implies stream/cache manage + read/write within namespace `{X}`.
+
+### Group-Based Role Assignment (from IdP `groups_claim`)
+
+You can assign roles to IdP groups without per-user RBAC bindings:
+
+- Add RBAC grouping rules that bind `group:<name>` to a role.
+- Configure `groups_claim` for the tenant IdP issuer.
+- At token exchange time, Felix maps each incoming group value to `group:<name>`
+  (if not already prefixed) and evaluates RBAC through that link.
+
+Example:
+- `g, group:g1, role:reader, tenant-a`
+- `p, role:reader, tenant-a, stream:tenant-a/payments/*, stream.subscribe`
 
 ## Control Plane Token Exchange Flow
 
@@ -128,7 +151,7 @@ If no permissions remain, the exchange returns `403`.
 Felix includes a **one-time operator bootstrap** flow to initialize tenant auth before any admin tokens exist.
 
 Why it exists:
-- Admin endpoints require a Felix token with `tenant.admin`.
+- Admin endpoints require a Felix token with explicit management permissions.
 - But Felix tokens require IdP issuer configuration and signing keys.
 - Bootstrap fills that gap once per tenant, then is disabled.
 
@@ -176,7 +199,11 @@ Content-Type: application/json
 
 ### After bootstrap
 
-All auth admin endpoints require a Felix token that includes `tenant.admin` for the tenant.
+Auth admin permissions:
+- IdP issuer admin endpoints require `tenant.manage`.
+- RBAC policy/grouping endpoints allow either:
+  - `rbac.policy.manage` / `rbac.assignment.manage` at tenant scope (`tenant:{tenant_id}`), or
+  - those same actions at narrower namespace/stream/cache scopes.
 Bootstrap tokens **never** authorize normal admin endpoints.
 
 ## Broker Validation Flow
@@ -204,7 +231,8 @@ IdP trust is **configured per tenant**. The control plane only accepts tokens fr
 
 ### Admin API (preferred)
 
-Admin endpoints require a Felix token with `tenant.admin` for the tenant.
+IdP issuer endpoints require a Felix token with `tenant.manage` for the tenant.
+RBAC endpoints require explicit RBAC actions (`rbac.view`, `rbac.policy.manage`, `rbac.assignment.manage`).
 
 Use the control plane admin endpoints to manage IdP issuers per tenant:
 
@@ -300,7 +328,7 @@ Content-Type: application/json
 
 {
   "requested": ["stream.publish", "cache.read"],
-  "resources": ["ns:payments", "stream:payments/orders/*"]
+  "resources": ["namespace:t1/payments", "stream:t1/payments/orders/*"]
 }
 ```
 
@@ -342,9 +370,10 @@ Response:
 ```text
 # policy rules (p)
 # p, <role>, <tenant>, <object>, <action>
-p, role:tenant-admin, tenant-a, tenant:*, tenant.admin
-p, role:payments-admin, tenant-a, ns:payments, ns.manage
-p, role:publisher, tenant-a, stream:payments/*, stream.publish
+p, role:tenant-admin, tenant-a, tenant:tenant-a, tenant.manage
+p, role:tenant-admin, tenant-a, tenant:tenant-a, rbac.policy.manage
+p, role:payments-admin, tenant-a, namespace:tenant-a/payments, ns.manage
+p, role:publisher, tenant-a, stream:tenant-a/payments/*, stream.publish
 
 # groupings (g)
 # g, <user>, <role>, <tenant>

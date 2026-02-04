@@ -123,10 +123,10 @@ fn build_auth_fixture() -> Result<AuthFixture> {
         key_store,
     );
     let perms = vec![
-        "stream.publish:stream:default/*".to_string(),
-        "stream.subscribe:stream:default/*".to_string(),
-        "cache.read:cache:default/*".to_string(),
-        "cache.write:cache:default/*".to_string(),
+        format!("stream.publish:stream:{tenant_id}/default/*"),
+        format!("stream.subscribe:stream:{tenant_id}/default/*"),
+        format!("cache.read:cache:{tenant_id}/default/*"),
+        format!("cache.write:cache:{tenant_id}/default/*"),
     ];
     let token = issuer.mint(&TenantId::new(&tenant_id), "conformance", perms)?;
 
@@ -444,22 +444,20 @@ async fn read_frame<R: FrameReader + ?Sized>(recv: &mut R) -> Result<Option<Fram
 }
 
 fn handle_event_frame(
-    expected_id: Option<u64>,
+    expected_id: u64,
     frame: Frame,
     pending: &mut VecDeque<Vec<u8>>,
     allow_hello: bool,
 ) -> Result<()> {
     if frame.header.flags & FLAG_BINARY_EVENT_BATCH != 0 {
-        if expected_id.is_some() && allow_hello {
+        if allow_hello {
             return Err(anyhow!("missing event stream hello for subscription"));
         }
         let batch =
             felix_wire::binary::decode_event_batch(&frame).context("decode binary event batch")?;
-        if let Some(expected) = expected_id
-            && expected != batch.subscription_id
-        {
+        if expected_id != batch.subscription_id {
             return Err(anyhow!(
-                "subscription id mismatch: expected {expected} got {}",
+                "subscription id mismatch: expected {expected_id} got {}",
                 batch.subscription_id
             ));
         }
@@ -475,28 +473,10 @@ fn handle_event_frame(
             if !allow_hello {
                 return Err(anyhow!("unexpected hello after subscription start"));
             }
-            if let Some(expected) = expected_id {
-                if expected != subscription_id {
-                    return Err(anyhow!(
-                        "subscription id mismatch: expected {expected} got {subscription_id}"
-                    ));
-                }
-            } else {
-                return Err(anyhow!("unexpected hello for legacy subscription"));
-            }
-        }
-        Message::Event { payload, .. } => {
-            if expected_id.is_some() && allow_hello {
-                return Err(anyhow!("missing event stream hello for subscription"));
-            }
-            pending.push_back(payload);
-        }
-        Message::EventBatch { payloads, .. } => {
-            if expected_id.is_some() && allow_hello {
-                return Err(anyhow!("missing event stream hello for subscription"));
-            }
-            for payload in payloads {
-                pending.push_back(payload);
+            if expected_id != subscription_id {
+                return Err(anyhow!(
+                    "subscription id mismatch: expected {expected_id} got {subscription_id}"
+                ));
             }
         }
         other => return Err(anyhow!("unexpected message: {other:?}")),
@@ -504,10 +484,9 @@ fn handle_event_frame(
     Ok(())
 }
 
-fn parse_subscribe_response(response: Option<Message>) -> Result<Option<u64>> {
+fn parse_subscribe_response(response: Option<Message>) -> Result<u64> {
     match response {
-        Some(Message::Subscribed { subscription_id }) => Ok(Some(subscription_id)),
-        Some(Message::Ok) => Ok(None),
+        Some(Message::Subscribed { subscription_id }) => Ok(subscription_id),
         other => Err(anyhow!("subscribe failed: {other:?}")),
     }
 }
@@ -646,11 +625,7 @@ mod tests {
     fn parse_subscribe_response_variants() {
         assert_eq!(
             parse_subscribe_response(Some(Message::Subscribed { subscription_id: 7 })).expect("ok"),
-            Some(7)
-        );
-        assert_eq!(
-            parse_subscribe_response(Some(Message::Ok)).expect("ok"),
-            None
+            7
         );
         assert!(
             parse_subscribe_response(Some(Message::Error {
@@ -776,13 +751,13 @@ mod tests {
     fn handle_event_frame_binary_paths() {
         let mut pending = VecDeque::new();
         let frame = binary_event_frame(7, &[Bytes::from_static(b"one")]);
-        assert!(handle_event_frame(Some(7), frame.clone(), &mut pending, true).is_err());
+        assert!(handle_event_frame(7, frame.clone(), &mut pending, true).is_err());
 
         let mut pending = VecDeque::new();
-        assert!(handle_event_frame(Some(8), frame.clone(), &mut pending, false).is_err());
+        assert!(handle_event_frame(8, frame.clone(), &mut pending, false).is_err());
 
         let mut pending = VecDeque::new();
-        handle_event_frame(Some(7), frame, &mut pending, false).expect("ok");
+        handle_event_frame(7, frame, &mut pending, false).expect("ok");
         assert_eq!(pending.pop_front(), Some(b"one".to_vec()));
 
         let mut pending = VecDeque::new();
@@ -790,43 +765,19 @@ mod tests {
             header: FrameHeader::new(FLAG_BINARY_EVENT_BATCH, 2),
             payload: Bytes::from_static(b"hi"),
         };
-        assert!(handle_event_frame(None, bad, &mut pending, false).is_err());
+        assert!(handle_event_frame(7, bad, &mut pending, false).is_err());
     }
 
     #[test]
     fn handle_event_frame_message_paths() {
         let mut pending = VecDeque::new();
         let hello = message_frame(Message::EventStreamHello { subscription_id: 9 });
-        assert!(handle_event_frame(Some(9), hello.clone(), &mut pending, false).is_err());
-        assert!(handle_event_frame(Some(8), hello.clone(), &mut pending, true).is_err());
-        assert!(handle_event_frame(None, hello.clone(), &mut pending, true).is_err());
-        handle_event_frame(Some(9), hello, &mut pending, true).expect("ok");
-
-        let mut pending = VecDeque::new();
-        let event = message_frame(Message::Event {
-            tenant_id: "t1".into(),
-            namespace: "default".into(),
-            stream: "conformance".into(),
-            payload: b"payload".to_vec(),
-        });
-        assert!(handle_event_frame(Some(1), event.clone(), &mut pending, true).is_err());
-        handle_event_frame(None, event, &mut pending, true).expect("ok");
-        assert_eq!(pending.pop_front(), Some(b"payload".to_vec()));
-
-        let mut pending = VecDeque::new();
-        let batch = message_frame(Message::EventBatch {
-            tenant_id: "t1".into(),
-            namespace: "default".into(),
-            stream: "conformance".into(),
-            payloads: vec![b"a".to_vec(), b"b".to_vec()],
-        });
-        assert!(handle_event_frame(Some(1), batch.clone(), &mut pending, true).is_err());
-        handle_event_frame(None, batch, &mut pending, false).expect("ok");
-        assert_eq!(pending.pop_front(), Some(b"a".to_vec()));
-        assert_eq!(pending.pop_front(), Some(b"b".to_vec()));
+        assert!(handle_event_frame(9, hello.clone(), &mut pending, false).is_err());
+        assert!(handle_event_frame(8, hello.clone(), &mut pending, true).is_err());
+        handle_event_frame(9, hello, &mut pending, true).expect("ok");
 
         let mut pending = VecDeque::new();
         let other = message_frame(Message::Ok);
-        assert!(handle_event_frame(None, other, &mut pending, false).is_err());
+        assert!(handle_event_frame(1, other, &mut pending, false).is_err());
     }
 }

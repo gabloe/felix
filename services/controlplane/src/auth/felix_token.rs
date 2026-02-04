@@ -106,7 +106,7 @@ const ED25519_KEY_LEN: usize = 32;
 ///     exp: 1_700_000_000,
 ///     iat: 1_699_999_000,
 ///     jti: None,
-///     perms: vec!["stream.publish:stream:payments/*".to_string()],
+///     perms: vec!["stream.publish:stream:tenant-a/payments/*".to_string()],
 /// };
 /// assert_eq!(claims.tid, "tenant-a");
 /// ```
@@ -809,7 +809,7 @@ mod tests {
             &keys,
             "tenant-a",
             "principal",
-            vec!["stream.publish:stream:payments/orders/*".to_string()],
+            vec!["stream.publish:stream:tenant-a/payments/orders/*".to_string()],
             Duration::from_secs(900),
         )
         .expect("mint");

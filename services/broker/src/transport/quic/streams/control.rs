@@ -33,7 +33,9 @@
 //   Err(_)    => hard failure (decode/IO/etc.)
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use felix_authz::{Action, CacheScope, Namespace, StreamName, cache_resource, stream_resource};
+use felix_authz::{
+    Action, CacheScope, Namespace, StreamName, TenantId, cache_resource, stream_resource,
+};
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::collections::HashMap;
@@ -682,7 +684,11 @@ async fn authorize_stream(
         .await?;
         return Ok(false);
     }
-    let resource = stream_resource(&Namespace::new(namespace), &StreamName::new(stream));
+    let resource = stream_resource(
+        &TenantId::new(tenant_id),
+        &Namespace::new(namespace),
+        &StreamName::new(stream),
+    );
     if auth_ctx.matcher.allows(action, &resource) {
         return Ok(true);
     }
@@ -744,7 +750,11 @@ async fn authorize_stream_simple(
         .await?;
         return Ok(false);
     }
-    let resource = stream_resource(&Namespace::new(namespace), &StreamName::new(stream));
+    let resource = stream_resource(
+        &TenantId::new(tenant_id),
+        &Namespace::new(namespace),
+        &StreamName::new(stream),
+    );
     if auth_ctx.matcher.allows(action, &resource) {
         return Ok(true);
     }
@@ -792,7 +802,11 @@ async fn authorize_cache(
         .await?;
         return Ok(false);
     }
-    let resource = cache_resource(&Namespace::new(namespace), &CacheScope::new(cache));
+    let resource = cache_resource(
+        &TenantId::new(tenant_id),
+        &Namespace::new(namespace),
+        &CacheScope::new(cache),
+    );
     if auth_ctx.matcher.allows(action, &resource) {
         return Ok(true);
     }

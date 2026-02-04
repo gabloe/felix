@@ -65,8 +65,8 @@ fn mint_valid_token(tenant_id: &str, key_material: &TenantKeyMaterial) -> String
             &TenantId::new(tenant_id),
             "p:test",
             vec![
-                "stream.publish:stream:*/*".to_string(),
-                "cache.read:cache:*/*".to_string(),
+                "stream.publish:stream:t1/*/*".to_string(),
+                "cache.read:cache:t1/*/*".to_string(),
             ],
         )
         .expect("mint token")
@@ -95,7 +95,7 @@ async fn broker_auth_accepts_valid_token() -> Result<()> {
     let ctx = auth.authenticate("t1", &token).await?;
     assert!(
         ctx.matcher
-            .allows(Action::StreamPublish, "stream:default/orders")
+            .allows(Action::StreamPublish, "stream:t1/default/orders")
     );
     Ok(())
 }
@@ -113,7 +113,7 @@ async fn broker_auth_rejects_invalid_claims_and_signature() -> Result<()> {
         exp: now + 300,
         iat: now,
         jti: None,
-        perms: vec!["stream.publish:stream:*/*".to_string()],
+        perms: vec!["stream.publish:stream:t1/*/*".to_string()],
     };
     let wrong_aud_token = encode_claims(&wrong_aud, "k1", &TEST_PRIVATE_KEY);
     assert!(auth.authenticate("t1", &wrong_aud_token).await.is_err());

@@ -25,7 +25,7 @@
 //! - Depth counters are tracked both per-stream and globally to support observability and tuning.
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
-use felix_authz::{Action, Namespace, StreamName, stream_resource};
+use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::{Frame, Message};
 use std::collections::HashMap;
@@ -729,7 +729,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("other", &["stream.publish:stream:ns/stream"]);
+        let auth_ctx = make_auth_ctx("other", &["stream.publish:stream:tenant/ns/stream"]);
         let err = handle_binary_publish_batch_control(
             &broker,
             &mut cache,
@@ -751,7 +751,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.subscribe:stream:ns/stream"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.subscribe:stream:tenant/ns/stream"]);
         let err = handle_binary_publish_batch_control(
             &broker,
             &mut cache,
@@ -773,7 +773,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_control(
             &broker,
             &mut cache,
@@ -811,7 +811,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_control(
             &broker,
             &mut cache,
@@ -847,7 +847,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_control(
             &broker,
             &mut cache,
@@ -1570,7 +1570,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("other", &["stream.publish:stream:ns/stream"]);
+        let auth_ctx = make_auth_ctx("other", &["stream.publish:stream:tenant/ns/stream"]);
         let result = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -1591,7 +1591,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.subscribe:stream:ns/stream"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.subscribe:stream:tenant/ns/stream"]);
         let result = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -1612,7 +1612,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -1648,7 +1648,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -1669,7 +1669,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = Frame::new(0, Bytes::from_static(b"bad")).expect("frame");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let err = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -1705,7 +1705,7 @@ mod tests {
         let mut cache = HashMap::new();
         let mut key = String::new();
         let frame = make_binary_publish_frame("tenant", "ns", "stream");
-        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:ns/*"]);
+        let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
         let result = handle_binary_publish_batch_uni(
             &broker,
             &mut cache,
@@ -2812,6 +2812,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         return Err(anyhow!("tenant mismatch"));
     }
     let resource = stream_resource(
+        &TenantId::new(batch.tenant_id.as_str()),
         &Namespace::new(batch.namespace.as_str()),
         &StreamName::new(batch.stream.as_str()),
     );
@@ -3632,6 +3633,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         return Ok(false);
     }
     let resource = stream_resource(
+        &TenantId::new(batch.tenant_id.as_str()),
         &Namespace::new(batch.namespace.as_str()),
         &StreamName::new(batch.stream.as_str()),
     );

@@ -51,9 +51,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    TenantAdmin,
-    TenantObserve,
+    RbacView,
+    RbacPolicyManage,
+    RbacAssignmentManage,
+    TenantManage,
     NamespaceManage,
+    StreamManage,
+    CacheManage,
     StreamPublish,
     StreamSubscribe,
     CacheRead,
@@ -76,14 +80,18 @@ impl Action {
     /// ```rust
     /// use felix_authz::Action;
     ///
-    /// assert_eq!(Action::TenantObserve.as_str(), "tenant.observe");
+    /// assert_eq!(Action::TenantManage.as_str(), "tenant.manage");
     /// ```
     pub fn as_str(self) -> &'static str {
         // Match each action to its stable, persisted identifier.
         match self {
-            Action::TenantAdmin => "tenant.admin",
-            Action::TenantObserve => "tenant.observe",
+            Action::RbacView => "rbac.view",
+            Action::RbacPolicyManage => "rbac.policy.manage",
+            Action::RbacAssignmentManage => "rbac.assignment.manage",
+            Action::TenantManage => "tenant.manage",
             Action::NamespaceManage => "ns.manage",
+            Action::StreamManage => "stream.manage",
+            Action::CacheManage => "cache.manage",
             Action::StreamPublish => "stream.publish",
             Action::StreamSubscribe => "stream.subscribe",
             Action::CacheRead => "cache.read",
@@ -104,9 +112,13 @@ impl std::str::FromStr for Action {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         // Keep this mapping in lockstep with `as_str` and policy storage.
         match value {
-            "tenant.admin" => Ok(Action::TenantAdmin),
-            "tenant.observe" => Ok(Action::TenantObserve),
+            "rbac.view" => Ok(Action::RbacView),
+            "rbac.policy.manage" => Ok(Action::RbacPolicyManage),
+            "rbac.assignment.manage" => Ok(Action::RbacAssignmentManage),
+            "tenant.manage" => Ok(Action::TenantManage),
             "ns.manage" => Ok(Action::NamespaceManage),
+            "stream.manage" => Ok(Action::StreamManage),
+            "cache.manage" => Ok(Action::CacheManage),
             "stream.publish" => Ok(Action::StreamPublish),
             "stream.subscribe" => Ok(Action::StreamSubscribe),
             "cache.read" => Ok(Action::CacheRead),
@@ -123,9 +135,13 @@ mod tests {
     #[test]
     fn action_string_roundtrip() {
         let actions = [
-            Action::TenantAdmin,
-            Action::TenantObserve,
+            Action::RbacView,
+            Action::RbacPolicyManage,
+            Action::RbacAssignmentManage,
+            Action::TenantManage,
             Action::NamespaceManage,
+            Action::StreamManage,
+            Action::CacheManage,
             Action::StreamPublish,
             Action::StreamSubscribe,
             Action::CacheRead,

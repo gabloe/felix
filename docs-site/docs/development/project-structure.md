@@ -73,21 +73,18 @@ crates/
 
 **Responsibilities**:
 - Frame type definitions
-- JSON control message encoding
 - Binary batch encoding/decoding
 - Protocol versioning
 - Frame validation
 
 **Key types**:
-- `Frame`: Top-level frame enum
-- `ControlFrame`: JSON control messages
+- `Frame`: Top-level frame type
 - `BinaryBatch`: Batch frame format
 - `FrameCodec`: Encode/decode implementation
 
 **Protocol layers**:
 1. **Envelope**: Version, type, length
-2. **Control frames**: JSON for human readability
-3. **Binary frames**: Zero-copy fast paths
+2. **Binary frames**: Zero-copy fast paths
 
 #### felix-transport
 

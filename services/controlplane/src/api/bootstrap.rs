@@ -121,15 +121,43 @@ pub async fn initialize(
 
     let mut policies = body.policies.clone();
     let required = format!("tenant:{tenant_id}");
+    // Seed a tenant-scoped management role; never grant tenant:* during bootstrap.
     if !policies.iter().any(|policy| {
         policy.subject == "role:tenant-admin"
-            && policy.action == "tenant.admin"
+            && policy.action == "tenant.manage"
             && key_match2(&policy.object, &required)
     }) {
         policies.push(PolicyRule {
             subject: "role:tenant-admin".to_string(),
-            object: "tenant:*".to_string(),
-            action: "tenant.admin".to_string(),
+            object: required.clone(),
+            action: "tenant.manage".to_string(),
+        });
+    }
+    // Seed explicit RBAC admin/read actions so bootstrap admins can manage RBAC
+    // without relying on non-RBAC permissions.
+    for action in ["rbac.view", "rbac.policy.manage", "rbac.assignment.manage"] {
+        if !policies.iter().any(|policy| {
+            policy.subject == "role:tenant-admin"
+                && policy.action == action
+                && key_match2(&policy.object, &required)
+        }) {
+            policies.push(PolicyRule {
+                subject: "role:tenant-admin".to_string(),
+                object: required.clone(),
+                action: action.to_string(),
+            });
+        }
+    }
+    // Keep namespace management explicit for tenant-admin bootstrap parity.
+    if !policies.iter().any(|policy| {
+        policy.subject == "role:tenant-admin"
+            && policy.action == "ns.manage"
+            && key_match2(&policy.object, &format!("namespace:{tenant_id}/*"))
+    }) {
+        policies.push(PolicyRule {
+            subject: "role:tenant-admin".to_string(),
+            object: format!("namespace:{tenant_id}/*"),
+            action: "ns.manage".to_string(),
         });
     }
 

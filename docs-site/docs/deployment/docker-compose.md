@@ -293,7 +293,6 @@ services:
       
       # Performance
       - FELIX_DISABLE_TIMINGS=false
-      - FELIX_BINARY_SINGLE_EVENT=false
       
       # Logging
       - RUST_LOG=info

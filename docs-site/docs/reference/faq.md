@@ -89,6 +89,16 @@ Felix complements Redis rather than replacing it:
 
 ## Architecture Questions
 
+### Can I grant stream access by IdP group instead of per-user?
+
+Yes. Configure `groups_claim` for the tenant issuer, then bind RBAC roles to
+`group:<name>` subjects. During token exchange, Felix maps incoming group claims
+to those group subjects and evaluates role permissions.
+
+Example:
+- grouping: `g, group:g1, role:reader, tenant-a`
+- policy: `p, role:reader, tenant-a, stream:tenant-a/payments/*, stream.subscribe`
+
 ### Why QUIC instead of TCP?
 
 QUIC provides several advantages for Felix's use case:
@@ -112,7 +122,7 @@ QUIC provides several advantages for Felix's use case:
 
 Felix uses `felix-wire`, a framed protocol with:
 
-- **JSON control frames**: Human-readable for debugging, compatibility
+- **Binary event frames**: Efficient `EventBatch` delivery for subscriptions
 - **Binary fast paths**: Zero-copy binary frames for high-throughput data
 - **Versioned envelope**: Forward/backward compatibility
 - **Type-specific framing**: Different frame types for pub/sub, cache, control
@@ -195,28 +205,7 @@ export FELIX_EVENT_BATCH_MAX_EVENTS="256"
 
 ### Should I enable binary encoding?
 
-**It depends on payload size:**
-
-Binary encoding benefits:
-- Lower serialization overhead
-- Higher throughput
-- Reduced CPU usage
-
-Trade-offs:
-- Less human-readable
-- Requires client support
-
-**Recommendation**:
-```bash
-# Enable for payloads > 512 bytes
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
-export FELIX_BINARY_SINGLE_EVENT_MIN_BYTES="512"
-```
-
-For debugging, disable binary encoding:
-```bash
-export FELIX_BINARY_SINGLE_EVENT="false"
-```
+Subscription event delivery is already binary `EventBatch` by default.
 
 ### How do I tune for high fanout?
 
@@ -343,23 +332,18 @@ export FELIX_EVENT_BATCH_MAX_BYTES="1048576"
 export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
 ```
 
-2. **Enable binary encoding**:
-```bash
-export FELIX_BINARY_SINGLE_EVENT="TRUE"
-```
-
-3. **Disable timings**:
+2. **Disable timings**:
 ```bash
 export FELIX_DISABLE_TIMINGS="1"
 ```
 
-4. **Increase parallelism**:
+3. **Increase parallelism**:
 ```bash
 export FELIX_EVENT_CONN_POOL="16"
 export FELIX_FANOUT_BATCH="128"
 ```
 
-5. **Scale horizontally**: Run multiple broker instances.
+4. **Scale horizontally**: Run multiple broker instances.
 
 ## Deployment Questions
 

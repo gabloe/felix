@@ -10,7 +10,7 @@ Felix performance is determined by several interconnected factors:
 2. **Batching**: Message aggregation at publish and delivery stages
 3. **Parallelism**: Connection pools and worker threads
 4. **Buffering**: Queue depths and flow control windows
-5. **Encoding**: JSON vs binary wire format
+5. **Encoding**: Binary wire framing efficiency
 
 ## Performance Profiles
 
@@ -44,8 +44,6 @@ fanout_batch_size: 64
 pub_queue_depth: 1024
 event_queue_depth: 1024
 
-# Binary mode
-event_single_binary_enabled: false
 publish_chunk_bytes: 16384
 ```
 
@@ -91,8 +89,6 @@ ack_on_commit: true
 pub_queue_depth: 512
 event_queue_depth: 512
 
-# No binary mode (JSON is faster for small batches)
-event_single_binary_enabled: false
 ```
 
 **Expected performance**:
@@ -139,9 +135,6 @@ ack_on_commit: false
 pub_queue_depth: 4096
 event_queue_depth: 4096
 
-# Binary mode enabled
-event_single_binary_enabled: true
-event_single_binary_min_bytes: 256
 publish_chunk_bytes: 32768
 ```
 
@@ -298,38 +291,15 @@ Max concurrent cache ops = cache_conn_pool × cache_streams_per_conn
 | High | 16 | 8 | 128 |
 | Very high | 32 | 16 | 512 |
 
-### Binary Encoding
+### Event Frame Encoding
 
-```yaml
-event_single_binary_enabled: true      # Enable binary encoding
-event_single_binary_min_bytes: 512     # Min payload size for binary
-```
-
-**Binary vs JSON performance** (batch=64, fanout=10):
-
-| Payload Size | JSON Throughput | Binary Throughput | Improvement |
-|--------------|----------------|-------------------|-------------|
-| 64 B | 180k msg/sec | 190k msg/sec | +5% |
-| 256 B | 170k msg/sec | 205k msg/sec | +20% |
-| 1 KB | 140k msg/sec | 195k msg/sec | +39% |
-| 4 KB | 80k msg/sec | 115k msg/sec | +44% |
-
-**When to enable**:
-
-✓ Payload sizes > 512 bytes  
-✓ High throughput priority  
-✓ High fanout workloads  
-✓ Validated binary encoding implementation  
-
-✗ Ultra-low latency priority (JSON is faster for tiny batches)  
-✗ Debugging (JSON is human-readable)  
-✗ Small payloads < 256 bytes  
+Subscription event delivery uses binary `EventBatch` framing by default.
 
 ## Benchmark Results
 
 ### Pub/Sub Latency (Localhost)
 
-**Configuration**: Balanced profile, binary mode, fanout=10, batch=64, payload=4KB
+**Configuration**: Balanced profile, fanout=10, batch=64, payload=4KB
 
 | Metric | p50 | p95 | p99 | p999 |
 |--------|-----|-----|-----|------|
@@ -408,7 +378,7 @@ disable_timings: false                 # Enable timing measurements
 
 1. Increase `event_batch_max_events` - more aggressive batching
 2. Increase connection pools - more parallelism
-3. Enable binary mode - reduce encoding overhead
+3. Confirm binary `EventBatch` decoding path in subscribers
 4. Check network bandwidth - saturated?
 5. Increase `pub_workers_per_conn` - more publish parallelism
 
@@ -458,7 +428,6 @@ cache_conn_pool: 16
 event_batch_max_events: 128
 pub_queue_depth: 2048
 event_queue_depth: 2048
-event_single_binary_enabled: true
 ```
 
 **Expected resources**: 16-32 CPU cores, 16-32 GB RAM
@@ -541,7 +510,7 @@ QUIC benefits from:
 1. ✓ Start with balanced profile, measure, then tune
 2. ✓ Size connection pools for your parallelism needs
 3. ✓ Use batching for throughput, minimize batching for latency
-4. ✓ Enable binary mode for large payloads (> 512 bytes)
+4. ✓ Validate binary `EventBatch` decode performance in clients
 5. ✓ Monitor queue depths - they reveal backpressure
 6. ✓ Disable telemetry in production for maximum throughput
 7. ✓ Profile before optimizing - don't guess

@@ -135,7 +135,7 @@ flowchart LR
 1. Client opens a bidirectional control stream to publish/subscribe and receive acknowledgements
 2. Broker validates scope, enqueues publish jobs, and fans out to subscribers
 3. Each subscription has a dedicated unidirectional event stream for delivery
-4. Events are sent as single frames or binary batches with configurable batching
+4. Events are sent as binary `EventBatch` frames with configurable batching
 
 ### Cache Data Flow
 

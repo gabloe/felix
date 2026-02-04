@@ -35,8 +35,8 @@ use utoipa::ToSchema;
 ///
 /// let rule = PolicyRule {
 ///     subject: "role:admin".to_string(),
-///     object: "tenant:*".to_string(),
-///     action: "tenant.admin".to_string(),
+///     object: "tenant:t1".to_string(),
+///     action: "tenant.manage".to_string(),
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

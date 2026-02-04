@@ -20,9 +20,9 @@
 //! use felix_authz::{Action, PermissionMatcher, PermissionPattern};
 //!
 //! let matcher = PermissionMatcher::new(vec![
-//!     PermissionPattern::new(Action::StreamPublish, "stream:payments/*"),
+//!     PermissionPattern::new(Action::StreamPublish, "stream:tenant-a/payments/*"),
 //! ]);
-//! assert!(matcher.allows(Action::StreamPublish, "stream:payments/orders"));
+//! assert!(matcher.allows(Action::StreamPublish, "stream:tenant-a/payments/orders"));
 //! ```
 //!
 //! # Common pitfalls
@@ -52,7 +52,7 @@ use crate::{Action, AuthzResult, PermissionPattern};
 /// ```rust
 /// use felix_authz::wildcard_match;
 ///
-/// assert!(wildcard_match("stream:*", "stream:payments"));
+/// assert!(wildcard_match("stream:*", "stream:tenant-a/payments"));
 /// ```
 pub fn wildcard_match(pattern: &str, value: &str) -> bool {
     // Fast-path for the common "allow everything" pattern.
@@ -115,9 +115,9 @@ pub fn wildcard_match(pattern: &str, value: &str) -> bool {
 /// use felix_authz::{Action, PermissionMatcher, PermissionPattern};
 ///
 /// let matcher = PermissionMatcher::new(vec![
-///     PermissionPattern::new(Action::CacheRead, "cache:payments/*"),
+///     PermissionPattern::new(Action::CacheRead, "cache:tenant-a/payments/*"),
 /// ]);
-/// assert!(matcher.allows(Action::CacheRead, "cache:payments/session/1"));
+/// assert!(matcher.allows(Action::CacheRead, "cache:tenant-a/payments/session/1"));
 /// ```
 #[derive(Debug, Clone)]
 pub struct PermissionMatcher {
@@ -154,9 +154,9 @@ impl PermissionMatcher {
     /// ```rust
     /// use felix_authz::PermissionMatcher;
     ///
-    /// let patterns = vec!["stream.publish:stream:payments/*".to_string()];
+    /// let patterns = vec!["stream.publish:stream:tenant-a/payments/*".to_string()];
     /// let matcher = PermissionMatcher::from_strings(&patterns).expect("parse");
-    /// assert!(matcher.allows(felix_authz::Action::StreamPublish, "stream:payments/1"));
+    /// assert!(matcher.allows(felix_authz::Action::StreamPublish, "stream:tenant-a/payments/1"));
     /// ```
     pub fn from_strings(patterns: &[String]) -> AuthzResult<Self> {
         let mut parsed = Vec::with_capacity(patterns.len());
@@ -202,27 +202,27 @@ mod tests {
     #[test]
     fn wildcard_match_exact() {
         assert!(wildcard_match(
-            "stream:payments/orders",
-            "stream:payments/orders"
+            "stream:tenant-a/payments/orders",
+            "stream:tenant-a/payments/orders"
         ));
         assert!(!wildcard_match(
-            "stream:payments/orders",
-            "stream:payments/orders.v2"
+            "stream:tenant-a/payments/orders",
+            "stream:tenant-a/payments/orders.v2"
         ));
     }
 
     #[test]
     fn wildcard_match_suffix() {
         assert!(wildcard_match(
-            "stream:payments/*",
-            "stream:payments/orders"
+            "stream:tenant-a/payments/*",
+            "stream:tenant-a/payments/orders"
         ));
         assert!(wildcard_match(
-            "stream:payments/*",
-            "stream:payments/orders.v2"
+            "stream:tenant-a/payments/*",
+            "stream:tenant-a/payments/orders.v2"
         ));
         assert!(!wildcard_match(
-            "stream:payments/*",
+            "stream:tenant-a/payments/*",
             "stream:accounts/orders"
         ));
     }
@@ -234,34 +234,46 @@ mod tests {
 
     #[test]
     fn wildcard_match_backtrack() {
-        assert!(wildcard_match("cache:*:read", "cache:payments:read"));
-        assert!(!wildcard_match("cache:*:read", "cache:payments:write"));
+        assert!(wildcard_match(
+            "cache:*:read",
+            "cache:tenant-a/payments:read"
+        ));
+        assert!(!wildcard_match(
+            "cache:*:read",
+            "cache:tenant-a/payments:write"
+        ));
     }
 
     #[test]
     fn wildcard_match_trailing_star() {
-        assert!(wildcard_match("stream:payments/*", "stream:payments/"));
+        assert!(wildcard_match(
+            "stream:tenant-a/payments/*",
+            "stream:tenant-a/payments/"
+        ));
     }
 
     #[test]
     fn matcher_allows() {
         let matcher = PermissionMatcher::new(vec![PermissionPattern::new(
             Action::StreamPublish,
-            "stream:payments/orders.*",
+            "stream:tenant-a/payments/orders.*",
         )]);
-        assert!(matcher.allows(Action::StreamPublish, "stream:payments/orders.v2"));
-        assert!(!matcher.allows(Action::StreamSubscribe, "stream:payments/orders.v2"));
+        assert!(matcher.allows(Action::StreamPublish, "stream:tenant-a/payments/orders.v2"));
+        assert!(!matcher.allows(
+            Action::StreamSubscribe,
+            "stream:tenant-a/payments/orders.v2"
+        ));
     }
 
     #[test]
     fn matcher_from_strings_and_patterns() {
         let patterns = vec![
-            "stream.publish:stream:payments/orders.*".to_string(),
-            "cache.read:cache:payments/session/*".to_string(),
+            "stream.publish:stream:tenant-a/payments/orders.*".to_string(),
+            "cache.read:cache:tenant-a/payments/session/*".to_string(),
         ];
         let matcher = PermissionMatcher::from_strings(&patterns).expect("parse patterns");
         assert_eq!(matcher.patterns().len(), 2);
-        assert!(matcher.allows(Action::StreamPublish, "stream:payments/orders.v1"));
-        assert!(matcher.allows(Action::CacheRead, "cache:payments/session/abc"));
+        assert!(matcher.allows(Action::StreamPublish, "stream:tenant-a/payments/orders.v1"));
+        assert!(matcher.allows(Action::CacheRead, "cache:tenant-a/payments/session/abc"));
     }
 }

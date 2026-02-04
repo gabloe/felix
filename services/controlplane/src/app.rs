@@ -119,11 +119,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/v1/tenants/:tenant_id/rbac/policies",
-            axum::routing::post(auth::admin::add_policy),
+            axum::routing::get(auth::admin::list_policies).post(auth::admin::add_policy),
         )
         .route(
             "/v1/tenants/:tenant_id/rbac/groupings",
-            axum::routing::post(auth::admin::add_grouping),
+            axum::routing::get(auth::admin::list_groupings).post(auth::admin::add_grouping),
         )
         .route(
             "/v1/tenants/:tenant_id/namespaces",
