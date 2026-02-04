@@ -10,9 +10,6 @@ ignore = [
   # security guarantees and risks shipping known-bad cryptographic behavior.
   # We must either upgrade away from the affected crate or replace it.
   "RUSTSEC-2024-0370",
-  # RSA is required by jsonwebtoken for RS256 OIDC validation.
-  # Remove when we migrate to non-RSA algorithms.
-  "RUSTSEC-2023-0071",
 ]
 
 [licenses]

@@ -268,3 +268,83 @@ async fn bootstrap_missing_configured_token_returns_internal_error() {
     let response = app.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn bootstrap_existing_unbootstrapped_tenant_initializes_without_conflict() {
+    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    store
+        .create_tenant(controlplane::model::Tenant {
+            tenant_id: "t-existing".to_string(),
+            display_name: "Existing".to_string(),
+        })
+        .await
+        .expect("seed tenant");
+
+    let app = build_bootstrap_router(state).into_service();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t-existing/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Existing",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn bootstrap_respects_preseeded_admin_policies_matching_required_scopes() {
+    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let app = build_bootstrap_router(state).into_service();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t2/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Tenant Two",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"],
+                "policies": [
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "tenant.manage" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.view" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.policy.manage" },
+                    { "subject": "role:tenant-admin", "object": "tenant:t2", "action": "rbac.assignment.manage" },
+                    { "subject": "role:tenant-admin", "object": "namespace:t2/*", "action": "ns.manage" }
+                ]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let policies = store.list_rbac_policies("t2").await.expect("policies");
+    let tenant_manage = policies
+        .iter()
+        .filter(|policy| {
+            policy.subject == "role:tenant-admin"
+                && policy.object == "tenant:t2"
+                && policy.action == "tenant.manage"
+        })
+        .count();
+    assert_eq!(tenant_manage, 1);
+
+    let ns_manage = policies
+        .iter()
+        .filter(|policy| {
+            policy.subject == "role:tenant-admin"
+                && policy.object == "namespace:t2/*"
+                && policy.action == "ns.manage"
+        })
+        .count();
+    assert_eq!(ns_manage, 1);
+}

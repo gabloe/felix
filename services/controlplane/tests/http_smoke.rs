@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::read_json;
 use controlplane::api::types::{FeatureFlags, Region};
-use controlplane::app::{AppState, build_router};
+use controlplane::app::{AppState, build_bootstrap_router, build_router};
 use controlplane::auth::felix_token::TenantSigningKeys;
 use controlplane::auth::idp_registry::IdpIssuerConfig;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -800,7 +800,34 @@ async fn list_endpoints_return_items() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-struct FailingStore;
+#[derive(Clone, Copy, Default)]
+struct FailingStore {
+    tenant_exists: bool,
+    namespace_exists: bool,
+    stream_create_not_found: bool,
+    cache_create_not_found: bool,
+    tenant_bootstrapped: Option<bool>,
+}
+
+impl FailingStore {
+    fn with_namespace_checks_succeeding() -> Self {
+        Self {
+            tenant_exists: true,
+            namespace_exists: true,
+            ..Self::default()
+        }
+    }
+
+    fn with_create_not_found() -> Self {
+        Self {
+            tenant_exists: true,
+            namespace_exists: true,
+            stream_create_not_found: true,
+            cache_create_not_found: true,
+            ..Self::default()
+        }
+    }
+}
 
 #[async_trait]
 impl ControlPlaneStore for FailingStore {
@@ -853,6 +880,9 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn create_stream(&self, _stream: Stream) -> StoreResult<Stream> {
+        if self.stream_create_not_found {
+            return Err(StoreError::NotFound("namespace".to_string()));
+        }
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
@@ -885,6 +915,9 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn create_cache(&self, _cache: Cache) -> StoreResult<Cache> {
+        if self.cache_create_not_found {
+            return Err(StoreError::NotFound("namespace".to_string()));
+        }
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
@@ -905,11 +938,11 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn tenant_exists(&self, _tenant_id: &str) -> StoreResult<bool> {
-        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        Ok(self.tenant_exists)
     }
 
     async fn namespace_exists(&self, _key: &NamespaceKey) -> StoreResult<bool> {
-        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        Ok(self.namespace_exists)
     }
 
     async fn health_check(&self) -> StoreResult<()> {
@@ -976,7 +1009,8 @@ impl AuthStore for FailingStore {
     }
 
     async fn tenant_auth_is_bootstrapped(&self, _tenant_id: &str) -> StoreResult<bool> {
-        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        self.tenant_bootstrapped
+            .ok_or_else(|| StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
     async fn set_tenant_auth_bootstrapped(
@@ -1014,7 +1048,7 @@ async fn system_health_reports_internal_error_on_store_failure() {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore),
+        store: Arc::new(FailingStore::default()),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
@@ -1043,7 +1077,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore),
+        store: Arc::new(FailingStore::default()),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
@@ -1089,5 +1123,220 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(FailingStore::with_namespace_checks_succeeding()),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let stream_create = json_request(
+        "POST",
+        "/v1/tenants/t1/namespaces/default/streams",
+        serde_json::json!({
+            "stream": "orders",
+            "kind": "Stream",
+            "shards": 1,
+            "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+            "consistency": "Leader",
+            "delivery": "AtLeastOnce",
+            "durable": false
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(stream_create)
+        .await
+        .expect("create stream");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let stream_get = Request::builder()
+        .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .body(Body::empty())
+        .expect("get stream");
+    let response = app.clone().oneshot(stream_get).await.expect("get stream");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let stream_patch = json_request(
+        "PATCH",
+        "/v1/tenants/t1/namespaces/default/streams/orders",
+        serde_json::json!({ "durable": true }),
+    );
+    let response = app
+        .clone()
+        .oneshot(stream_patch)
+        .await
+        .expect("patch stream");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let stream_delete = Request::builder()
+        .method("DELETE")
+        .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .body(Body::empty())
+        .expect("delete stream");
+    let response = app
+        .clone()
+        .oneshot(stream_delete)
+        .await
+        .expect("delete stream");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let cache_create = json_request(
+        "POST",
+        "/v1/tenants/t1/namespaces/default/caches",
+        serde_json::json!({
+            "cache": "primary",
+            "display_name": "Primary"
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(cache_create)
+        .await
+        .expect("create cache");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let cache_get = Request::builder()
+        .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .body(Body::empty())
+        .expect("get cache");
+    let response = app.clone().oneshot(cache_get).await.expect("get cache");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let cache_patch = json_request(
+        "PATCH",
+        "/v1/tenants/t1/namespaces/default/caches/primary",
+        serde_json::json!({ "display_name": "Updated" }),
+    );
+    let response = app.clone().oneshot(cache_patch).await.expect("patch cache");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let cache_delete = Request::builder()
+        .method("DELETE")
+        .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .body(Body::empty())
+        .expect("delete cache");
+    let response = app
+        .clone()
+        .oneshot(cache_delete)
+        .await
+        .expect("delete cache");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn stream_and_cache_create_report_not_found_when_store_reports_missing_namespace() {
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(FailingStore::with_create_not_found()),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_router(state).into_service();
+
+    let stream_create = json_request(
+        "POST",
+        "/v1/tenants/t1/namespaces/default/streams",
+        serde_json::json!({
+            "stream": "orders",
+            "kind": "Stream",
+            "shards": 1,
+            "retention": { "max_age_seconds": 3600, "max_size_bytes": null },
+            "consistency": "Leader",
+            "delivery": "AtLeastOnce",
+            "durable": false
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(stream_create)
+        .await
+        .expect("create stream");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let cache_create = json_request(
+        "POST",
+        "/v1/tenants/t1/namespaces/default/caches",
+        serde_json::json!({
+            "cache": "primary",
+            "display_name": "Primary"
+        }),
+    );
+    let response = app
+        .clone()
+        .oneshot(cache_create)
+        .await
+        .expect("create cache");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fails() {
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local Region".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: false,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::new(FailingStore {
+            tenant_exists: true,
+            tenant_bootstrapped: Some(false),
+            ..FailingStore::default()
+        }),
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        bootstrap_enabled: true,
+        bootstrap_token: Some("secret".to_string()),
+    };
+    let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
+        build_bootstrap_router(state).into_service();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/t1/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            serde_json::json!({
+                "display_name": "Tenant One",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
