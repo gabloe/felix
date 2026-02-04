@@ -34,7 +34,7 @@ event streaming (publish/subscribe) and request/response caching (put/get with T
 with explicit control over multiplexing, batching, and flow control.
 
 Core components
-- `felix-wire`: framed protocol for all clients and brokers (JSON control + binary fast paths).
+- `felix-wire`: framed binary protocol for all clients and brokers.
 - `felix-transport`: QUIC abstraction layer (client/server, pools, stream lifecycle).
 - `felix-broker`: pub/sub logic, cache storage, stream registry, fanout.
 - `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
@@ -255,7 +255,7 @@ Run the wire protocol conformance runner:
 cargo run -p felix-conformance
 ```
 
-The conformance runner validates that the wire framing and JSON message encoding
+The conformance runner validates that the wire framing and binary message encoding
 match the shared test vectors. It exists to keep client implementations honest:
 any client or server that passes the suite can interoperate without guessing at
 edge cases or relying on Rust-specific behavior.

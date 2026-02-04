@@ -20,7 +20,7 @@ durability, clustering, or advanced observability.
 
 ## Wire protocol v1 (`felix-wire`)
 - [X] Versioned frame header (magic/version/flags/len)
-- [ ] Add message type in header (type field) for non-JSON parsing
+- [ ] Add message type in header (type field) for faster dispatch
 - [X] Message types: `Publish`, `Subscribe`, `Event`, `CachePut`, `CacheGet`, `CacheValue`, `Ok`, `Error`
 - [X] Encode/decode message payloads with frames
 - [X] Define v1 wire spec in `docs/protocol.md`
