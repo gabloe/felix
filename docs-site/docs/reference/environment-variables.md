@@ -255,10 +255,41 @@ Subscription event delivery uses binary `EventBatch` frames by default.
 
 **Type**: Positive integer (count)
 
-**Default**: `128`
+**Default**: `4096`
 
 ```bash
-export FELIX_SUBSCRIBER_QUEUE_CAPACITY="128"
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="4096"
+# Alias (same behavior):
+export FELIX_SUB_QUEUE_CAPACITY="4096"
+```
+
+### `FELIX_SUB_QUEUE_POLICY`
+
+**Description**: Backpressure policy when broker subscriber queues are full.
+
+**Type**: Enum (`block`, `drop_new`, `drop_old`)
+
+**Default**: `block`
+
+```bash
+export FELIX_SUB_QUEUE_POLICY="drop_new"
+```
+
+**Policy notes**:
+- `block`: await queue space (strongest delivery guarantee, may reduce publish throughput).
+- `drop_new`: drop incoming item when queue is full.
+- `drop_old`: currently emulated with `drop_new` semantics and tracked separately.
+
+### `FELIX_SUB_SINGLE_WRITER_PER_CONN`
+
+**Description**: Keep all subscribers on the same QUIC connection on one writer lane.
+
+**Type**: Boolean (`1|true|yes` to enable)
+
+**Default**: `true`
+
+```bash
+export FELIX_SUB_SINGLE_WRITER_PER_CONN="true"
 ```
 
 ### `FELIX_SUB_WRITER_LANES`
@@ -450,6 +481,8 @@ export FELIX_CACHE_BENCH_KEYS="1024"
 export FELIX_EVENT_CONN_POOL="8"
 export FELIX_EVENT_CONN_POOL="4"   # Lower overhead
 export FELIX_EVENT_CONN_POOL="16"  # More parallelism
+# Alias used by perf scripts:
+export FELIX_SUB_CONNS="8"
 ```
 
 ### `FELIX_EVENT_CONN_RECV_WINDOW`
@@ -489,6 +522,30 @@ export FELIX_EVENT_STREAM_RECV_WINDOW="67108864"
 **Example**:
 ```bash
 export FELIX_EVENT_SEND_WINDOW="268435456"
+```
+
+### `FELIX_CLIENT_SUB_QUEUE_CAPACITY`
+
+**Description**: Bounded queue capacity between client subscription IO and dispatch stages.
+
+**Type**: Positive integer (count)
+
+**Default**: `4096`
+
+```bash
+export FELIX_CLIENT_SUB_QUEUE_CAPACITY="4096"
+```
+
+### `FELIX_CLIENT_SUB_QUEUE_POLICY`
+
+**Description**: Client-side backpressure policy for subscription pipeline queues.
+
+**Type**: Enum (`block`, `drop_new`, `drop_old`)
+
+**Default**: `drop_new`
+
+```bash
+export FELIX_CLIENT_SUB_QUEUE_POLICY="block"
 ```
 
 ## Publishing Pool (Client)

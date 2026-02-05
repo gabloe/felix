@@ -53,6 +53,25 @@ pub(crate) const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 /// Either case can happen due to bugs or a malicious peer; we cap memory usage.
 /// Override with `FELIX_EVENT_ROUTER_MAX_PENDING`.
 pub(crate) const DEFAULT_EVENT_ROUTER_MAX_PENDING: usize = 16 * 1024;
+pub(crate) const DEFAULT_CLIENT_SUB_QUEUE_CAPACITY: usize = 4096;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientSubQueuePolicy {
+    Block,
+    DropNew,
+    DropOld,
+}
+
+impl ClientSubQueuePolicy {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "block" => Some(Self::Block),
+            "drop_new" => Some(Self::DropNew),
+            "drop_old" => Some(Self::DropOld),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -73,6 +92,8 @@ pub struct ClientConfig {
     pub cache_stream_recv_window: u64,
     pub cache_send_window: u64,
     pub event_router_max_pending: usize,
+    pub client_sub_queue_capacity: usize,
+    pub client_sub_queue_policy: ClientSubQueuePolicy,
     pub max_frame_bytes: usize,
     pub bench_embed_ts: bool,
 }
@@ -81,6 +102,8 @@ pub struct ClientConfig {
 pub(crate) struct ClientRuntimeConfig {
     pub(crate) event_router_max_pending: usize,
     pub(crate) max_frame_bytes: usize,
+    pub(crate) client_sub_queue_capacity: usize,
+    pub(crate) client_sub_queue_policy: ClientSubQueuePolicy,
     #[cfg(feature = "telemetry")]
     pub(crate) bench_embed_ts: bool,
 }
@@ -106,6 +129,8 @@ struct ClientConfigOverride {
     cache_stream_recv_window: Option<u64>,
     cache_send_window: Option<u64>,
     event_router_max_pending: Option<usize>,
+    client_sub_queue_capacity: Option<usize>,
+    client_sub_queue_policy: Option<String>,
     max_frame_bytes: Option<usize>,
     bench_embed_ts: Option<bool>,
 }
@@ -152,6 +177,8 @@ impl ClientConfig {
             cache_stream_recv_window: DEFAULT_CACHE_STREAM_RECV_WINDOW,
             cache_send_window: DEFAULT_CACHE_SEND_WINDOW,
             event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
+            client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
+            client_sub_queue_policy: ClientSubQueuePolicy::Block,
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             bench_embed_ts: false,
         }
@@ -177,7 +204,9 @@ impl ClientConfig {
         if let Some(value) = read_usize_env("FELIX_CACHE_STREAMS_PER_CONN") {
             config.cache_streams_per_conn = value;
         }
-        if let Some(value) = read_usize_env("FELIX_EVENT_CONN_POOL") {
+        if let Some(value) =
+            read_usize_env("FELIX_EVENT_CONN_POOL").or_else(|| read_usize_env("FELIX_SUB_CONNS"))
+        {
             config.event_conn_pool = value;
         }
         if let Some(value) = read_u64_env("FELIX_EVENT_CONN_RECV_WINDOW") {
@@ -200,6 +229,14 @@ impl ClientConfig {
         }
         if let Some(value) = read_usize_env("FELIX_EVENT_ROUTER_MAX_PENDING") {
             config.event_router_max_pending = value;
+        }
+        if let Some(value) = read_usize_env("FELIX_CLIENT_SUB_QUEUE_CAPACITY") {
+            config.client_sub_queue_capacity = value;
+        }
+        if let Ok(value) = std::env::var("FELIX_CLIENT_SUB_QUEUE_POLICY")
+            && let Some(policy) = ClientSubQueuePolicy::parse(value.as_str())
+        {
+            config.client_sub_queue_policy = policy;
         }
         if let Some(value) = read_usize_env("FELIX_MAX_FRAME_BYTES") {
             config.max_frame_bytes = value;
@@ -224,6 +261,8 @@ impl ClientConfig {
         let _ = CLIENT_RUNTIME_CONFIG.set(ClientRuntimeConfig {
             event_router_max_pending: self.event_router_max_pending,
             max_frame_bytes: self.max_frame_bytes,
+            client_sub_queue_capacity: self.client_sub_queue_capacity,
+            client_sub_queue_policy: self.client_sub_queue_policy,
             #[cfg(feature = "telemetry")]
             bench_embed_ts: self.bench_embed_ts,
         });
@@ -308,6 +347,16 @@ impl ClientConfigOverride {
         {
             config.event_router_max_pending = value;
         }
+        if let Some(value) = self.client_sub_queue_capacity
+            && value > 0
+        {
+            config.client_sub_queue_capacity = value;
+        }
+        if let Some(value) = &self.client_sub_queue_policy
+            && let Some(policy) = ClientSubQueuePolicy::parse(value.as_str())
+        {
+            config.client_sub_queue_policy = policy;
+        }
         if let Some(value) = self.max_frame_bytes
             && value > 0
         {
@@ -331,6 +380,8 @@ pub(crate) fn runtime_config() -> &'static ClientRuntimeConfig {
     CLIENT_RUNTIME_CONFIG.get_or_init(|| ClientRuntimeConfig {
         event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
         max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+        client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
+        client_sub_queue_policy: ClientSubQueuePolicy::Block,
         #[cfg(feature = "telemetry")]
         bench_embed_ts: false,
     })

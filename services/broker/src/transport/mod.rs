@@ -39,10 +39,18 @@ mod tests {
             pub_workers_per_conn: 4,
             pub_queue_depth: 1024,
             subscriber_queue_capacity: 128,
+            subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,
             subscriber_lane_queue_depth: 8192,
+            subscriber_lane_queue_policy: felix_broker::SubQueuePolicy::Block,
             max_subscriber_writer_lanes: 8,
             subscriber_lane_shard: crate::config::SubscriberLaneShard::Auto,
+            subscriber_single_writer_per_conn: true,
+            subscriber_flush_max_items: 64,
+            subscriber_flush_max_delay_us: 200,
+            subscriber_max_bytes_per_write: 256 * 1024,
+            sub_streams_per_conn: 4,
+            sub_stream_mode: crate::config::SubStreamMode::PerSubscriber,
         };
 
         let base = TransportConfig::default();

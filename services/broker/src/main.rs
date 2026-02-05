@@ -68,6 +68,14 @@ where
     // Observability is initialized first so any subsequent startup logs/metrics are captured.
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
+    tracing::info!(
+        lanes = config.subscriber_writer_lanes.max(1),
+        queue_bound = config.subscriber_lane_queue_depth.max(1),
+        queue_mode = ?config.subscriber_lane_queue_policy,
+        shard = ?config.subscriber_lane_shard,
+        single_writer_per_conn = config.subscriber_single_writer_per_conn,
+        "sub egress lanes ENABLED"
+    );
     // Configuration is resolved from environment variables (and optionally a YAML file).
     // Keep this early so the remainder of startup is entirely driven by `config`.
 
@@ -76,7 +84,8 @@ where
     // durable/clustered backend via configuration.
     let broker = Broker::new(EphemeralCache::new().into())
         .with_topic_capacity(config.subscriber_queue_capacity.max(1))
-        .context("configure subscriber queue depth")?;
+        .context("configure subscriber queue depth")?
+        .with_subscriber_queue_policy(config.subscriber_queue_policy);
     tracing::info!("broker started");
     let controlplane_url = config
         .controlplane_url

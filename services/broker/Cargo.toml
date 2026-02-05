@@ -70,5 +70,6 @@ rustls = "0.23"
 [features]
 default = []
 telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
+perf_debug = ["felix-broker/perf_debug"]
 
 [lints.rust]

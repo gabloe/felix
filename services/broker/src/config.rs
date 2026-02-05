@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use felix_broker::SubQueuePolicy;
 use serde::Deserialize;
 use std::fs;
 use std::io::ErrorKind;
@@ -47,14 +48,30 @@ pub struct BrokerConfig {
     pub pub_queue_depth: usize,
     // Per-subscriber queue capacity in broker core.
     pub subscriber_queue_capacity: usize,
+    // Subscriber queue policy for publish->fanout enqueue.
+    pub subscriber_queue_policy: SubQueuePolicy,
     // Number of outbound subscriber writer lanes.
     pub subscriber_writer_lanes: usize,
     // Bounded queue depth per writer lane.
     pub subscriber_lane_queue_depth: usize,
+    // Queue policy for lane ingress.
+    pub subscriber_lane_queue_policy: SubQueuePolicy,
     // Upper bound to prevent over-sharding lane counts that can regress p99/p999 under load.
     pub max_subscriber_writer_lanes: usize,
     // Deterministic policy for assigning subscribers to writer lanes.
     pub subscriber_lane_shard: SubscriberLaneShard,
+    // If true, route all subscribers on the same QUIC connection to one writer lane.
+    pub subscriber_single_writer_per_conn: bool,
+    // Max queued items drained per lane flush.
+    pub subscriber_flush_max_items: usize,
+    // Max time spent waiting for a lane flush fill.
+    pub subscriber_flush_max_delay_us: u64,
+    // Upper bound for coalesced bytes per write call.
+    pub subscriber_max_bytes_per_write: usize,
+    // Number of delivery streams to use per connection in hashed-pool mode.
+    pub sub_streams_per_conn: usize,
+    // Strategy for mapping subscribers to streams.
+    pub sub_stream_mode: SubStreamMode,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -68,6 +85,23 @@ pub enum SubscriberLaneShard {
     RoundRobinPin,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubStreamMode {
+    PerSubscriber,
+    HashedPool,
+}
+
+impl SubStreamMode {
+    fn parse_env(value: &str) -> Option<Self> {
+        match value {
+            "per_subscriber" => Some(Self::PerSubscriber),
+            "hashed_pool" => Some(Self::HashedPool),
+            _ => None,
+        }
+    }
+}
+
 impl SubscriberLaneShard {
     fn parse_env(value: &str) -> Option<Self> {
         match value {
@@ -77,6 +111,15 @@ impl SubscriberLaneShard {
             "round_robin_pin" => Some(Self::RoundRobinPin),
             _ => None,
         }
+    }
+}
+
+fn parse_sub_queue_policy(value: &str) -> Option<SubQueuePolicy> {
+    match value {
+        "block" => Some(SubQueuePolicy::Block),
+        "drop_new" => Some(SubQueuePolicy::DropNew),
+        "drop_old" => Some(SubQueuePolicy::DropOld),
+        _ => None,
     }
 }
 
@@ -92,11 +135,18 @@ const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 1024;
-const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
+const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 4096;
+const DEFAULT_SUBSCRIBER_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
 const DEFAULT_SUBSCRIBER_WRITER_LANES: usize = 4;
 const DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH: usize = 8192;
+const DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::Block;
 const DEFAULT_MAX_SUBSCRIBER_WRITER_LANES: usize = 8;
 const DEFAULT_SUBSCRIBER_LANE_SHARD: SubscriberLaneShard = SubscriberLaneShard::Auto;
+const DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS: usize = 64;
+const DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US: u64 = 200;
+const DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE: usize = 256 * 1024;
+const DEFAULT_SUB_STREAMS_PER_CONN: usize = 4;
+const DEFAULT_SUB_STREAM_MODE: SubStreamMode = SubStreamMode::PerSubscriber;
 
 #[derive(Debug, Deserialize)]
 struct BrokerConfigOverride {
@@ -120,10 +170,18 @@ struct BrokerConfigOverride {
     pub_workers_per_conn: Option<usize>,
     pub_queue_depth: Option<usize>,
     subscriber_queue_capacity: Option<usize>,
+    subscriber_queue_policy: Option<String>,
     subscriber_writer_lanes: Option<usize>,
     subscriber_lane_queue_depth: Option<usize>,
+    subscriber_lane_queue_policy: Option<String>,
     max_subscriber_writer_lanes: Option<usize>,
     subscriber_lane_shard: Option<SubscriberLaneShard>,
+    subscriber_single_writer_per_conn: Option<bool>,
+    subscriber_flush_max_items: Option<usize>,
+    subscriber_flush_max_delay_us: Option<u64>,
+    subscriber_max_bytes_per_write: Option<usize>,
+    sub_streams_per_conn: Option<usize>,
+    sub_stream_mode: Option<SubStreamMode>,
 }
 
 impl BrokerConfig {
@@ -218,19 +276,31 @@ impl BrokerConfig {
             .unwrap_or(DEFAULT_PUB_QUEUE_DEPTH);
         let subscriber_queue_capacity = std::env::var("FELIX_SUBSCRIBER_QUEUE_CAPACITY")
             .ok()
+            .or_else(|| std::env::var("FELIX_SUB_QUEUE_CAPACITY").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SUBSCRIBER_QUEUE_CAPACITY);
-        let subscriber_writer_lanes = std::env::var("FELIX_SUB_WRITER_LANES")
+        let subscriber_queue_policy = std::env::var("FELIX_SUB_QUEUE_POLICY")
             .ok()
+            .and_then(|value| parse_sub_queue_policy(&value))
+            .unwrap_or(DEFAULT_SUBSCRIBER_QUEUE_POLICY);
+        let subscriber_writer_lanes = std::env::var("FELIX_SUB_EGRESS_LANES")
+            .ok()
+            .or_else(|| std::env::var("FELIX_SUB_WRITER_LANES").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SUBSCRIBER_WRITER_LANES);
-        let subscriber_lane_queue_depth = std::env::var("FELIX_SUB_LANE_QUEUE_DEPTH")
+        let subscriber_lane_queue_depth = std::env::var("FELIX_SUB_QUEUE_BOUND")
             .ok()
+            .or_else(|| std::env::var("FELIX_SUB_LANE_QUEUE_DEPTH").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH);
+        let subscriber_lane_queue_policy = std::env::var("FELIX_SUB_QUEUE_MODE")
+            .ok()
+            .or_else(|| std::env::var("FELIX_SUB_LANE_QUEUE_POLICY").ok())
+            .and_then(|value| parse_sub_queue_policy(&value))
+            .unwrap_or(DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY);
         let max_subscriber_writer_lanes = std::env::var("FELIX_MAX_SUB_WRITER_LANES")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -240,6 +310,33 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| SubscriberLaneShard::parse_env(value.as_str()))
             .unwrap_or(DEFAULT_SUBSCRIBER_LANE_SHARD);
+        let subscriber_single_writer_per_conn = std::env::var("FELIX_SUB_SINGLE_WRITER_PER_CONN")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let subscriber_flush_max_items = std::env::var("FELIX_SUB_FLUSH_MAX_ITEMS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS);
+        let subscriber_flush_max_delay_us = std::env::var("FELIX_SUB_FLUSH_MAX_DELAY_US")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US);
+        let subscriber_max_bytes_per_write = std::env::var("FELIX_SUB_MAX_BYTES_PER_WRITE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE);
+        let sub_streams_per_conn = std::env::var("FELIX_SUB_STREAMS_PER_CONN")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SUB_STREAMS_PER_CONN);
+        let sub_stream_mode = std::env::var("FELIX_SUB_STREAM_MODE")
+            .ok()
+            .and_then(|value| SubStreamMode::parse_env(value.as_str()))
+            .unwrap_or(DEFAULT_SUB_STREAM_MODE);
         Ok(Self {
             quic_bind,
             metrics_bind,
@@ -261,10 +358,18 @@ impl BrokerConfig {
             pub_workers_per_conn,
             pub_queue_depth,
             subscriber_queue_capacity,
+            subscriber_queue_policy,
             subscriber_writer_lanes,
             subscriber_lane_queue_depth,
+            subscriber_lane_queue_policy,
             max_subscriber_writer_lanes,
             subscriber_lane_shard,
+            subscriber_single_writer_per_conn,
+            subscriber_flush_max_items,
+            subscriber_flush_max_delay_us,
+            subscriber_max_bytes_per_write,
+            sub_streams_per_conn,
+            sub_stream_mode,
         })
     }
 
@@ -373,6 +478,11 @@ impl BrokerConfig {
             {
                 config.subscriber_queue_capacity = value;
             }
+            if let Some(value) = override_cfg.subscriber_queue_policy
+                && let Some(parsed) = parse_sub_queue_policy(&value)
+            {
+                config.subscriber_queue_policy = parsed;
+            }
             if let Some(value) = override_cfg.subscriber_writer_lanes
                 && value > 0
             {
@@ -383,6 +493,11 @@ impl BrokerConfig {
             {
                 config.subscriber_lane_queue_depth = value;
             }
+            if let Some(value) = override_cfg.subscriber_lane_queue_policy
+                && let Some(parsed) = parse_sub_queue_policy(&value)
+            {
+                config.subscriber_lane_queue_policy = parsed;
+            }
             if let Some(value) = override_cfg.max_subscriber_writer_lanes
                 && value > 0
             {
@@ -390,6 +505,30 @@ impl BrokerConfig {
             }
             if let Some(value) = override_cfg.subscriber_lane_shard {
                 config.subscriber_lane_shard = value;
+            }
+            if let Some(value) = override_cfg.subscriber_single_writer_per_conn {
+                config.subscriber_single_writer_per_conn = value;
+            }
+            if let Some(value) = override_cfg.subscriber_flush_max_items
+                && value > 0
+            {
+                config.subscriber_flush_max_items = value;
+            }
+            if let Some(value) = override_cfg.subscriber_flush_max_delay_us {
+                config.subscriber_flush_max_delay_us = value;
+            }
+            if let Some(value) = override_cfg.subscriber_max_bytes_per_write
+                && value > 0
+            {
+                config.subscriber_max_bytes_per_write = value;
+            }
+            if let Some(value) = override_cfg.sub_streams_per_conn
+                && value > 0
+            {
+                config.sub_streams_per_conn = value;
+            }
+            if let Some(value) = override_cfg.sub_stream_mode {
+                config.sub_stream_mode = value;
             }
         }
         Ok(config)
@@ -441,6 +580,10 @@ mod tests {
             DEFAULT_SUBSCRIBER_QUEUE_CAPACITY
         );
         assert_eq!(
+            config.subscriber_queue_policy,
+            DEFAULT_SUBSCRIBER_QUEUE_POLICY
+        );
+        assert_eq!(
             config.subscriber_writer_lanes,
             DEFAULT_SUBSCRIBER_WRITER_LANES
         );
@@ -449,10 +592,29 @@ mod tests {
             DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH
         );
         assert_eq!(
+            config.subscriber_lane_queue_policy,
+            DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY
+        );
+        assert_eq!(
             config.max_subscriber_writer_lanes,
             DEFAULT_MAX_SUBSCRIBER_WRITER_LANES
         );
         assert_eq!(config.subscriber_lane_shard, DEFAULT_SUBSCRIBER_LANE_SHARD);
+        assert!(!config.subscriber_single_writer_per_conn);
+        assert_eq!(
+            config.subscriber_flush_max_items,
+            DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS
+        );
+        assert_eq!(
+            config.subscriber_flush_max_delay_us,
+            DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US
+        );
+        assert_eq!(
+            config.subscriber_max_bytes_per_write,
+            DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE
+        );
+        assert_eq!(config.sub_streams_per_conn, DEFAULT_SUB_STREAMS_PER_CONN);
+        assert_eq!(config.sub_stream_mode, DEFAULT_SUB_STREAM_MODE);
     }
 
     #[serial]
@@ -478,8 +640,16 @@ mod tests {
             env::set_var("FELIX_FANOUT_BATCH", "256");
             env::set_var("FELIX_SUB_WRITER_LANES", "8");
             env::set_var("FELIX_SUB_LANE_QUEUE_DEPTH", "4096");
+            env::set_var("FELIX_SUB_QUEUE_MODE", "drop_old");
             env::set_var("FELIX_MAX_SUB_WRITER_LANES", "16");
             env::set_var("FELIX_SUB_LANE_SHARD", "connection_id_hash");
+            env::set_var("FELIX_SUB_QUEUE_POLICY", "block");
+            env::set_var("FELIX_SUB_SINGLE_WRITER_PER_CONN", "false");
+            env::set_var("FELIX_SUB_FLUSH_MAX_ITEMS", "32");
+            env::set_var("FELIX_SUB_FLUSH_MAX_DELAY_US", "150");
+            env::set_var("FELIX_SUB_MAX_BYTES_PER_WRITE", "131072");
+            env::set_var("FELIX_SUB_STREAMS_PER_CONN", "8");
+            env::set_var("FELIX_SUB_STREAM_MODE", "hashed_pool");
         }
 
         let config = BrokerConfig::from_env().expect("from_env");
@@ -501,11 +671,19 @@ mod tests {
         assert_eq!(config.fanout_batch_size, 256);
         assert_eq!(config.subscriber_writer_lanes, 8);
         assert_eq!(config.subscriber_lane_queue_depth, 4096);
+        assert_eq!(config.subscriber_lane_queue_policy, SubQueuePolicy::DropOld);
         assert_eq!(config.max_subscriber_writer_lanes, 16);
+        assert_eq!(config.subscriber_queue_policy, SubQueuePolicy::Block);
         assert_eq!(
             config.subscriber_lane_shard,
             SubscriberLaneShard::ConnectionIdHash
         );
+        assert!(!config.subscriber_single_writer_per_conn);
+        assert_eq!(config.subscriber_flush_max_items, 32);
+        assert_eq!(config.subscriber_flush_max_delay_us, 150);
+        assert_eq!(config.subscriber_max_bytes_per_write, 131072);
+        assert_eq!(config.sub_streams_per_conn, 8);
+        assert_eq!(config.sub_stream_mode, SubStreamMode::HashedPool);
 
         clear_felix_env();
     }
@@ -748,12 +926,14 @@ max_frame_bytes: 8000000
             env::set_var("FELIX_BROKER_PUB_WORKERS_PER_CONN", "8");
             env::set_var("FELIX_BROKER_PUB_QUEUE_DEPTH", "2048");
             env::set_var("FELIX_SUBSCRIBER_QUEUE_CAPACITY", "256");
+            env::set_var("FELIX_SUB_QUEUE_POLICY", "drop_old");
         }
 
         let config = BrokerConfig::from_env().expect("from_env");
         assert_eq!(config.pub_workers_per_conn, 8);
         assert_eq!(config.pub_queue_depth, 2048);
         assert_eq!(config.subscriber_queue_capacity, 256);
+        assert_eq!(config.subscriber_queue_policy, SubQueuePolicy::DropOld);
 
         clear_felix_env();
     }
@@ -791,6 +971,8 @@ cache_send_window: 128000000
 pub_workers_per_conn: 16
 pub_queue_depth: 4096
 subscriber_queue_capacity: 96
+subscriber_queue_policy: block
+subscriber_single_writer_per_conn: false
 "#,
         )
         .unwrap();
@@ -805,6 +987,8 @@ subscriber_queue_capacity: 96
         assert_eq!(config.pub_workers_per_conn, 16);
         assert_eq!(config.pub_queue_depth, 4096);
         assert_eq!(config.subscriber_queue_capacity, 96);
+        assert_eq!(config.subscriber_queue_policy, SubQueuePolicy::Block);
+        assert!(!config.subscriber_single_writer_per_conn);
 
         clear_felix_env();
     }

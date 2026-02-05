@@ -6,6 +6,11 @@
 //!
 //! # Notes
 //! Intended for benchmarking and tuning; not part of production runtime.
+//!
+//! Throughput fairness experiments:
+//! - `--pub-yield-every-batches N` yields publisher task every N batches.
+//! - `--sub-dedicated-thread` runs the primary subscriber on a dedicated
+//!   current-thread Tokio runtime to isolate scheduler contention.
 use anyhow::{Context, Result};
 use broker::timings as broker_timings;
 use felix_broker::timings as broker_publish_timings;
@@ -21,6 +26,7 @@ use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
@@ -39,8 +45,12 @@ struct DemoConfig {
     pub_streams_per_conn: usize,
     pub_sharding: Option<String>,
     pub_stream_count: usize,
+    sub_conns: usize,
     sub_writer_lanes: Option<usize>,
     sub_lane_shard: Option<String>,
+    sub_delivery_shaping: bool,
+    pub_yield_every_batches: usize,
+    sub_dedicated_thread: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +99,20 @@ struct TimingSummary {
     client_sub_read_p99: Option<Duration>,
     client_sub_read_await_p50: Option<Duration>,
     client_sub_read_await_p99: Option<Duration>,
+    client_sub_poll_gap_p50: Option<Duration>,
+    client_sub_poll_gap_p99: Option<Duration>,
+    client_sub_poll_gap_p999: Option<Duration>,
+    client_sub_queue_wait_p50: Option<Duration>,
+    client_sub_queue_wait_p99: Option<Duration>,
+    client_sub_time_in_queue_p50: Option<Duration>,
+    client_sub_time_in_queue_p99: Option<Duration>,
+    client_sub_time_in_queue_p999: Option<Duration>,
+    client_sub_runtime_gap_p50: Option<Duration>,
+    client_sub_runtime_gap_p99: Option<Duration>,
+    client_sub_runtime_gap_p999: Option<Duration>,
+    client_sub_delivery_chan_wait_p50: Option<Duration>,
+    client_sub_delivery_chan_wait_p99: Option<Duration>,
+    client_sub_delivery_chan_wait_p999: Option<Duration>,
     client_sub_decode_p50: Option<Duration>,
     client_sub_decode_p99: Option<Duration>,
     client_sub_dispatch_p50: Option<Duration>,
@@ -172,13 +196,101 @@ async fn run_demo(
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let (config, matrix, payloads, fanouts, all) = parse_args();
-    run_demo(config, matrix, payloads, fanouts, all).await
+#[cfg(feature = "telemetry")]
+async fn run_smoke(mut base: DemoConfig) -> Result<()> {
+    base.warmup = 200;
+    base.total = 2000;
+    base.payload_bytes = 1024;
+    base.fanout = 10;
+    base.batch_size = 64;
+    base.binary = false;
+    base.pub_conns = 4;
+    base.pub_streams_per_conn = 2;
+    base.pub_stream_count = 1;
+
+    let mut baseline = base.clone();
+    baseline.sub_dedicated_thread = false;
+    let (baseline_result, baseline_summary) = run_case(baseline).await?;
+    let baseline_summary = baseline_summary.ok_or_else(|| {
+        anyhow::anyhow!("smoke mode requires telemetry timing summary for baseline run")
+    })?;
+
+    let mut dedicated = base;
+    dedicated.sub_dedicated_thread = true;
+    let (dedicated_result, dedicated_summary) = run_case(dedicated).await?;
+    let dedicated_summary = dedicated_summary.ok_or_else(|| {
+        anyhow::anyhow!("smoke mode requires telemetry timing summary for dedicated run")
+    })?;
+
+    println!(
+        "Smoke summary: baseline p99={} dedicated p99={} | baseline sub_read_await_p99={} dedicated sub_read_await_p99={} | baseline sub_dispatch_p99={} dedicated sub_dispatch_p99={}",
+        format_duration(baseline_result.p99),
+        format_duration(dedicated_result.p99),
+        baseline_summary
+            .client_sub_read_await_p99
+            .map(format_duration)
+            .unwrap_or_else(|| "n/a".to_string()),
+        dedicated_summary
+            .client_sub_read_await_p99
+            .map(format_duration)
+            .unwrap_or_else(|| "n/a".to_string()),
+        baseline_summary
+            .client_sub_dispatch_p99
+            .map(format_duration)
+            .unwrap_or_else(|| "n/a".to_string()),
+        dedicated_summary
+            .client_sub_dispatch_p99
+            .map(format_duration)
+            .unwrap_or_else(|| "n/a".to_string()),
+    );
+
+    let baseline_read = baseline_summary
+        .client_sub_read_await_p99
+        .unwrap_or(Duration::MAX);
+    let dedicated_read = dedicated_summary
+        .client_sub_read_await_p99
+        .unwrap_or(Duration::MAX);
+    let dedicated_dispatch = dedicated_summary
+        .client_sub_dispatch_p99
+        .unwrap_or(Duration::MAX);
+
+    let threshold = Duration::from_millis(50);
+    if dedicated_read > threshold || dedicated_dispatch > threshold {
+        anyhow::bail!(
+            "smoke failed: dedicated subscriber tails too high (read_await_p99={}, dispatch_p99={})",
+            format_duration(dedicated_read),
+            format_duration(dedicated_dispatch),
+        );
+    }
+    if dedicated_read > baseline_read.mul_f64(1.10) {
+        anyhow::bail!(
+            "smoke failed: dedicated subscriber did not improve read_await_p99 enough (baseline={}, dedicated={})",
+            format_duration(baseline_read),
+            format_duration(dedicated_read),
+        );
+    }
+    Ok(())
 }
 
-fn parse_args_from<I>(mut args: I) -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool)
+#[cfg(not(feature = "telemetry"))]
+async fn run_smoke(_base: DemoConfig) -> Result<()> {
+    anyhow::bail!("--smoke requires telemetry feature");
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let (config, matrix, payloads, fanouts, all, smoke, compare_sub_delivery_shaping) =
+        parse_args();
+    if compare_sub_delivery_shaping {
+        run_compare_sub_delivery_shaping(config).await
+    } else if smoke {
+        run_smoke(config).await
+    } else {
+        run_demo(config, matrix, payloads, fanouts, all).await
+    }
+}
+
+fn parse_args_from<I>(mut args: I) -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool, bool, bool)
 where
     I: Iterator<Item = String>,
 {
@@ -193,8 +305,24 @@ where
     let mut pub_streams_per_conn = 2;
     let mut pub_sharding = None;
     let mut pub_stream_count = 1;
+    let mut sub_conns = std::env::var("FELIX_SUB_EGRESS_CONNS")
+        .ok()
+        .or_else(|| std::env::var("FELIX_SUB_CONNS").ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
     let mut sub_writer_lanes = None;
     let mut sub_lane_shard = None;
+    let mut pub_yield_every_batches = 0usize;
+    let mut sub_dedicated_thread = std::env::var("FELIX_SUB_DEDICATED_THREAD")
+        .ok()
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "False" | "FALSE"))
+        .unwrap_or(true);
+    let mut sub_delivery_shaping = std::env::var("FELIX_SUB_DELIVERY_SHAPING")
+        .ok()
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "False" | "FALSE"))
+        .unwrap_or(true);
+    let mut smoke = false;
+    let mut compare_sub_delivery_shaping = false;
     let mut matrix = false;
     let mut all = true;
     let mut all_set = false;
@@ -211,11 +339,18 @@ where
     let mut pub_streams_set = false;
     let mut pub_sharding_set = false;
     let mut pub_stream_count_set = false;
+    let mut sub_conns_set = false;
     let mut sub_writer_lanes_set = false;
     let mut sub_lane_shard_set = false;
+    let mut pub_yield_every_batches_set = false;
+    let mut sub_dedicated_thread_set = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                print_usage();
+                std::process::exit(0);
+            }
             "--matrix" => {
                 matrix = true;
                 all = false;
@@ -294,11 +429,45 @@ where
                     sub_writer_lanes_set = true;
                 }
             }
+            "--sub-conns" => {
+                if let Some(value) = args.next() {
+                    sub_conns = value.parse().unwrap_or(sub_conns);
+                    sub_conns_set = true;
+                }
+            }
             "--sub-lane-shard" => {
                 if let Some(value) = args.next() {
                     sub_lane_shard = Some(value);
                     sub_lane_shard_set = true;
                 }
+            }
+            "--pub-yield-every-batches" => {
+                if let Some(value) = args.next() {
+                    pub_yield_every_batches = value.parse().unwrap_or(pub_yield_every_batches);
+                    pub_yield_every_batches_set = true;
+                }
+            }
+            "--sub-dedicated-thread" => {
+                sub_dedicated_thread = true;
+                sub_dedicated_thread_set = true;
+            }
+            "--sub-shared-thread" => {
+                sub_dedicated_thread = false;
+                sub_dedicated_thread_set = true;
+            }
+            "--smoke" => {
+                smoke = true;
+                all = false;
+            }
+            "--sub-delivery-shaping-on" => {
+                sub_delivery_shaping = true;
+            }
+            "--sub-delivery-shaping-off" => {
+                sub_delivery_shaping = false;
+            }
+            "--compare-sub-delivery-shaping" => {
+                compare_sub_delivery_shaping = true;
+                all = false;
             }
             "--payloads" => {
                 payloads = args.next();
@@ -329,8 +498,11 @@ where
             || pub_streams_set
             || pub_sharding_set
             || pub_stream_count_set
+            || sub_conns_set
             || sub_writer_lanes_set
-            || sub_lane_shard_set)
+            || sub_lane_shard_set
+            || pub_yield_every_batches_set
+            || sub_dedicated_thread_set)
     {
         all = false;
     }
@@ -357,23 +529,69 @@ where
             pub_streams_per_conn,
             pub_sharding,
             pub_stream_count,
+            sub_conns,
             sub_writer_lanes,
             sub_lane_shard,
+            sub_delivery_shaping,
+            pub_yield_every_batches,
+            sub_dedicated_thread,
         },
         matrix,
         payloads,
         fanouts,
         all,
+        smoke,
+        compare_sub_delivery_shaping,
     )
 }
 
-fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool) {
+fn parse_args() -> (DemoConfig, bool, Vec<usize>, Vec<usize>, bool, bool, bool) {
     parse_args_from(std::env::args().skip(1))
 }
 
-async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummary>)> {
+fn print_usage() {
+    println!("Felix latency-demo");
+    println!("  --warmup <N> --total <N> --payload <bytes> --fanout <N> --batch <N>");
+    println!("  --pub-conns <N> --pub-streams-per-conn <N> --pub-stream-count <N>");
+    println!("  --pub-yield-every-batches <N>  Yield publisher loop every N batches (0=off)");
+    println!("  --sub-dedicated-thread         Force dedicated subscriber thread (default ON)");
+    println!("  --sub-shared-thread            Disable dedicated subscriber thread");
+    println!("  --smoke                        Run throughput A/B sanity check");
+    println!("  --sub-delivery-shaping-on      Enable broker sub delivery shaping (default ON)");
+    println!("  --sub-delivery-shaping-off     Disable broker sub delivery shaping");
+    println!("  --compare-sub-delivery-shaping Run current config twice (OFF then ON) and compare");
+    println!("  --sub-writer-lanes <N> --sub-conns <N> --sub-lane-shard <mode>");
+    println!("  --matrix --payloads <csv> --fanouts <csv> --all --binary");
+    println!();
     println!(
-        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | publish_fastpath {} | pub conns {} | pub streams/conn {} | pub stream count {} | sub lanes {} | sub shard {}",
+        "Throughput starvation repro:\n  cargo run --release -p broker --bin latency-demo --all-features -- --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1"
+    );
+    println!("Fairness A/B:\n  ... --pub-yield-every-batches 1\n  ... --sub-dedicated-thread");
+}
+
+fn effective_sub_lanes_hint(config: &DemoConfig) -> usize {
+    if let Some(lanes) = config.sub_writer_lanes {
+        return lanes.max(1);
+    }
+    std::env::var("FELIX_SUB_EGRESS_LANES")
+        .ok()
+        .or_else(|| std::env::var("FELIX_SUB_WRITER_LANES").ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(4)
+}
+
+async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummary>)> {
+    let sub_lanes_hint = effective_sub_lanes_hint(&config);
+    let sub_stream_mode = std::env::var("FELIX_SUB_STREAM_MODE")
+        .ok()
+        .unwrap_or_else(|| "per_subscriber".to_string());
+    let sub_queue_bound = std::env::var("FELIX_SUB_QUEUE_BOUND")
+        .ok()
+        .or_else(|| std::env::var("FELIX_SUB_LANE_QUEUE_DEPTH").ok())
+        .unwrap_or_else(|| "8192".to_string());
+    println!(
+        "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | publish_fastpath {} | pub conns {} | pub streams/conn {} | pub stream count {} | sub lanes {} | sub shard {} | sub conns {} | sub stream mode {} | sub queue bound {} | pub yield every {} batches | sub dedicated thread {} | sub delivery shaping {}",
         config.warmup,
         config.total,
         config.payload_bytes,
@@ -383,8 +601,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.pub_conns,
         config.pub_streams_per_conn,
         config.pub_stream_count,
-        config.sub_writer_lanes.unwrap_or(0),
-        config.sub_lane_shard.as_deref().unwrap_or("default")
+        sub_lanes_hint,
+        config.sub_lane_shard.as_deref().unwrap_or("default"),
+        config.sub_conns.max(1),
+        sub_stream_mode,
+        sub_queue_bound,
+        config.pub_yield_every_batches,
+        config.sub_dedicated_thread,
+        config.sub_delivery_shaping
     );
     println!("{}", expectation_note(&config));
     let use_ack = config.batch_size <= 1 && !config.binary;
@@ -438,8 +662,46 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let addr = server.local_addr()?;
     let mut broker_config = broker::config::BrokerConfig::from_env()?;
     broker_config.fanout_batch_size = config.batch_size.max(1);
+    // Tune subscriber egress by workload profile:
+    // - latency profile (batch=1): favor immediate flush and stable ordering
+    // - throughput profile (batch>1): favor coalescing and parallel lanes
+    if config.batch_size <= 1 {
+        broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
+        broker_config.subscriber_flush_max_items = 1;
+        broker_config.subscriber_flush_max_delay_us = 0;
+        broker_config.subscriber_max_bytes_per_write = 64 * 1024;
+        broker_config.subscriber_single_writer_per_conn = true;
+    } else {
+        broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
+        broker_config.subscriber_flush_max_items = 64;
+        broker_config.subscriber_flush_max_delay_us = 200;
+        broker_config.subscriber_max_bytes_per_write = 256 * 1024;
+        broker_config.subscriber_single_writer_per_conn = false;
+    }
+    if config.sub_delivery_shaping {
+        broker_config.event_batch_max_events = broker_config.event_batch_max_events.max(64);
+        broker_config.event_batch_max_bytes = 64 * 1024;
+        broker_config.event_batch_max_delay_us = 250;
+        broker_config.subscriber_max_bytes_per_write = 64 * 1024;
+    } else {
+        broker_config.event_batch_max_events = 1;
+        broker_config.event_batch_max_bytes = 1024;
+        broker_config.event_batch_max_delay_us = 0;
+    }
     if let Some(lanes) = config.sub_writer_lanes {
         broker_config.subscriber_writer_lanes = lanes.max(1);
+    }
+    if let Ok(raw) = std::env::var("FELIX_SUB_EGRESS_LANES")
+        && let Ok(expected) = raw.parse::<usize>()
+    {
+        let active = broker_config.subscriber_writer_lanes.max(1);
+        if expected > 0 && active != expected {
+            return Err(anyhow::anyhow!(
+                "FELIX_SUB_EGRESS_LANES set to {} but active lanes is {}",
+                expected,
+                active
+            ));
+        }
     }
     if let Some(shard) = config.sub_lane_shard.as_deref() {
         broker_config.subscriber_lane_shard = match shard {
@@ -464,96 +726,178 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     if let Some(sharding) = config.pub_sharding.as_deref().and_then(parse_sharding_mode) {
         client_config.publish_sharding = sharding;
     }
-    let client = Client::connect(addr, "localhost", client_config).await?;
+    let client = Client::connect(addr, "localhost", client_config.clone()).await?;
+    let mut sub_clients = Vec::with_capacity(config.sub_conns.max(1));
+    for _ in 0..config.sub_conns.max(1) {
+        sub_clients.push(Client::connect(addr, "localhost", client_config.clone()).await?);
+    }
 
     let delivered_total = Arc::new(AtomicUsize::new(0));
     let (primary_sub, drain_tasks) = setup_subscribers(
-        &client,
+        &sub_clients,
         config.fanout,
         total_events,
         config.warmup,
         config.pub_stream_count,
         Arc::clone(&delivered_total),
+        config.sub_dedicated_thread,
     )
     .await?;
 
-    let (warmup_tx, warmup_rx) = oneshot::channel();
     let idle_timeout = Duration::from_millis(config.idle_ms);
-    let delivered_for_primary = Arc::clone(&delivered_total);
     let primary_total = per_stream_events(config.total, config.pub_stream_count.max(1), 0);
     let primary_warmup = per_stream_events(config.warmup, config.pub_stream_count.max(1), 0);
-    let recv_task = tokio::spawn(async move {
-        let mut results = Vec::with_capacity(primary_total);
-        let mut seen = 0usize;
-        let mut warmup_tx = Some(warmup_tx);
-        if primary_warmup == 0
-            && let Some(tx) = warmup_tx.take()
-        {
-            let _ = tx.send(());
-        }
-        let mut sub = primary_sub;
-        while results.len() < primary_total {
-            let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
-            let event = match next {
-                Ok(result) => result,
-                Err(_) => break,
-            };
-            match event {
-                Ok(Some(event)) => {
-                    let sample = client_timings::should_sample();
-                    let dispatch_start = sample.then(Instant::now);
-                    if seen < primary_warmup {
-                        seen += 1;
-                        if seen == primary_warmup
-                            && let Some(tx) = warmup_tx.take()
-                        {
-                            let _ = tx.send(());
+    let mut dedicated_handle = if config.sub_dedicated_thread {
+        Some(spawn_dedicated_primary_subscriber(
+            addr,
+            client_config.clone(),
+            idle_timeout,
+            primary_warmup,
+            primary_total,
+            config.pub_stream_count.max(1),
+            Arc::clone(&delivered_total),
+        ))
+    } else {
+        None
+    };
+    let mut warmup_rx = None;
+    let recv_task = if let Some(mut sub) = primary_sub {
+        let (warmup_tx, local_warmup_rx) = oneshot::channel();
+        warmup_rx = Some(local_warmup_rx);
+        let delivered_for_primary = Arc::clone(&delivered_total);
+        Some(tokio::spawn(async move {
+            let mut results = Vec::with_capacity(primary_total);
+            let mut seen = 0usize;
+            let mut warmup_tx = Some(warmup_tx);
+            if primary_warmup == 0
+                && let Some(tx) = warmup_tx.take()
+            {
+                let _ = tx.send(());
+            }
+            while results.len() < primary_total {
+                let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
+                let event = match next {
+                    Ok(result) => result,
+                    Err(_) => break,
+                };
+                match event {
+                    Ok(Some(event)) => {
+                        let sample = client_timings::should_sample();
+                        let dispatch_start = sample.then(Instant::now);
+                        if seen < primary_warmup {
+                            seen += 1;
+                            if seen == primary_warmup
+                                && let Some(tx) = warmup_tx.take()
+                            {
+                                let _ = tx.send(());
+                            }
+                            continue;
                         }
-                        continue;
+                        let elapsed = decode_latency(event.payload.as_ref());
+                        results.push(elapsed);
+                        delivered_for_primary.fetch_add(1, Ordering::Relaxed);
+                        if let Some(start) = dispatch_start {
+                            let dispatch_ns = start.elapsed().as_nanos() as u64;
+                            client_timings::record_sub_dispatch_ns(dispatch_ns);
+                            metrics::histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
+                        }
                     }
-                    let elapsed = decode_latency(event.payload.as_ref());
-                    results.push(elapsed);
-                    delivered_for_primary.fetch_add(1, Ordering::Relaxed);
-                    if let Some(start) = dispatch_start {
-                        let dispatch_ns = start.elapsed().as_nanos() as u64;
-                        client_timings::record_sub_dispatch_ns(dispatch_ns);
-                        metrics::histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
+                    Ok(None) => break,
+                    Err(err) => {
+                        return Err(anyhow::anyhow!("primary subscriber failed: {err}"));
                     }
                 }
-                Ok(None) => break,
-                Err(_) => break,
             }
-        }
-        results
-    });
+            Ok::<Vec<Duration>, anyhow::Error>(results)
+        }))
+    } else {
+        None
+    };
+    if let Some(handle) = &mut dedicated_handle {
+        handle.await_ready().await?;
+    }
+    let dedicated_recv_task = if let Some(handle) = &mut dedicated_handle {
+        let mut rx = handle
+            .delivery_rx
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("dedicated delivery receiver missing"))?;
+        Some(tokio::spawn(async move {
+            let mut results = Vec::with_capacity(primary_total);
+            while results.len() < primary_total {
+                let next = tokio::time::timeout(idle_timeout, rx.recv()).await;
+                match next {
+                    Ok(Some(latency)) => results.push(latency),
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+            results
+        }))
+    } else {
+        None
+    };
 
     let publisher = client.publisher().await?;
     publish_batches(
         &publisher,
-        config.payload_bytes,
-        config.warmup,
-        config.batch_size,
-        config.binary,
-        use_ack,
-        config.pub_stream_count,
+        &PublishBatchConfig {
+            payload_bytes: config.payload_bytes,
+            total: config.warmup,
+            batch_size: config.batch_size,
+            binary: config.binary,
+            use_ack,
+            stream_count: config.pub_stream_count,
+            pub_yield_every_batches: config.pub_yield_every_batches,
+        },
     )
     .await?;
-    let _ = warmup_rx.await;
+    if let Some(handle) = &mut dedicated_handle {
+        handle.await_warmup().await
+    } else if let Some(local_warmup_rx) = warmup_rx {
+        local_warmup_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("warmup channel closed"))
+    } else {
+        Ok(())
+    }?;
 
     let start = Instant::now();
     publish_batches(
         &publisher,
-        config.payload_bytes,
-        config.total,
-        config.batch_size,
-        config.binary,
-        use_ack,
-        config.pub_stream_count,
+        &PublishBatchConfig {
+            payload_bytes: config.payload_bytes,
+            total: config.total,
+            batch_size: config.batch_size,
+            binary: config.binary,
+            use_ack,
+            stream_count: config.pub_stream_count,
+            pub_yield_every_batches: config.pub_yield_every_batches,
+        },
     )
     .await?;
-
-    let mut latencies = recv_task.await.expect("join");
     let elapsed = start.elapsed();
+
+    let mut latencies = if let Some(task) = recv_task {
+        task.await.expect("join")?
+    } else if let Some(task) = dedicated_recv_task {
+        task.await.expect("join")
+    } else if let Some(handle) = dedicated_handle.take() {
+        handle.finish().await?;
+        Vec::new()
+    } else {
+        Vec::new()
+    };
+    if let Some(handle) = dedicated_handle.take() {
+        handle.finish().await?;
+    }
+    let expected_delivered_total = config.total * config.fanout;
+    let delivery_wait_timeout = Duration::from_millis(config.idle_ms.max(2000) * 5);
+    let _ = tokio::time::timeout(delivery_wait_timeout, async {
+        while delivered_total.load(Ordering::Relaxed) < expected_delivered_total {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     publisher.finish().await?;
     for mut task in drain_tasks {
         tokio::select! {
@@ -606,24 +950,73 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     ))
 }
 
+async fn run_compare_sub_delivery_shaping(mut base: DemoConfig) -> Result<()> {
+    base.sub_delivery_shaping = false;
+    let (off_result, off_summary) = run_case(base.clone()).await?;
+    base.sub_delivery_shaping = true;
+    let (on_result, on_summary) = run_case(base).await?;
+
+    #[cfg(feature = "telemetry")]
+    {
+        let off = off_summary.ok_or_else(|| anyhow::anyhow!("missing timing summary (OFF run)"))?;
+        let on = on_summary.ok_or_else(|| anyhow::anyhow!("missing timing summary (ON run)"))?;
+        println!(
+            "Shaping compare: OFF p99={} p999={} read_await_p99={} write_await_p99={} | ON p99={} p999={} read_await_p99={} write_await_p99={}",
+            format_duration(off_result.p99),
+            format_duration(off_result.p999),
+            format_optional_duration(off.client_sub_read_await_p99),
+            format_optional_duration(off.broker_sub_write_await_p99),
+            format_duration(on_result.p99),
+            format_duration(on_result.p999),
+            format_optional_duration(on.client_sub_read_await_p99),
+            format_optional_duration(on.broker_sub_write_await_p99),
+        );
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        let _ = (off_summary, on_summary);
+        println!(
+            "Shaping compare: OFF p99={} p999={} | ON p99={} p999={}",
+            format_duration(off_result.p99),
+            format_duration(off_result.p999),
+            format_duration(on_result.p99),
+            format_duration(on_result.p999),
+        );
+    }
+    Ok(())
+}
+
 async fn setup_subscribers(
-    client: &Client,
+    clients: &[Client],
     fanout: usize,
     total_events: usize,
     warmup: usize,
     stream_count: usize,
     delivered_total: Arc<AtomicUsize>,
-) -> Result<(Subscription, Vec<tokio::task::JoinHandle<()>>)> {
+    reserve_primary_slot: bool,
+) -> Result<(Option<Subscription>, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
     let mut primary_sub = None;
+    let mut primary_slot_reserved = reserve_primary_slot;
+    let assign_primary = !reserve_primary_slot;
     let stream_count = stream_count.max(1);
+    if clients.is_empty() {
+        anyhow::bail!("no subscriber clients configured");
+    }
+    let mut next_client = 0usize;
     for stream_index in 0..stream_count {
         let per_stream_total = per_stream_events(total_events, stream_count, stream_index);
         let per_stream_warmup = per_stream_events(warmup, stream_count, stream_index);
         for _ in 0..fanout {
             let stream = stream_name(stream_index, stream_count);
+            let client = &clients[next_client % clients.len()];
+            next_client = next_client.wrapping_add(1);
+            if stream_index == 0 && primary_slot_reserved {
+                primary_slot_reserved = false;
+                continue;
+            }
             let sub = client.subscribe("t1", "default", stream.as_str()).await?;
-            if primary_sub.is_none() {
+            if assign_primary && primary_sub.is_none() {
                 primary_sub = Some(sub);
             } else {
                 let mut sub = sub;
@@ -651,36 +1044,216 @@ async fn setup_subscribers(
             }
         }
     }
-    Ok((primary_sub.expect("primary subscriber"), drain_tasks))
+    Ok((primary_sub, drain_tasks))
 }
 
-async fn publish_batches(
-    publisher: &Publisher,
+async fn publish_batches(publisher: &Publisher, config: &PublishBatchConfig) -> Result<()> {
+    let mut remaining = config.total;
+    let mut stream_index = 0usize;
+    let mut sent_batches = 0usize;
+    while remaining > 0 {
+        let count = remaining.min(config.batch_size);
+        publish_batch(
+            publisher,
+            config.payload_bytes,
+            count,
+            config.binary,
+            config.use_ack,
+            stream_index,
+            config.stream_count,
+        )
+        .await?;
+        stream_index = stream_index.wrapping_add(1);
+        remaining -= count;
+        sent_batches = sent_batches.wrapping_add(1);
+        if config.pub_yield_every_batches > 0
+            && sent_batches.is_multiple_of(config.pub_yield_every_batches)
+        {
+            tokio::task::yield_now().await;
+        }
+    }
+    Ok(())
+}
+
+struct PublishBatchConfig {
     payload_bytes: usize,
     total: usize,
     batch_size: usize,
     binary: bool,
     use_ack: bool,
     stream_count: usize,
-) -> Result<()> {
-    let mut remaining = total;
-    let mut stream_index = 0usize;
-    while remaining > 0 {
-        let count = remaining.min(batch_size);
-        publish_batch(
-            publisher,
-            payload_bytes,
-            count,
-            binary,
-            use_ack,
-            stream_index,
-            stream_count,
-        )
-        .await?;
-        stream_index = stream_index.wrapping_add(1);
-        remaining -= count;
+    pub_yield_every_batches: usize,
+}
+
+struct DedicatedPrimaryHandle {
+    ready_rx: Option<oneshot::Receiver<Result<(), String>>>,
+    warmup_rx: Option<oneshot::Receiver<()>>,
+    error_rx: oneshot::Receiver<Result<(), String>>,
+    delivery_rx: Option<tokio::sync::mpsc::Receiver<Duration>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl DedicatedPrimaryHandle {
+    async fn await_ready(&mut self) -> Result<()> {
+        let ready_rx = self
+            .ready_rx
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("dedicated subscriber ready already awaited"))?;
+        let ready = ready_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("dedicated subscriber ready channel closed"))?;
+        ready.map_err(anyhow::Error::msg)
     }
-    Ok(())
+
+    async fn await_warmup(&mut self) -> Result<()> {
+        let warmup_rx = self
+            .warmup_rx
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("dedicated subscriber warmup already awaited"))?;
+        warmup_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("dedicated subscriber warmup channel closed"))
+    }
+
+    async fn finish(mut self) -> Result<()> {
+        let recv = self
+            .error_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("dedicated subscriber completion channel closed"))?;
+        if let Some(join) = self.join.take() {
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = join.join();
+            })
+            .await;
+        }
+        recv.map_err(anyhow::Error::msg)
+    }
+}
+
+fn spawn_dedicated_primary_subscriber(
+    addr: std::net::SocketAddr,
+    client_config: ClientConfig,
+    idle_timeout: Duration,
+    primary_warmup: usize,
+    primary_total: usize,
+    stream_count: usize,
+    delivered_total: Arc<AtomicUsize>,
+) -> DedicatedPrimaryHandle {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (warmup_ready_tx, warmup_ready_rx) = oneshot::channel();
+    let (error_tx, error_rx) = oneshot::channel();
+    let chan_capacity = std::env::var("FELIX_SUB_DEDICATED_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(4096)
+        .max(1);
+    let (delivery_tx, delivery_rx) = tokio::sync::mpsc::channel(chan_capacity);
+    let join = thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let _ = error_tx.send(Err(format!("build dedicated runtime failed: {err}")));
+                return;
+            }
+        };
+        let result = runtime.block_on(async move {
+            let mut warmup_ready_tx = Some(warmup_ready_tx);
+            let delivery_tx = delivery_tx;
+            let client = match Client::connect(addr, "localhost", client_config).await {
+                Ok(client) => client,
+                Err(err) => {
+                    let _ =
+                        ready_tx.send(Err(format!("dedicated subscriber connect failed: {err}")));
+                    return Err(format!("dedicated subscriber connect failed: {err}"));
+                }
+            };
+            let mut sub = match client
+                .subscribe("t1", "default", stream_name(0, stream_count).as_str())
+                .await
+            {
+                Ok(sub) => sub,
+                Err(err) => {
+                    let _ =
+                        ready_tx.send(Err(format!("dedicated subscriber subscribe failed: {err}")));
+                    return Err(format!("dedicated subscriber subscribe failed: {err}"));
+                }
+            };
+            let _ = ready_tx.send(Ok(()));
+            let mut seen = 0usize;
+            let mut last_runtime_tick = Instant::now();
+            if primary_warmup == 0
+                && let Some(tx) = warmup_ready_tx.take()
+            {
+                let _ = tx.send(());
+            }
+            while seen < primary_warmup + primary_total {
+                let runtime_gap_ns = last_runtime_tick.elapsed().as_nanos() as u64;
+                last_runtime_tick = Instant::now();
+                client_timings::record_sub_runtime_gap_ns(runtime_gap_ns);
+                metrics::histogram!("client_sub_runtime_gap_ns").record(runtime_gap_ns as f64);
+                let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
+                let event = match next {
+                    Ok(result) => result,
+                    Err(_) => break,
+                };
+                match event {
+                    Ok(Some(event)) => {
+                        let sample = client_timings::should_sample();
+                        let dispatch_start = sample.then(Instant::now);
+                        if seen < primary_warmup {
+                            seen += 1;
+                            if seen == primary_warmup
+                                && let Some(tx) = warmup_ready_tx.take()
+                            {
+                                let _ = tx.send(());
+                            }
+                            continue;
+                        }
+                        let latency = decode_latency(event.payload.as_ref());
+                        let enqueue_start = Instant::now();
+                        if delivery_tx.send(latency).await.is_err() {
+                            break;
+                        }
+                        seen += 1;
+                        let wait_ns = enqueue_start.elapsed().as_nanos() as u64;
+                        client_timings::record_sub_delivery_chan_wait_ns(wait_ns);
+                        metrics::histogram!("client_sub_delivery_chan_wait_ns")
+                            .record(wait_ns as f64);
+                        if wait_ns > 0 {
+                            metrics::counter!(
+                                "felix_client_sub_delivery_channel_backpressure_total"
+                            )
+                            .increment(1);
+                        }
+                        metrics::gauge!("felix_client_sub_delivery_channel_depth")
+                            .set((chan_capacity.saturating_sub(delivery_tx.capacity())) as f64);
+                        delivered_total.fetch_add(1, Ordering::Relaxed);
+                        if let Some(start) = dispatch_start {
+                            let dispatch_ns = start.elapsed().as_nanos() as u64;
+                            client_timings::record_sub_dispatch_ns(dispatch_ns);
+                            metrics::histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(err) => {
+                        return Err(format!("dedicated subscriber receive failed: {err}"));
+                    }
+                }
+            }
+            Ok(())
+        });
+        let _ = error_tx.send(result);
+    });
+    DedicatedPrimaryHandle {
+        ready_rx: Some(ready_rx),
+        warmup_rx: Some(warmup_ready_rx),
+        error_rx,
+        delivery_rx: Some(delivery_rx),
+        join: Some(join),
+    }
 }
 
 async fn publish_batch(
@@ -760,9 +1333,15 @@ fn print_result(result: &DemoResult) {
         result.binary
     );
     println!("  delivered total = {}", result.delivered_total);
-    println!("  p50  = {}", format_duration(result.p50));
-    println!("  p99  = {}", format_duration(result.p99));
-    println!("  p999 = {}", format_duration(result.p999));
+    if result.received == 0 {
+        println!("  p50  = n/a (no received samples)");
+        println!("  p99  = n/a (no received samples)");
+        println!("  p999 = n/a (no received samples)");
+    } else {
+        println!("  p50  = {}", format_duration(result.p50));
+        println!("  p99  = {}", format_duration(result.p99));
+        println!("  p999 = {}", format_duration(result.p999));
+    }
     println!("  throughput = {:.2} msg/s", result.throughput);
     println!(
         "  effective throughput = {:.2} msg/s",
@@ -784,7 +1363,7 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         return;
     };
     println!(
-        "  timings: client_pub_enqueue_wait p50={} p99={} p999={} client_encode p50={} p99={} client_binary_encode p50={} p99={} p999={} client_text_encode p50={} p99={} p999={} client_text_batch_build p50={} p99={} p999={} client_write p50={} p99={} client_send_await p50={} p99={} p999={} client_sub_read p50={} p99={} client_sub_read_await p50={} p99={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_sub_consumer_gap p50={} p99={} p999={} client_e2e_latency p50={} p99={} p999={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_prefix_build p50={} p99={} broker_sub_write p50={} p99={} broker_sub_write_await p50={} p99={} broker_sub_delivery p50={} p99={} p999={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_fanout p50={} p99={} broker_publish_enqueue p50={} p99={} broker_publish_send p50={} p99={}",
+        "  timings: client_pub_enqueue_wait p50={} p99={} p999={} client_encode p50={} p99={} client_binary_encode p50={} p99={} p999={} client_text_encode p50={} p99={} p999={} client_text_batch_build p50={} p99={} p999={} client_write p50={} p99={} client_send_await p50={} p99={} p999={} client_sub_read p50={} p99={} client_sub_read_await p50={} p99={} client_sub_poll_gap p50={} p99={} p999={} client_sub_queue_wait p50={} p99={} client_sub_time_in_queue p50={} p99={} p999={} client_sub_runtime_gap p50={} p99={} p999={} client_sub_delivery_chan_wait p50={} p99={} p999={} client_sub_decode p50={} p99={} client_sub_dispatch p50={} p99={} client_sub_consumer_gap p50={} p99={} p999={} client_e2e_latency p50={} p99={} p999={} client_ack_read p50={} p99={} client_ack_decode p50={} p99={} broker_decode p50={} p99={} broker_ingress_enqueue p50={} p99={} broker_ack_write p50={} p99={} broker_quic_write p50={} p99={} broker_sub_queue_wait p50={} p99={} broker_sub_prefix_build p50={} p99={} broker_sub_write p50={} p99={} broker_sub_write_await p50={} p99={} broker_sub_delivery p50={} p99={} p999={} broker_publish_lookup p50={} p99={} broker_publish_append p50={} p99={} broker_publish_fanout p50={} p99={} broker_publish_enqueue p50={} p99={} broker_publish_send p50={} p99={}",
         format_optional_duration(summary.client_pub_enqueue_wait_p50),
         format_optional_duration(summary.client_pub_enqueue_wait_p99),
         format_optional_duration(summary.client_pub_enqueue_wait_p999),
@@ -808,6 +1387,20 @@ fn print_timing_summary(summary: Option<TimingSummary>) {
         format_optional_duration(summary.client_sub_read_p99),
         format_optional_duration(summary.client_sub_read_await_p50),
         format_optional_duration(summary.client_sub_read_await_p99),
+        format_optional_duration(summary.client_sub_poll_gap_p50),
+        format_optional_duration(summary.client_sub_poll_gap_p99),
+        format_optional_duration(summary.client_sub_poll_gap_p999),
+        format_optional_duration(summary.client_sub_queue_wait_p50),
+        format_optional_duration(summary.client_sub_queue_wait_p99),
+        format_optional_duration(summary.client_sub_time_in_queue_p50),
+        format_optional_duration(summary.client_sub_time_in_queue_p99),
+        format_optional_duration(summary.client_sub_time_in_queue_p999),
+        format_optional_duration(summary.client_sub_runtime_gap_p50),
+        format_optional_duration(summary.client_sub_runtime_gap_p99),
+        format_optional_duration(summary.client_sub_runtime_gap_p999),
+        format_optional_duration(summary.client_sub_delivery_chan_wait_p50),
+        format_optional_duration(summary.client_sub_delivery_chan_wait_p99),
+        format_optional_duration(summary.client_sub_delivery_chan_wait_p999),
         format_optional_duration(summary.client_sub_decode_p50),
         format_optional_duration(summary.client_sub_decode_p99),
         format_optional_duration(summary.client_sub_dispatch_p50),
@@ -904,6 +1497,13 @@ fn print_frame_counters() -> (
         broker.sub_items_out_ok,
         broker.sub_batches_out_ok
     );
+    println!(
+        "  sub_delivery_counters: broker_batches_out={} broker_items_out={} client_batches_in={} client_items_in={}",
+        broker.sub_batches_out_ok,
+        broker.sub_items_out_ok,
+        client.sub_batches_in_ok,
+        client.sub_items_in_ok
+    );
     (client, broker)
 }
 
@@ -936,6 +1536,14 @@ fn print_sanity_checks(
     };
     let expected_delivered = config.total * config.fanout;
     let use_ack = config.batch_size <= 1 && !config.binary;
+    if client.pub_batches_out_ok > 0 && client.pub_frames_out_ok > 0 {
+        let writes_per_batch = client.pub_frames_out_ok as f64 / client.pub_batches_out_ok as f64;
+        let avg_bytes_per_write = client.bytes_out as f64 / client.pub_frames_out_ok as f64;
+        println!(
+            "  publish_write_shape: writes_per_batch={:.2} avg_bytes_per_write={:.1}",
+            writes_per_batch, avg_bytes_per_write
+        );
+    }
     if client.pub_items_out_ok != expected_items as u64 {
         println!(
             "  sanity: pub_items_out_ok mismatch expected={} actual={}",
@@ -1003,14 +1611,24 @@ fn build_timing_summary(
         mut client_send_await,
         mut client_sub_read,
         mut client_sub_read_await,
+        mut client_sub_queue_wait,
         mut client_sub_decode,
         mut client_sub_dispatch,
         mut client_sub_consumer_gap,
+        mut client_sub_poll_gap,
+        mut client_sub_time_in_queue,
+        mut client_sub_runtime_gap,
+        mut client_sub_delivery_chan_wait,
         mut client_e2e_latency,
         mut client_ack_read,
         mut client_ack_decode,
     ) = client_samples.unwrap_or_else(|| {
         (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1083,6 +1701,23 @@ fn build_timing_summary(
         client_sub_read_p99: percentile_ns(&mut client_sub_read, 0.99),
         client_sub_read_await_p50: percentile_ns(&mut client_sub_read_await, 0.50),
         client_sub_read_await_p99: percentile_ns(&mut client_sub_read_await, 0.99),
+        client_sub_poll_gap_p50: percentile_ns(&mut client_sub_poll_gap, 0.50),
+        client_sub_poll_gap_p99: percentile_ns(&mut client_sub_poll_gap, 0.99),
+        client_sub_poll_gap_p999: percentile_ns(&mut client_sub_poll_gap, 0.999),
+        client_sub_queue_wait_p50: percentile_ns(&mut client_sub_queue_wait, 0.50),
+        client_sub_queue_wait_p99: percentile_ns(&mut client_sub_queue_wait, 0.99),
+        client_sub_time_in_queue_p50: percentile_ns(&mut client_sub_time_in_queue, 0.50),
+        client_sub_time_in_queue_p99: percentile_ns(&mut client_sub_time_in_queue, 0.99),
+        client_sub_time_in_queue_p999: percentile_ns(&mut client_sub_time_in_queue, 0.999),
+        client_sub_runtime_gap_p50: percentile_ns(&mut client_sub_runtime_gap, 0.50),
+        client_sub_runtime_gap_p99: percentile_ns(&mut client_sub_runtime_gap, 0.99),
+        client_sub_runtime_gap_p999: percentile_ns(&mut client_sub_runtime_gap, 0.999),
+        client_sub_delivery_chan_wait_p50: percentile_ns(&mut client_sub_delivery_chan_wait, 0.50),
+        client_sub_delivery_chan_wait_p99: percentile_ns(&mut client_sub_delivery_chan_wait, 0.99),
+        client_sub_delivery_chan_wait_p999: percentile_ns(
+            &mut client_sub_delivery_chan_wait,
+            0.999,
+        ),
         client_sub_decode_p50: percentile_ns(&mut client_sub_decode, 0.50),
         client_sub_decode_p99: percentile_ns(&mut client_sub_decode, 0.99),
         client_sub_dispatch_p50: percentile_ns(&mut client_sub_dispatch, 0.50),
@@ -1354,8 +1989,12 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: None,
             pub_stream_count: 1,
+            sub_conns: 1,
             sub_writer_lanes: None,
             sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 0,
+            sub_dedicated_thread: false,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -1379,8 +2018,12 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: Some("rr".to_string()),
             pub_stream_count: 1,
+            sub_conns: 1,
             sub_writer_lanes: None,
             sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 0,
+            sub_dedicated_thread: false,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -1418,18 +2061,26 @@ mod tests {
             "8".to_string(),
             "--sub-lane-shard".to_string(),
             "connection_id_hash".to_string(),
+            "--pub-yield-every-batches".to_string(),
+            "3".to_string(),
+            "--sub-dedicated-thread".to_string(),
             "--payloads".to_string(),
             "1,2".to_string(),
             "--fanouts".to_string(),
             "1,3".to_string(),
         ];
-        let (config, matrix, payloads, fanouts, all) = parse_args_from(args.into_iter());
+        let (config, matrix, payloads, fanouts, all, smoke, compare) =
+            parse_args_from(args.into_iter());
         assert!(matrix);
         assert_eq!(payloads, vec![1, 2]);
         assert_eq!(fanouts, vec![1, 3]);
         assert!(!all);
+        assert!(!smoke);
+        assert!(!compare);
         assert_eq!(config.sub_writer_lanes, Some(8));
         assert_eq!(config.sub_lane_shard.as_deref(), Some("connection_id_hash"));
+        assert_eq!(config.pub_yield_every_batches, 3);
+        assert!(config.sub_dedicated_thread);
 
         assert_eq!(parse_csv_usize("1,2,3"), vec![1, 2, 3]);
         let payload = encode_payload(4);
@@ -1455,8 +2106,12 @@ mod tests {
                 pub_streams_per_conn: 1,
                 pub_sharding: None,
                 pub_stream_count: 1,
+                sub_conns: 1,
                 sub_writer_lanes: None,
                 sub_lane_shard: None,
+                sub_delivery_shaping: true,
+                pub_yield_every_batches: 0,
+                sub_dedicated_thread: false,
             })
             .contains("latency-focused")
         );
@@ -1473,8 +2128,12 @@ mod tests {
                 pub_streams_per_conn: 1,
                 pub_sharding: None,
                 pub_stream_count: 1,
+                sub_conns: 1,
                 sub_writer_lanes: None,
                 sub_lane_shard: None,
+                sub_delivery_shaping: true,
+                pub_yield_every_batches: 0,
+                sub_dedicated_thread: false,
             })
             .contains("throughput-focused")
         );
@@ -1509,11 +2168,44 @@ mod tests {
             pub_streams_per_conn: 1,
             pub_sharding: None,
             pub_stream_count: 1,
+            sub_conns: 1,
             sub_writer_lanes: None,
             sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 0,
+            sub_dedicated_thread: false,
         };
         tokio::time::timeout(Duration::from_secs(20), run_all_with_mode(base, true))
             .await
             .context("latency demo fast run_all timeout")?
+    }
+
+    #[tokio::test]
+    async fn latency_demo_smoke_flags() -> Result<()> {
+        let config = DemoConfig {
+            warmup: 1,
+            total: 4,
+            payload_bytes: 8,
+            fanout: 1,
+            batch_size: 2,
+            binary: false,
+            idle_ms: 10,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: None,
+            pub_stream_count: 1,
+            sub_conns: 1,
+            sub_writer_lanes: Some(2),
+            sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 1,
+            sub_dedicated_thread: true,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            run_demo(config, false, vec![8], vec![1], false),
+        )
+        .await
+        .context("latency demo smoke flags timeout")?
     }
 }

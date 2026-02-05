@@ -1454,6 +1454,11 @@ fn config_optimized_defaults() {
         config.event_router_max_pending,
         DEFAULT_EVENT_ROUTER_MAX_PENDING
     );
+    assert_eq!(
+        config.client_sub_queue_capacity,
+        DEFAULT_CLIENT_SUB_QUEUE_CAPACITY
+    );
+    assert_eq!(config.client_sub_queue_policy, ClientSubQueuePolicy::Block);
     assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
     assert!(!config.bench_embed_ts);
 }
@@ -1479,6 +1484,8 @@ fn config_from_env_variables() {
         std::env::set_var("FELIX_CACHE_STREAM_RECV_WINDOW", "16384");
         std::env::set_var("FELIX_CACHE_SEND_WINDOW", "32768");
         std::env::set_var("FELIX_EVENT_ROUTER_MAX_PENDING", "1000");
+        std::env::set_var("FELIX_CLIENT_SUB_QUEUE_CAPACITY", "2048");
+        std::env::set_var("FELIX_CLIENT_SUB_QUEUE_POLICY", "block");
         std::env::set_var("FELIX_MAX_FRAME_BYTES", "8388608");
         std::env::set_var("FELIX_BENCH_EMBED_TS", "true");
     }
@@ -1499,6 +1506,8 @@ fn config_from_env_variables() {
     assert_eq!(config.cache_stream_recv_window, 16384);
     assert_eq!(config.cache_send_window, 32768);
     assert_eq!(config.event_router_max_pending, 1000);
+    assert_eq!(config.client_sub_queue_capacity, 2048);
+    assert_eq!(config.client_sub_queue_policy, ClientSubQueuePolicy::Block);
     assert_eq!(config.max_frame_bytes, 8388608);
     assert!(config.bench_embed_ts);
 
@@ -1518,6 +1527,8 @@ fn config_from_env_variables() {
         std::env::remove_var("FELIX_CACHE_STREAM_RECV_WINDOW");
         std::env::remove_var("FELIX_CACHE_SEND_WINDOW");
         std::env::remove_var("FELIX_EVENT_ROUTER_MAX_PENDING");
+        std::env::remove_var("FELIX_CLIENT_SUB_QUEUE_CAPACITY");
+        std::env::remove_var("FELIX_CLIENT_SUB_QUEUE_POLICY");
         std::env::remove_var("FELIX_MAX_FRAME_BYTES");
         std::env::remove_var("FELIX_BENCH_EMBED_TS");
     }
@@ -1545,6 +1556,8 @@ cache_conn_recv_window: 81920
 cache_stream_recv_window: 163840
 cache_send_window: 327680
 event_router_max_pending: 2000
+client_sub_queue_capacity: 3072
+client_sub_queue_policy: drop_old
 max_frame_bytes: 16777216
 bench_embed_ts: true
 "#;
@@ -1569,6 +1582,11 @@ bench_embed_ts: true
     assert_eq!(config.cache_stream_recv_window, 163840);
     assert_eq!(config.cache_send_window, 327680);
     assert_eq!(config.event_router_max_pending, 2000);
+    assert_eq!(config.client_sub_queue_capacity, 3072);
+    assert_eq!(
+        config.client_sub_queue_policy,
+        ClientSubQueuePolicy::DropOld
+    );
     assert_eq!(config.max_frame_bytes, 16777216);
     assert!(config.bench_embed_ts);
 }

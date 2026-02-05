@@ -237,6 +237,8 @@ pub(crate) async fn enqueue_publish(
         .workers
         .get(worker_index)
         .ok_or_else(|| anyhow!("publish worker index out of range"))?;
+    #[cfg(feature = "perf_debug")]
+    let enqueue_wait_start = Instant::now();
     // We use try_send first to keep the fast path allocation-free and to make overload observable
     // (Full vs Closed). Only the Wait policy performs an async send with a timeout.
     // IMPORTANT: Any code path that successfully enqueues MUST increment depth counters exactly once.
@@ -246,6 +248,20 @@ pub(crate) async fn enqueue_publish(
             let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;
             let global = GLOBAL_INGRESS_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
             t_gauge!("felix_broker_ingress_queue_depth").set(global as f64);
+            #[cfg(feature = "perf_debug")]
+            {
+                let wait_ns = enqueue_wait_start.elapsed().as_nanos() as u64;
+                metrics::histogram!(
+                    "felix_perf_publish_enqueue_wait_ns",
+                    "worker" => worker_index.to_string()
+                )
+                .record(wait_ns as f64);
+                metrics::counter!(
+                    "felix_perf_publish_enqueue_ok_total",
+                    "worker" => worker_index.to_string()
+                )
+                .increment(1);
+            }
             Ok(true)
         }
         Err(mpsc::error::TrySendError::Full(job)) => {
@@ -271,6 +287,20 @@ pub(crate) async fn enqueue_publish(
                     let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;
                     let global = GLOBAL_INGRESS_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
                     t_gauge!("felix_broker_ingress_queue_depth").set(global as f64);
+                    #[cfg(feature = "perf_debug")]
+                    {
+                        let wait_ns = enqueue_wait_start.elapsed().as_nanos() as u64;
+                        metrics::histogram!(
+                            "felix_perf_publish_enqueue_wait_ns",
+                            "worker" => worker_index.to_string()
+                        )
+                        .record(wait_ns as f64);
+                        metrics::counter!(
+                            "felix_perf_publish_enqueue_wait_total",
+                            "worker" => worker_index.to_string()
+                        )
+                        .increment(1);
+                    }
                     Ok(true)
                 }
             }

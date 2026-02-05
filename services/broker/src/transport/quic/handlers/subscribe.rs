@@ -47,15 +47,11 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
-use felix_broker::Broker;
+use felix_broker::{Broker, SubscriptionReceiver};
 use felix_wire::Message;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-#[cfg(any(
-    not(any(test, debug_assertions)),
-    all(feature = "telemetry", debug_assertions)
-))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -70,10 +66,8 @@ use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::write_message;
 use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
 
-#[cfg(not(any(test, debug_assertions)))]
-static WRITER_LANE_MANAGER: OnceLock<Arc<WriterLaneManager>> = OnceLock::new();
-#[cfg(all(feature = "telemetry", debug_assertions))]
-static CONNECTION_LANE_ASSERT: OnceLock<DashMap<u64, usize>> = OnceLock::new();
+static ACTIVE_SUB_CONN_COUNTS: OnceLock<DashMap<u64, usize>> = OnceLock::new();
+static SUB_EGRESS_MANAGERS: OnceLock<DashMap<u64, Arc<WriterLaneManager>>> = OnceLock::new();
 
 /// Handle a subscribe request received on the bi-directional control stream.
 ///
@@ -152,6 +146,16 @@ pub(crate) async fn handle_subscribe_message(
     };
 
     // Open a uni stream for event delivery. If this fails, respond with error on control stream.
+    if matches!(
+        config.sub_stream_mode,
+        crate::config::SubStreamMode::HashedPool
+    ) {
+        t_counter!("broker_sub_stream_mode_fallback_total", "mode" => "hashed_pool").increment(1);
+        tracing::debug!(
+            requested_streams_per_conn = config.sub_streams_per_conn,
+            "hashed_pool stream mode not enabled yet; using per_subscriber stream mode"
+        );
+    }
     let mut event_send = match connection.open_uni().await {
         Ok(send) => send,
         Err(err) => {
@@ -175,23 +179,6 @@ pub(crate) async fn handle_subscribe_message(
             return Ok(true);
         }
     };
-
-    // Control-plane acknowledgement: subscriber is registered.
-    t_counter!("felix_subscribe_requests_total", "result" => "ok").increment(1);
-    super::publish::handle_ack_enqueue_result(
-        send_outgoing_critical(
-            out_ack_tx,
-            out_ack_depth,
-            "felix_broker_out_ack_depth",
-            ack_throttle_tx,
-            Outgoing::Message(Message::Subscribed { subscription_id }),
-        )
-        .await,
-        ack_timeout_state,
-        ack_throttle_tx,
-        cancel_tx,
-    )
-    .await?;
 
     // First write a hello on the uni stream so the client can bind:
     //   subscription_id -> this uni stream
@@ -221,13 +208,16 @@ pub(crate) async fn handle_subscribe_message(
         max_bytes,
         flush_delay,
         single_event_mode: config.fanout_batch_size <= 1,
+        flush_max_items: config.subscriber_flush_max_items.max(1),
+        flush_max_delay: Duration::from_micros(config.subscriber_flush_max_delay_us.max(1)),
+        max_bytes_per_write: config.subscriber_max_bytes_per_write.max(1),
     };
-    let manager = WriterLaneManager::init(&config);
     let connection_id = connection.info().id.0;
+    let manager = WriterLaneManager::init(&config, connection_id);
     let lane_idx = manager.select_lane(subscription_id, Some(connection_id));
     let (event_rx, unsubscribe_guard) = subscription.into_parts();
     if manager
-        .try_send(
+        .enqueue(
             lane_idx,
             LaneCommand::Register {
                 subscriber_id: subscription_id,
@@ -237,6 +227,7 @@ pub(crate) async fn handle_subscribe_message(
                 guard: unsubscribe_guard,
             },
         )
+        .await
         .is_err()
     {
         metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
@@ -246,8 +237,42 @@ pub(crate) async fn handle_subscribe_message(
             subscription_id,
             "subscriber lane queue full during register"
         );
+        t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
+        super::publish::handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::Error {
+                    message: "subscriber lane queue full during register".to_string(),
+                }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
         return Ok(true);
     }
+
+    // Control-plane acknowledgement: subscriber is fully wired for delivery.
+    t_counter!("felix_subscribe_requests_total", "result" => "ok").increment(1);
+    super::publish::handle_ack_enqueue_result(
+        send_outgoing_critical(
+            out_ack_tx,
+            out_ack_depth,
+            "felix_broker_out_ack_depth",
+            ack_throttle_tx,
+            Outgoing::Message(Message::Subscribed { subscription_id }),
+        )
+        .await,
+        ack_timeout_state,
+        ack_throttle_tx,
+        cancel_tx,
+    )
+    .await?;
     tokio::spawn(async move {
         run_lane_feeder(
             event_rx,
@@ -288,6 +313,15 @@ pub(crate) struct EventWriterConfig {
 
     /// If true, encode each payload as its own one-item EventBatch frame.
     single_event_mode: bool,
+
+    /// Max number of lane commands to gather per flush.
+    flush_max_items: usize,
+
+    /// Max delay while filling a lane flush buffer.
+    flush_max_delay: Duration,
+
+    /// Upper bound for coalesced bytes in one write.
+    max_bytes_per_write: usize,
 }
 
 #[cfg(test)]
@@ -321,6 +355,22 @@ async fn write_parts(
     Ok(())
 }
 
+async fn write_parts_many(
+    send: &mut quinn::SendStream,
+    frames: Vec<felix_wire::binary::EncodedEventBatchParts>,
+) -> Result<usize> {
+    let mut total = 0usize;
+    let mut segments = Vec::new();
+    for frame in frames {
+        total = total.saturating_add(frame.frame_len());
+        segments.extend(frame.into_segments());
+    }
+    send.write_all_chunks(segments.as_mut_slice())
+        .await
+        .context("write subscription coalesced frame chunks")?;
+    Ok(total)
+}
+
 #[derive(Debug)]
 struct LaneSubscriber {
     event_send: quinn::SendStream,
@@ -331,7 +381,7 @@ struct LaneSubscriber {
 }
 
 #[derive(Debug)]
-enum LaneCommand {
+enum ConnectionCommand {
     Register {
         subscriber_id: u64,
         connection: felix_transport::QuicConnection,
@@ -342,6 +392,29 @@ enum LaneCommand {
     Delivery {
         subscriber_id: u64,
         frame_parts: felix_wire::binary::EncodedEventBatchParts,
+        item_count: usize,
+        first_enqueued_at: Instant,
+        enqueue_at: Instant,
+    },
+    Unregister {
+        subscriber_id: u64,
+    },
+}
+
+#[derive(Debug)]
+enum LaneCommand {
+    Register {
+        subscriber_id: u64,
+        connection_id: Option<u64>,
+        connection: felix_transport::QuicConnection,
+        event_send: quinn::SendStream,
+        guard: felix_broker::SubscriptionGuard,
+    },
+    Delivery {
+        subscriber_id: u64,
+        frame_parts: felix_wire::binary::EncodedEventBatchParts,
+        item_count: usize,
+        first_enqueued_at: Instant,
         enqueue_at: Instant,
     },
     Unregister {
@@ -353,29 +426,72 @@ enum LaneCommand {
 struct WriterLaneManager {
     lanes: Vec<mpsc::Sender<LaneCommand>>,
     lane_queue_capacity: usize,
+    lane_queue_policy: felix_broker::SubQueuePolicy,
     lane_queue_highwater: Vec<AtomicUsize>,
+    connection_writers: DashMap<u64, mpsc::Sender<ConnectionCommand>>,
+    subscriber_connections: DashMap<u64, u64>,
+    connection_queue_capacity: usize,
+    max_bytes_per_write: usize,
     connection_lanes: DashMap<u64, usize>,
     subscriber_pins: DashMap<u64, usize>,
     shard: crate::config::SubscriberLaneShard,
+    single_writer_per_conn: bool,
     rr_counter: AtomicUsize,
 }
 
-impl WriterLaneManager {
-    fn init(config: &crate::config::BrokerConfig) -> Arc<Self> {
-        #[cfg(any(test, debug_assertions))]
-        {
-            Arc::new(Self::new(config))
-        }
+#[derive(Debug, Clone, Copy)]
+struct LaneRuntimeConfig {
+    flush_max_items: usize,
+}
 
-        #[cfg(not(any(test, debug_assertions)))]
-        {
-            WRITER_LANE_MANAGER
-                .get_or_init(|| Arc::new(Self::new(config)))
-                .clone()
+#[derive(Debug)]
+struct LaneDelivery {
+    subscriber_id: u64,
+    frame_parts: felix_wire::binary::EncodedEventBatchParts,
+    item_count: usize,
+    first_enqueued_at: Instant,
+    enqueue_at: Instant,
+}
+
+impl WriterLaneManager {
+    fn init(config: &crate::config::BrokerConfig, scope_key: u64) -> Arc<Self> {
+        let key = Self::config_key(config, scope_key);
+        let managers = SUB_EGRESS_MANAGERS.get_or_init(DashMap::new);
+        if let Some(existing) = managers.get(&key) {
+            return existing.clone();
         }
+        let manager = Self::new(config);
+        managers.insert(key, Arc::clone(&manager));
+        manager
     }
 
-    fn new(config: &crate::config::BrokerConfig) -> Self {
+    fn config_key(config: &crate::config::BrokerConfig, scope_key: u64) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        scope_key.hash(&mut hasher);
+        config.quic_bind.hash(&mut hasher);
+        config.subscriber_writer_lanes.hash(&mut hasher);
+        config.subscriber_lane_queue_depth.hash(&mut hasher);
+        match config.subscriber_lane_queue_policy {
+            felix_broker::SubQueuePolicy::Block => 0u8,
+            felix_broker::SubQueuePolicy::DropNew => 1u8,
+            felix_broker::SubQueuePolicy::DropOld => 2u8,
+        }
+        .hash(&mut hasher);
+        match config.subscriber_lane_shard {
+            crate::config::SubscriberLaneShard::Auto => 0u8,
+            crate::config::SubscriberLaneShard::SubscriberIdHash => 1u8,
+            crate::config::SubscriberLaneShard::ConnectionIdHash => 2u8,
+            crate::config::SubscriberLaneShard::RoundRobinPin => 3u8,
+        }
+        .hash(&mut hasher);
+        config.subscriber_single_writer_per_conn.hash(&mut hasher);
+        config.subscriber_flush_max_items.hash(&mut hasher);
+        config.subscriber_flush_max_delay_us.hash(&mut hasher);
+        config.subscriber_max_bytes_per_write.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn new(config: &crate::config::BrokerConfig) -> Arc<Self> {
         let requested_lanes = config.subscriber_writer_lanes.max(1);
         let max_lanes = config.max_subscriber_writer_lanes.max(1);
         let lane_count = requested_lanes.min(max_lanes);
@@ -387,25 +503,40 @@ impl WriterLaneManager {
             );
         }
         let queue_depth = config.subscriber_lane_queue_depth.max(1);
+        let lane_cfg = LaneRuntimeConfig {
+            flush_max_items: config.subscriber_flush_max_items.max(1),
+        };
         let mut lanes = Vec::with_capacity(lane_count);
-        for lane_id in 0..lane_count {
+        let mut lane_receivers = Vec::with_capacity(lane_count);
+        for _lane_id in 0..lane_count {
             let (tx, rx) = mpsc::channel(queue_depth);
-            tokio::spawn(run_writer_lane(lane_id, rx));
             lanes.push(tx);
+            lane_receivers.push(rx);
         }
         let mut lane_queue_highwater = Vec::with_capacity(lane_count);
         for _ in 0..lane_count {
             lane_queue_highwater.push(AtomicUsize::new(0));
         }
-        Self {
+        let manager = Self {
             lanes,
             lane_queue_capacity: queue_depth,
+            lane_queue_policy: config.subscriber_lane_queue_policy,
             lane_queue_highwater,
+            connection_writers: DashMap::new(),
+            subscriber_connections: DashMap::new(),
+            connection_queue_capacity: queue_depth,
+            max_bytes_per_write: config.subscriber_max_bytes_per_write.max(1),
             connection_lanes: DashMap::new(),
             subscriber_pins: DashMap::new(),
             shard: config.subscriber_lane_shard,
+            single_writer_per_conn: config.subscriber_single_writer_per_conn,
             rr_counter: AtomicUsize::new(0),
+        };
+        let manager = Arc::new(manager);
+        for (lane_id, rx) in lane_receivers.into_iter().enumerate() {
+            tokio::spawn(run_writer_lane(lane_id, rx, lane_cfg, Arc::clone(&manager)));
         }
+        manager
     }
 
     fn lane_for_subscriber(&self, subscriber_id: u64) -> usize {
@@ -422,16 +553,18 @@ impl WriterLaneManager {
     }
 
     fn select_lane(&self, subscriber_id: u64, connection_id: Option<u64>) -> usize {
+        if self.single_writer_per_conn
+            && let Some(connection_id) = connection_id
+        {
+            return self.lane_for_connection(connection_id);
+        }
         // Design intent:
         // - `Auto` defaults to connection ownership to avoid cross-lane contention on shared QUIC
         //   send state when multiple subscribers share one connection.
         // - `SubscriberIdHash` maximizes distribution independent of connection topology.
         // - `RoundRobinPin` assigns once at subscribe time (not per message) so ordering is stable.
         match self.shard {
-            crate::config::SubscriberLaneShard::Auto => match connection_id {
-                Some(connection_id) => self.lane_for_connection(connection_id),
-                None => self.lane_for_subscriber(subscriber_id),
-            },
+            crate::config::SubscriberLaneShard::Auto => self.lane_for_subscriber(subscriber_id),
             crate::config::SubscriberLaneShard::SubscriberIdHash => {
                 self.lane_for_subscriber(subscriber_id)
             }
@@ -450,9 +583,51 @@ impl WriterLaneManager {
 
     fn unregister_subscriber(&self, subscriber_id: u64, connection_id: Option<u64>) {
         self.subscriber_pins.remove(&subscriber_id);
+        self.subscriber_connections.remove(&subscriber_id);
         if let Some(connection_id) = connection_id {
             self.connection_lanes.remove(&connection_id);
         }
+    }
+
+    fn ensure_connection_writer(&self, connection_id: u64) -> mpsc::Sender<ConnectionCommand> {
+        if let Some(existing) = self.connection_writers.get(&connection_id) {
+            return existing.clone();
+        }
+        let (tx, rx) = mpsc::channel(self.connection_queue_capacity.max(1));
+        tokio::spawn(run_connection_writer(
+            connection_id,
+            rx,
+            self.max_bytes_per_write,
+        ));
+        self.connection_writers.insert(connection_id, tx.clone());
+        tx
+    }
+
+    async fn enqueue_connection(
+        &self,
+        connection_id: u64,
+        cmd: ConnectionCommand,
+    ) -> std::result::Result<(), ()> {
+        let sender = self.ensure_connection_writer(connection_id);
+        let conn_label = connection_id.to_string();
+        let wait_start = Instant::now();
+        let result = match self.lane_queue_policy {
+            felix_broker::SubQueuePolicy::Block => sender.send(cmd).await.map_err(|_| ()),
+            felix_broker::SubQueuePolicy::DropNew | felix_broker::SubQueuePolicy::DropOld => {
+                sender.try_send(cmd).map_err(|_| ())
+            }
+        };
+        let wait_ns = wait_start.elapsed().as_nanos() as u64;
+        timings::record_sub_queue_wait_ns(wait_ns);
+        t_histogram!("felix_broker_sub_queue_wait_ns").record(wait_ns as f64);
+        t_histogram!("broker_sub_conn_enqueue_wait_ns", "connection_id" => conn_label.clone())
+            .record(wait_ns as f64);
+        let depth = self
+            .connection_queue_capacity
+            .saturating_sub(sender.capacity());
+        metrics::gauge!("felix_sub_conn_queue_len", "connection_id" => conn_label)
+            .set(depth as f64);
+        result
     }
 
     fn update_lane_queue_highwater(&self, lane_idx: usize) {
@@ -477,116 +652,361 @@ impl WriterLaneManager {
         }
     }
 
-    fn try_send(&self, lane_idx: usize, cmd: LaneCommand) -> std::result::Result<(), LaneCommand> {
-        match self.lanes[lane_idx].try_send(cmd) {
-            Ok(()) => {
-                t_counter!("broker_sub_lane_enqueued_total", "lane" => lane_idx.to_string())
+    async fn enqueue(&self, lane_idx: usize, cmd: LaneCommand) -> std::result::Result<(), ()> {
+        let lane = lane_idx.to_string();
+        let sender = &self.lanes[lane_idx];
+        let enqueue_wait_start = Instant::now();
+        let result = match self.lane_queue_policy {
+            felix_broker::SubQueuePolicy::Block => sender.send(cmd).await.map_err(|_| ()),
+            felix_broker::SubQueuePolicy::DropNew => sender.try_send(cmd).map_err(|err| {
+                if matches!(err, tokio::sync::mpsc::error::TrySendError::Full(_)) {
+                    t_counter!("broker_sub_lane_queue_full_total", "lane" => lane.clone())
+                        .increment(1);
+                }
+            }),
+            felix_broker::SubQueuePolicy::DropOld => sender.try_send(cmd).map_err(|err| {
+                if matches!(err, tokio::sync::mpsc::error::TrySendError::Full(_)) {
+                    t_counter!("broker_sub_lane_queue_full_total", "lane" => lane.clone())
+                        .increment(1);
+                    t_counter!(
+                        "broker_sub_lane_drop_old_emulated_total",
+                        "lane" => lane.clone()
+                    )
                     .increment(1);
+                }
+            }),
+        };
+        let enqueue_wait_ns = enqueue_wait_start.elapsed().as_nanos() as u64;
+        t_histogram!("broker_sub_lane_enqueue_block_ns", "lane" => lane.clone())
+            .record(enqueue_wait_ns as f64);
+        match result {
+            Ok(()) => {
+                t_counter!("broker_sub_lane_enqueued_total", "lane" => lane.clone()).increment(1);
                 self.update_lane_queue_highwater(lane_idx);
+                let queue_len = self.lane_queue_capacity.saturating_sub(sender.capacity());
+                metrics::gauge!("felix_sub_lane_queue_len", "lane" => lane).set(queue_len as f64);
                 Ok(())
             }
-            Err(tokio::sync::mpsc::error::TrySendError::Full(cmd))
-            | Err(tokio::sync::mpsc::error::TrySendError::Closed(cmd)) => {
-                t_counter!("broker_sub_lane_dropped_total", "lane" => lane_idx.to_string())
-                    .increment(1);
-                Err(cmd)
+            Err(()) => {
+                t_counter!("broker_sub_lane_dropped_total", "lane" => lane).increment(1);
+                Err(())
             }
         }
     }
 }
 
-async fn run_writer_lane(lane_id: usize, mut rx: mpsc::Receiver<LaneCommand>) {
-    let mut subscribers: HashMap<u64, LaneSubscriber> = HashMap::new();
-    while let Some(cmd) = rx.recv().await {
-        match cmd {
-            LaneCommand::Register {
-                subscriber_id,
-                connection,
-                connection_id,
-                event_send,
-                guard,
-            } => {
-                subscribers.insert(
+async fn run_writer_lane(
+    lane_id: usize,
+    mut rx: mpsc::Receiver<LaneCommand>,
+    lane_cfg: LaneRuntimeConfig,
+    manager: Arc<WriterLaneManager>,
+) {
+    let lane_label = lane_id.to_string();
+    while let Some(first_cmd) = rx.recv().await {
+        let mut pending = Vec::with_capacity(lane_cfg.flush_max_items.max(1));
+        pending.push(first_cmd);
+
+        while pending.len() < lane_cfg.flush_max_items {
+            match rx.try_recv() {
+                Ok(cmd) => pending.push(cmd),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        metrics::gauge!("felix_sub_lane_queue_len", "lane" => lane_label.clone())
+            .set(rx.len() as f64);
+
+        for cmd in pending {
+            match cmd {
+                LaneCommand::Register {
                     subscriber_id,
-                    LaneSubscriber {
-                        event_send,
-                        _connection: connection,
-                        _connection_id: connection_id,
-                        _unsubscribe_guard: guard,
-                    },
-                );
-            }
-            LaneCommand::Unregister { subscriber_id } => {
-                subscribers.remove(&subscriber_id);
-            }
-            LaneCommand::Delivery {
-                subscriber_id,
-                frame_parts,
-                enqueue_at,
-            } => {
-                let Some(subscriber) = subscribers.get_mut(&subscriber_id) else {
-                    continue;
-                };
-                #[cfg(all(feature = "telemetry", debug_assertions))]
-                if let Some(connection_id) = subscriber._connection_id {
-                    debug_assert_connection_lane(connection_id, lane_id);
-                }
-                let sample = t_should_sample();
-                let queue_wait_ns = enqueue_at.elapsed().as_nanos() as u64;
-                timings::record_sub_queue_wait_ns(queue_wait_ns);
-                t_histogram!("broker_sub_lane_queue_wait_ns", "lane" => lane_id.to_string())
-                    .record(queue_wait_ns as f64);
-
-                let write_start = t_now_if(sample);
-                t_counter!("broker_sub_lane_write_calls_total", "lane" => lane_id.to_string())
-                    .increment(1);
-                match write_parts(&mut subscriber.event_send, frame_parts).await {
-                    Ok(_) => {
-                        if let Some(start) = write_start {
-                            let write_ns = start.elapsed().as_nanos() as u64;
-                            timings::record_sub_write_ns(write_ns);
-                            timings::record_sub_write_await_ns(write_ns);
-                            timings::record_quic_write_ns(write_ns);
-                            t_histogram!("broker_sub_lane_write_ns", "lane" => lane_id.to_string())
-                                .record(write_ns as f64);
-                            t_histogram!(
-                                "broker_sub_lane_write_await_ns",
-                                "lane" => lane_id.to_string()
-                            )
-                            .record(write_ns as f64);
-                        }
-                    }
-                    Err(err) => {
-                        t_counter!(
-                            "broker_sub_lane_write_errors_total",
-                            "lane" => lane_id.to_string()
+                    connection_id,
+                    connection,
+                    event_send,
+                    guard,
+                } => {
+                    let Some(connection_id) = connection_id else {
+                        continue;
+                    };
+                    manager
+                        .subscriber_connections
+                        .insert(subscriber_id, connection_id);
+                    connection_subscriber_register(Some(connection_id));
+                    let _ = manager
+                        .enqueue_connection(
+                            connection_id,
+                            ConnectionCommand::Register {
+                                subscriber_id,
+                                connection,
+                                connection_id: Some(connection_id),
+                                event_send,
+                                guard,
+                            },
                         )
-                        .increment(1);
-                        metrics::counter!("felix_subscriber_disconnect_total").increment(1);
-                        tracing::info!(
-                            lane = lane_id,
-                            subscriber_id,
-                            error = %err,
-                            "lane writer subscriber stream closed"
-                        );
-                        subscribers.remove(&subscriber_id);
+                        .await;
+                }
+                LaneCommand::Unregister { subscriber_id } => {
+                    if let Some((_, connection_id)) =
+                        manager.subscriber_connections.remove(&subscriber_id)
+                    {
+                        let _ = manager
+                            .enqueue_connection(
+                                connection_id,
+                                ConnectionCommand::Unregister { subscriber_id },
+                            )
+                            .await;
+                        connection_subscriber_unregister(Some(connection_id));
                     }
+                }
+                LaneCommand::Delivery {
+                    subscriber_id,
+                    frame_parts,
+                    item_count,
+                    first_enqueued_at,
+                    enqueue_at,
+                } => {
+                    let Some(connection_id) = manager
+                        .subscriber_connections
+                        .get(&subscriber_id)
+                        .map(|entry| *entry.value())
+                    else {
+                        continue;
+                    };
+                    let _ = manager
+                        .enqueue_connection(
+                            connection_id,
+                            ConnectionCommand::Delivery {
+                                subscriber_id,
+                                frame_parts,
+                                item_count,
+                                first_enqueued_at,
+                                enqueue_at,
+                            },
+                        )
+                        .await;
                 }
             }
         }
     }
 }
 
-#[cfg(all(feature = "telemetry", debug_assertions))]
-fn debug_assert_connection_lane(connection_id: u64, lane_id: usize) {
-    let map = CONNECTION_LANE_ASSERT.get_or_init(DashMap::new);
-    let mut entry = map.entry(connection_id).or_insert(lane_id);
-    debug_assert_eq!(
-        *entry, lane_id,
-        "connection_id {} routed to multiple lanes: {} and {}",
-        connection_id, *entry, lane_id
-    );
-    *entry = lane_id;
+async fn run_connection_writer(
+    connection_id: u64,
+    mut rx: mpsc::Receiver<ConnectionCommand>,
+    max_bytes_per_write: usize,
+) {
+    let conn_label = connection_id.to_string();
+    let mut debug_window_start = Instant::now();
+    let mut debug_writes = 0u64;
+    let mut debug_bytes = 0u64;
+    let mut debug_dequeues = 0u64;
+    let mut subscribers: HashMap<u64, LaneSubscriber> = HashMap::new();
+    while let Some(first_cmd) = rx.recv().await {
+        let mut pending = Vec::with_capacity(64);
+        pending.push(first_cmd);
+        while pending.len() < 64 {
+            match rx.try_recv() {
+                Ok(cmd) => pending.push(cmd),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        metrics::gauge!("felix_sub_conn_queue_len", "connection_id" => conn_label.clone())
+            .set(rx.len() as f64);
+
+        let mut deliveries: HashMap<u64, VecDeque<LaneDelivery>> = HashMap::new();
+        for cmd in pending {
+            match cmd {
+                ConnectionCommand::Register {
+                    subscriber_id,
+                    connection,
+                    connection_id,
+                    event_send,
+                    guard,
+                } => {
+                    subscribers.insert(
+                        subscriber_id,
+                        LaneSubscriber {
+                            event_send,
+                            _connection: connection,
+                            _connection_id: connection_id,
+                            _unsubscribe_guard: guard,
+                        },
+                    );
+                }
+                ConnectionCommand::Unregister { subscriber_id } => {
+                    subscribers.remove(&subscriber_id);
+                    deliveries.remove(&subscriber_id);
+                }
+                ConnectionCommand::Delivery {
+                    subscriber_id,
+                    frame_parts,
+                    item_count,
+                    first_enqueued_at,
+                    enqueue_at,
+                } => {
+                    deliveries
+                        .entry(subscriber_id)
+                        .or_default()
+                        .push_back(LaneDelivery {
+                            subscriber_id,
+                            frame_parts,
+                            item_count,
+                            first_enqueued_at,
+                            enqueue_at,
+                        });
+                }
+            }
+        }
+
+        let mut rr_order: VecDeque<u64> = deliveries.keys().copied().collect();
+        while let Some(subscriber_id) = rr_order.pop_front() {
+            let Some(queue) = deliveries.get_mut(&subscriber_id) else {
+                continue;
+            };
+            let Some(first) = queue.pop_front() else {
+                continue;
+            };
+            debug_dequeues = debug_dequeues.saturating_add(1);
+            if !queue.is_empty() {
+                rr_order.push_back(subscriber_id);
+            }
+            let Some(subscriber) = subscribers.get_mut(&subscriber_id) else {
+                continue;
+            };
+
+            let mut frames = vec![first.frame_parts];
+            let mut item_count = first.item_count;
+            let mut coalesced_bytes = frames[0].frame_len();
+            while let Some(next) = queue.front() {
+                let next_len = next.frame_parts.frame_len();
+                if coalesced_bytes.saturating_add(next_len) > max_bytes_per_write {
+                    break;
+                }
+                if let Some(next_frame) = queue.pop_front() {
+                    item_count = item_count.saturating_add(next_frame.item_count);
+                    coalesced_bytes =
+                        coalesced_bytes.saturating_add(next_frame.frame_parts.frame_len());
+                    frames.push(next_frame.frame_parts);
+                }
+            }
+            if !queue.is_empty() {
+                rr_order.push_back(subscriber_id);
+            }
+
+            let sample = t_should_sample();
+            let queue_wait_ns = first.enqueue_at.elapsed().as_nanos() as u64;
+            let first_dequeue_ns = first.first_enqueued_at.elapsed().as_nanos() as u64;
+            t_histogram!("broker_sub_lane_queue_wait_ns", "connection_id" => conn_label.clone())
+                .record(queue_wait_ns as f64);
+            t_histogram!(
+                "broker_sub_lane_dequeue_to_write_start_ns",
+                "connection_id" => conn_label.clone()
+            )
+            .record(queue_wait_ns as f64);
+            t_histogram!("broker_sub_time_to_first_dequeue_ns", "connection_id" => conn_label.clone())
+                .record(first_dequeue_ns as f64);
+
+            let write_start = t_now_if(sample);
+            t_counter!("broker_sub_conn_write_calls_total", "connection_id" => conn_label.clone())
+                .increment(1);
+            t_histogram!("broker_sub_conn_writes_per_flush", "connection_id" => conn_label.clone())
+                .record(frames.len() as f64);
+            let write_result = if frames.len() == 1 {
+                write_parts(
+                    &mut subscriber.event_send,
+                    frames.pop().expect("single frame"),
+                )
+                .await
+                .map(|_| coalesced_bytes)
+            } else {
+                write_parts_many(&mut subscriber.event_send, frames).await
+            };
+            match write_result {
+                Ok(bytes_written) => {
+                    debug_writes = debug_writes.saturating_add(1);
+                    debug_bytes = debug_bytes.saturating_add(bytes_written as u64);
+                    t_histogram!(
+                        "broker_sub_conn_avg_bytes_per_write",
+                        "connection_id" => conn_label.clone()
+                    )
+                    .record(bytes_written as f64);
+                    t_counter!(
+                        "broker_sub_conn_bytes_written_total",
+                        "connection_id" => conn_label.clone()
+                    )
+                    .increment(bytes_written as u64);
+                    #[cfg(feature = "telemetry")]
+                    {
+                        let counters = crate::transport::quic::telemetry::frame_counters();
+                        counters
+                            .frames_out_ok
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        counters
+                            .bytes_out
+                            .fetch_add(bytes_written as u64, std::sync::atomic::Ordering::Relaxed);
+                        counters
+                            .sub_frames_out_ok
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        counters
+                            .sub_batches_out_ok
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        counters
+                            .sub_items_out_ok
+                            .fetch_add(item_count as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(start) = write_start {
+                        let write_ns = start.elapsed().as_nanos() as u64;
+                        timings::record_sub_write_ns(write_ns);
+                        timings::record_sub_write_await_ns(write_ns);
+                        timings::record_quic_write_ns(write_ns);
+                        t_histogram!("broker_sub_write_blocked_ns").record(write_ns as f64);
+                        t_histogram!("broker_sub_conn_write_ns", "connection_id" => conn_label.clone())
+                            .record(write_ns as f64);
+                        t_histogram!(
+                            "broker_sub_conn_write_await_ns",
+                            "connection_id" => conn_label.clone()
+                        )
+                        .record(write_ns as f64);
+                    }
+                }
+                Err(err) => {
+                    t_counter!(
+                        "broker_sub_conn_write_errors_total",
+                        "connection_id" => conn_label.clone()
+                    )
+                    .increment(1);
+                    metrics::counter!("felix_subscriber_disconnect_total").increment(1);
+                    tracing::info!(
+                        connection_id,
+                        subscriber_id = first.subscriber_id,
+                        error = %err,
+                        "connection writer subscriber stream closed"
+                    );
+                    subscribers.remove(&first.subscriber_id);
+                }
+            }
+        }
+        if debug_window_start.elapsed() >= Duration::from_secs(1) {
+            let avg_bytes_per_write = if debug_writes == 0 {
+                0.0
+            } else {
+                debug_bytes as f64 / debug_writes as f64
+            };
+            tracing::debug!(
+                connection_id,
+                queue_depth = rx.len(),
+                dequeues_per_sec = debug_dequeues,
+                writes_per_sec = debug_writes,
+                avg_bytes_per_write,
+                "subscriber connection throughput window"
+            );
+            debug_window_start = Instant::now();
+            debug_writes = 0;
+            debug_bytes = 0;
+            debug_dequeues = 0;
+        }
+    }
 }
 
 fn hash64(value: u64) -> u64 {
@@ -595,8 +1015,53 @@ fn hash64(value: u64) -> u64 {
     hasher.finish()
 }
 
+fn connection_subscriber_register(connection_id: Option<u64>) {
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    let map = ACTIVE_SUB_CONN_COUNTS.get_or_init(DashMap::new);
+    let new_count = if let Some(mut entry) = map.get_mut(&connection_id) {
+        *entry += 1;
+        *entry
+    } else {
+        map.insert(connection_id, 1);
+        1
+    };
+    metrics::gauge!("felix_sub_active_connections").set(map.len() as f64);
+    metrics::gauge!("felix_sub_connection_subscribers", "connection_id" => connection_id.to_string())
+        .set(new_count as f64);
+}
+
+fn connection_subscriber_unregister(connection_id: Option<u64>) {
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    let Some(map) = ACTIVE_SUB_CONN_COUNTS.get() else {
+        return;
+    };
+    if let Some(mut entry) = map.get_mut(&connection_id) {
+        if *entry > 1 {
+            *entry -= 1;
+            metrics::gauge!(
+                "felix_sub_connection_subscribers",
+                "connection_id" => connection_id.to_string()
+            )
+            .set(*entry as f64);
+        } else {
+            drop(entry);
+            map.remove(&connection_id);
+            metrics::gauge!(
+                "felix_sub_connection_subscribers",
+                "connection_id" => connection_id.to_string()
+            )
+            .set(0.0);
+        }
+    }
+    metrics::gauge!("felix_sub_active_connections").set(map.len() as f64);
+}
+
 async fn run_lane_feeder(
-    mut event_rx: mpsc::Receiver<Bytes>,
+    mut event_rx: SubscriptionReceiver,
     manager: Arc<WriterLaneManager>,
     lane_idx: usize,
     connection_id: Option<u64>,
@@ -604,13 +1069,21 @@ async fn run_lane_feeder(
 ) {
     let max_events = config.max_events.max(1);
     let max_bytes = config.max_bytes.max(1);
-    let mut pending: Option<Bytes> = None;
+    let _lane_flush_hints = (
+        config.flush_max_items,
+        config.flush_max_delay,
+        config.max_bytes_per_write,
+    );
+    let mut pending: Option<(Bytes, Instant)> = None;
 
     loop {
-        let first = match pending.take() {
-            Some(payload) => payload,
+        let (first, first_enqueued_at) = match pending.take() {
+            Some((payload, enqueued_at)) => (payload, enqueued_at),
             None => match event_rx.recv().await {
-                Some(payload) => payload,
+                Some(envelope) => {
+                    let enqueued_at = envelope.enqueued_at();
+                    (envelope.into_payload(), enqueued_at)
+                }
                 None => break,
             },
         };
@@ -624,15 +1097,18 @@ async fn run_lane_feeder(
                 None
             } else {
                 match tokio::time::timeout(config.flush_delay, event_rx.recv()).await {
-                    Ok(Some(payload)) => Some(payload),
+                    Ok(Some(envelope)) => {
+                        let enqueued_at = envelope.enqueued_at();
+                        Some((envelope.into_payload(), enqueued_at))
+                    }
                     Ok(None) | Err(_) => None,
                 }
             };
-            let Some(payload) = next else {
+            let Some((payload, enqueued_at)) = next else {
                 break;
             };
             if batch_bytes.saturating_add(payload.len()) > max_bytes {
-                pending = Some(payload);
+                pending = Some((payload, enqueued_at));
                 break;
             }
             batch_bytes += payload.len();
@@ -663,9 +1139,11 @@ async fn run_lane_feeder(
         let cmd = LaneCommand::Delivery {
             subscriber_id: config.subscription_id,
             frame_parts: parts,
+            item_count: batch.len(),
+            first_enqueued_at,
             enqueue_at: Instant::now(),
         };
-        if manager.try_send(lane_idx, cmd).is_err() {
+        if manager.enqueue(lane_idx, cmd).await.is_err() {
             metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
         } else if let Some(start) = enqueue_start {
             let enqueue_ns = start.elapsed().as_nanos() as u64;
@@ -673,12 +1151,14 @@ async fn run_lane_feeder(
                 .record(enqueue_ns as f64);
         }
     }
-    let _ = manager.try_send(
-        lane_idx,
-        LaneCommand::Unregister {
-            subscriber_id: config.subscription_id,
-        },
-    );
+    let _ = manager
+        .enqueue(
+            lane_idx,
+            LaneCommand::Unregister {
+                subscriber_id: config.subscription_id,
+            },
+        )
+        .await;
     manager.unregister_subscriber(config.subscription_id, connection_id);
 }
 
@@ -756,6 +1236,7 @@ pub(crate) async fn run_event_writer(
                 if let Some(start) = write_await_start {
                     let write_await_ns = start.elapsed().as_nanos() as u64;
                     timings::record_sub_write_await_ns(write_await_ns);
+                    t_histogram!("broker_sub_write_blocked_ns").record(write_await_ns as f64);
                     t_histogram!(
                         "felix_broker_sub_write_await_ns",
                         "payload_bytes" => payload.len().to_string(),
@@ -799,6 +1280,7 @@ pub(crate) async fn run_event_writer(
                 t_histogram!("felix_broker_sub_write_ns").record(write_ns as f64);
                 t_histogram!("felix_broker_quic_write_ns").record(write_ns as f64);
                 t_histogram!("broker_sub_write_await_ns").record(write_ns as f64);
+                t_histogram!("broker_sub_write_blocked_ns").record(write_ns as f64);
             }
         }
         let _ = event_send.finish();
@@ -965,6 +1447,7 @@ pub(crate) async fn run_event_writer(
         if let Some(start) = write_await_start {
             let write_await_ns = start.elapsed().as_nanos() as u64;
             timings::record_sub_write_await_ns(write_await_ns);
+            t_histogram!("broker_sub_write_blocked_ns").record(write_await_ns as f64);
             t_histogram!(
                 "felix_broker_sub_write_await_ns",
                 "payload_bytes" => batch_bytes.to_string(),
@@ -1009,6 +1492,7 @@ pub(crate) async fn run_event_writer(
             t_histogram!("felix_broker_sub_write_ns").record(write_ns as f64);
             t_histogram!("felix_broker_quic_write_ns").record(write_ns as f64);
             t_histogram!("broker_sub_write_await_ns").record(write_ns as f64);
+            t_histogram!("broker_sub_write_blocked_ns").record(write_ns as f64);
         }
 
         // If the channel was closed and we flushed the last batch, exit.
@@ -1076,10 +1560,18 @@ mod tests {
             pub_workers_per_conn: 1,
             pub_queue_depth: 8,
             subscriber_queue_capacity: 8,
+            subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,
             subscriber_lane_queue_depth: 8192,
+            subscriber_lane_queue_policy: felix_broker::SubQueuePolicy::Block,
             max_subscriber_writer_lanes: 8,
             subscriber_lane_shard: crate::config::SubscriberLaneShard::Auto,
+            subscriber_single_writer_per_conn: true,
+            subscriber_flush_max_items: 64,
+            subscriber_flush_max_delay_us: 200,
+            subscriber_max_bytes_per_write: 256 * 1024,
+            sub_streams_per_conn: 4,
+            sub_stream_mode: crate::config::SubStreamMode::PerSubscriber,
         }
     }
 
@@ -1183,6 +1675,9 @@ mod tests {
             max_bytes: 1024,
             flush_delay: Duration::from_millis(10),
             single_event_mode: true,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -1219,6 +1714,9 @@ mod tests {
             max_bytes: 1024,
             flush_delay: Duration::from_millis(10),
             single_event_mode: true,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -1255,6 +1753,9 @@ mod tests {
             max_bytes: 5,
             flush_delay: Duration::from_millis(50),
             single_event_mode: false,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
         };
 
         let (server_task, connection) = spawn_event_writer(rx, config).await?;
@@ -1731,6 +2232,7 @@ mod tests {
         config.subscriber_writer_lanes = 8;
         config.max_subscriber_writer_lanes = 8;
         config.subscriber_lane_shard = crate::config::SubscriberLaneShard::Auto;
+        config.subscriber_single_writer_per_conn = true;
         let manager = WriterLaneManager::new(&config);
 
         let lane_a = manager.select_lane(100, Some(7));
@@ -1738,6 +2240,24 @@ mod tests {
         let lane_c = manager.select_lane(300, Some(7));
         assert_eq!(lane_a, lane_b);
         assert_eq!(lane_b, lane_c);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lane_selection_auto_uses_subscriber_hash_when_conn_pin_disabled() -> Result<()> {
+        let mut config = test_config();
+        config.subscriber_writer_lanes = 8;
+        config.max_subscriber_writer_lanes = 8;
+        config.subscriber_lane_shard = crate::config::SubscriberLaneShard::Auto;
+        config.subscriber_single_writer_per_conn = false;
+        let manager = WriterLaneManager::new(&config);
+
+        let lane_a = manager.select_lane(100, Some(7));
+        let lane_b = manager.select_lane(200, Some(7));
+        let lane_c = manager.select_lane(100, Some(7));
+        assert_eq!(lane_a, lane_c);
+        assert_ne!(lane_a, lane_b);
 
         Ok(())
     }

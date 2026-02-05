@@ -11,9 +11,14 @@ struct TimingCollector {
     send_await_ns: Mutex<Vec<u64>>,
     sub_read_wait_ns: Mutex<Vec<u64>>,
     sub_read_await_ns: Mutex<Vec<u64>>,
+    sub_queue_wait_ns: Mutex<Vec<u64>>,
     sub_decode_ns: Mutex<Vec<u64>>,
     sub_dispatch_ns: Mutex<Vec<u64>>,
     sub_consumer_gap_ns: Mutex<Vec<u64>>,
+    sub_poll_gap_ns: Mutex<Vec<u64>>,
+    sub_time_in_queue_ns: Mutex<Vec<u64>>,
+    sub_runtime_gap_ns: Mutex<Vec<u64>>,
+    sub_delivery_chan_wait_ns: Mutex<Vec<u64>>,
     e2e_latency_ns: Mutex<Vec<u64>>,
     ack_read_wait_ns: Mutex<Vec<u64>>,
     ack_decode_ns: Mutex<Vec<u64>>,
@@ -33,6 +38,11 @@ struct TimingCollector {
 static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
 
 pub type ClientTimingSamples = (
+    Vec<u64>,
+    Vec<u64>,
+    Vec<u64>,
+    Vec<u64>,
+    Vec<u64>,
     Vec<u64>,
     Vec<u64>,
     Vec<u64>,
@@ -73,9 +83,14 @@ pub fn enable_collection(sample_every: usize) {
         send_await_ns: Mutex::new(Vec::new()),
         sub_read_wait_ns: Mutex::new(Vec::new()),
         sub_read_await_ns: Mutex::new(Vec::new()),
+        sub_queue_wait_ns: Mutex::new(Vec::new()),
         sub_decode_ns: Mutex::new(Vec::new()),
         sub_dispatch_ns: Mutex::new(Vec::new()),
         sub_consumer_gap_ns: Mutex::new(Vec::new()),
+        sub_poll_gap_ns: Mutex::new(Vec::new()),
+        sub_time_in_queue_ns: Mutex::new(Vec::new()),
+        sub_runtime_gap_ns: Mutex::new(Vec::new()),
+        sub_delivery_chan_wait_ns: Mutex::new(Vec::new()),
         e2e_latency_ns: Mutex::new(Vec::new()),
         ack_read_wait_ns: Mutex::new(Vec::new()),
         ack_decode_ns: Mutex::new(Vec::new()),
@@ -185,6 +200,16 @@ pub fn record_sub_read_await_ns(value: u64) {
     }
 }
 
+pub fn record_sub_queue_wait_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_queue_wait_ns
+            .lock()
+            .expect("sub queue wait lock");
+        guard.push(value);
+    }
+}
+
 pub fn record_sub_decode_ns(value: u64) {
     if let Some(collector) = COLLECTOR.get() {
         let mut guard = collector.sub_decode_ns.lock().expect("sub decode lock");
@@ -205,6 +230,46 @@ pub fn record_sub_consumer_gap_ns(value: u64) {
             .sub_consumer_gap_ns
             .lock()
             .expect("sub consumer gap lock");
+        guard.push(value);
+    }
+}
+
+pub fn record_sub_poll_gap_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_poll_gap_ns
+            .lock()
+            .expect("sub poll gap lock");
+        guard.push(value);
+    }
+}
+
+pub fn record_sub_time_in_queue_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_time_in_queue_ns
+            .lock()
+            .expect("sub time in queue lock");
+        guard.push(value);
+    }
+}
+
+pub fn record_sub_runtime_gap_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_runtime_gap_ns
+            .lock()
+            .expect("sub runtime gap lock");
+        guard.push(value);
+    }
+}
+
+pub fn record_sub_delivery_chan_wait_ns(value: u64) {
+    if let Some(collector) = COLLECTOR.get() {
+        let mut guard = collector
+            .sub_delivery_chan_wait_ns
+            .lock()
+            .expect("sub delivery channel wait lock");
         guard.push(value);
     }
 }
@@ -321,12 +386,32 @@ pub fn take_samples() -> Option<ClientTimingSamples> {
         .sub_read_await_ns
         .lock()
         .expect("sub read await lock");
+    let mut sub_queue_wait = collector
+        .sub_queue_wait_ns
+        .lock()
+        .expect("sub queue wait lock");
     let mut sub_decode = collector.sub_decode_ns.lock().expect("sub decode lock");
     let mut sub_dispatch = collector.sub_dispatch_ns.lock().expect("sub dispatch lock");
     let mut sub_consumer_gap = collector
         .sub_consumer_gap_ns
         .lock()
         .expect("sub consumer gap lock");
+    let mut sub_poll_gap = collector
+        .sub_poll_gap_ns
+        .lock()
+        .expect("sub poll gap lock");
+    let mut sub_time_in_queue = collector
+        .sub_time_in_queue_ns
+        .lock()
+        .expect("sub time in queue lock");
+    let mut sub_runtime_gap = collector
+        .sub_runtime_gap_ns
+        .lock()
+        .expect("sub runtime gap lock");
+    let mut sub_delivery_chan_wait = collector
+        .sub_delivery_chan_wait_ns
+        .lock()
+        .expect("sub delivery channel wait lock");
     let mut e2e_latency = collector.e2e_latency_ns.lock().expect("e2e latency lock");
     let mut ack_read = collector.ack_read_wait_ns.lock().expect("ack read lock");
     let mut ack_decode = collector.ack_decode_ns.lock().expect("ack decode lock");
@@ -340,9 +425,14 @@ pub fn take_samples() -> Option<ClientTimingSamples> {
         std::mem::take(&mut *send_await),
         std::mem::take(&mut *sub_read),
         std::mem::take(&mut *sub_read_await),
+        std::mem::take(&mut *sub_queue_wait),
         std::mem::take(&mut *sub_decode),
         std::mem::take(&mut *sub_dispatch),
         std::mem::take(&mut *sub_consumer_gap),
+        std::mem::take(&mut *sub_poll_gap),
+        std::mem::take(&mut *sub_time_in_queue),
+        std::mem::take(&mut *sub_runtime_gap),
+        std::mem::take(&mut *sub_delivery_chan_wait),
         std::mem::take(&mut *e2e_latency),
         std::mem::take(&mut *ack_read),
         std::mem::take(&mut *ack_decode),
@@ -413,12 +503,17 @@ mod tests {
         record_send_await_ns(7);
         record_sub_read_wait_ns(8);
         record_sub_read_await_ns(9);
-        record_sub_decode_ns(10);
-        record_sub_dispatch_ns(11);
-        record_sub_consumer_gap_ns(12);
-        record_e2e_latency_ns(13);
-        record_ack_read_wait_ns(14);
-        record_ack_decode_ns(15);
+        record_sub_queue_wait_ns(10);
+        record_sub_decode_ns(11);
+        record_sub_dispatch_ns(12);
+        record_sub_consumer_gap_ns(13);
+        record_sub_poll_gap_ns(131);
+        record_sub_time_in_queue_ns(132);
+        record_sub_runtime_gap_ns(133);
+        record_sub_delivery_chan_wait_ns(134);
+        record_e2e_latency_ns(14);
+        record_ack_read_wait_ns(15);
+        record_ack_decode_ns(16);
         record_cache_encode_ns(16);
         record_cache_open_stream_ns(17);
         record_cache_write_ns(18);
@@ -451,12 +546,17 @@ mod tests {
         record_send_await_ns(700);
         record_sub_read_wait_ns(800);
         record_sub_read_await_ns(900);
-        record_sub_decode_ns(1000);
-        record_sub_dispatch_ns(1100);
-        record_sub_consumer_gap_ns(1200);
-        record_e2e_latency_ns(1300);
-        record_ack_read_wait_ns(1400);
-        record_ack_decode_ns(1500);
+        record_sub_queue_wait_ns(1000);
+        record_sub_decode_ns(1100);
+        record_sub_dispatch_ns(1200);
+        record_sub_consumer_gap_ns(1300);
+        record_sub_poll_gap_ns(1310);
+        record_sub_time_in_queue_ns(1320);
+        record_sub_runtime_gap_ns(1330);
+        record_sub_delivery_chan_wait_ns(1340);
+        record_e2e_latency_ns(1400);
+        record_ack_read_wait_ns(1500);
+        record_ack_decode_ns(1600);
         record_cache_encode_ns(1600);
         record_cache_open_stream_ns(1700);
         record_cache_write_ns(1800);
@@ -479,8 +579,13 @@ mod tests {
         assert!(samples.10.contains(&1100));
         assert!(samples.11.contains(&1200));
         assert!(samples.12.contains(&1300));
-        assert!(samples.13.contains(&1400));
-        assert!(samples.14.contains(&1500));
+        assert!(samples.13.contains(&1310));
+        assert!(samples.14.contains(&1320));
+        assert!(samples.15.contains(&1330));
+        assert!(samples.16.contains(&1340));
+        assert!(samples.17.contains(&1400));
+        assert!(samples.18.contains(&1500));
+        assert!(samples.19.contains(&1600));
         let cache_samples = take_cache_samples().expect("cache samples");
         assert!(cache_samples.0.contains(&1600));
         assert!(cache_samples.1.contains(&1700));

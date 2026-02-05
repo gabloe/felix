@@ -149,11 +149,26 @@ cargo run --release -p broker --bin latency-demo -- \
     --payload 4096 \
     --total 10000 \
     --warmup 500
+
+# Fairness A/B knobs for throughput-mode cliffs
+cargo run --release -p broker --bin latency-demo --all-features -- \
+    --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 \
+    --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1 \
+    --pub-yield-every-batches 1
+
+cargo run --release -p broker --bin latency-demo --all-features -- \
+    --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 \
+    --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1 \
+    --sub-dedicated-thread
 ```
 
 **What to expect**:
 - One or more result lines with p50/p99/p999 latencies
 - Throughput metrics (overall and per-subscriber)
+- Scheduler fairness probes:
+  - `--pub-yield-every-batches N` reduces publisher burst monopolization
+  - dedicated subscriber drain is on by default (set `FELIX_SUB_DEDICATED_THREAD=0` or `--sub-shared-thread` to opt out)
+  - `--sub-dedicated-thread` forces isolation explicitly
 
 ---
 
