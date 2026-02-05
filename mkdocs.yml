@@ -111,6 +111,7 @@ nav:
     - Pub/Sub Streaming: features/pubsub.md
     - Distributed Cache: features/cache.md
     - Performance Tuning: features/performance.md
+    - Performance & Platform Notes: features/performance-platform-notes.md
     - Observability: features/observability.md
     - Security: features/security.md
   - Deployment:

@@ -56,7 +56,7 @@ tasks:
   demo:cache:
     cmds: ["cargo run --release -p broker --bin cache-demo"]
   demo:latency:
-    cmds: ["cargo run --release -p broker --bin latency-demo"]
+    cmds: ["cargo run --release -p broker --bin latency-demo --all-features"]
   demo:notifications:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications"]
   demo:orders:

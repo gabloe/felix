@@ -21,6 +21,11 @@ mod telemetry {
         Vec<u64>,
         Vec<u64>,
         Vec<u64>,
+        Vec<u64>,
+        Vec<u64>,
+        Vec<u64>,
+        Vec<u64>,
+        Vec<u64>,
     );
 
     pub type ClientCacheTimingSamples = (
@@ -51,9 +56,14 @@ mod telemetry {
     pub fn record_send_await_ns(_value: u64) {}
     pub fn record_sub_read_wait_ns(_value: u64) {}
     pub fn record_sub_read_await_ns(_value: u64) {}
+    pub fn record_sub_queue_wait_ns(_value: u64) {}
     pub fn record_sub_decode_ns(_value: u64) {}
     pub fn record_sub_dispatch_ns(_value: u64) {}
     pub fn record_sub_consumer_gap_ns(_value: u64) {}
+    pub fn record_sub_poll_gap_ns(_value: u64) {}
+    pub fn record_sub_time_in_queue_ns(_value: u64) {}
+    pub fn record_sub_runtime_gap_ns(_value: u64) {}
+    pub fn record_sub_delivery_chan_wait_ns(_value: u64) {}
     pub fn record_e2e_latency_ns(_value: u64) {}
     pub fn record_ack_read_wait_ns(_value: u64) {}
     pub fn record_ack_decode_ns(_value: u64) {}
@@ -109,9 +119,14 @@ mod tests {
         record_send_await_ns(700);
         record_sub_read_wait_ns(800);
         record_sub_read_await_ns(900);
+        record_sub_queue_wait_ns(950);
         record_sub_decode_ns(1000);
         record_sub_dispatch_ns(1100);
         record_sub_consumer_gap_ns(1200);
+        record_sub_poll_gap_ns(1250);
+        record_sub_time_in_queue_ns(1275);
+        record_sub_runtime_gap_ns(1280);
+        record_sub_delivery_chan_wait_ns(1290);
         record_e2e_latency_ns(1300);
         record_ack_read_wait_ns(1400);
         record_ack_decode_ns(1500);

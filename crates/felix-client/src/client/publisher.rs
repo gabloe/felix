@@ -745,7 +745,8 @@ mod tests {
     #[cfg(feature = "telemetry")]
     async fn publish_batch_binary_appends_bench_ts_when_enabled() -> Result<()> {
         use crate::config::{
-            ClientRuntimeConfig, DEFAULT_EVENT_ROUTER_MAX_PENDING, DEFAULT_MAX_FRAME_BYTES,
+            ClientRuntimeConfig, ClientSubQueuePolicy, DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
+            DEFAULT_EVENT_ROUTER_MAX_PENDING, DEFAULT_MAX_FRAME_BYTES,
             install_runtime_config_for_tests, reset_runtime_config_for_tests,
         };
 
@@ -753,6 +754,8 @@ mod tests {
         install_runtime_config_for_tests(ClientRuntimeConfig {
             event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
+            client_sub_queue_policy: ClientSubQueuePolicy::DropNew,
             bench_embed_ts: true,
         });
 

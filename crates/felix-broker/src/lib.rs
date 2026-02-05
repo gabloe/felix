@@ -7,6 +7,7 @@ use felix_storage::StorageApi;
 use parking_lot::Mutex;
 use slab::Slab;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
@@ -85,6 +86,15 @@ pub enum BrokerError {
 
 const DEFAULT_TOPIC_CAPACITY: usize = 1024;
 const DEFAULT_LOG_CAPACITY: usize = 1024;
+const DEFAULT_SUB_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
+static GLOBAL_SUB_QUEUE_DEPTH: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubQueuePolicy {
+    Block,
+    DropNew,
+    DropOld,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
@@ -113,17 +123,41 @@ struct StreamState {
     log_state: Mutex<LogState>,
     // Per-subscriber bounded queue depth.
     subscriber_queue_capacity: usize,
+    // Queue admission policy when subscriber queue is full.
+    subscriber_queue_policy: SubQueuePolicy,
+    // Approximate number of queued items across subscribers in this stream.
+    queued_items: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Default)]
 struct SubscriberRegistry {
-    senders: Slab<mpsc::Sender<Bytes>>,
+    senders: Slab<mpsc::Sender<DeliveryEnvelope>>,
 }
 
 #[derive(Debug, Clone)]
 struct SubscriberEntry {
     id: usize,
-    sender: mpsc::Sender<Bytes>,
+    sender: mpsc::Sender<DeliveryEnvelope>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeliveryEnvelope {
+    payload: Bytes,
+    enqueued_at: Instant,
+}
+
+impl DeliveryEnvelope {
+    pub fn payload(&self) -> &Bytes {
+        &self.payload
+    }
+
+    pub fn into_payload(self) -> Bytes {
+        self.payload
+    }
+
+    pub fn enqueued_at(&self) -> Instant {
+        self.enqueued_at
+    }
 }
 
 #[derive(Debug)]
@@ -135,7 +169,7 @@ struct LogState {
 }
 
 impl StreamState {
-    fn new(subscriber_queue_capacity: usize) -> Self {
+    fn new(subscriber_queue_capacity: usize, subscriber_queue_policy: SubQueuePolicy) -> Self {
         Self {
             subscribers_snapshot: ArcSwap::from_pointee(Vec::new()),
             subscribers: Mutex::new(SubscriberRegistry::default()),
@@ -144,15 +178,20 @@ impl StreamState {
                 next_seq: 0,
             }),
             subscriber_queue_capacity,
+            subscriber_queue_policy,
+            queued_items: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    fn register_subscriber(&self) -> (u64, mpsc::Receiver<Bytes>) {
+    fn register_subscriber(&self) -> (u64, SubscriptionReceiver) {
         let mut state = self.subscribers.lock();
         let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
         let id = state.senders.insert(tx);
         self.rebuild_subscriber_snapshot(&state);
-        (id as u64, rx)
+        (
+            id as u64,
+            SubscriptionReceiver::new(rx, Arc::clone(&self.queued_items)),
+        )
     }
 
     fn remove_subscriber(&self, id: u64) {
@@ -208,7 +247,14 @@ impl StreamState {
         }
 
         // Hot path: one lock per publish batch (instead of per payload).
+        #[cfg(feature = "perf_debug")]
+        let lock_wait_start = std::time::Instant::now();
         let mut state = self.log_state.lock();
+        #[cfg(feature = "perf_debug")]
+        {
+            let wait_ns = lock_wait_start.elapsed().as_nanos() as u64;
+            metrics::histogram!("felix_perf_log_lock_wait_ns").record(wait_ns as f64);
+        }
         #[cfg(debug_assertions)]
         {
             // Debug-only invariant check kept outside the append loop.
@@ -265,6 +311,13 @@ impl StreamState {
         // The cursor tail points to the next sequence to be published.
         state.next_seq
     }
+
+    fn increment_queue_depth(&self) {
+        let _ = self.queued_items.fetch_add(1, Ordering::Relaxed) + 1;
+        let global = GLOBAL_SUB_QUEUE_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+        metrics::gauge!("felix_sub_queue_len").set(global as f64);
+        metrics::counter!("felix_sub_queue_enqueued_total").increment(1);
+    }
 }
 
 /// RAII handle that unregisters a stream subscriber on drop.
@@ -285,21 +338,82 @@ impl Drop for SubscriptionGuard {
 /// Receiver wrapper that keeps the unsubscribe guard alive for the receiver lifetime.
 #[derive(Debug)]
 pub struct Subscription {
-    receiver: mpsc::Receiver<Bytes>,
+    receiver: SubscriptionReceiver,
     guard: SubscriptionGuard,
 }
 
 impl Subscription {
     pub async fn recv(&mut self) -> Option<Bytes> {
-        self.receiver.recv().await
+        self.receiver
+            .recv()
+            .await
+            .map(DeliveryEnvelope::into_payload)
     }
 
     pub fn try_recv(&mut self) -> std::result::Result<Bytes, mpsc::error::TryRecvError> {
-        self.receiver.try_recv()
+        self.receiver.try_recv().map(DeliveryEnvelope::into_payload)
     }
 
-    pub fn into_parts(self) -> (mpsc::Receiver<Bytes>, SubscriptionGuard) {
+    pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
         (self.receiver, self.guard)
+    }
+}
+
+#[derive(Debug)]
+pub struct SubscriptionReceiver {
+    receiver: mpsc::Receiver<DeliveryEnvelope>,
+    queued_items: Arc<AtomicUsize>,
+}
+
+impl SubscriptionReceiver {
+    fn new(receiver: mpsc::Receiver<DeliveryEnvelope>, queued_items: Arc<AtomicUsize>) -> Self {
+        Self {
+            receiver,
+            queued_items,
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<DeliveryEnvelope> {
+        let value = self.receiver.recv().await?;
+        self.decrement_depth(1);
+        Some(value)
+    }
+
+    pub fn try_recv(&mut self) -> std::result::Result<DeliveryEnvelope, mpsc::error::TryRecvError> {
+        match self.receiver.try_recv() {
+            Ok(value) => {
+                self.decrement_depth(1);
+                Ok(value)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn decrement_depth(&self, n: usize) {
+        for _ in 0..n {
+            if self
+                .queued_items
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+                .is_ok()
+            {
+                metrics::counter!("felix_sub_queue_dequeued_total").increment(1);
+            }
+            if let Ok(prev) =
+                GLOBAL_SUB_QUEUE_DEPTH
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+            {
+                metrics::gauge!("felix_sub_queue_len").set((prev.saturating_sub(1)) as f64);
+            }
+        }
+    }
+}
+
+impl Drop for SubscriptionReceiver {
+    fn drop(&mut self) {
+        let remaining = self.receiver.len();
+        if remaining > 0 {
+            self.decrement_depth(remaining);
+        }
     }
 }
 
@@ -355,6 +469,8 @@ pub struct Broker {
     topic_capacity: usize,
     // Per-topic in-memory log capacity.
     log_capacity: usize,
+    // Subscriber queue backpressure policy.
+    subscriber_queue_policy: SubQueuePolicy,
 }
 
 unsafe impl Send for Broker {}
@@ -446,6 +562,7 @@ impl Broker {
             cache,
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
             log_capacity: DEFAULT_LOG_CAPACITY,
+            subscriber_queue_policy: DEFAULT_SUB_QUEUE_POLICY,
         }
     }
 
@@ -464,6 +581,11 @@ impl Broker {
         }
         self.log_capacity = capacity;
         Ok(self)
+    }
+
+    pub fn with_subscriber_queue_policy(mut self, policy: SubQueuePolicy) -> Self {
+        self.subscriber_queue_policy = policy;
+        self
     }
 
     pub async fn publish(
@@ -525,16 +647,53 @@ impl Broker {
         let enqueue_start = t_now_if(sample);
         for subscriber in senders.iter() {
             for payload in payloads {
-                match subscriber.sender.try_send(payload.clone()) {
-                    Ok(()) => {
-                        sent += 1;
+                metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
+                let envelope = DeliveryEnvelope {
+                    payload: payload.clone(),
+                    enqueued_at: Instant::now(),
+                };
+                match stream_state.subscriber_queue_policy {
+                    SubQueuePolicy::Block => {
+                        if subscriber.sender.send(envelope).await.is_ok() {
+                            stream_state.increment_queue_depth();
+                            sent += 1;
+                        } else {
+                            closed_subscribers.push(subscriber.id as u64);
+                            break;
+                        }
                     }
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        metrics::counter!("felix_subscribe_dropped_total").increment(1);
-                    }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                        closed_subscribers.push(subscriber.id as u64);
-                        break;
+                    SubQueuePolicy::DropNew => match subscriber.sender.try_send(envelope) {
+                        Ok(()) => {
+                            stream_state.increment_queue_depth();
+                            sent += 1;
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            metrics::counter!("felix_subscribe_dropped_total").increment(1);
+                            metrics::counter!("felix_sub_queue_dropped_total").increment(1);
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            closed_subscribers.push(subscriber.id as u64);
+                            break;
+                        }
+                    },
+                    SubQueuePolicy::DropOld => {
+                        // tokio::mpsc does not expose drop-head; emulate with drop-new semantics.
+                        match subscriber.sender.try_send(envelope) {
+                            Ok(()) => {
+                                stream_state.increment_queue_depth();
+                                sent += 1;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                metrics::counter!("felix_subscribe_dropped_total").increment(1);
+                                metrics::counter!("felix_sub_queue_dropped_total").increment(1);
+                                metrics::counter!("felix_sub_queue_drop_old_emulated_total")
+                                    .increment(1);
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                closed_subscribers.push(subscriber.id as u64);
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -683,9 +842,12 @@ impl Broker {
         let key = StreamKey::new(tenant_id, namespace, stream);
         self.streams.write().await.insert(key.clone(), metadata);
         let mut guard = self.topics.write().await;
-        guard
-            .entry(key)
-            .or_insert_with(|| Arc::new(StreamState::new(self.topic_capacity)));
+        guard.entry(key).or_insert_with(|| {
+            Arc::new(StreamState::new(
+                self.topic_capacity,
+                self.subscriber_queue_policy,
+            ))
+        });
         Ok(())
     }
 
@@ -858,7 +1020,14 @@ impl Broker {
         namespace: &str,
         stream: &str,
     ) -> std::result::Result<Arc<StreamState>, BrokerError> {
+        #[cfg(feature = "perf_debug")]
+        let lock_wait_start = std::time::Instant::now();
         let guard = self.topics.read().await;
+        #[cfg(feature = "perf_debug")]
+        {
+            let wait_ns = lock_wait_start.elapsed().as_nanos() as u64;
+            metrics::histogram!("felix_perf_topics_read_lock_wait_ns").record(wait_ns as f64);
+        }
         guard
             .get(&StreamKey::new(tenant_id, namespace, stream))
             .cloned()
@@ -987,7 +1156,7 @@ mod tests {
 
     #[test]
     fn append_batch_keeps_monotonic_sequences_and_trims_once() {
-        let stream = StreamState::new(8);
+        let stream = StreamState::new(8, SubQueuePolicy::DropNew);
         let first = vec![
             Bytes::from_static(b"a"),
             Bytes::from_static(b"b"),
@@ -1047,6 +1216,113 @@ mod tests {
             .expect("publish");
         assert_eq!(delivered, 0);
         assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"one"));
+        assert!(sub.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn block_policy_backpressures_publish_when_queue_is_full() {
+        let broker = Broker::new(EphemeralCache::new().into())
+            .with_topic_capacity(1)
+            .expect("capacity")
+            .with_subscriber_queue_policy(SubQueuePolicy::Block);
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "blocky", StreamMetadata::default())
+            .await
+            .expect("register");
+        let mut sub = broker
+            .subscribe("t1", "default", "blocky")
+            .await
+            .expect("subscribe");
+
+        broker
+            .publish("t1", "default", "blocky", Bytes::from_static(b"one"))
+            .await
+            .expect("publish");
+
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            broker.publish("t1", "default", "blocky", Bytes::from_static(b"two")),
+        )
+        .await;
+        assert!(blocked.is_err(), "publish should block on full queue");
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"one"));
+        let sent = broker
+            .publish("t1", "default", "blocky", Bytes::from_static(b"two"))
+            .await
+            .expect("publish");
+        assert_eq!(sent, 1);
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"two"));
+    }
+
+    #[tokio::test]
+    async fn drop_old_policy_is_emulated_as_drop_new() {
+        let broker = Broker::new(EphemeralCache::new().into())
+            .with_topic_capacity(1)
+            .expect("capacity")
+            .with_subscriber_queue_policy(SubQueuePolicy::DropOld);
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "drop_old", StreamMetadata::default())
+            .await
+            .expect("register");
+        let mut sub = broker
+            .subscribe("t1", "default", "drop_old")
+            .await
+            .expect("subscribe");
+
+        broker
+            .publish("t1", "default", "drop_old", Bytes::from_static(b"one"))
+            .await
+            .expect("publish");
+        let delivered = broker
+            .publish("t1", "default", "drop_old", Bytes::from_static(b"two"))
+            .await
+            .expect("publish");
+        assert_eq!(delivered, 0);
+        assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"one"));
+        assert!(sub.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn small_queue_does_not_grow_unbounded_under_burst() {
+        let broker = Broker::new(EphemeralCache::new().into())
+            .with_topic_capacity(2)
+            .expect("capacity")
+            .with_subscriber_queue_policy(SubQueuePolicy::DropNew);
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "bounded", StreamMetadata::default())
+            .await
+            .expect("register");
+        let mut sub = broker
+            .subscribe("t1", "default", "bounded")
+            .await
+            .expect("subscribe");
+
+        for i in 0..100 {
+            let payload = Bytes::from(format!("msg-{i}"));
+            let _ = broker
+                .publish("t1", "default", "bounded", payload)
+                .await
+                .expect("publish");
+        }
+
+        // Queue is capped at 2; only the earliest buffered items are still available.
+        let _ = sub.recv().await.expect("recv");
+        let _ = sub.recv().await.expect("recv");
         assert!(sub.try_recv().is_err());
     }
 

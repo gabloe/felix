@@ -234,6 +234,10 @@ impl QuicConnection {
         &self.info
     }
 
+    pub fn stats(&self) -> quinn::ConnectionStats {
+        self.inner.stats()
+    }
+
     /// Open a bidirectional stream to the peer.
     ///
     /// ```no_run

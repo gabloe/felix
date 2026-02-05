@@ -23,10 +23,10 @@ use crate::client::cache::{CacheRequest, CacheWorker, run_cache_worker};
 use crate::client::event_router::{EventRouterCommand, spawn_event_router};
 use crate::client::publisher::{PublishWorker, run_publisher_writer};
 use crate::client::sharding::PublishSharding;
-use crate::client::subscription::Subscription;
+use crate::client::subscription::{Subscription, SubscriptionPipelineConfig};
 use crate::config::{
-    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, PUBLISH_QUEUE_DEPTH, cache_transport_config,
-    event_transport_config,
+    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, ClientSubQueuePolicy, PUBLISH_QUEUE_DEPTH,
+    cache_transport_config, event_transport_config, runtime_config,
 };
 use crate::wire::{read_message, write_message};
 
@@ -290,20 +290,17 @@ impl Client {
             "conn" => connection_index.to_string()
         )
         .increment(1);
-        Ok(Subscription {
+        Ok(Subscription::spawn_pipeline(SubscriptionPipelineConfig {
             recv,
-            frame_scratch: BytesMut::with_capacity(64 * 1024),
-            current_batch: None,
-            current_index: 0,
-            #[cfg(feature = "telemetry")]
-            last_poll: None,
+            queue_capacity: client_sub_queue_capacity(),
+            queue_policy: client_sub_queue_policy(),
+            subscription_id,
             tenant_id,
             namespace,
             stream,
-            subscription_id: Some(subscription_id),
             event_conn_index: connection_index,
             event_conn_counts: Arc::clone(&self.event_conn_counts),
-        })
+        }))
     }
 
     pub async fn cache_put(
@@ -434,4 +431,12 @@ async fn authenticate_stream(
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
     }
+}
+
+fn client_sub_queue_capacity() -> usize {
+    runtime_config().client_sub_queue_capacity.max(1)
+}
+
+fn client_sub_queue_policy() -> ClientSubQueuePolicy {
+    runtime_config().client_sub_queue_policy
 }
