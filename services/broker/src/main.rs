@@ -35,7 +35,7 @@ use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -183,8 +183,8 @@ where
 fn build_server_config() -> Result<ServerConfig> {
     // Dev-only self-signed TLS config for QUIC endpoints.
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
-    let cert_der = CertificateDer::from(cert.serialize_der()?);
-    let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+    let cert_der = cert.cert.der().clone();
+    let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
     Ok(ServerConfig::with_single_cert(
         vec![cert_der],
         key_der.into(),

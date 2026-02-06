@@ -14,19 +14,19 @@ anyhow = { workspace = true }
 axum = "0.8"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
-opentelemetry = "0.24"
-opentelemetry-otlp = { version = "0.17", features = ["tonic"] }
-opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-opentelemetry = "0.25"
+tracing-opentelemetry = "0.32.1"
 tower-http = { version = "0.6", features = ["trace"] }
-utoipa = { version = "4", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "7", features = ["axum"] }
+utoipa = { version = "5.4.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 async-trait = "0.1"
 thiserror = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
