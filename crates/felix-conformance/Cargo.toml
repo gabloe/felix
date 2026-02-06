@@ -19,6 +19,6 @@ felix-transport = { path = "../felix-transport", version = "0.1.0" }
 felix-wire = { path = "../felix-wire", version = "0.1.0" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 quinn = "0.11"
-rcgen = "0.12"
+rcgen = "0.14"
 rustls = "0.23"
 tokio = { workspace = true }
