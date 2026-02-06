@@ -124,6 +124,7 @@ async fn run_subscription_io_task(
     queue_capacity: usize,
 ) {
     let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+    #[cfg(feature = "telemetry")]
     let mut last_poll = Instant::now();
     loop {
         #[cfg(feature = "telemetry")]
@@ -133,10 +134,6 @@ async fn run_subscription_io_task(
             last_poll = now;
             timings::record_sub_poll_gap_ns(poll_gap_ns);
             t_histogram!("client_sub_poll_gap_ns").record(poll_gap_ns as f64);
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            last_poll = Instant::now();
         }
 
         let first = match read_frame_into(&mut recv, &mut frame_scratch, true).await {

@@ -40,6 +40,9 @@ jobs:
       - name: Install Rust
         run: rustup update stable
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -58,13 +61,7 @@ jobs:
       - name: Generate code coverage (lcov)
         run: |
           set -euxo pipefail
-          cargo llvm-cov \
-            --no-cfg-coverage \
-            --all-features \
-            --workspace \
-            --lcov \
-            --output-path lcov.info \
-            --skip-functions
+          task coverage
 
       - name: Generate coverage badge (coverage.svg)
         uses: ImBIOS/lcov-coverage-badge@v1

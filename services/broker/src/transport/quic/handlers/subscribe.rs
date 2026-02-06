@@ -1896,6 +1896,7 @@ mod tests {
         assert_eq!(batch.payloads.len(), 1);
         assert_eq!(batch.payloads[0].as_ref(), b"hello");
 
+        let _ = felix_broker::timings::take_samples();
         let handled = server_task.await.context("server join")??;
         assert!(handled);
         Ok(())
@@ -2071,6 +2072,7 @@ mod tests {
         assert_eq!(batch2.payloads.len(), 1);
         assert_eq!(batch2.payloads[0].as_ref(), b"ccccc");
 
+        let _ = felix_broker::timings::take_samples();
         server_task.await.context("server join")??;
         Ok(())
     }
@@ -2222,6 +2224,7 @@ mod tests {
         assert_eq!(recv_1, expected);
         assert_eq!(recv_2, expected);
 
+        let _ = felix_broker::timings::take_samples();
         server_task.await.context("server join")??;
         Ok(())
     }
@@ -2276,6 +2279,678 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(second, third);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_hashed_pool_with_generated_id() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let mut config = test_config();
+        config.sub_stream_mode = crate::config::SubStreamMode::HashedPool;
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            handle_subscribe_message(
+                broker_for_server,
+                connection,
+                config,
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "orders".to_string(),
+                None,
+            )
+            .await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+
+        let subscription_id = match out_ack_rx.recv().await.context("missing ack")? {
+            Outgoing::Message(Message::Subscribed { subscription_id }) => subscription_id,
+            _ => panic!("unexpected ack"),
+        };
+        assert!(subscription_id > 0);
+
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let hello = crate::transport::quic::codec::read_message_limited(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("hello");
+        match hello {
+            Message::EventStreamHello {
+                subscription_id: hello_id,
+            } => assert_eq!(hello_id, subscription_id),
+            other => panic!("unexpected hello: {other:?}"),
+        }
+
+        broker
+            .publish("t1", "default", "orders", bytes::Bytes::from_static(b"ok"))
+            .await?;
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("event frame");
+        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
+        assert_eq!(batch.payloads[0].as_ref(), b"ok");
+
+        let _ = felix_broker::timings::take_samples();
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_message_open_uni_failure_sends_error_ack() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+        let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+        let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+            std::time::Instant::now(),
+        )));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        let broker_for_server = broker.clone();
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            handle_subscribe_message(
+                broker_for_server,
+                connection,
+                test_config(),
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "t1".to_string(),
+                "default".to_string(),
+                "orders".to_string(),
+                Some(900),
+            )
+            .await
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        drop(connection);
+
+        let ack = tokio::time::timeout(Duration::from_secs(1), out_ack_rx.recv())
+            .await
+            .context("ack timeout")?
+            .context("missing ack")?;
+        match ack {
+            Outgoing::Message(Message::Error { message }) => {
+                assert!(!message.is_empty());
+            }
+            _ => panic!("expected error ack"),
+        }
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parts_many_writes_two_frames_in_order() -> Result<()> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let mut send = connection.open_uni().await?;
+            let _ = opened_tx.send(());
+            let frames = vec![
+                felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"aa")])?,
+                felix_wire::binary::encode_event_batch_parts(2, &[Bytes::from_static(b"bbb")])?,
+            ];
+            let result = write_parts_many(&mut send, frames).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            result
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        opened_rx.await.context("uni stream not opened")?;
+        let mut recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).expect("decode frame1");
+        assert_eq!(batch1.subscription_id, 1);
+        assert_eq!(batch1.payloads[0].as_ref(), b"aa");
+
+        let frame2 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame2");
+        let batch2 = felix_wire::binary::decode_event_batch(&frame2).expect("decode frame2");
+        assert_eq!(batch2.subscription_id, 2);
+        assert_eq!(batch2.payloads[0].as_ref(), b"bbb");
+
+        let total = server_task.await.context("server join")??;
+        assert!(total > 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_flushes_by_count_and_deadline() -> Result<()> {
+        let (tx, rx) = mpsc::channel(8);
+        let config = EventWriterConfig {
+            subscription_id: 44,
+            max_events: 2,
+            max_bytes: 1024,
+            flush_delay: Duration::from_millis(20),
+            single_event_mode: false,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
+        };
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        tx.send(make_payload(b"a")).await?;
+        tx.send(make_payload(b"b")).await?;
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("count-based frame");
+        let batch = felix_wire::binary::decode_event_batch(&frame).expect("decode count batch");
+        assert_eq!(batch.payloads.len(), 2);
+        assert_eq!(batch.payloads[0].as_ref(), b"a");
+        assert_eq!(batch.payloads[1].as_ref(), b"b");
+
+        tx.send(make_payload(b"deadline")).await?;
+        let frame = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("deadline frame");
+        let batch = felix_wire::binary::decode_event_batch(&frame).expect("decode deadline batch");
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].as_ref(), b"deadline");
+
+        drop(tx);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_flushes_on_channel_close() -> Result<()> {
+        let (tx, rx) = mpsc::channel(4);
+        let config = EventWriterConfig {
+            subscription_id: 55,
+            max_events: 8,
+            max_bytes: 1024,
+            flush_delay: Duration::from_secs(5),
+            single_event_mode: false,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
+        };
+
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        tx.send(make_payload(b"closed")).await?;
+        drop(tx);
+        drop(connection);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_event_writer_single_event_mode_writes_multiple_frames() -> Result<()> {
+        let (tx, rx) = mpsc::channel(4);
+        let config = EventWriterConfig {
+            subscription_id: 66,
+            max_events: 2,
+            max_bytes: 1024,
+            flush_delay: Duration::from_millis(10),
+            single_event_mode: true,
+            flush_max_items: 64,
+            flush_max_delay: Duration::from_micros(200),
+            max_bytes_per_write: 256 * 1024,
+        };
+
+        let (server_task, connection) = spawn_event_writer(rx, config).await?;
+        let accept_uni = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni());
+        tx.send(make_payload(b"one")).await?;
+        tx.send(make_payload(b"two")).await?;
+
+        let mut event_recv = accept_uni.await.context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).expect("decode batch1");
+        assert_eq!(batch1.payloads.len(), 1);
+        assert_eq!(batch1.payloads[0].as_ref(), b"one");
+
+        let frame2 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame2");
+        let batch2 = felix_wire::binary::decode_event_batch(&frame2).expect("decode batch2");
+        assert_eq!(batch2.payloads.len(), 1);
+        assert_eq!(batch2.payloads[0].as_ref(), b"two");
+
+        drop(tx);
+        server_task.await.context("server join")??;
+        Ok(())
+    }
+
+    #[test]
+    fn connection_subscriber_register_unregister_tracks_counts() {
+        let connection_id = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            & u128::from(u64::MAX)) as u64;
+
+        connection_subscriber_unregister(None);
+        connection_subscriber_register(Some(connection_id));
+        connection_subscriber_register(Some(connection_id));
+        let map = ACTIVE_SUB_CONN_COUNTS
+            .get()
+            .expect("counts map should be initialized");
+        let count = map
+            .get(&connection_id)
+            .expect("connection count should exist");
+        assert_eq!(*count, 2);
+        drop(count);
+
+        connection_subscriber_unregister(Some(connection_id));
+        let count = map
+            .get(&connection_id)
+            .expect("connection count should still exist");
+        assert_eq!(*count, 1);
+        drop(count);
+
+        connection_subscriber_unregister(Some(connection_id));
+        assert!(map.get(&connection_id).is_none());
+    }
+
+    #[test]
+    fn connection_subscriber_unregister_no_map_is_noop() {
+        let connection_id = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            & u128::from(u64::MAX)) as u64;
+        connection_subscriber_unregister(Some(connection_id));
+    }
+
+    #[tokio::test]
+    async fn connection_id_hash_falls_back_to_subscriber_hash_without_connection() {
+        let mut config = test_config();
+        config.subscriber_writer_lanes = 8;
+        config.max_subscriber_writer_lanes = 8;
+        config.subscriber_lane_shard = crate::config::SubscriberLaneShard::ConnectionIdHash;
+        config.subscriber_single_writer_per_conn = false;
+        let manager = WriterLaneManager::new(&config);
+
+        let without_conn = manager.select_lane(555, None);
+        let expected = manager.lane_for_subscriber(555);
+        assert_eq!(without_conn, expected);
+
+        let with_conn_a = manager.select_lane(555, Some(42));
+        let with_conn_b = manager.select_lane(999, Some(42));
+        assert_eq!(with_conn_a, with_conn_b);
+    }
+
+    #[tokio::test]
+    async fn unregister_subscriber_clears_internal_maps() {
+        let mut config = test_config();
+        config.subscriber_lane_shard = crate::config::SubscriberLaneShard::RoundRobinPin;
+        let manager = WriterLaneManager::new(&config);
+        manager.subscriber_pins.insert(7, 2);
+        manager.subscriber_connections.insert(7, 88);
+        manager.connection_lanes.insert(88, 1);
+
+        manager.unregister_subscriber(7, Some(88));
+
+        assert!(manager.subscriber_pins.get(&7).is_none());
+        assert!(manager.subscriber_connections.get(&7).is_none());
+        assert!(manager.connection_lanes.get(&88).is_none());
+    }
+
+    #[tokio::test]
+    async fn run_connection_writer_coalesces_multiple_deliveries() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+        let subscription = broker.subscribe("t1", "default", "orders").await?;
+        let (_rx, guard) = subscription.into_parts();
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move { server.accept().await });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let client_conn = client.connect(addr, "localhost").await?;
+
+        let connection = server_task.await.context("server join")??;
+        let connection_id = connection.info().id.0;
+        let event_send = connection.open_uni().await?;
+
+        let (tx, rx) = mpsc::channel(8);
+        let writer_task = tokio::spawn(run_connection_writer(connection_id, rx, 64 * 1024));
+
+        tx.send(ConnectionCommand::Register {
+            subscriber_id: 1,
+            connection: connection.clone(),
+            connection_id: Some(connection_id),
+            event_send,
+            guard,
+        })
+        .await
+        .context("register")?;
+
+        let frame_a = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        let frame_b =
+            felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"bb")])?;
+        let now = Instant::now();
+        tx.send(ConnectionCommand::Delivery {
+            subscriber_id: 1,
+            frame_parts: frame_a,
+            item_count: 1,
+            first_enqueued_at: now,
+            enqueue_at: now,
+        })
+        .await
+        .context("delivery a")?;
+        tx.send(ConnectionCommand::Delivery {
+            subscriber_id: 1,
+            frame_parts: frame_b,
+            item_count: 1,
+            first_enqueued_at: now,
+            enqueue_at: now,
+        })
+        .await
+        .context("delivery b")?;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(2), client_conn.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).context("decode batch1")?;
+        assert_eq!(batch1.payloads[0].as_ref(), b"a");
+        let frame2 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame2");
+        let batch2 = felix_wire::binary::decode_event_batch(&frame2).context("decode batch2")?;
+        assert_eq!(batch2.payloads[0].as_ref(), b"bb");
+
+        drop(tx);
+        writer_task.await.context("writer join")?;
+        let _ = crate::timings::take_samples();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_connection_writer_handles_write_error() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+        let subscription = broker.subscribe("t1", "default", "orders").await?;
+        let (_rx, guard) = subscription.into_parts();
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move { server.accept().await });
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let client_conn = client.connect(addr, "localhost").await?;
+
+        let connection = server_task.await.context("server join")??;
+        let connection_id = connection.info().id.0;
+        let event_send = connection.open_uni().await?;
+        drop(client_conn);
+
+        let (tx, rx) = mpsc::channel(8);
+        let writer_task = tokio::spawn(run_connection_writer(connection_id, rx, 64 * 1024));
+
+        tx.send(ConnectionCommand::Register {
+            subscriber_id: 1,
+            connection: connection.clone(),
+            connection_id: Some(connection_id),
+            event_send,
+            guard,
+        })
+        .await
+        .context("register")?;
+
+        let frame = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        let now = Instant::now();
+        tx.send(ConnectionCommand::Delivery {
+            subscriber_id: 1,
+            frame_parts: frame,
+            item_count: 1,
+            first_enqueued_at: now,
+            enqueue_at: now,
+        })
+        .await
+        .context("delivery")?;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(tx);
+        writer_task.await.context("writer join")?;
+        let _ = crate::timings::take_samples();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_connection_writer_unregister_drops_late_deliveries() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        broker.register_tenant("t1").await?;
+        broker.register_namespace("t1", "default").await?;
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                felix_broker::StreamMetadata::default(),
+            )
+            .await?;
+        let subscription = broker.subscribe("t1", "default", "orders").await?;
+        let (_rx, guard) = subscription.into_parts();
+
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move { server.accept().await });
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let client_conn = client.connect(addr, "localhost").await?;
+
+        let connection = server_task.await.context("server join")??;
+        let connection_id = connection.info().id.0;
+        let event_send = connection.open_uni().await?;
+
+        let (tx, rx) = mpsc::channel(8);
+        let writer_task = tokio::spawn(run_connection_writer(connection_id, rx, 64 * 1024));
+
+        tx.send(ConnectionCommand::Register {
+            subscriber_id: 1,
+            connection: connection.clone(),
+            connection_id: Some(connection_id),
+            event_send,
+            guard,
+        })
+        .await
+        .context("register")?;
+
+        let now = Instant::now();
+        let frame = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        tx.send(ConnectionCommand::Delivery {
+            subscriber_id: 1,
+            frame_parts: frame,
+            item_count: 1,
+            first_enqueued_at: now,
+            enqueue_at: now,
+        })
+        .await
+        .context("delivery")?;
+
+        let mut event_recv = tokio::time::timeout(Duration::from_secs(2), client_conn.accept_uni())
+            .await
+            .context("accept uni timeout")??;
+        let mut scratch = BytesMut::new();
+        let frame1 = crate::transport::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        )
+        .await?
+        .expect("frame1");
+        let batch1 = felix_wire::binary::decode_event_batch(&frame1).context("decode batch1")?;
+        assert_eq!(batch1.payloads[0].as_ref(), b"a");
+
+        tx.send(ConnectionCommand::Unregister { subscriber_id: 1 })
+            .await
+            .context("unregister")?;
+
+        let late = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"late")])?;
+        tx.send(ConnectionCommand::Delivery {
+            subscriber_id: 1,
+            frame_parts: late,
+            item_count: 1,
+            first_enqueued_at: now,
+            enqueue_at: now,
+        })
+        .await
+        .context("late delivery")?;
+
+        let no_frame = tokio::time::timeout(
+            Duration::from_millis(150),
+            crate::transport::quic::codec::read_frame_limited_into(
+                &mut event_recv,
+                16 * 1024,
+                &mut scratch,
+            ),
+        )
+        .await;
+        match no_frame {
+            Err(_) => {}
+            Ok(Ok(None)) => {}
+            Ok(Ok(Some(_))) => panic!("unexpected late frame"),
+            Ok(Err(err)) => return Err(err),
+        }
+
+        drop(tx);
+        writer_task.await.context("writer join")?;
+        let _ = crate::timings::take_samples();
         Ok(())
     }
 }

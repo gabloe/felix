@@ -175,4 +175,31 @@ mod tests {
         assert!(result.1.is_none());
         Ok(())
     }
+
+    #[test]
+    fn pubsub_demo_resolve_auth_demo_path_sets_override() -> Result<()> {
+        let mut config = broker::config::BrokerConfig::from_env()?;
+        config.controlplane_url = None;
+        let (_auth, override_creds) = resolve_demo_auth(&config)?;
+        let (tenant, token) = override_creds.expect("demo auth override");
+        assert_eq!(tenant, "t1");
+        assert!(!token.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn pubsub_demo_apply_demo_auth_optional_override() -> Result<()> {
+        let cert = build_server_config()?.1;
+        let mut base = build_client_config(cert)?;
+        let untouched = apply_demo_auth(base.clone(), None);
+        assert_eq!(untouched.auth_tenant_id, None);
+        assert_eq!(untouched.auth_token, None);
+
+        base.auth_tenant_id = Some("ignored".to_string());
+        base.auth_token = Some("ignored".to_string());
+        let updated = apply_demo_auth(base, Some(("t1".to_string(), "tok".to_string())));
+        assert_eq!(updated.auth_tenant_id.as_deref(), Some("t1"));
+        assert_eq!(updated.auth_token.as_deref(), Some("tok"));
+        Ok(())
+    }
 }

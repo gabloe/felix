@@ -1973,7 +1973,30 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::*;
     use anyhow::Context;
+    use serial_test::serial;
     use std::time::Duration;
+
+    fn base_config() -> DemoConfig {
+        DemoConfig {
+            warmup: 1,
+            total: 5,
+            payload_bytes: 0,
+            fanout: 1,
+            batch_size: 1,
+            binary: false,
+            idle_ms: 5,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: None,
+            pub_stream_count: 1,
+            sub_conns: 1,
+            sub_writer_lanes: None,
+            sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 0,
+            sub_dedicated_thread: false,
+        }
+    }
 
     #[tokio::test]
     async fn latency_demo_end_to_end() -> Result<()> {
@@ -2156,25 +2179,7 @@ mod tests {
 
     #[tokio::test]
     async fn latency_demo_run_all_fast() -> Result<()> {
-        let base = DemoConfig {
-            warmup: 1,
-            total: 5,
-            payload_bytes: 0,
-            fanout: 1,
-            batch_size: 1,
-            binary: false,
-            idle_ms: 5,
-            pub_conns: 1,
-            pub_streams_per_conn: 1,
-            pub_sharding: None,
-            pub_stream_count: 1,
-            sub_conns: 1,
-            sub_writer_lanes: None,
-            sub_lane_shard: None,
-            sub_delivery_shaping: true,
-            pub_yield_every_batches: 0,
-            sub_dedicated_thread: false,
-        };
+        let base = base_config();
         tokio::time::timeout(Duration::from_secs(20), run_all_with_mode(base, true))
             .await
             .context("latency demo fast run_all timeout")?
@@ -2207,5 +2212,176 @@ mod tests {
         )
         .await
         .context("latency demo smoke flags timeout")?
+    }
+
+    #[serial]
+    #[test]
+    fn latency_demo_parse_env_and_error_inputs() {
+        unsafe {
+            std::env::set_var("FELIX_SUB_CONNS", "not-a-number");
+            std::env::set_var("FELIX_SUB_EGRESS_CONNS", "7");
+            std::env::set_var("FELIX_SUB_DEDICATED_THREAD", "false");
+            std::env::set_var("FELIX_SUB_DELIVERY_SHAPING", "0");
+        }
+
+        let args = vec![
+            "--warmup".to_string(),
+            "oops".to_string(),
+            "--total".to_string(),
+            "bad".to_string(),
+            "--payload".to_string(),
+            "16".to_string(),
+            "--fanout".to_string(),
+            "5".to_string(),
+            "--batch".to_string(),
+            "0".to_string(),
+            "--smoke".to_string(),
+            "--compare-sub-delivery-shaping".to_string(),
+            "--sub-shared-thread".to_string(),
+            "--sub-writer-lanes".to_string(),
+            "nope".to_string(),
+            "--payloads".to_string(),
+            "1,x,2".to_string(),
+            "--fanouts".to_string(),
+            "3, bad,4".to_string(),
+        ];
+        let (config, matrix, payloads, fanouts, all, smoke, compare) =
+            parse_args_from(args.into_iter());
+        assert!(!matrix);
+        assert!(!all);
+        assert!(smoke);
+        assert!(compare);
+        assert_eq!(payloads, vec![1, 2]);
+        assert_eq!(fanouts, vec![3, 4]);
+        assert_eq!(config.sub_conns, 7);
+        assert_eq!(config.sub_writer_lanes, None);
+        assert!(!config.sub_dedicated_thread);
+        assert!(!config.sub_delivery_shaping);
+        assert_eq!(config.warmup, 1000);
+        assert_eq!(config.total, 10000);
+        assert_eq!(config.batch_size, 0);
+
+        unsafe {
+            std::env::remove_var("FELIX_SUB_CONNS");
+            std::env::remove_var("FELIX_SUB_EGRESS_CONNS");
+            std::env::remove_var("FELIX_SUB_DEDICATED_THREAD");
+            std::env::remove_var("FELIX_SUB_DELIVERY_SHAPING");
+        }
+    }
+
+    #[serial]
+    #[test]
+    fn latency_demo_effective_lanes_hint_respects_env_and_floor() {
+        let mut config = base_config();
+        config.sub_writer_lanes = Some(0);
+        assert_eq!(effective_sub_lanes_hint(&config), 1);
+        config.sub_writer_lanes = Some(9);
+        assert_eq!(effective_sub_lanes_hint(&config), 9);
+
+        config.sub_writer_lanes = None;
+        unsafe {
+            std::env::set_var("FELIX_SUB_EGRESS_LANES", "0");
+        }
+        assert_eq!(effective_sub_lanes_hint(&config), 4);
+        unsafe {
+            std::env::set_var("FELIX_SUB_EGRESS_LANES", "6");
+        }
+        assert_eq!(effective_sub_lanes_hint(&config), 6);
+        unsafe {
+            std::env::remove_var("FELIX_SUB_EGRESS_LANES");
+        }
+    }
+
+    #[tokio::test]
+    async fn latency_demo_compare_sub_delivery_shaping_path() -> Result<()> {
+        let mut config = base_config();
+        config.total = 3;
+        config.warmup = 0;
+        tokio::time::timeout(
+            Duration::from_secs(25),
+            run_compare_sub_delivery_shaping(config),
+        )
+        .await
+        .context("latency demo compare shaping timeout")?
+    }
+
+    #[test]
+    fn latency_demo_print_and_sanity_helpers_cover_branches() {
+        let empty = DemoResult {
+            publish_total: 10,
+            sample_total: 5,
+            payload_bytes: 16,
+            fanout: 2,
+            batch_size: 1,
+            binary: false,
+            received: 0,
+            dropped: 1,
+            delivered_total: 3,
+            p50: Duration::from_micros(1),
+            p99: Duration::from_micros(2),
+            p999: Duration::from_micros(3),
+            throughput: 1.0,
+            effective_throughput: 0.5,
+            delivered_throughput: 0.6,
+            delivered_per_sub_throughput: 0.3,
+        };
+        print_result(&empty);
+
+        let mut received = empty;
+        received.received = 4;
+        received.delivered_total = 9;
+        print_result(&received);
+
+        #[cfg(feature = "telemetry")]
+        {
+            let summary = build_timing_summary(None, None, None);
+            print_timing_summary(Some(summary));
+            print_timing_summary(None);
+
+            let client = felix_client::FrameCountersSnapshot {
+                frames_in_ok: 0,
+                frames_in_err: 0,
+                frames_out_ok: 10,
+                bytes_in: 0,
+                bytes_out: 1000,
+                pub_frames_out_ok: 10,
+                pub_frames_out_err: 1,
+                sub_frames_in_ok: 0,
+                ack_frames_in_ok: 0,
+                pub_items_out_ok: 99,
+                pub_items_out_err: 1,
+                pub_batches_out_ok: 1,
+                pub_batches_out_err: 1,
+                sub_items_in_ok: 0,
+                sub_batches_in_ok: 0,
+                ack_items_in_ok: 0,
+                binary_encode_reallocs: 0,
+                text_encode_reallocs: 0,
+            };
+            let broker = broker::quic::FrameCountersSnapshot {
+                frames_in_ok: 0,
+                frames_in_err: 0,
+                frames_out_ok: 0,
+                bytes_in: 0,
+                bytes_out: 0,
+                pub_frames_in_ok: 1,
+                pub_frames_in_err: 0,
+                pub_items_in_ok: 1,
+                pub_items_in_err: 0,
+                pub_batches_in_ok: 1,
+                pub_batches_in_err: 0,
+                ack_frames_out_ok: 0,
+                ack_items_out_ok: 0,
+                sub_frames_out_ok: 0,
+                sub_items_out_ok: 0,
+                sub_batches_out_ok: 0,
+            };
+            print_sanity_checks(&base_config(), &received, &client, &broker);
+            let mut ack_config = base_config();
+            ack_config.batch_size = 64;
+            print_sanity_checks(&ack_config, &received, &client, &broker);
+
+            let _ = print_frame_counters();
+        }
     }
 }

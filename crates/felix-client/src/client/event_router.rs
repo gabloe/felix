@@ -197,4 +197,57 @@ mod tests {
         let _ = shutdown_tx.send(());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn stream_arrives_before_registration_is_delivered() -> Result<()> {
+        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
+        crate::config::ClientConfig::optimized_defaults(quinn).install();
+        let (client_conn, server_conn, shutdown_tx) = quic_pair().await?;
+        let router = spawn_event_router(client_conn);
+
+        let mut uni = server_conn.open_uni().await?;
+        crate::wire::write_message(
+            &mut uni,
+            Message::EventStreamHello {
+                subscription_id: 77,
+            },
+        )
+        .await?;
+        let _ = uni.finish();
+
+        let (tx, rx) = oneshot::channel();
+        router
+            .send(EventRouterCommand::Register {
+                subscription_id: 77,
+                response: tx,
+            })
+            .await
+            .expect("send");
+        assert!(rx.await.expect("response").is_ok());
+        let _ = shutdown_tx.send(());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_drop_notifies_pending_waiters() -> Result<()> {
+        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
+        crate::config::ClientConfig::optimized_defaults(quinn).install();
+        let (client_conn, _server_conn, shutdown_tx) = quic_pair().await?;
+        let router = spawn_event_router(client_conn);
+
+        let (tx, rx) = oneshot::channel();
+        router
+            .send(EventRouterCommand::Register {
+                subscription_id: 55,
+                response: tx,
+            })
+            .await
+            .expect("send");
+        drop(router);
+
+        let err = rx.await.expect("response").expect_err("router closed");
+        assert!(err.to_string().contains("event stream router closed"));
+        let _ = shutdown_tx.send(());
+        Ok(())
+    }
 }

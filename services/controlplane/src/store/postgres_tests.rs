@@ -60,7 +60,8 @@ fn docker_available() -> bool {
     std::process::Command::new("docker")
         .arg("version")
         .output()
-        .is_ok()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Error> {
