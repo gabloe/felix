@@ -63,7 +63,8 @@ fn docker_available() -> bool {
     std::process::Command::new("docker")
         .arg("version")
         .output()
-        .is_ok()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn test_ed25519_key_bytes() -> ([u8; 32], [u8; 32]) {
@@ -81,7 +82,7 @@ struct PgFixture {
 
 struct PgContainer {
     url: String,
-    _container: Container<'static, Postgres>,
+    _container: Option<Container<'static, Postgres>>,
 }
 
 static PG_CONTAINER: tokio::sync::OnceCell<PgContainer> = tokio::sync::OnceCell::const_new();
@@ -226,6 +227,31 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
 }
 
 async fn pg_container() -> Result<Option<&'static PgContainer>> {
+    if let Ok(url) = std::env::var("FELIX_TEST_DATABASE_URL") {
+        if url.trim().is_empty() {
+            eprintln!("skipping pg-tests: FELIX_TEST_DATABASE_URL is empty");
+            return Ok(None);
+        }
+        let container = PG_CONTAINER
+            .get_or_try_init(|| async move {
+                eprintln!("pg-tests: using FELIX_TEST_DATABASE_URL");
+                wait_for_postgres(&url, Duration::from_secs(30)).await?;
+                Ok::<_, sqlx::Error>(PgContainer {
+                    url,
+                    _container: None,
+                })
+            })
+            .await;
+
+        return match container {
+            Ok(container) => Ok(Some(container)),
+            Err(err) => {
+                eprintln!("skipping pg-tests: cannot connect to postgres: {err}");
+                Ok(None)
+            }
+        };
+    }
+
     if !docker_available() {
         eprintln!("skipping pg-tests: docker not available");
         return Ok(None);
@@ -234,7 +260,8 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
         .get_or_try_init(|| async {
             eprintln!("pg-tests: starting postgres container");
             let docker = Box::leak(Box::new(Cli::default()));
-            let container = docker.run(Postgres::default());
+            let container = std::panic::catch_unwind(|| docker.run(Postgres::default()))
+                .map_err(|_| sqlx::Error::Protocol("docker run panicked".into()))?;
             let port = container.get_host_port_ipv4(5432);
             let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
             // Avoid logging the full URL in case it includes credentials.
@@ -244,7 +271,7 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
             eprintln!("pg-tests: postgres accepting connections");
             Ok::<_, sqlx::Error>(PgContainer {
                 url,
-                _container: container,
+                _container: Some(container),
             })
         })
         .await;

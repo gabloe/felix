@@ -40,7 +40,7 @@ pub fn build_router(state: AppState) -> Router {
                 uri = %request.uri(),
                 version = ?request.version()
             );
-            span.set_parent(parent);
+            let _ = span.set_parent(parent);
             span
         });
 
@@ -58,7 +58,7 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::regions::list_regions),
         )
         .route(
-            "/v1/regions/:region_id",
+            "/v1/regions/{region_id}",
             axum::routing::get(api::regions::get_region),
         )
         .route(
@@ -98,58 +98,58 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::tenants::list_tenants).post(api::tenants::create_tenant),
         )
         .route(
-            "/v1/tenants/:tenant_id",
+            "/v1/tenants/{tenant_id}",
             axum::routing::delete(api::tenants::delete_tenant),
         )
         .route(
-            "/v1/tenants/:tenant_id/token/exchange",
+            "/v1/tenants/{tenant_id}/token/exchange",
             axum::routing::post(auth::exchange::exchange_token),
         )
         .route(
-            "/v1/tenants/:tenant_id/.well-known/jwks.json",
+            "/v1/tenants/{tenant_id}/.well-known/jwks.json",
             axum::routing::get(auth::jwks::tenant_jwks),
         )
         .route(
-            "/v1/tenants/:tenant_id/idp-issuers",
+            "/v1/tenants/{tenant_id}/idp-issuers",
             axum::routing::post(auth::admin::upsert_idp_issuer),
         )
         .route(
-            "/v1/tenants/:tenant_id/idp-issuers/:issuer",
+            "/v1/tenants/{tenant_id}/idp-issuers/{issuer}",
             axum::routing::delete(auth::admin::delete_idp_issuer),
         )
         .route(
-            "/v1/tenants/:tenant_id/rbac/policies",
+            "/v1/tenants/{tenant_id}/rbac/policies",
             axum::routing::get(auth::admin::list_policies).post(auth::admin::add_policy),
         )
         .route(
-            "/v1/tenants/:tenant_id/rbac/groupings",
+            "/v1/tenants/{tenant_id}/rbac/groupings",
             axum::routing::get(auth::admin::list_groupings).post(auth::admin::add_grouping),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces",
+            "/v1/tenants/{tenant_id}/namespaces",
             axum::routing::get(api::namespaces::list_namespaces)
                 .post(api::namespaces::create_namespace),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces/:namespace",
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}",
             axum::routing::delete(api::namespaces::delete_namespace),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces/:namespace/streams",
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams",
             axum::routing::get(api::streams::list_streams).post(api::streams::create_stream),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces/:namespace/streams/:stream",
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams/{stream}",
             axum::routing::get(api::streams::get_stream)
                 .patch(api::streams::patch_stream)
                 .delete(api::streams::delete_stream),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces/:namespace/caches",
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
             axum::routing::get(api::caches::list_caches).post(api::caches::create_cache),
         )
         .route(
-            "/v1/tenants/:tenant_id/namespaces/:namespace/caches/:cache",
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
             axum::routing::get(api::caches::get_cache)
                 .patch(api::caches::patch_cache)
                 .delete(api::caches::delete_cache),
@@ -164,7 +164,7 @@ pub fn build_router(state: AppState) -> Router {
 pub fn build_bootstrap_router(state: AppState) -> Router {
     Router::new()
         .route(
-            "/internal/bootstrap/tenants/:tenant_id/initialize",
+            "/internal/bootstrap/tenants/{tenant_id}/initialize",
             axum::routing::post(api::bootstrap::initialize),
         )
         .layer(TraceLayer::new_for_http())

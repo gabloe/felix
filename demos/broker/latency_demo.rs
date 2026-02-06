@@ -1896,8 +1896,8 @@ fn current_time_nanos() -> u128 {
 
 fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
-    let cert_der = CertificateDer::from(cert.serialize_der()?);
-    let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+    let cert_der = cert.cert.der().clone();
+    let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
     let server_config =
         quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
             .context("build server config")?;

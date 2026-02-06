@@ -11,7 +11,6 @@ use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::trace as sdktrace;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
@@ -67,15 +66,23 @@ pub fn init_observability(service_name: &str) -> PrometheusHandle {
 /// Attaches resource attributes describing the service and environment.
 /// Uses Tokio runtime for batch processing of spans.
 /// Returns `None` if installation fails (best-effort).
-fn build_tracer_provider(service_name: &str) -> Option<opentelemetry_sdk::trace::TracerProvider> {
-    let resource = Resource::new(resource_attributes(service_name));
-    opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(opentelemetry_otlp::new_exporter().tonic())
-        .with_trace_config(sdktrace::Config::default().with_resource(resource))
-        // Install batch span processor with Tokio runtime; failure returns None.
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .ok()
+fn build_tracer_provider(
+    service_name: &str,
+) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    let resource = Resource::builder_empty()
+        .with_attributes(resource_attributes(service_name))
+        .build();
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()
+        .ok()?;
+    // Install batch span processor; failure returns None.
+    Some(
+        opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(resource)
+            .build(),
+    )
 }
 
 /// Collects resource attributes for the tracer based on environment variables.
