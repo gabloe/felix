@@ -165,10 +165,17 @@ struct DemoArgs {
 
 impl DemoArgs {
     fn from_env() -> Self {
+        Self::from_args(std::env::args().skip(1))
+    }
+
+    fn from_args<I>(args: I) -> Self
+    where
+        I: Iterator<Item = String>,
+    {
         let mut alerts = 10usize;
         let mut last_n = 5usize;
         let mut drop_subscriber = false;
-        for arg in std::env::args().skip(1) {
+        for arg in args {
             if arg == "--drop-subscriber" {
                 drop_subscriber = true;
             } else if let Some(value) = arg.strip_prefix("--alerts=") {
@@ -397,5 +404,35 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(15), run_demo(args))
             .await
             .context("notifications demo drop timeout")?
+    }
+
+    #[test]
+    fn notifications_demo_args_parse_variants() {
+        let parsed = DemoArgs::from_args(
+            vec![
+                "--alerts=4".to_string(),
+                "--last-n=2".to_string(),
+                "--drop-subscriber".to_string(),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(parsed.alerts, 4);
+        assert_eq!(parsed.last_n, 2);
+        assert!(parsed.drop_subscriber);
+
+        let parsed = DemoArgs::from_args(
+            vec!["--alerts=bad".to_string(), "--last-n=nope".to_string()].into_iter(),
+        );
+        assert_eq!(parsed.alerts, 10);
+        assert_eq!(parsed.last_n, 5);
+        assert!(!parsed.drop_subscriber);
+    }
+
+    #[tokio::test]
+    async fn notifications_demo_join_with_timeout_times_out_cleanly() {
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        });
+        join_with_timeout("slow-subscriber", handle).await;
     }
 }

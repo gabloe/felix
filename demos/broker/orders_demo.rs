@@ -196,14 +196,50 @@ mod tests {
             .await
             .context("orders demo kill payments timeout")?
     }
+
+    #[test]
+    fn orders_demo_args_parse_variants() {
+        let parsed = DemoArgs::from_args(
+            vec![
+                "--orders=7".to_string(),
+                "--duplicate-every=3".to_string(),
+                "--kill-worker=payments".to_string(),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(parsed.orders, 7);
+        assert_eq!(parsed.duplicate_every, 3);
+        assert!(parsed.kill_payments);
+
+        let parsed = DemoArgs::from_args(
+            vec!["--orders=x".to_string(), "--duplicate-every=y".to_string()].into_iter(),
+        );
+        assert_eq!(parsed.orders, 12);
+        assert_eq!(parsed.duplicate_every, 5);
+        assert!(!parsed.kill_payments);
+    }
+
+    #[tokio::test]
+    async fn orders_demo_wait_for_completion_timeout_path() {
+        let done = Arc::new(AtomicUsize::new(0));
+        wait_for_completion(&done, 1).await;
+        assert_eq!(done.load(Ordering::Relaxed), 0);
+    }
 }
 
 impl DemoArgs {
     fn from_env() -> Self {
+        Self::from_args(std::env::args().skip(1))
+    }
+
+    fn from_args<I>(args: I) -> Self
+    where
+        I: Iterator<Item = String>,
+    {
         let mut orders = 12usize;
         let mut duplicate_every = 5usize;
         let mut kill_payments = false;
-        for arg in std::env::args().skip(1) {
+        for arg in args {
             if let Some(value) = arg.strip_prefix("--orders=") {
                 orders = value.parse().unwrap_or(orders);
             } else if let Some(value) = arg.strip_prefix("--duplicate-every=") {

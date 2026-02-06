@@ -47,31 +47,17 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Install Task
+        uses: arduino/setup-task@v2
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Lint
+        run: task lint
 
       - name: Test
-        run: cargo test --workspace
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --version 0.19.0 --locked
+        run: task test
 
       - name: cargo-deny
-        run: cargo deny check
+        run: task deny
 
       - name: RSA dependency check (non-controlplane crates)
-        run: |
-          for pkg in broker felix-authz felix-client felix-broker felix-transport felix-wire; do
-            set +e
-            tree=$(cargo tree -i rsa -p "$pkg" 2>/dev/null)
-            status=$?
-            set -e
-            if [ $status -eq 0 ] && echo "$tree" | rg -q "rsa v"; then
-              echo "$tree"
-              echo "rsa crate detected in $pkg dependency tree"
-              exit 1
-            fi
-          done
+        run: task deny:rsa:default
