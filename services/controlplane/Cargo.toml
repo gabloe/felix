@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 axum = "0.8"
-metrics = "0.23"
+metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 opentelemetry = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
