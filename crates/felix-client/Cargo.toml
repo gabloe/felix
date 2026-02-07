@@ -10,7 +10,7 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-metrics = "0.23"
+metrics = "0.24"
 serde = { workspace = true, features = ["derive"] }
 serde_yaml_ng = { workspace = true }
 felix-broker = { path = "../felix-broker", version = "0.1.0" }
