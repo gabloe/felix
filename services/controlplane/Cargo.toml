@@ -13,7 +13,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 axum = "0.8"
 metrics = "0.23"
-metrics-exporter-prometheus = "0.15"
+metrics-exporter-prometheus = "0.18"
 opentelemetry = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
