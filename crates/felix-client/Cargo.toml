@@ -8,6 +8,8 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 bytes = { workspace = true }
+ahash = "0.8"
+hashbrown = { version = "0.14", features = ["equivalent"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 metrics = "0.23"

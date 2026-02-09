@@ -1,11 +1,14 @@
 // Publisher worker pool and single-writer stream logic.
+use ahash::{AHasher, RandomState};
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_wire::{AckMode, FrameHeader, Message};
+use hashbrown::HashMap;
 use quinn::{RecvStream, SendStream};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,6 +32,18 @@ pub(crate) struct PublisherInner {
     pub(crate) workers: Arc<Vec<PublishWorker>>,
     pub(crate) sharding: PublishSharding,
     pub(crate) rr: AtomicUsize,
+    stream_cache: Mutex<StreamShardCache>,
+}
+
+impl PublisherInner {
+    pub(crate) fn new(workers: Arc<Vec<PublishWorker>>, sharding: PublishSharding) -> Self {
+        Self {
+            workers,
+            sharding,
+            rr: AtomicUsize::new(0),
+            stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
+        }
+    }
 }
 
 pub(crate) struct PublishWorker {
@@ -55,6 +70,91 @@ pub(crate) enum PublishRequest {
     },
 }
 
+const STREAM_SHARD_CACHE_CAPACITY: usize = 1024;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct StreamKey {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+}
+
+impl StreamKey {
+    fn new(tenant_id: &str, namespace: &str, stream: &str) -> Self {
+        Self {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct StreamKeyRef<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+    stream: &'a str,
+}
+
+impl<'a> StreamKeyRef<'a> {
+    fn new(tenant_id: &'a str, namespace: &'a str, stream: &'a str) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+            stream,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
+    fn equivalent(&self, key: &StreamKey) -> bool {
+        self.tenant_id == key.tenant_id
+            && self.namespace == key.namespace
+            && self.stream == key.stream
+    }
+}
+
+struct StreamShardCache {
+    capacity: usize,
+    order: VecDeque<StreamKey>,
+    entries: HashMap<StreamKey, usize, RandomState>,
+}
+
+impl StreamShardCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity.min(64)),
+            entries: HashMap::with_capacity_and_hasher(capacity, RandomState::new()),
+        }
+    }
+
+    fn get(&self, key: StreamKeyRef<'_>) -> Option<usize> {
+        self.entries.get(&key).copied()
+    }
+
+    fn insert(&mut self, key: StreamKey, worker_index: usize) {
+        if self.capacity == 0 || self.entries.contains_key(&key) {
+            return;
+        }
+        if self.entries.len() == self.capacity
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.entries.remove(&evicted);
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, worker_index);
+    }
+}
+
+fn hash_stream_index(tenant_id: &str, namespace: &str, stream: &str, worker_count: usize) -> usize {
+    let mut hasher = AHasher::default();
+    tenant_id.hash(&mut hasher);
+    namespace.hash(&mut hasher);
+    stream.hash(&mut hasher);
+    (hasher.finish() as usize) % worker_count
+}
+
 impl Publisher {
     fn select_worker(
         &self,
@@ -66,16 +166,22 @@ impl Publisher {
         if workers.is_empty() {
             return Err(anyhow::anyhow!("publish pool is empty"));
         }
+        let worker_count = workers.len();
         let index = match self.inner.sharding {
             PublishSharding::RoundRobin => {
-                self.inner.rr.fetch_add(1, Ordering::Relaxed) % workers.len()
+                self.inner.rr.fetch_add(1, Ordering::Relaxed) % worker_count
             }
             PublishSharding::HashStream => {
-                let mut hasher = DefaultHasher::new();
-                tenant_id.hash(&mut hasher);
-                namespace.hash(&mut hasher);
-                stream.hash(&mut hasher);
-                (hasher.finish() as usize) % workers.len()
+                if let Ok(mut cache) = self.inner.stream_cache.try_lock() {
+                    if let Some(index) = cache.get(StreamKeyRef::new(tenant_id, namespace, stream))
+                    {
+                        return Ok(&workers[index]);
+                    }
+                    let index = hash_stream_index(tenant_id, namespace, stream, worker_count);
+                    cache.insert(StreamKey::new(tenant_id, namespace, stream), index);
+                    return Ok(&workers[index]);
+                }
+                hash_stream_index(tenant_id, namespace, stream, worker_count)
             }
         };
         Ok(&workers[index])
@@ -102,12 +208,6 @@ impl Publisher {
         let sample = crate::t_should_sample();
         #[cfg(not(feature = "telemetry"))]
         let sample = false;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = sample;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = sample;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = sample;
         #[cfg(not(feature = "telemetry"))]
         let _ = sample;
         #[cfg(feature = "telemetry")]
@@ -663,11 +763,7 @@ mod tests {
             });
         }
         Publisher {
-            inner: Arc::new(PublisherInner {
-                workers: Arc::new(publish_workers),
-                sharding,
-                rr: AtomicUsize::new(0),
-            }),
+            inner: Arc::new(PublisherInner::new(Arc::new(publish_workers), sharding)),
         }
     }
 
@@ -776,15 +872,14 @@ mod tests {
         });
 
         let publisher = Publisher {
-            inner: Arc::new(PublisherInner {
-                workers: Arc::new(vec![PublishWorker {
+            inner: Arc::new(PublisherInner::new(
+                Arc::new(vec![PublishWorker {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
                 }]),
-                sharding: PublishSharding::RoundRobin,
-                rr: AtomicUsize::new(0),
-            }),
+                PublishSharding::RoundRobin,
+            )),
         };
         publisher
             .publish_batch_binary("t", "ns", "s", &[b"x".to_vec()])
@@ -807,6 +902,18 @@ mod tests {
         let rr_end = publisher.inner.rr.load(Ordering::Relaxed);
         assert!(rr_end >= rr_start + 2);
         publisher.finish().await.expect("finish");
+    }
+
+    #[test]
+    fn stream_cache_eviction_preserves_recent_entries() {
+        let mut cache = StreamShardCache::new(2);
+        cache.insert(StreamKey::new("t1", "ns", "a"), 0);
+        cache.insert(StreamKey::new("t1", "ns", "b"), 1);
+        assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "a")), Some(0));
+        cache.insert(StreamKey::new("t1", "ns", "c"), 2);
+        assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "a")), None);
+        assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "b")), Some(1));
+        assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "c")), Some(2));
     }
 
     fn make_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
@@ -864,15 +971,14 @@ mod tests {
         drop(rx);
         let handle = tokio::spawn(async { Ok(()) });
         let publisher = Publisher {
-            inner: Arc::new(PublisherInner {
-                workers: Arc::new(vec![PublishWorker {
+            inner: Arc::new(PublisherInner::new(
+                Arc::new(vec![PublishWorker {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
                 }]),
-                sharding: PublishSharding::RoundRobin,
-                rr: AtomicUsize::new(0),
-            }),
+                PublishSharding::RoundRobin,
+            )),
         };
         publisher.finish().await.expect("finish");
     }
