@@ -643,16 +643,18 @@ impl Broker {
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
+        let payload_times: Vec<Instant> = payloads.iter().map(|_| Instant::now()).collect();
         let enqueue_start = t_now_if(sample);
         for subscriber in senders.iter() {
-            for payload in payloads {
-                metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
-                let envelope = DeliveryEnvelope {
-                    payload: payload.clone(),
-                    enqueued_at: Instant::now(),
-                };
+            for (payload_idx, payload) in payloads.iter().enumerate() {
+                let enqueued_at = payload_times[payload_idx];
                 match stream_state.subscriber_queue_policy {
                     SubQueuePolicy::Block => {
+                        metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
+                        let envelope = DeliveryEnvelope {
+                            payload: payload.clone(),
+                            enqueued_at,
+                        };
                         if subscriber.sender.send(envelope).await.is_ok() {
                             stream_state.increment_queue_depth();
                             sent += 1;
@@ -661,8 +663,14 @@ impl Broker {
                             break;
                         }
                     }
-                    SubQueuePolicy::DropNew => match subscriber.sender.try_send(envelope) {
-                        Ok(()) => {
+                    SubQueuePolicy::DropNew => match subscriber.sender.try_reserve() {
+                        Ok(permit) => {
+                            metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
+                            let envelope = DeliveryEnvelope {
+                                payload: payload.clone(),
+                                enqueued_at,
+                            };
+                            permit.send(envelope);
                             stream_state.increment_queue_depth();
                             sent += 1;
                         }
@@ -677,8 +685,15 @@ impl Broker {
                     },
                     SubQueuePolicy::DropOld => {
                         // tokio::mpsc does not expose drop-head; emulate with drop-new semantics.
-                        match subscriber.sender.try_send(envelope) {
-                            Ok(()) => {
+                        match subscriber.sender.try_reserve() {
+                            Ok(permit) => {
+                                metrics::counter!("felix_sub_shared_payload_clones_total")
+                                    .increment(1);
+                                let envelope = DeliveryEnvelope {
+                                    payload: payload.clone(),
+                                    enqueued_at,
+                                };
+                                permit.send(envelope);
                                 stream_state.increment_queue_depth();
                                 sent += 1;
                             }
