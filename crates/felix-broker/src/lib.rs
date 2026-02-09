@@ -1,12 +1,15 @@
 // In-process pub/sub broker with a tiny cache hook.
 // The broker enforces tenant/namespace/stream existence via local registries
 // that are kept in sync by the control plane watcher.
+use ahash::RandomState;
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use felix_storage::StorageApi;
+use hashbrown::HashMap;
 use parking_lot::Mutex;
 use slab::Slab;
-use std::collections::{HashMap, VecDeque};
+use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
@@ -224,14 +227,13 @@ impl StreamState {
     }
 
     fn rebuild_subscriber_snapshot(&self, state: &SubscriberRegistry) {
-        let snapshot = state
-            .senders
-            .iter()
-            .map(|(id, sender)| SubscriberEntry {
+        let mut snapshot = Vec::with_capacity(state.senders.len());
+        for (id, sender) in state.senders.iter() {
+            snapshot.push(SubscriberEntry {
                 id,
                 sender: sender.clone(),
-            })
-            .collect::<Vec<_>>();
+            });
+        }
         self.subscribers_snapshot.store(Arc::new(snapshot));
     }
 
@@ -454,15 +456,15 @@ impl Drop for SubscriptionReceiver {
 #[derive(Debug)]
 pub struct Broker {
     // Map of stream key -> stream state (subscriber registry + log).
-    topics: RwLock<HashMap<StreamKey, Arc<StreamState>>>,
+    topics: RwLock<HashMap<StreamKey, Arc<StreamState>, RandomState>>,
     // Map of stream key -> metadata for existence checks.
-    streams: RwLock<HashMap<StreamKey, StreamMetadata>>,
+    streams: RwLock<HashMap<StreamKey, StreamMetadata, RandomState>>,
     // Map of cache key -> metadata for existence checks.
-    caches: RwLock<HashMap<CacheKey, CacheMetadata>>,
+    caches: RwLock<HashMap<CacheKey, CacheMetadata, RandomState>>,
     // Map of tenant id -> active marker.
-    tenants: RwLock<HashMap<String, ()>>,
+    tenants: RwLock<HashMap<String, (), RandomState>>,
     // Map of namespace key -> active marker.
-    namespaces: RwLock<HashMap<NamespaceKey, ()>>,
+    namespaces: RwLock<HashMap<NamespaceKey, (), RandomState>>,
     // Ephemeral cache used by demos and simple workflows.
     cache: Box<dyn StorageApi + Send>,
     // Per-subscriber queue capacity for each stream.
@@ -496,6 +498,27 @@ impl NamespaceKey {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+struct NamespaceKeyRef<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+}
+
+impl<'a> NamespaceKeyRef<'a> {
+    fn new(tenant_id: &'a str, namespace: &'a str) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<NamespaceKey> for NamespaceKeyRef<'a> {
+    fn equivalent(&self, key: &NamespaceKey) -> bool {
+        self.tenant_id == key.tenant_id && self.namespace == key.namespace
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct StreamKey {
     tenant_id: String,
@@ -514,6 +537,31 @@ impl StreamKey {
             namespace: namespace.into(),
             stream: stream.into(),
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+struct StreamKeyRef<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+    stream: &'a str,
+}
+
+impl<'a> StreamKeyRef<'a> {
+    fn new(tenant_id: &'a str, namespace: &'a str, stream: &'a str) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+            stream,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
+    fn equivalent(&self, key: &StreamKey) -> bool {
+        self.tenant_id == key.tenant_id
+            && self.namespace == key.namespace
+            && self.stream == key.stream
     }
 }
 
@@ -538,6 +586,31 @@ impl CacheKey {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+struct CacheKeyRef<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+    cache: &'a str,
+}
+
+impl<'a> CacheKeyRef<'a> {
+    fn new(tenant_id: &'a str, namespace: &'a str, cache: &'a str) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+            cache,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<CacheKey> for CacheKeyRef<'a> {
+    fn equivalent(&self, key: &CacheKey) -> bool {
+        self.tenant_id == key.tenant_id
+            && self.namespace == key.namespace
+            && self.cache == key.cache
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CacheMetadata;
 
@@ -554,11 +627,11 @@ impl Broker {
     // Start with an empty topic table and default capacity.
     pub fn new(cache: Box<dyn StorageApi + Send>) -> Self {
         Self {
-            topics: RwLock::new(HashMap::new()),
-            streams: RwLock::new(HashMap::new()),
-            caches: RwLock::new(HashMap::new()),
-            tenants: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(HashMap::new()),
+            topics: RwLock::new(HashMap::with_hasher(RandomState::new())),
+            streams: RwLock::new(HashMap::with_hasher(RandomState::new())),
+            caches: RwLock::new(HashMap::with_hasher(RandomState::new())),
+            tenants: RwLock::new(HashMap::with_hasher(RandomState::new())),
+            namespaces: RwLock::new(HashMap::with_hasher(RandomState::new())),
             cache,
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
             log_capacity: DEFAULT_LOG_CAPACITY,
@@ -637,15 +710,22 @@ impl Broker {
         let send_start = t_now_if(sample);
         let senders = stream_state.subscriber_snapshot();
         let fanout = senders.len();
+        #[cfg(feature = "telemetry")]
+        let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+        #[cfg(feature = "telemetry")]
+        let fanout_label = fanout.to_string();
+        #[cfg(feature = "telemetry")]
+        let payload_bytes_label = payload_bytes.to_string();
         #[cfg(not(feature = "telemetry"))]
         let _ = fanout;
 
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
-        let payload_times: Vec<Instant> = payloads.iter().map(|_| Instant::now()).collect();
+        let mut payload_times: SmallVec<[Instant; 8]> = SmallVec::with_capacity(payloads.len());
+        payload_times.extend(payloads.iter().map(|_| Instant::now()));
         let enqueue_start = t_now_if(sample);
-        for subscriber in senders.iter() {
+        'subscribers: for subscriber in senders.iter() {
             for (payload_idx, payload) in payloads.iter().enumerate() {
                 let enqueued_at = payload_times[payload_idx];
                 match stream_state.subscriber_queue_policy {
@@ -663,28 +743,89 @@ impl Broker {
                             break;
                         }
                     }
-                    SubQueuePolicy::DropNew => match subscriber.sender.try_reserve() {
-                        Ok(permit) => {
-                            metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
-                            let envelope = DeliveryEnvelope {
-                                payload: payload.clone(),
-                                enqueued_at,
-                            };
-                            permit.send(envelope);
-                            stream_state.increment_queue_depth();
-                            sent += 1;
+                    SubQueuePolicy::DropNew => {
+                        if payload_idx == 0 && payloads.len() > 1 {
+                            match subscriber.sender.try_reserve_many(payloads.len()) {
+                                Ok(mut permits) => {
+                                    for (payload_idx, payload) in payloads.iter().enumerate() {
+                                        let Some(permit) = permits.next() else {
+                                            break;
+                                        };
+                                        let enqueued_at = payload_times[payload_idx];
+                                        metrics::counter!("felix_sub_shared_payload_clones_total")
+                                            .increment(1);
+                                        let envelope = DeliveryEnvelope {
+                                            payload: payload.clone(),
+                                            enqueued_at,
+                                        };
+                                        permit.send(envelope);
+                                        stream_state.increment_queue_depth();
+                                        sent += 1;
+                                    }
+                                    continue 'subscribers;
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    closed_subscribers.push(subscriber.id as u64);
+                                    continue 'subscribers;
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    // Fall back to per-payload reservation to preserve drop-new semantics.
+                                }
+                            }
                         }
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                            metrics::counter!("felix_subscribe_dropped_total").increment(1);
-                            metrics::counter!("felix_sub_queue_dropped_total").increment(1);
+                        match subscriber.sender.try_reserve() {
+                            Ok(permit) => {
+                                metrics::counter!("felix_sub_shared_payload_clones_total")
+                                    .increment(1);
+                                let envelope = DeliveryEnvelope {
+                                    payload: payload.clone(),
+                                    enqueued_at,
+                                };
+                                permit.send(envelope);
+                                stream_state.increment_queue_depth();
+                                sent += 1;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                metrics::counter!("felix_subscribe_dropped_total").increment(1);
+                                metrics::counter!("felix_sub_queue_dropped_total").increment(1);
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                closed_subscribers.push(subscriber.id as u64);
+                                break;
+                            }
                         }
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                            closed_subscribers.push(subscriber.id as u64);
-                            break;
-                        }
-                    },
+                    }
                     SubQueuePolicy::DropOld => {
                         // tokio::mpsc does not expose drop-head; emulate with drop-new semantics.
+                        if payload_idx == 0 && payloads.len() > 1 {
+                            match subscriber.sender.try_reserve_many(payloads.len()) {
+                                Ok(mut permits) => {
+                                    for (payload_idx, payload) in payloads.iter().enumerate() {
+                                        let Some(permit) = permits.next() else {
+                                            break;
+                                        };
+                                        let enqueued_at = payload_times[payload_idx];
+                                        metrics::counter!("felix_sub_shared_payload_clones_total")
+                                            .increment(1);
+                                        let envelope = DeliveryEnvelope {
+                                            payload: payload.clone(),
+                                            enqueued_at,
+                                        };
+                                        permit.send(envelope);
+                                        stream_state.increment_queue_depth();
+                                        sent += 1;
+                                    }
+                                    continue 'subscribers;
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    closed_subscribers.push(subscriber.id as u64);
+                                    continue 'subscribers;
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    // Fall back to per-payload reservation to preserve drop-old emulation.
+                                }
+                            }
+                        }
                         match subscriber.sender.try_reserve() {
                             Ok(permit) => {
                                 metrics::counter!("felix_sub_shared_payload_clones_total")
@@ -717,11 +858,10 @@ impl Broker {
             timings::record_enqueue_ns(enqueue_ns);
             #[cfg(feature = "telemetry")]
             {
-                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
                 t_histogram!(
                     "broker_publish_enqueue_ns",
-                    "fanout" => fanout.to_string(),
-                    "payload_bytes" => payload_bytes.to_string()
+                    "fanout" => fanout_label.clone(),
+                    "payload_bytes" => payload_bytes_label.clone()
                 )
                 .record(enqueue_ns as f64);
             }
@@ -737,11 +877,10 @@ impl Broker {
             timings::record_fanout_ns(fanout_ns);
             #[cfg(feature = "telemetry")]
             {
-                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
                 t_histogram!(
                     "broker_publish_fanout_total_ns",
-                    "fanout" => fanout.to_string(),
-                    "payload_bytes" => payload_bytes.to_string()
+                    "fanout" => fanout_label.clone(),
+                    "payload_bytes" => payload_bytes_label.clone()
                 )
                 .record(fanout_ns as f64);
             }
@@ -751,11 +890,10 @@ impl Broker {
             timings::record_send_ns(send_ns);
             #[cfg(feature = "telemetry")]
             {
-                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
                 t_histogram!(
                     "broker_publish_send_ns",
-                    "fanout" => fanout.to_string(),
-                    "payload_bytes" => payload_bytes.to_string()
+                    "fanout" => fanout_label,
+                    "payload_bytes" => payload_bytes_label
                 )
                 .record(send_ns as f64);
             }
@@ -913,9 +1051,7 @@ impl Broker {
         if !self.tenants.read().await.contains_key(tenant_id) {
             return Err(BrokerError::TenantNotFound(tenant_id.to_string()));
         }
-        let namespace_key = NamespaceKey::new(tenant_id, namespace);
-        self.assert_namespace_exists(tenant_id, namespace, namespace_key)
-            .await?;
+        self.assert_namespace_exists(tenant_id, namespace).await?;
         let key = CacheKey::new(tenant_id, namespace, cache);
         Ok(self.caches.write().await.remove(&key).is_some())
     }
@@ -930,10 +1066,8 @@ impl Broker {
         if !self.tenants.read().await.contains_key(tenant_id) {
             return Err(BrokerError::TenantNotFound(tenant_id.to_string()));
         }
-        let namespace_key = NamespaceKey::new(tenant_id, namespace);
         // Fast-path guard: reject unknown namespace.
-        self.assert_namespace_exists(tenant_id, namespace, namespace_key)
-            .await?;
+        self.assert_namespace_exists(tenant_id, namespace).await?;
         let key = StreamKey::new(tenant_id, namespace, stream);
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
@@ -951,14 +1085,14 @@ impl Broker {
             .namespaces
             .read()
             .await
-            .contains_key(&NamespaceKey::new(tenant_id, namespace))
+            .contains_key(&NamespaceKeyRef::new(tenant_id, namespace))
         {
             return false;
         }
         self.streams
             .read()
             .await
-            .contains_key(&StreamKey::new(tenant_id, namespace, stream))
+            .contains_key(&StreamKeyRef::new(tenant_id, namespace, stream))
     }
 
     pub async fn cache_exists(&self, tenant_id: &str, namespace: &str, cache: &str) -> bool {
@@ -969,14 +1103,14 @@ impl Broker {
             .namespaces
             .read()
             .await
-            .contains_key(&NamespaceKey::new(tenant_id, namespace))
+            .contains_key(&NamespaceKeyRef::new(tenant_id, namespace))
         {
             return false;
         }
         self.caches
             .read()
             .await
-            .contains_key(&CacheKey::new(tenant_id, namespace, cache))
+            .contains_key(&CacheKeyRef::new(tenant_id, namespace, cache))
     }
 
     pub async fn namespace_exists(&self, tenant_id: &str, namespace: &str) -> bool {
@@ -986,7 +1120,7 @@ impl Broker {
         self.namespaces
             .read()
             .await
-            .contains_key(&NamespaceKey::new(tenant_id, namespace))
+            .contains_key(&NamespaceKeyRef::new(tenant_id, namespace))
     }
 
     pub async fn register_tenant(&self, tenant_id: impl Into<String>) -> Result<bool> {
@@ -1055,7 +1189,7 @@ impl Broker {
             metrics::histogram!("felix_perf_topics_read_lock_wait_ns").record(wait_ns as f64);
         }
         guard
-            .get(&StreamKey::new(tenant_id, namespace, stream))
+            .get(&StreamKeyRef::new(tenant_id, namespace, stream))
             .cloned()
             .ok_or_else(|| BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
@@ -1083,13 +1217,13 @@ impl Broker {
     }
 
     /// It is up to the caller to check for the error or not.
-    async fn assert_namespace_exists(
-        &self,
-        tenant_id: &str,
-        namespace: &str,
-        namespace_key: NamespaceKey,
-    ) -> Result<()> {
-        if !self.namespaces.read().await.contains_key(&namespace_key) {
+    async fn assert_namespace_exists(&self, tenant_id: &str, namespace: &str) -> Result<()> {
+        if !self
+            .namespaces
+            .read()
+            .await
+            .contains_key(&NamespaceKeyRef::new(tenant_id, namespace))
+        {
             return Err(BrokerError::NamespaceNotFound {
                 tenant_id: tenant_id.to_string(),
                 namespace: namespace.to_string(),

@@ -660,18 +660,29 @@ pub mod binary {
         stream: &str,
         payloads: &[Vec<u8>],
     ) -> Result<Frame> {
-        let mut buf = BytesMut::new();
         let tenant_bytes = tenant_id.as_bytes();
         let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
-        buf.put_u16(tenant_len);
-        buf.extend_from_slice(tenant_bytes);
         let namespace_bytes = namespace.as_bytes();
         let namespace_len =
             u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
-        buf.put_u16(namespace_len);
-        buf.extend_from_slice(namespace_bytes);
         let stream_bytes = stream.as_bytes();
         let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let mut payload_len =
+            2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len = payload_len
+                .checked_add(4 + len as usize)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if payload_len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+        let mut buf = BytesMut::with_capacity(payload_len);
+        buf.put_u16(tenant_len);
+        buf.extend_from_slice(tenant_bytes);
+        buf.put_u16(namespace_len);
+        buf.extend_from_slice(namespace_bytes);
         buf.put_u16(stream_len);
         buf.extend_from_slice(stream_bytes);
         buf.put_u32(payloads.len() as u32);
@@ -697,6 +708,18 @@ pub mod binary {
     ) -> Result<Bytes> {
         let (bytes, _stats) =
             encode_publish_batch_bytes_with_stats(tenant_id, namespace, stream, payloads)?;
+        Ok(bytes)
+    }
+
+    pub fn encode_publish_batch_bytes_from_bytes(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Bytes],
+    ) -> Result<Bytes> {
+        let (bytes, _stats) = encode_publish_batch_bytes_with_stats_from_bytes(
+            tenant_id, namespace, stream, payloads,
+        )?;
         Ok(bytes)
     }
 
@@ -745,6 +768,56 @@ pub mod binary {
             if next_cap != cap {
                 reallocs += 1;
                 cap = next_cap;
+            }
+        }
+        Ok((buf.freeze(), EncodeStats { reallocs }))
+    }
+
+    pub fn encode_publish_batch_bytes_with_stats_from_bytes(
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Bytes],
+    ) -> Result<(Bytes, EncodeStats)> {
+        let tenant_bytes = tenant_id.as_bytes();
+        let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let namespace_bytes = namespace.as_bytes();
+        let namespace_len =
+            u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let stream_bytes = stream.as_bytes();
+        let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+        let mut payload_len =
+            2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len = payload_len
+                .checked_add(4 + len as usize)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if payload_len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+        let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+        let mut reallocs = 0u64;
+        let mut cap = buf.capacity();
+        let header = FrameHeader::new(FLAG_BINARY_PUBLISH_BATCH, payload_len as u32);
+        header.encode(&mut buf);
+        buf.put_u16(tenant_len);
+        buf.extend_from_slice(tenant_bytes);
+        buf.put_u16(namespace_len);
+        buf.extend_from_slice(namespace_bytes);
+        buf.put_u16(stream_len);
+        buf.extend_from_slice(stream_bytes);
+        buf.put_u32(payloads.len() as u32);
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            buf.put_u32(len);
+            let start = buf.len();
+            buf.resize(start + len as usize, 0);
+            buf[start..].copy_from_slice(payload);
+            if buf.capacity() != cap {
+                reallocs = reallocs.saturating_add(1);
+                cap = buf.capacity();
             }
         }
         Ok((buf.freeze(), EncodeStats { reallocs }))

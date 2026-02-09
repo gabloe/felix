@@ -358,6 +358,63 @@ impl Publisher {
         response_rx.await.context("binary batch response dropped")?
     }
 
+    pub async fn publish_batch_binary_bytes(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Bytes],
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        #[cfg(feature = "telemetry")]
+        let sample = crate::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let start = crate::t_now_if(sample);
+        let (bytes, stats) = felix_wire::binary::encode_publish_batch_bytes_with_stats_from_bytes(
+            tenant_id, namespace, stream, payloads,
+        )?;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = stats;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = start {
+            let encode_ns = start.elapsed().as_nanos() as u64;
+            timings::record_encode_ns(encode_ns);
+            timings::record_binary_encode_ns(encode_ns);
+            t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+        }
+        #[cfg(feature = "telemetry")]
+        if stats.reallocs > 0 {
+            let counters = frame_counters();
+            counters
+                .binary_encode_reallocs
+                .fetch_add(stats.reallocs, Ordering::Relaxed);
+        }
+        let (response_tx, response_rx) = oneshot::channel();
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::BinaryBytes {
+                bytes,
+                item_count: payloads.len(),
+                sample,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue binary batch")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        response_rx.await.context("binary batch response dropped")?
+    }
+
     pub async fn finish(&self) -> Result<()> {
         let mut handles = Vec::new();
         for worker in self.inner.workers.iter() {
@@ -397,6 +454,7 @@ pub(crate) async fn run_publisher_writer(
 ) -> Result<()> {
     // Single writer: serialize publish requests over one bi-directional stream.
     let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
+    let mut json_scratch = BytesMut::with_capacity(64 * 1024);
     while let Some(request) = rx.recv().await {
         match request {
             PublishRequest::Message {
@@ -427,12 +485,13 @@ pub(crate) async fn run_publisher_writer(
                         msg_request_id,
                         msg_ack,
                     )?;
-                    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + json_len);
-                    buf.resize(FrameHeader::LEN, 0);
+                    json_scratch.clear();
+                    json_scratch.reserve(FrameHeader::LEN + json_len);
+                    json_scratch.resize(FrameHeader::LEN, 0);
                     #[cfg(feature = "telemetry")]
                     let encode_start = crate::t_now_if(sample);
                     let stats = felix_wire::text::write_publish_batch_json(
-                        &mut buf,
+                        &mut json_scratch,
                         &tenant_id,
                         &namespace,
                         &stream,
@@ -458,18 +517,18 @@ pub(crate) async fn run_publisher_writer(
                     }
                     #[cfg(feature = "telemetry")]
                     let build_start = crate::t_now_if(sample);
-                    let payload_len = buf.len() - FrameHeader::LEN;
+                    let payload_len = json_scratch.len() - FrameHeader::LEN;
                     let header = FrameHeader::new(0, payload_len as u32);
                     let mut header_bytes = [0u8; FrameHeader::LEN];
                     header.encode_into(&mut header_bytes);
-                    buf[..FrameHeader::LEN].copy_from_slice(&header_bytes);
+                    json_scratch[..FrameHeader::LEN].copy_from_slice(&header_bytes);
                     #[cfg(feature = "telemetry")]
                     if let Some(start) = build_start {
                         let build_ns = start.elapsed().as_nanos() as u64;
                         timings::record_text_batch_build_ns(build_ns);
                         t_histogram!("client_text_batch_build_ns").record(build_ns as f64);
                     }
-                    let bytes = buf.freeze();
+                    let bytes = json_scratch.split().freeze();
                     #[cfg(feature = "telemetry")]
                     let write_start = crate::t_now_if(sample);
                     #[cfg(feature = "telemetry")]

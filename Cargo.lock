@@ -931,14 +931,17 @@ dependencies = [
 name = "felix-broker"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arc-swap",
  "bytes",
  "felix-storage",
  "felix-wire",
+ "hashbrown 0.14.5",
  "metrics",
  "parking_lot",
  "serial_test",
  "slab",
+ "smallvec",
  "thiserror 2.0.18",
  "tokio",
 ]
