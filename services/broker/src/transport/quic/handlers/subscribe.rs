@@ -897,21 +897,31 @@ async fn run_connection_writer(
             let sample = t_should_sample();
             let queue_wait_ns = first.enqueue_at.elapsed().as_nanos() as u64;
             let first_dequeue_ns = first.first_enqueued_at.elapsed().as_nanos() as u64;
-            t_histogram!("broker_sub_lane_queue_wait_ns", "connection_id" => conn_label.clone())
+            if sample {
+                t_histogram!("broker_sub_lane_queue_wait_ns", "connection_id" => conn_label.clone())
+                    .record(queue_wait_ns as f64);
+                t_histogram!(
+                    "broker_sub_lane_dequeue_to_write_start_ns",
+                    "connection_id" => conn_label.clone()
+                )
                 .record(queue_wait_ns as f64);
-            t_histogram!(
-                "broker_sub_lane_dequeue_to_write_start_ns",
-                "connection_id" => conn_label.clone()
-            )
-            .record(queue_wait_ns as f64);
-            t_histogram!("broker_sub_time_to_first_dequeue_ns", "connection_id" => conn_label.clone())
+                t_histogram!(
+                    "broker_sub_time_to_first_dequeue_ns",
+                    "connection_id" => conn_label.clone()
+                )
                 .record(first_dequeue_ns as f64);
+            }
 
             let write_start = t_now_if(sample);
-            t_counter!("broker_sub_conn_write_calls_total", "connection_id" => conn_label.clone())
-                .increment(1);
-            t_histogram!("broker_sub_conn_writes_per_flush", "connection_id" => conn_label.clone())
+            if sample {
+                t_counter!("broker_sub_conn_write_calls_total", "connection_id" => conn_label.clone())
+                    .increment(1);
+                t_histogram!(
+                    "broker_sub_conn_writes_per_flush",
+                    "connection_id" => conn_label.clone()
+                )
                 .record(frames.len() as f64);
+            }
             let write_result = if frames.len() == 1 {
                 write_parts(
                     &mut subscriber.event_send,
@@ -926,16 +936,18 @@ async fn run_connection_writer(
                 Ok(bytes_written) => {
                     debug_writes = debug_writes.saturating_add(1);
                     debug_bytes = debug_bytes.saturating_add(bytes_written as u64);
-                    t_histogram!(
-                        "broker_sub_conn_avg_bytes_per_write",
-                        "connection_id" => conn_label.clone()
-                    )
-                    .record(bytes_written as f64);
-                    t_counter!(
-                        "broker_sub_conn_bytes_written_total",
-                        "connection_id" => conn_label.clone()
-                    )
-                    .increment(bytes_written as u64);
+                    if sample {
+                        t_histogram!(
+                            "broker_sub_conn_avg_bytes_per_write",
+                            "connection_id" => conn_label.clone()
+                        )
+                        .record(bytes_written as f64);
+                        t_counter!(
+                            "broker_sub_conn_bytes_written_total",
+                            "connection_id" => conn_label.clone()
+                        )
+                        .increment(bytes_written as u64);
+                    }
                     #[cfg(feature = "telemetry")]
                     {
                         let counters = crate::transport::quic::telemetry::frame_counters();
@@ -1519,10 +1531,11 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn make_server_config() -> anyhow::Result<(quinn::ServerConfig, CertificateDer<'static>)> {
-        let cert = generate_simple_self_signed(vec!["localhost".into()])
-            .context("generate self-signed cert")?;
-        let cert_der = CertificateDer::from(cert.serialize_der()?);
-        let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+        let rcgen::CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".into()])
+                .context("generate self-signed cert")?;
+        let cert_der = cert.der().clone();
+        let key_der = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
         let server_config = quinn::ServerConfig::with_single_cert(
             vec![cert_der.clone()],
             PrivateKeyDer::Pkcs8(key_der),

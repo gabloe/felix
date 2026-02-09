@@ -112,9 +112,10 @@ fn jwks_from_public_key(public_key: &[u8], kid: &str) -> Jwks {
 
 fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>)> {
     // Self-signed cert is sufficient for loopback QUIC tests.
-    let cert = generate_simple_self_signed(vec!["localhost".into()])?;
-    let cert_der = CertificateDer::from(cert.serialize_der()?);
-    let key_der = PrivatePkcs8KeyDer::from(cert.get_key_pair().serialize_der());
+    let rcgen::CertifiedKey { cert, signing_key } =
+        generate_simple_self_signed(vec!["localhost".into()])?;
+    let cert_der = cert.der().clone();
+    let key_der = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
     let server_config =
         quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())?;
     Ok((server_config, cert_der))

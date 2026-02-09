@@ -637,9 +637,8 @@ impl Broker {
         let send_start = t_now_if(sample);
         let senders = stream_state.subscriber_snapshot();
         let fanout = senders.len();
-        let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
-        let _fanout_label = fanout.to_string();
-        let _payload_bytes_label = payload_bytes.to_string();
+        #[cfg(not(feature = "telemetry"))]
+        let _ = fanout;
 
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
@@ -701,12 +700,16 @@ impl Broker {
         if let Some(start) = enqueue_start {
             let enqueue_ns = start.elapsed().as_nanos() as u64;
             timings::record_enqueue_ns(enqueue_ns);
-            t_histogram!(
-                "broker_publish_enqueue_ns",
-                "fanout" => _fanout_label.clone(),
-                "payload_bytes" => _payload_bytes_label.clone()
-            )
-            .record(enqueue_ns as f64);
+            #[cfg(feature = "telemetry")]
+            {
+                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+                t_histogram!(
+                    "broker_publish_enqueue_ns",
+                    "fanout" => fanout.to_string(),
+                    "payload_bytes" => payload_bytes.to_string()
+                )
+                .record(enqueue_ns as f64);
+            }
         }
 
         if !closed_subscribers.is_empty() {
@@ -717,22 +720,30 @@ impl Broker {
         if let Some(start) = fanout_start {
             let fanout_ns = start.elapsed().as_nanos() as u64;
             timings::record_fanout_ns(fanout_ns);
-            t_histogram!(
-                "broker_publish_fanout_total_ns",
-                "fanout" => _fanout_label.clone(),
-                "payload_bytes" => _payload_bytes_label.clone()
-            )
-            .record(fanout_ns as f64);
+            #[cfg(feature = "telemetry")]
+            {
+                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+                t_histogram!(
+                    "broker_publish_fanout_total_ns",
+                    "fanout" => fanout.to_string(),
+                    "payload_bytes" => payload_bytes.to_string()
+                )
+                .record(fanout_ns as f64);
+            }
         }
         if let Some(start) = send_start {
             let send_ns = start.elapsed().as_nanos() as u64;
             timings::record_send_ns(send_ns);
-            t_histogram!(
-                "broker_publish_send_ns",
-                "fanout" => _fanout_label,
-                "payload_bytes" => _payload_bytes_label
-            )
-            .record(send_ns as f64);
+            #[cfg(feature = "telemetry")]
+            {
+                let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+                t_histogram!(
+                    "broker_publish_send_ns",
+                    "fanout" => fanout.to_string(),
+                    "payload_bytes" => payload_bytes.to_string()
+                )
+                .record(send_ns as f64);
+            }
         }
         Ok(sent)
     }
