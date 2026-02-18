@@ -182,10 +182,9 @@ where
 /// regenerating keys on each start).
 fn build_server_config() -> Result<ServerConfig> {
     // Dev-only self-signed TLS config for QUIC endpoints.
-    let rcgen::CertifiedKey { cert, signing_key } =
-        generate_simple_self_signed(vec!["localhost".into()])?;
-    let cert_der = cert.der().clone();
-    let key_der = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+    let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+    let cert_der = cert.cert.der().clone();
+    let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
     Ok(ServerConfig::with_single_cert(
         vec![cert_der],
         key_der.into(),

@@ -81,7 +81,7 @@ pub fn generate_signing_keys() -> Result<TenantSigningKeys> {
     // We store raw seeds (not PKCS8) to keep storage compact and to make
     // derivation of the public key deterministic for integrity checks.
     let mut private_key = [0u8; 32];
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     rng.fill_bytes(&mut private_key);
     let signing_key = Ed25519SigningKey::from_bytes(&private_key);
     let public_key = signing_key.verifying_key().to_bytes();
