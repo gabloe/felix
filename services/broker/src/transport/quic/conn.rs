@@ -315,10 +315,9 @@ mod tests {
         let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
         let auth = Arc::new(BrokerAuth::new("http://127.0.0.1".to_string()));
 
-        let rcgen::CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["localhost".into()])?;
-        let cert_der = cert.der().clone();
-        let key_der = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+        let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_der = cert.cert.der().clone();
+        let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
         let server_config =
             quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())?;
         let server = QuicServer::bind(

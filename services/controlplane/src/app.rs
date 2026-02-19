@@ -40,7 +40,7 @@ pub fn build_router(state: AppState) -> Router {
                 uri = %request.uri(),
                 version = ?request.version()
             );
-            span.set_parent(parent);
+            let _ = span.set_parent(parent);
             span
         });
 

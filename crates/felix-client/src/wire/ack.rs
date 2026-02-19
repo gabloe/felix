@@ -119,10 +119,9 @@ mod tests {
         tokio::sync::oneshot::Sender<()>,
         tokio::task::JoinHandle<Result<()>>,
     )> {
-        let rcgen::CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["localhost".into()])?;
-        let cert_der = cert.der().clone();
-        let key_der = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+        let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_der = cert.cert.der().clone();
+        let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
         let server_config =
             quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into())
                 .context("server config")?;

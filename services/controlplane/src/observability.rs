@@ -13,7 +13,6 @@ use opentelemetry::global;
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::trace as sdktrace;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -47,14 +46,22 @@ pub fn init_observability(service_name: &str) -> PrometheusHandle {
     install_metrics_recorder()
 }
 
-fn build_tracer_provider(service_name: &str) -> Option<opentelemetry_sdk::trace::TracerProvider> {
-    let resource = Resource::new(resource_attributes(service_name));
-    opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(opentelemetry_otlp::new_exporter().tonic())
-        .with_trace_config(sdktrace::Config::default().with_resource(resource))
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .ok()
+fn build_tracer_provider(
+    service_name: &str,
+) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    let resource = Resource::builder_empty()
+        .with_attributes(resource_attributes(service_name))
+        .build();
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()
+        .ok()?;
+    Some(
+        opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(resource)
+            .build(),
+    )
 }
 
 fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
