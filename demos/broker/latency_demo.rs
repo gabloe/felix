@@ -13,6 +13,7 @@
 //!   current-thread Tokio runtime to isolate scheduler contention.
 use anyhow::{Context, Result};
 use broker::timings as broker_timings;
+use bytes::Bytes;
 use felix_broker::timings as broker_publish_timings;
 use felix_broker::{Broker, StreamMetadata};
 use felix_client::timings as client_timings;
@@ -1266,14 +1267,17 @@ async fn publish_batch(
     stream_count: usize,
 ) -> Result<()> {
     let stream = stream_name(stream_index, stream_count);
+    if binary {
+        let payloads = (0..batch_size)
+            .map(|_| Bytes::from(encode_payload(payload_bytes)))
+            .collect::<Vec<_>>();
+        return publisher
+            .publish_batch_binary_bytes("t1", "default", stream.as_str(), &payloads)
+            .await;
+    }
     let payloads = (0..batch_size)
         .map(|_| encode_payload(payload_bytes))
         .collect::<Vec<_>>();
-    if binary {
-        return publisher
-            .publish_batch_binary("t1", "default", stream.as_str(), &payloads)
-            .await;
-    }
     if batch_size == 1 {
         publisher
             .publish(

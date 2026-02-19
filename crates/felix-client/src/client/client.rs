@@ -212,11 +212,10 @@ impl Client {
 
     pub async fn publisher(&self) -> Result<super::publisher::Publisher> {
         Ok(super::publisher::Publisher {
-            inner: Arc::new(super::publisher::PublisherInner {
-                workers: Arc::clone(&self.publish_workers),
-                sharding: self.publish_sharding,
-                rr: AtomicUsize::new(0),
-            }),
+            inner: Arc::new(super::publisher::PublisherInner::new(
+                Arc::clone(&self.publish_workers),
+                self.publish_sharding,
+            )),
         })
     }
 

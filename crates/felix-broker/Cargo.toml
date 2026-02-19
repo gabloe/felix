@@ -12,6 +12,9 @@ tokio = { workspace = true }
 metrics = "0.24"
 felix-storage = { path = "../felix-storage", version = "0.1.0" }
 arc-swap = "1.7"
+ahash = "0.8"
+hashbrown = { version = "0.14", features = ["equivalent"] }
+smallvec = "1.13"
 slab = "0.4"
 parking_lot = "0.12"
 
