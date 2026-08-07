@@ -40,6 +40,7 @@ mod tests {
             pub_queue_depth: 1024,
             pub_inflight_bytes: 64 * 1024 * 1024,
             pub_ingress_wait: false,
+            core_shards: 0,
             subscriber_queue_capacity: 128,
             subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,

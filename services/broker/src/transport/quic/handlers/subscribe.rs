@@ -276,7 +276,7 @@ pub(crate) async fn handle_subscribe_message(
         cancel_tx,
     )
     .await?;
-    tokio::spawn(async move {
+    let feeder = async move {
         run_lane_feeder(
             event_rx,
             manager,
@@ -285,7 +285,33 @@ pub(crate) async fn handle_subscribe_message(
             writer_config,
         )
         .await;
-    });
+    };
+    // With core shards enabled, run this subscription's feeder on the shard
+    // that owns its stream: the fanout enqueue (publish worker) and this
+    // dequeue then happen on the same core, so the subscriber queue becomes a
+    // core-local handoff instead of a cross-core wakeup. Mapping must match
+    // `publish_worker_index` (handle id % shard count).
+    let shard_runtime = match crate::core_shards::global_shards(&config) {
+        Some(shards) => match broker
+            .resolve_stream_handle(&tenant_id, &namespace, &stream)
+            .await
+        {
+            Ok(handle) => Some(shards.handle_for(handle.id()).clone()),
+            Err(err) => {
+                tracing::warn!(error = %err, "stream handle unavailable; feeder on main runtime");
+                None
+            }
+        },
+        None => None,
+    };
+    match shard_runtime {
+        Some(runtime) => {
+            runtime.spawn(feeder);
+        }
+        None => {
+            tokio::spawn(feeder);
+        }
+    }
     Ok(true)
 }
 
@@ -1719,6 +1745,7 @@ mod tests {
             pub_queue_depth: 8,
             pub_inflight_bytes: 64 * 1024 * 1024,
             pub_ingress_wait: false,
+            core_shards: 0,
             subscriber_queue_capacity: 8,
             subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,

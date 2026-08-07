@@ -673,6 +673,18 @@ export FELIX_BROKER_PUBLISH_INFLIGHT_BYTES="67108864"
 export FELIX_PUB_INGRESS_WAIT="1"
 ```
 
+### `FELIX_CORE_SHARDS`
+
+**Description**: Number of core-pinned shard executors owning stream work (thread-per-core, shared-nothing). Each stream is owned by one shard: its publish worker and its subscriptions' lane feeders run on that shard's dedicated single-threaded runtime, pinned to a CPU core on Linux. Benefits scale with stream count; single-stream workloads serialize on one shard by design.
+
+**Type**: Positive integer (count; `0` = disabled)
+
+**Default**: `0`
+
+```bash
+export FELIX_CORE_SHARDS="4"
+```
+
 ## QUIC Transport Tuning
 
 Process-wide levers read by every Felix QUIC endpoint (broker, client, demos). See [Benchmarks](../features/benchmarks.md) for measured impact.

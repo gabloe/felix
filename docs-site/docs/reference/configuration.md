@@ -533,6 +533,27 @@ pub_ingress_wait: true
 - Off (default): overload sheds fire-and-forget publishes visibly (`felix_broker_ingress_dropped_total`) and keeps latency bounded.
 - On: backpressure propagates through QUIC flow control to the publisher — nothing is shed, producers slow down. Use for lossless pipelines and sustainable-throughput benchmarking.
 
+### `core_shards`
+
+**Description**: Number of core-pinned shard executors owning stream work (thread-per-core). Each stream's handle id deterministically selects an owning shard; that shard runs the stream's publish worker and its subscriptions' lane feeders on one dedicated single-threaded runtime (pinned to a CPU core on Linux). Publish append, fanout enqueue, and subscriber dequeue all stay core-local.
+
+**Type**: `usize` (count; `0` = disabled)
+
+**Default**: `0`
+
+**Environment**: `FELIX_CORE_SHARDS`
+
+**Example**:
+```yaml
+core_shards: 4
+```
+
+**Tuning**:
+- When enabled, the publish worker count becomes the shard count (one worker per shard), superseding `pub_workers_per_conn`.
+- Benefits scale with stream count: workloads spread across many streams gain parallel, contention-free per-core pipelines (measured +34% delivered throughput at 4 streams × 4 shards, unpinned). Single-stream workloads serialize on one shard by design — neutral to mildly positive.
+- Core pinning requires Linux (`sched_setaffinity`); elsewhere shards still get dedicated threads, preserving the single-writer ownership model without hard affinity.
+- Reasonable starting point: number of physical cores minus 2 (leaving headroom for QUIC I/O on the main runtime).
+
 ## Performance Configuration
 
 ### `disable_timings`

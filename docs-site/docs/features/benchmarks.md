@@ -39,35 +39,46 @@ Numbers are only useful if they are honest. The harness enforces:
 
 ## Results
 
-Measured on an Apple Silicon macOS host, loopback, release build, TLS 1.3
-enabled (QUIC always encrypts), defaults — no environment tuning.
+Measured on the same Apple Silicon host using native macOS and a Linux
+devcontainer, loopback, release build, TLS 1.3 enabled (QUIC always encrypts),
+defaults — no environment tuning. Linux can use UDP GSO/GRO, so the comparison
+also shows how strongly kernel batching affects QUIC throughput.
 
 ### Latency profile (batch = 1, per-message ack)
 
-| Payload | Fanout | p50 | p99 | p999 |
-|---|---|---|---|---|
-| 0 B | 1 | 121 µs | 199 µs | 311 µs |
-| 256 B | 1 | 128 µs | 208 µs | 263 µs |
-| 1 KiB | 1 | 124 µs | 212 µs | 329 µs |
-| 0 B | 10 | 460 µs | 1.09 ms | 1.49 ms |
-| 256 B | 10 | 447 µs | 1.13 ms | 2.09 ms |
-| 1 KiB | 10 | 444 µs | 1.05 ms | 1.32 ms |
+| Payload | Fanout | macOS p50 / p99 / p999 | Linux p50 / p99 / p999 |
+|---|---:|---|---|
+| 0 B | 1 | 121 / 199 / 311 µs | 82 / 116 / 175 µs |
+| 256 B | 1 | 128 / 208 / 263 µs | 91 / 172 / 241 µs |
+| 1 KiB | 1 | 124 / 212 / 329 µs | 96 / 161 / 223 µs |
+| 0 B | 10 | 460 µs / 1.09 / 1.49 ms | 98 / 147 / 193 µs |
+| 256 B | 10 | 447 µs / 1.13 / 2.09 ms | 99 / 148 / 181 µs |
+| 1 KiB | 10 | 444 µs / 1.05 / 1.32 ms | 142 / 720 µs / 4.96 ms |
 
-Sub-millisecond p999 at fanout 1; low-single-digit-ms p999 at fanout 10.
+Both platforms stay sub-millisecond at fanout 1. Linux substantially improves
+most fanout-10 percentiles, although the 1 KiB p999 shows an isolated
+low-single-digit-ms tail.
 
 ### Throughput profile (batch = 64, lossless, zero drops)
 
-| Payload | Fanout | Delivered msg/s | Delivered bytes/s |
-|---|---|---|---|
-| 0 B | 1 | 650 K | — |
-| 0 B | 10 | 2.46–2.58 M | — |
-| 1 KiB | 1 | 244–263 K | ~250 MB/s |
-| 1 KiB | 10 | 460 K | ~470 MB/s |
-| 4 KiB | 1 | 62–87 K | ~255–356 MB/s |
-| 4 KiB | 10 | ~107 K | ~437 MB/s |
+| Payload | Fanout | macOS JSON | Linux JSON | Linux binary |
+|---|---:|---:|---:|---:|
+| 0 B | 1 | 650 K | 1.29 M | 1.23 M |
+| 0 B | 10 | 2.46–2.58 M | 1.19 M | 2.92 M |
+| 1 KiB | 1 | 244–263 K | 178 K | 442 K |
+| 1 KiB | 10 | 410–460 K | 1.54 M | 1.57 M |
+| 4 KiB | 1 | 62–87 K | 97 K | 120 K |
+| 4 KiB | 10 | ~107 K | 499–561 K | 566–590 K |
 
 Every row completes with `delivery drops 0`: these are sustainable rates under
-end-to-end backpressure, not burst rates measured while shedding load.
+end-to-end backpressure, not burst rates measured while shedding load. Rates
+count subscriber deliveries. The Linux 4 KiB × fanout 10 binary result delivers
+about **2.3 GB/s** of payload.
+
+The 1 KiB × fanout 10 Linux figures are averages of five interleaved runs:
+JSON averaged 1.541 M msg/s and binary averaged 1.569 M msg/s. Binary won three
+of five runs, but the averages are within 2%, confirming that the earlier
+single-run JSON lead was variance rather than an encoding-path reversal.
 
 ### Encode-once fanout CPU efficiency
 
@@ -76,8 +87,21 @@ user-space CPU falling from 1.43–1.61 s to 0.58–0.67 s after shared event-fr
 fanout: roughly **60% less user CPU per delivered message**. Delivered
 throughput remained within variance at 410–431 K msg/s because macOS loopback
 was dominated by UDP kernel time; the same change improved 4 KiB × fanout 10
-p99 latency from 365 ms to 221 ms. Linux GSO/GRO results should be measured
-separately before extrapolating throughput gains.
+p99 latency from 365 ms to 221 ms.
+
+Linux GSO closes that kernel-bound gap decisively: 4 KiB × fanout 10 reaches
+499–561 K JSON and 566–590 K binary delivered msg/s, up to roughly 5x the
+macOS JSON rate. For the representative 1 KiB × fanout 10 binary workload,
+`/usr/bin/time -v` reported 1.23 s user time and 0.33 s system time over
+0.59 s wall time. The equivalent macOS run used about 0.6 s user and 3.3 s
+system time. System time therefore fell by about 90%, flipping the workload
+from roughly 5.5:1 system-dominated to 3.7:1 user-dominated.
+
+This Linux workload is no longer syscall-bound. The next optimization target is
+user-space scheduling and synchronization, not an `io_uring` transport rewrite.
+A CPU flamegraph is still required to distinguish lock/map contention from
+channel handoff and wakeup costs before committing to a thread-per-core design;
+the measured 11,002 voluntary context switches alone cannot separate them.
 
 ## The transport levers that matter
 
@@ -95,7 +119,12 @@ These findings came out of profiling the QUIC path and are wired into
 Broker-side levers (see [Configuration](../reference/configuration.md)):
 `pub_inflight_bytes` (ingress byte budget), `pub_ingress_wait` (lossless
 backpressure vs. shed-on-overload), subscriber queue policies
-(`block` / `drop_new` / `drop_old`) and depths.
+(`block` / `drop_new` / `drop_old`) and depths, and `core_shards`
+(`FELIX_CORE_SHARDS`) — thread-per-core stream ownership: each stream's
+publish worker and lane feeders run on a dedicated core-pinned runtime
+(Linux pinning; dedicated threads elsewhere). Measured +34% delivered
+throughput on a 4-stream × fanout-4 workload with 4 shards, unpinned macOS;
+benefits scale with stream count, single-stream shapes are neutral.
 
 ## Saturation behavior
 

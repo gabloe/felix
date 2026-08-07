@@ -90,7 +90,14 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
-    let worker_count = config.pub_workers_per_conn.max(1);
+    let shards = crate::core_shards::global_shards(config);
+    // With core shards enabled, run exactly one publish worker per shard so
+    // each stream's state has a single owning core (worker i lives on shard i,
+    // and `publish_worker_index` maps handle id -> worker == shard).
+    let worker_count = match &shards {
+        Some(shards) => shards.len(),
+        None => config.pub_workers_per_conn.max(1),
+    };
     let publish_queue_depth = config.pub_queue_depth.max(1);
     let admission = Arc::new(PublishAdmission::new(config.pub_inflight_bytes));
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -103,7 +110,7 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(publish_queue_depth);
         let queue_depth_worker = Arc::clone(&queue_depth);
         let broker_for_worker = Arc::clone(&broker);
-        tokio::spawn(async move {
+        let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
                 metrics::counter!(
@@ -152,7 +159,15 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
                     let _ = response.send(result);
                 }
             }
-        });
+        };
+        match &shards {
+            Some(shards) => {
+                shards.handle_for(worker_id as u64).spawn(worker_task);
+            }
+            None => {
+                tokio::spawn(worker_task);
+            }
+        }
         worker_txs.push(publish_tx);
     }
     PublishContext {

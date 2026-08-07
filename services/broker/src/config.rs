@@ -51,6 +51,10 @@ pub struct BrokerConfig {
     // If true, un-acked publishes wait (bounded) for ingress capacity instead of shedding.
     // Off by default: fire-and-forget load should shed visibly under overload.
     pub pub_ingress_wait: bool,
+    // Number of core-pinned shard executors owning stream work (0 = disabled).
+    // When enabled, publish workers and subscription lane feeders run on the
+    // shard owning their stream, keeping the per-message path core-local.
+    pub core_shards: usize,
     // Per-subscriber queue capacity in broker core.
     pub subscriber_queue_capacity: usize,
     // Subscriber queue policy for publish->fanout enqueue.
@@ -177,6 +181,7 @@ struct BrokerConfigOverride {
     pub_queue_depth: Option<usize>,
     pub_inflight_bytes: Option<usize>,
     pub_ingress_wait: Option<bool>,
+    core_shards: Option<usize>,
     subscriber_queue_capacity: Option<usize>,
     subscriber_queue_policy: Option<String>,
     subscriber_writer_lanes: Option<usize>,
@@ -291,6 +296,10 @@ impl BrokerConfig {
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
+        let core_shards = std::env::var("FELIX_CORE_SHARDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
         let subscriber_queue_capacity = std::env::var("FELIX_SUBSCRIBER_QUEUE_CAPACITY")
             .ok()
             .or_else(|| std::env::var("FELIX_SUB_QUEUE_CAPACITY").ok())
@@ -376,6 +385,7 @@ impl BrokerConfig {
             pub_queue_depth,
             pub_inflight_bytes,
             pub_ingress_wait,
+            core_shards,
             subscriber_queue_capacity,
             subscriber_queue_policy,
             subscriber_writer_lanes,
@@ -500,6 +510,9 @@ impl BrokerConfig {
             if let Some(value) = override_cfg.pub_ingress_wait {
                 config.pub_ingress_wait = value;
             }
+            if let Some(value) = override_cfg.core_shards {
+                config.core_shards = value;
+            }
             if let Some(value) = override_cfg.subscriber_queue_capacity
                 && value > 0
             {
@@ -603,6 +616,7 @@ mod tests {
             DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS
         );
         assert_eq!(config.pub_inflight_bytes, DEFAULT_PUB_INFLIGHT_BYTES);
+        assert_eq!(config.core_shards, 0);
         assert_eq!(
             config.subscriber_queue_capacity,
             DEFAULT_SUBSCRIBER_QUEUE_CAPACITY
@@ -962,6 +976,20 @@ max_frame_bytes: 8000000
         assert_eq!(config.pub_queue_depth, 2048);
         assert_eq!(config.subscriber_queue_capacity, 256);
         assert_eq!(config.subscriber_queue_policy, SubQueuePolicy::DropOld);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_core_shards() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CORE_SHARDS", "4");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.core_shards, 4);
 
         clear_felix_env();
     }
