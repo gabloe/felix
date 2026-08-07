@@ -78,7 +78,7 @@ pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
 pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
-pub use config::ClientConfig;
+pub use config::{ClientConfig, ClientSubQueuePolicy};
 pub use counters::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
 
 pub(crate) use macros::{t_now_if, t_should_sample};

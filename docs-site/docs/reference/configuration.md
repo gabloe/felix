@@ -49,10 +49,11 @@ event_batch_max_bytes: 65536
 event_batch_max_delay_us: 250
 fanout_batch_size: 64
 pub_workers_per_conn: 4
-pub_queue_depth: 1024
-subscriber_queue_capacity: 128
+pub_queue_depth: 64
+pub_inflight_bytes: 67108864
+subscriber_queue_capacity: 512
 subscriber_writer_lanes: 4
-subscriber_lane_queue_depth: 8192
+subscriber_lane_queue_depth: 64
 max_subscriber_writer_lanes: 8
 subscriber_lane_shard: auto
 ```
@@ -319,12 +320,12 @@ high fanout / large payload workloads.
 
 **Type**: `usize` (count)
 
-**Default**: `128`
+**Default**: `512`
 
 **Environment**: `FELIX_SUBSCRIBER_QUEUE_CAPACITY`
 
 ```yaml
-subscriber_queue_capacity: 128
+subscriber_queue_capacity: 512
 ```
 
 #### `subscriber_writer_lanes`
@@ -347,12 +348,12 @@ subscriber_writer_lanes: 4
 
 **Type**: `usize` (count)
 
-**Default**: `8192`
+**Default**: `64`
 
 **Environment**: `FELIX_SUB_LANE_QUEUE_DEPTH`
 
 ```yaml
-subscriber_lane_queue_depth: 8192
+subscriber_lane_queue_depth: 64
 ```
 
 #### `max_subscriber_writer_lanes`
@@ -478,19 +479,59 @@ pub_workers_per_conn: 4
 
 **Type**: `usize` (count)
 
-**Default**: `1024`
+**Default**: `64`
 
 **Environment**: `FELIX_BROKER_PUB_QUEUE_DEPTH`
 
 **Example**:
 ```yaml
-pub_queue_depth: 1024
+pub_queue_depth: 64
 ```
 
 **Tuning**:
-- Larger values allow more buffering under burst
+- Larger values allow more buffering under burst but increase saturation latency
 - Affects memory usage per worker
 - Consider with `publish_queue_wait_timeout_ms`
+
+### `pub_inflight_bytes`
+
+**Description**: Shared in-flight publish byte budget across all publish workers (process-wide, not per-connection).
+
+**Type**: `usize` (bytes)
+
+**Default**: `67108864` (64 MiB)
+
+**Environment**: `FELIX_BROKER_PUBLISH_INFLIGHT_BYTES`
+
+**Example**:
+```yaml
+pub_inflight_bytes: 67108864
+```
+
+**Tuning**:
+- `pub_queue_depth` bounds the number of queued *jobs*, but a job's payload can be as large as `max_frame_bytes`; `pub_inflight_bytes` bounds actual queued-or-processing *bytes* regardless of item count.
+- The budget is acquired before a job is handed to a worker queue and released only once the job finishes processing, so it reflects real resident memory, not just admission-time bytes.
+- Should be set well above `max_frame_bytes` — a job larger than the remaining budget waits (and can time out under `EnqueuePolicy::Wait`) rather than being admitted.
+- Lower this to shrink worst-case ingress memory under large-payload workloads; raise it to allow more large batches in flight concurrently.
+
+### `pub_ingress_wait`
+
+**Description**: When true, un-acked (fire-and-forget) publishes wait — bounded by `publish_queue_wait_timeout_ms` — for ingress capacity instead of being shed when the publish queue or byte budget is full.
+
+**Type**: `bool`
+
+**Default**: `false`
+
+**Environment**: `FELIX_PUB_INGRESS_WAIT`
+
+**Example**:
+```yaml
+pub_ingress_wait: true
+```
+
+**Tuning**:
+- Off (default): overload sheds fire-and-forget publishes visibly (`felix_broker_ingress_dropped_total`) and keeps latency bounded.
+- On: backpressure propagates through QUIC flow control to the publisher — nothing is shed, producers slow down. Use for lossless pipelines and sustainable-throughput benchmarking.
 
 ## Performance Configuration
 

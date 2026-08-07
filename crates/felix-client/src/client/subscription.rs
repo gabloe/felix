@@ -157,11 +157,6 @@ async fn run_subscription_io_task(
         {
             break;
         }
-
-        // Keep the IO task hot and predictable: read one frame, enqueue, then yield.
-        // We intentionally avoid cancellation-based speculative reads here to preserve
-        // stream framing safety across runtimes.
-        tokio::task::yield_now().await;
     }
 }
 

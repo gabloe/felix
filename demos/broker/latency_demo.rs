@@ -26,12 +26,52 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 type DemoAuthResult = Result<(Arc<broker::auth::BrokerAuth>, Option<(String, String)>)>;
+
+/// Counts measured deliveries and remembers when the last one landed.
+///
+/// Delivery duration must end at the moment the final event arrived, not when
+/// drain tasks give up: a drain task waiting out its idle timeout on dropped
+/// events would otherwise inflate the measured delivery window (and deflate
+/// reported throughput) by the entire timeout.
+#[derive(Clone)]
+struct DeliveryTracker {
+    delivered: Arc<AtomicUsize>,
+    epoch: Instant,
+    last_delivery_ns: Arc<AtomicU64>,
+}
+
+impl DeliveryTracker {
+    fn new() -> Self {
+        Self {
+            delivered: Arc::new(AtomicUsize::new(0)),
+            epoch: Instant::now(),
+            last_delivery_ns: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn record(&self) {
+        self.delivered.fetch_add(1, Ordering::Relaxed);
+        let elapsed_ns = self.epoch.elapsed().as_nanos() as u64;
+        // fetch_max keeps the latest timestamp under concurrent recorders.
+        self.last_delivery_ns
+            .fetch_max(elapsed_ns, Ordering::Relaxed);
+    }
+
+    fn total(&self) -> usize {
+        self.delivered.load(Ordering::Relaxed)
+    }
+
+    fn last_delivery_at(&self) -> Option<Instant> {
+        let ns = self.last_delivery_ns.load(Ordering::Relaxed);
+        (ns > 0).then(|| self.epoch + Duration::from_nanos(ns))
+    }
+}
 
 #[derive(Clone, Debug)]
 struct DemoConfig {
@@ -68,6 +108,9 @@ struct DemoResult {
     p50: Duration,
     p99: Duration,
     p999: Duration,
+    publish_duration: Duration,
+    drain_duration: Duration,
+    publish_submit_throughput: f64,
     throughput: f64,
     effective_throughput: f64,
     delivered_throughput: f64,
@@ -590,7 +633,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let sub_queue_bound = std::env::var("FELIX_SUB_QUEUE_BOUND")
         .ok()
         .or_else(|| std::env::var("FELIX_SUB_LANE_QUEUE_DEPTH").ok())
-        .unwrap_or_else(|| "8192".to_string());
+        .unwrap_or_else(|| "64".to_string());
     println!(
         "Warmup: {} messages | Measure: {} messages | payload {} bytes | fanout {} | batch {} | publish_fastpath {} | pub conns {} | pub streams/conn {} | pub stream count {} | sub lanes {} | sub shard {} | sub conns {} | sub stream mode {} | sub queue bound {} | pub yield every {} batches | sub dedicated thread {} | sub delivery shaping {}",
         config.warmup,
@@ -665,7 +708,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     broker_config.fanout_batch_size = config.batch_size.max(1);
     // Tune subscriber egress by workload profile:
     // - latency profile (batch=1): favor immediate flush and stable ordering
-    // - throughput profile (batch>1): favor coalescing and parallel lanes
+    // - throughput profile (batch>1): bound queued work while using parallel lanes
     if config.batch_size <= 1 {
         broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
         broker_config.subscriber_flush_max_items = 1;
@@ -673,10 +716,19 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         broker_config.subscriber_max_bytes_per_write = 64 * 1024;
         broker_config.subscriber_single_writer_per_conn = true;
     } else {
+        // Throughput profile measures *sustainable* rate: lossless end-to-end
+        // backpressure (Block queues + ingress wait) paces the publisher to the
+        // pipeline's real capacity instead of measuring what survived shedding.
+        // Production keeps DropNew defaults for overload visibility.
+        broker_config.subscriber_queue_policy = felix_broker::SubQueuePolicy::Block;
+        broker_config.subscriber_queue_capacity = 4096;
         broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
-        broker_config.subscriber_flush_max_items = 64;
-        broker_config.subscriber_flush_max_delay_us = 200;
-        broker_config.subscriber_max_bytes_per_write = 256 * 1024;
+        broker_config.subscriber_lane_queue_depth = 1024;
+        broker_config.pub_ingress_wait = true;
+        broker_config.publish_queue_wait_timeout_ms = 60_000;
+        broker_config.subscriber_flush_max_items = 16;
+        broker_config.subscriber_flush_max_delay_us = 50;
+        broker_config.subscriber_max_bytes_per_write = 64 * 1024;
         broker_config.subscriber_single_writer_per_conn = false;
     }
     if config.sub_delivery_shaping {
@@ -733,14 +785,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         sub_clients.push(Client::connect(addr, "localhost", client_config.clone()).await?);
     }
 
-    let delivered_total = Arc::new(AtomicUsize::new(0));
+    let delivery_tracker = DeliveryTracker::new();
     let (primary_sub, drain_tasks) = setup_subscribers(
         &sub_clients,
         config.fanout,
         total_events,
         config.warmup,
         config.pub_stream_count,
-        Arc::clone(&delivered_total),
+        delivery_tracker.clone(),
         config.sub_dedicated_thread,
     )
     .await?;
@@ -756,7 +808,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             primary_warmup,
             primary_total,
             config.pub_stream_count.max(1),
-            Arc::clone(&delivered_total),
+            delivery_tracker.clone(),
         ))
     } else {
         None
@@ -765,7 +817,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let recv_task = if let Some(mut sub) = primary_sub {
         let (warmup_tx, local_warmup_rx) = oneshot::channel();
         warmup_rx = Some(local_warmup_rx);
-        let delivered_for_primary = Arc::clone(&delivered_total);
+        let tracker_for_primary = delivery_tracker.clone();
         Some(tokio::spawn(async move {
             let mut results = Vec::with_capacity(primary_total);
             let mut seen = 0usize;
@@ -796,7 +848,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                         }
                         let elapsed = decode_latency(event.payload.as_ref());
                         results.push(elapsed);
-                        delivered_for_primary.fetch_add(1, Ordering::Relaxed);
+                        tracker_for_primary.record();
                         if let Some(start) = dispatch_start {
                             let dispatch_ns = start.elapsed().as_nanos() as u64;
                             client_timings::record_sub_dispatch_ns(dispatch_ns);
@@ -876,7 +928,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         },
     )
     .await?;
-    let elapsed = start.elapsed();
+    let publish_elapsed = start.elapsed();
 
     let mut latencies = if let Some(task) = recv_task {
         task.await.expect("join")?
@@ -892,13 +944,6 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         handle.finish().await?;
     }
     let expected_delivered_total = config.total * config.fanout;
-    let delivery_wait_timeout = Duration::from_millis(config.idle_ms.max(2000) * 5);
-    let _ = tokio::time::timeout(delivery_wait_timeout, async {
-        while delivered_total.load(Ordering::Relaxed) < expected_delivered_total {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
     publisher.finish().await?;
     for mut task in drain_tasks {
         tokio::select! {
@@ -908,6 +953,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             }
         }
     }
+    // End the delivery window at the last event that actually arrived. Drain
+    // tasks sit out an idle timeout when events were dropped; counting that
+    // wait would misreport delivered throughput by the full timeout.
+    let delivery_elapsed = delivery_tracker
+        .last_delivery_at()
+        .and_then(|at| at.checked_duration_since(start))
+        .map(|elapsed| elapsed.max(publish_elapsed))
+        .unwrap_or(publish_elapsed);
     server_task.abort();
 
     latencies.sort_unstable();
@@ -924,10 +977,11 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     } else {
         None
     };
-    let delivered_total = delivered_total.load(Ordering::Relaxed);
-    let delivered_throughput = delivered_total as f64 / elapsed.as_secs_f64();
+    let delivered_total = delivery_tracker.total();
+    let drain_duration = delivery_elapsed.saturating_sub(publish_elapsed);
+    let delivered_throughput = delivered_total as f64 / delivery_elapsed.as_secs_f64();
     let delivered_per_sub_throughput =
-        (delivered_total as f64 / config.fanout.max(1) as f64) / elapsed.as_secs_f64();
+        (delivered_total as f64 / config.fanout.max(1) as f64) / delivery_elapsed.as_secs_f64();
     Ok((
         DemoResult {
             publish_total: config.total,
@@ -937,13 +991,16 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             batch_size: config.batch_size,
             binary: config.binary,
             received,
-            dropped: primary_total.saturating_sub(received),
+            dropped: expected_delivered_total.saturating_sub(delivered_total),
             delivered_total,
             p50: percentile(&latencies, 0.50),
             p99: percentile(&latencies, 0.99),
             p999: percentile(&latencies, 0.999),
-            throughput: config.total as f64 / elapsed.as_secs_f64(),
-            effective_throughput: received as f64 / elapsed.as_secs_f64(),
+            publish_duration: publish_elapsed,
+            drain_duration,
+            publish_submit_throughput: config.total as f64 / publish_elapsed.as_secs_f64(),
+            throughput: config.total as f64 / delivery_elapsed.as_secs_f64(),
+            effective_throughput: received as f64 / delivery_elapsed.as_secs_f64(),
             delivered_throughput,
             delivered_per_sub_throughput,
         },
@@ -993,7 +1050,7 @@ async fn setup_subscribers(
     total_events: usize,
     warmup: usize,
     stream_count: usize,
-    delivered_total: Arc<AtomicUsize>,
+    delivery_tracker: DeliveryTracker,
     reserve_primary_slot: bool,
 ) -> Result<(Option<Subscription>, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
@@ -1022,7 +1079,7 @@ async fn setup_subscribers(
             } else {
                 let mut sub = sub;
                 let idle_timeout = Duration::from_millis(2000);
-                let delivered = Arc::clone(&delivered_total);
+                let tracker = delivery_tracker.clone();
                 drain_tasks.push(tokio::spawn(async move {
                     let mut remaining = per_stream_total;
                     let mut seen = 0usize;
@@ -1032,7 +1089,7 @@ async fn setup_subscribers(
                             Ok(Ok(Some(_))) => {
                                 remaining -= 1;
                                 if seen >= per_stream_warmup {
-                                    delivered.fetch_add(1, Ordering::Relaxed);
+                                    tracker.record();
                                 }
                                 seen += 1;
                             }
@@ -1138,7 +1195,7 @@ fn spawn_dedicated_primary_subscriber(
     primary_warmup: usize,
     primary_total: usize,
     stream_count: usize,
-    delivered_total: Arc<AtomicUsize>,
+    delivery_tracker: DeliveryTracker,
 ) -> DedicatedPrimaryHandle {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (warmup_ready_tx, warmup_ready_rx) = oneshot::channel();
@@ -1231,7 +1288,7 @@ fn spawn_dedicated_primary_subscriber(
                         }
                         metrics::gauge!("felix_client_sub_delivery_channel_depth")
                             .set((chan_capacity.saturating_sub(delivery_tx.capacity())) as f64);
-                        delivered_total.fetch_add(1, Ordering::Relaxed);
+                        delivery_tracker.record();
                         if let Some(start) = dispatch_start {
                             let dispatch_ns = start.elapsed().as_nanos() as u64;
                             client_timings::record_sub_dispatch_ns(dispatch_ns);
@@ -1326,7 +1383,7 @@ fn per_stream_events(total: usize, stream_count: usize, stream_index: usize) -> 
 
 fn print_result(result: &DemoResult) {
     println!(
-        "Results (publish n = {}, sampled {}, received {}, dropped {}) payload={}B fanout={} batch={} publish_fastpath={}:",
+        "Results (publish n = {}, sampled {}, received {}, delivery drops {}) payload={}B fanout={} batch={} publish_fastpath={}:",
         result.publish_total,
         result.sample_total,
         result.received,
@@ -1346,6 +1403,18 @@ fn print_result(result: &DemoResult) {
         println!("  p99  = {}", format_duration(result.p99));
         println!("  p999 = {}", format_duration(result.p999));
     }
+    println!(
+        "  publish submit throughput = {:.2} msg/s",
+        result.publish_submit_throughput
+    );
+    println!(
+        "  publish duration = {}",
+        format_duration(result.publish_duration)
+    );
+    println!(
+        "  delivery drain duration = {}",
+        format_duration(result.drain_duration)
+    );
     println!("  throughput = {:.2} msg/s", result.throughput);
     println!(
         "  effective throughput = {:.2} msg/s",
@@ -1912,7 +1981,12 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
-    ClientConfig::from_env_or_yaml(quinn, None)
+    let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
+    // Lossless measurement: block the subscription reader instead of shedding
+    // client-side so reported drops reflect broker-side saturation only.
+    config.client_sub_queue_policy = felix_client::ClientSubQueuePolicy::Block;
+    config.client_sub_queue_capacity = config.client_sub_queue_capacity.max(4096);
+    Ok(config)
 }
 
 fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
@@ -1988,7 +2062,8 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            idle_ms: 5,
+            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
+            idle_ms: 100,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2011,7 +2086,8 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            idle_ms: 10,
+            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
+            idle_ms: 100,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2040,7 +2116,8 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            idle_ms: 5,
+            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
+            idle_ms: 100,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: Some("rr".to_string()),
@@ -2198,7 +2275,8 @@ mod tests {
             fanout: 1,
             batch_size: 2,
             binary: false,
-            idle_ms: 10,
+            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
+            idle_ms: 100,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2324,6 +2402,9 @@ mod tests {
             p50: Duration::from_micros(1),
             p99: Duration::from_micros(2),
             p999: Duration::from_micros(3),
+            publish_duration: Duration::from_millis(10),
+            drain_duration: Duration::from_millis(5),
+            publish_submit_throughput: 2.0,
             throughput: 1.0,
             effective_throughput: 0.5,
             delivered_throughput: 0.6,

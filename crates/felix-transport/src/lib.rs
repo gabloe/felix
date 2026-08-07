@@ -24,6 +24,24 @@ pub struct TransportConfig {
     pub stream_receive_window: u64,
     // Connection-level send window.
     pub send_window: u64,
+    // Starting datagram size before path MTU discovery completes.
+    // RFC-safe default (1200); raise only on known-good paths (loopback, jumbo LAN)
+    // to skip the discovery ramp entirely.
+    pub initial_mtu: u16,
+    // Upper bound for path MTU discovery probing. Probes are loss-tolerant, so a
+    // high bound is safe on any network and lets loopback (~16 KiB) and jumbo-frame
+    // LANs (~9 KiB) converge to their real MTU instead of quinn's 1452 default.
+    pub mtu_discovery_upper_bound: u16,
+    // Largest UDP datagram the endpoint will accept (receive side). Must be at
+    // least as large as the peer's discovered MTU for large datagrams to flow.
+    pub max_udp_payload_size: u16,
+    // Requested SO_SNDBUF/SO_RCVBUF. Applied best-effort: halved until the OS
+    // accepts, so an unconfigurable host degrades gracefully.
+    pub udp_send_buffer_bytes: usize,
+    pub udp_recv_buffer_bytes: usize,
+    // Optional initial congestion window (bytes). None keeps quinn's RFC default.
+    // Setting this high removes the slow-start ramp on trusted low-loss paths.
+    pub initial_congestion_window_bytes: Option<u64>,
 }
 
 // Keep defaults large enough for most dev/test workloads.
@@ -32,15 +50,52 @@ const DEFAULT_MAX_STREAMS: u16 = 1024;
 const DEFAULT_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
 const DEFAULT_STREAM_RECEIVE_WINDOW: u64 = 16 * 1024 * 1024;
 const DEFAULT_SEND_WINDOW: u64 = 64 * 1024 * 1024;
+const DEFAULT_INITIAL_MTU: u16 = 1200;
+// Bound MTU discovery at 16 KiB: it matches loopback (lo0 = 16384) and jumbo-frame
+// ceilings, and measured best for byte-heavy workloads. A far-away bound (e.g. the
+// QUIC max 65527) makes the search converge slower without ever finding a larger
+// path. Small-message workloads can prefer ~4096 (finer ACK clocking) via
+// FELIX_MTU_UPPER_BOUND.
+const DEFAULT_MTU_DISCOVERY_UPPER_BOUND: u16 = 16384;
+const DEFAULT_MAX_UDP_PAYLOAD_SIZE: u16 = 65527;
+const DEFAULT_UDP_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name).ok()?.parse::<u64>().ok()
+}
 
 impl Default for TransportConfig {
     fn default() -> Self {
+        // Environment overrides act as process-wide tuning levers so every
+        // endpoint (broker, client, demos) picks them up without plumbing.
+        let initial_mtu = env_u64("FELIX_INITIAL_MTU")
+            .map(|value| value.clamp(1200, 65527) as u16)
+            .unwrap_or(DEFAULT_INITIAL_MTU);
+        let mtu_discovery_upper_bound = env_u64("FELIX_MTU_UPPER_BOUND")
+            .map(|value| value.clamp(1200, 65527) as u16)
+            .unwrap_or(DEFAULT_MTU_DISCOVERY_UPPER_BOUND);
+        let max_udp_payload_size = env_u64("FELIX_MAX_UDP_PAYLOAD")
+            .map(|value| value.clamp(1200, 65527) as u16)
+            .unwrap_or(DEFAULT_MAX_UDP_PAYLOAD_SIZE);
+        let udp_send_buffer_bytes = env_u64("FELIX_UDP_SEND_BUFFER")
+            .map(|value| value as usize)
+            .unwrap_or(DEFAULT_UDP_BUFFER_BYTES);
+        let udp_recv_buffer_bytes = env_u64("FELIX_UDP_RECV_BUFFER")
+            .map(|value| value as usize)
+            .unwrap_or(DEFAULT_UDP_BUFFER_BYTES);
+        let initial_congestion_window_bytes = env_u64("FELIX_INITIAL_CWND");
         Self {
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             max_streams: DEFAULT_MAX_STREAMS,
             receive_window: DEFAULT_RECEIVE_WINDOW,
             stream_receive_window: DEFAULT_STREAM_RECEIVE_WINDOW,
             send_window: DEFAULT_SEND_WINDOW,
+            initial_mtu,
+            mtu_discovery_upper_bound,
+            max_udp_payload_size,
+            udp_send_buffer_bytes,
+            udp_recv_buffer_bytes,
+            initial_congestion_window_bytes,
         }
     }
 }
@@ -58,7 +113,66 @@ impl TransportConfig {
         config.stream_receive_window(stream_window);
         config.receive_window(receive_window);
         config.send_window(self.send_window);
+        // Path MTU: start safe, probe high. Fewer, larger datagrams directly
+        // reduce per-byte syscall and crypto costs on high-MTU paths.
+        let initial_mtu = self.initial_mtu.clamp(1200, self.max_udp_payload_size);
+        config.initial_mtu(initial_mtu);
+        let mtu_bound = self
+            .mtu_discovery_upper_bound
+            .clamp(initial_mtu, self.max_udp_payload_size);
+        let mut mtud = quinn::MtuDiscoveryConfig::default();
+        mtud.upper_bound(mtu_bound);
+        config.mtu_discovery_config(Some(mtud));
+        // RFC 9002 scales the initial congestion window with datagram size
+        // (IW10), but quinn's CubicConfig hardcodes 14720 bytes. Once the path
+        // MTU exceeds that, the window holds less than one packet and the
+        // sender degrades to one-packet-per-ACK-delay (~25 ms) cadence. Keep
+        // the window at 10 full-size datagrams unless explicitly overridden.
+        let iw10 = 10u64 * u64::from(mtu_bound);
+        let window = self
+            .initial_congestion_window_bytes
+            .unwrap_or_else(|| iw10.max(14720));
+        let mut cubic = quinn::congestion::CubicConfig::default();
+        cubic.initial_window(window);
+        config.congestion_controller_factory(Arc::new(cubic));
         config
+    }
+
+    fn quinn_endpoint_config(&self) -> quinn::EndpointConfig {
+        let mut config = quinn::EndpointConfig::default();
+        // Accept datagrams up to the configured bound (quinn's default of 1472
+        // would silently cap peers that discovered a larger path MTU).
+        if let Err(err) = config.max_udp_payload_size(self.max_udp_payload_size) {
+            tracing::warn!(error = %err, "invalid max_udp_payload_size; using quinn default");
+        }
+        config
+    }
+
+    fn bind_udp_socket(&self, addr: SocketAddr) -> Result<std::net::UdpSocket> {
+        let domain = if addr.is_ipv6() {
+            socket2::Domain::IPV6
+        } else {
+            socket2::Domain::IPV4
+        };
+        let socket =
+            socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))
+                .context("create UDP socket")?;
+        // Large socket buffers absorb bursts at high message rates; drops here
+        // surface as QUIC retransmits and latency spikes. Halve until the OS
+        // accepts the size so hosts with low limits still work.
+        let mut send_bytes = self.udp_send_buffer_bytes;
+        while send_bytes >= 64 * 1024 && socket.set_send_buffer_size(send_bytes).is_err() {
+            send_bytes /= 2;
+        }
+        let mut recv_bytes = self.udp_recv_buffer_bytes;
+        while recv_bytes >= 64 * 1024 && socket.set_recv_buffer_size(recv_bytes).is_err() {
+            recv_bytes /= 2;
+        }
+        socket.bind(&addr.into()).context("bind UDP socket")?;
+        socket
+            .set_nonblocking(true)
+            .context("set UDP socket nonblocking")?;
+        Ok(socket.into())
     }
 }
 
@@ -123,7 +237,14 @@ impl QuicServer {
         // Apply transport defaults before binding the endpoint.
         let quinn_transport = transport.quinn_transport_config();
         server_config.transport_config(Arc::new(quinn_transport));
-        let endpoint = Endpoint::server(server_config, addr).context("bind QUIC server")?;
+        let socket = transport.bind_udp_socket(addr)?;
+        let endpoint = Endpoint::new(
+            transport.quinn_endpoint_config(),
+            Some(server_config),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )
+        .context("bind QUIC server")?;
         Ok(Self {
             endpoint,
             _transport: transport,
@@ -180,7 +301,14 @@ impl QuicClient {
         // Apply transport defaults before binding the endpoint.
         let quinn_transport = transport.quinn_transport_config();
         client_config.transport_config(Arc::new(quinn_transport));
-        let mut endpoint = Endpoint::client(addr).context("bind QUIC client")?;
+        let socket = transport.bind_udp_socket(addr)?;
+        let mut endpoint = Endpoint::new(
+            transport.quinn_endpoint_config(),
+            None,
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )
+        .context("bind QUIC client")?;
         endpoint.set_default_client_config(client_config);
         Ok(Self {
             endpoint,
@@ -401,12 +529,36 @@ mod tests {
             receive_window: 128 * 1024 * 1024,
             stream_receive_window: 32 * 1024 * 1024,
             send_window: 128 * 1024 * 1024,
+            ..TransportConfig::default()
         };
         assert_eq!(config.max_frame_bytes, 8 * 1024 * 1024);
         assert_eq!(config.max_streams, 2048);
         assert_eq!(config.receive_window, 128 * 1024 * 1024);
         assert_eq!(config.stream_receive_window, 32 * 1024 * 1024);
         assert_eq!(config.send_window, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn transport_config_mtu_defaults_are_probe_high_start_safe() {
+        let config = TransportConfig::default();
+        // Start at the RFC-safe minimum unless explicitly overridden.
+        assert!(config.initial_mtu >= 1200);
+        // Probe up to the QUIC maximum so high-MTU paths (loopback, jumbo LAN)
+        // converge to their real MTU.
+        assert!(config.mtu_discovery_upper_bound >= config.initial_mtu);
+        assert!(config.max_udp_payload_size >= config.mtu_discovery_upper_bound);
+        // Building quinn configs must not panic for the defaults.
+        let _ = config.quinn_transport_config();
+        let _ = config.quinn_endpoint_config();
+    }
+
+    #[test]
+    fn transport_config_initial_cwnd_applies_without_panic() {
+        let config = TransportConfig {
+            initial_congestion_window_bytes: Some(4 * 1024 * 1024),
+            ..TransportConfig::default()
+        };
+        let _ = config.quinn_transport_config();
     }
 
     #[tokio::test]

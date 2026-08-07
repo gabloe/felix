@@ -799,7 +799,10 @@ mod tests {
             warmup: 1,
             samples: 2,
             payload_sizes: vec![0, 8],
-            ttl_ms: Some(25),
+            // Exercises the ttl-carrying path; expiry timing is covered by
+            // run_ttl_check. Keep comfortably above QUIC's 25 ms max_ack_delay
+            // so a single delayed-ACK cycle can't expire entries mid-bench.
+            ttl_ms: Some(250),
             concurrency: 1,
             key_count: 2,
             ops: vec![BenchOp::Put, BenchOp::GetHit, BenchOp::GetMiss],

@@ -28,7 +28,7 @@ use crate::config::BrokerConfig;
 use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
-use super::handlers::publish::{PublishContext, PublishJob, decrement_depth};
+use super::handlers::publish::{PublishAdmission, PublishContext, PublishJob, decrement_depth};
 
 use super::streams::{handle_stream, handle_uni_stream};
 
@@ -90,6 +90,7 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
     let worker_count = config.pub_workers_per_conn.max(1);
     let publish_queue_depth = config.pub_queue_depth.max(1);
+    let admission = Arc::new(PublishAdmission::new(config.pub_inflight_bytes));
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut worker_txs = Vec::with_capacity(worker_count);
     for worker_id in 0..worker_count {
@@ -143,6 +144,8 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         worker_count,
         depth: queue_depth,
         wait_timeout: Duration::from_millis(config.publish_queue_wait_timeout_ms),
+        admission,
+        ingress_wait: config.pub_ingress_wait,
     }
 }
 
@@ -271,6 +274,7 @@ mod tests {
                 stream: "demo".to_string(),
                 payloads: vec![Bytes::from_static(b"ok")],
                 response: Some(response_tx),
+                admission_permit: None,
             })
             .await
             .expect("enqueue publish");
@@ -294,6 +298,7 @@ mod tests {
                 stream: "missing".to_string(),
                 payloads: vec![Bytes::from_static(b"payload")],
                 response: Some(response_tx),
+                admission_permit: None,
             })
             .await
             .expect("enqueue publish");

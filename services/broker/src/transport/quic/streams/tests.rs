@@ -55,7 +55,7 @@ use crate::auth::{BrokerAuth, ControlPlaneKeyStore};
 use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::handlers::publish::{
-    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, PublishJob,
+    AckTimeoutState, AckWaiterMessage, Outgoing, PublishAdmission, PublishContext, PublishJob,
 };
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
@@ -539,6 +539,8 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
+        admission: Arc::new(PublishAdmission::unlimited()),
+        ingress_wait: false,
     }
 }
 
@@ -3411,6 +3413,8 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
+        admission: Arc::new(PublishAdmission::unlimited()),
+        ingress_wait: false,
     };
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     let binary =
@@ -3581,6 +3585,8 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             worker_count: 1,
             depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(50),
+            admission: Arc::new(PublishAdmission::unlimited()),
+            ingress_wait: false,
         };
         let mut config = BrokerConfig::from_env()?;
         config.ack_on_commit = true;

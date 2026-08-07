@@ -38,6 +38,8 @@ mod tests {
             fanout_batch_size: 64,
             pub_workers_per_conn: 4,
             pub_queue_depth: 1024,
+            pub_inflight_bytes: 64 * 1024 * 1024,
+            pub_ingress_wait: false,
             subscriber_queue_capacity: 128,
             subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,

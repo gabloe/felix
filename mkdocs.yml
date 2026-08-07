@@ -112,6 +112,7 @@ nav:
     - Distributed Cache: features/cache.md
     - Performance Tuning: features/performance.md
     - Performance & Platform Notes: features/performance-platform-notes.md
+    - Benchmarks: features/benchmarks.md
     - Observability: features/observability.md
     - Security: features/security.md
   - Deployment:
