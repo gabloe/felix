@@ -322,11 +322,30 @@ high fanout / large payload workloads.
 
 **Default**: `512`
 
-**Environment**: `FELIX_SUBSCRIBER_QUEUE_CAPACITY`
+**Environment**: `FELIX_SUBSCRIBER_QUEUE_CAPACITY` (alias: `FELIX_SUB_QUEUE_CAPACITY`)
 
 ```yaml
 subscriber_queue_capacity: 512
 ```
+
+#### `subscriber_queue_policy`
+
+**Description**: Backpressure policy when a subscriber's broker-core queue (`subscriber_queue_capacity`) is full — this is the fanout enqueue path, upstream of the writer lanes below.
+
+**Type**: `enum` (`block`, `drop_new`, `drop_old`)
+
+**Default**: `drop_new`
+
+**Environment**: `FELIX_SUB_QUEUE_POLICY`
+
+```yaml
+subscriber_queue_policy: drop_new
+```
+
+**Tuning**:
+- `drop_new` (default): sheds the newest event when the queue is full — bounds latency, overload becomes visible as drops (`felix_subscribe_dropped_total`).
+- `block`: publish waits for queue space — strongest delivery guarantee, but a single slow subscriber can add latency to publishers. Used by the benchmark harness's lossless throughput mode alongside `pub_ingress_wait`.
+- `drop_old`: currently emulated with `drop_new` semantics; tracked separately in metrics.
 
 #### `subscriber_writer_lanes`
 
@@ -350,11 +369,27 @@ subscriber_writer_lanes: 4
 
 **Default**: `64`
 
-**Environment**: `FELIX_SUB_LANE_QUEUE_DEPTH`
+**Environment**: `FELIX_SUB_LANE_QUEUE_DEPTH` (alias: `FELIX_SUB_QUEUE_BOUND`)
 
 ```yaml
 subscriber_lane_queue_depth: 64
 ```
+
+#### `subscriber_lane_queue_policy`
+
+**Description**: Backpressure policy for the writer-lane command queue (downstream of `subscriber_queue_policy`; gates the actual QUIC write).
+
+**Type**: `enum` (`block`, `drop_new`, `drop_old`)
+
+**Default**: `drop_new`
+
+**Environment**: `FELIX_SUB_QUEUE_MODE` (alias: `FELIX_SUB_LANE_QUEUE_POLICY`)
+
+```yaml
+subscriber_lane_queue_policy: drop_new
+```
+
+Same semantics as `subscriber_queue_policy`, applied one stage later in the pipeline. Control commands (subscriber register/unregister) always use blocking send regardless of this setting.
 
 #### `max_subscriber_writer_lanes`
 
@@ -389,6 +424,96 @@ Policy guidance:
 - `subscriber_id_hash`: Good general distribution independent of connection topology.
 - `connection_id_hash`: Useful when many subscribers share connections and connection-local contention dominates.
 - `round_robin_pin`: Pins lane at subscribe-time; preserves ordering, but can underperform in skewed workloads.
+
+#### `subscriber_single_writer_per_conn`
+
+**Description**: If true, route all subscribers on the same QUIC connection to one writer lane (serializes writes per connection instead of spreading them across lanes).
+
+**Type**: `bool`
+
+**Default**: `false`
+
+**Environment**: `FELIX_SUB_SINGLE_WRITER_PER_CONN` (`1`, `true`, `yes` = enabled)
+
+```yaml
+subscriber_single_writer_per_conn: false
+```
+
+**Tuning**: The latency-focused benchmark profile (batch = 1) enables this for stable per-message ordering; the throughput profile leaves it off to use parallel lanes.
+
+#### `subscriber_flush_max_items`
+
+**Description**: Maximum queued lane commands drained per flush before a write is issued.
+
+**Type**: `usize` (count)
+
+**Default**: `16`
+
+**Environment**: `FELIX_SUB_FLUSH_MAX_ITEMS`
+
+```yaml
+subscriber_flush_max_items: 16
+```
+
+#### `subscriber_flush_max_delay_us`
+
+**Description**: Maximum time spent waiting to fill a lane flush buffer before writing what's accumulated.
+
+**Type**: `u64` (microseconds)
+
+**Default**: `50`
+
+**Environment**: `FELIX_SUB_FLUSH_MAX_DELAY_US`
+
+```yaml
+subscriber_flush_max_delay_us: 50
+```
+
+#### `subscriber_max_bytes_per_write`
+
+**Description**: Upper bound on coalesced bytes per QUIC write call to a subscriber stream.
+
+**Type**: `usize` (bytes)
+
+**Default**: `65536` (64 KiB)
+
+**Environment**: `FELIX_SUB_MAX_BYTES_PER_WRITE`
+
+```yaml
+subscriber_max_bytes_per_write: 65536
+```
+
+### Delivery Stream Topology
+
+#### `sub_streams_per_conn`
+
+**Description**: Number of delivery streams to use per connection in hashed-pool mode (`sub_stream_mode: hashed_pool`).
+
+**Type**: `usize` (count)
+
+**Default**: `4`
+
+**Environment**: `FELIX_SUB_STREAMS_PER_CONN`
+
+```yaml
+sub_streams_per_conn: 4
+```
+
+#### `sub_stream_mode`
+
+**Description**: Strategy for mapping subscribers to event streams.
+
+**Type**: `enum` (`per_subscriber`, `hashed_pool`)
+
+**Default**: `per_subscriber`
+
+**Environment**: `FELIX_SUB_STREAM_MODE`
+
+```yaml
+sub_stream_mode: per_subscriber
+```
+
+**Notes**: `hashed_pool` is not yet enabled — the broker currently falls back to `per_subscriber` and logs a debug warning if `hashed_pool` is requested.
 
 ## Cache Configuration
 
@@ -533,6 +658,27 @@ pub_ingress_wait: true
 - Off (default): overload sheds fire-and-forget publishes visibly (`felix_broker_ingress_dropped_total`) and keeps latency bounded.
 - On: backpressure propagates through QUIC flow control to the publisher — nothing is shed, producers slow down. Use for lossless pipelines and sustainable-throughput benchmarking.
 
+### `core_shards`
+
+**Description**: Number of core-pinned shard executors owning stream work (thread-per-core). Each stream's handle id deterministically selects an owning shard; that shard runs the stream's publish worker and its subscriptions' lane feeders on one dedicated single-threaded runtime (pinned to a CPU core on Linux). Publish append, fanout enqueue, and subscriber dequeue all stay core-local.
+
+**Type**: `usize` (count; `0` = disabled)
+
+**Default**: `0`
+
+**Environment**: `FELIX_CORE_SHARDS`
+
+**Example**:
+```yaml
+core_shards: 4
+```
+
+**Tuning**:
+- When enabled, the publish worker count becomes the shard count (one worker per shard), superseding `pub_workers_per_conn`.
+- Benefits scale with stream count: workloads spread across many streams gain parallel, contention-free per-core pipelines (measured +34% delivered throughput at 4 streams × 4 shards, unpinned). Single-stream workloads serialize on one shard by design — neutral to mildly positive.
+- Core pinning requires Linux (`sched_setaffinity`); elsewhere shards still get dedicated threads, preserving the single-writer ownership model without hard affinity.
+- Reasonable starting point: number of physical cores minus 2 (leaving headroom for QUIC I/O on the main runtime).
+
 ## Performance Configuration
 
 ### `disable_timings`
@@ -655,7 +801,7 @@ event_batch_max_delay_us: 250
 fanout_batch_size: 64
 subscriber_writer_lanes: 4
 subscriber_lane_shard: auto
-subscriber_queue_capacity: 128
+subscriber_queue_capacity: 512
 disable_timings: false
 cache_conn_recv_window: 268435456
 ```
@@ -670,7 +816,9 @@ fanout_batch_size: 128
 subscriber_writer_lanes: 8
 max_subscriber_writer_lanes: 8
 subscriber_lane_shard: auto
-subscriber_queue_capacity: 256
+subscriber_queue_capacity: 4096
+pub_ingress_wait: true
+core_shards: 4
 disable_timings: true
 ```
 

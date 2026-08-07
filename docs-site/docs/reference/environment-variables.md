@@ -286,7 +286,7 @@ export FELIX_SUB_QUEUE_POLICY="drop_new"
 
 **Type**: Boolean (`1|true|yes` to enable)
 
-**Default**: `true`
+**Default**: `false`
 
 ```bash
 export FELIX_SUB_SINGLE_WRITER_PER_CONN="true"
@@ -302,6 +302,8 @@ export FELIX_SUB_SINGLE_WRITER_PER_CONN="true"
 
 ```bash
 export FELIX_SUB_WRITER_LANES="4"
+# Alias (checked first, same behavior):
+export FELIX_SUB_EGRESS_LANES="4"
 ```
 
 ### `FELIX_SUB_LANE_QUEUE_DEPTH`
@@ -314,6 +316,22 @@ export FELIX_SUB_WRITER_LANES="4"
 
 ```bash
 export FELIX_SUB_LANE_QUEUE_DEPTH="64"
+# Alias (same behavior):
+export FELIX_SUB_QUEUE_BOUND="64"
+```
+
+### `FELIX_SUB_QUEUE_MODE`
+
+**Description**: Backpressure policy for the writer-lane command queue (downstream of `FELIX_SUB_QUEUE_POLICY`, which gates the earlier broker-core fanout enqueue).
+
+**Type**: Enum (`block`, `drop_new`, `drop_old`)
+
+**Default**: `drop_new`
+
+```bash
+export FELIX_SUB_QUEUE_MODE="drop_new"
+# Alias (same behavior):
+export FELIX_SUB_LANE_QUEUE_POLICY="drop_new"
 ```
 
 ### `FELIX_MAX_SUB_WRITER_LANES`
@@ -345,6 +363,66 @@ export FELIX_SUB_LANE_SHARD="auto"
 - `subscriber_id_hash`: stable by subscriber id.
 - `connection_id_hash`: stable by connection id.
 - `round_robin_pin`: pinned RR assignment per subscriber.
+
+### `FELIX_SUB_FLUSH_MAX_ITEMS`
+
+**Description**: Maximum queued lane commands drained per flush before a write is issued.
+
+**Type**: Positive integer (count)
+
+**Default**: `16`
+
+```bash
+export FELIX_SUB_FLUSH_MAX_ITEMS="16"
+```
+
+### `FELIX_SUB_FLUSH_MAX_DELAY_US`
+
+**Description**: Maximum time spent waiting to fill a lane flush buffer before writing what's accumulated.
+
+**Type**: Unsigned integer (microseconds)
+
+**Default**: `50`
+
+```bash
+export FELIX_SUB_FLUSH_MAX_DELAY_US="50"
+```
+
+### `FELIX_SUB_MAX_BYTES_PER_WRITE`
+
+**Description**: Upper bound on coalesced bytes per QUIC write call to a subscriber stream.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `65536` (64 KiB)
+
+```bash
+export FELIX_SUB_MAX_BYTES_PER_WRITE="65536"
+```
+
+### `FELIX_SUB_STREAMS_PER_CONN`
+
+**Description**: Number of delivery streams per connection in hashed-pool mode.
+
+**Type**: Positive integer (count)
+
+**Default**: `4`
+
+```bash
+export FELIX_SUB_STREAMS_PER_CONN="4"
+```
+
+### `FELIX_SUB_STREAM_MODE`
+
+**Description**: Strategy for mapping subscribers to event streams. `hashed_pool` is not yet enabled — the broker falls back to `per_subscriber` and logs a debug warning if requested.
+
+**Type**: Enum (`per_subscriber`, `hashed_pool`)
+
+**Default**: `per_subscriber`
+
+```bash
+export FELIX_SUB_STREAM_MODE="per_subscriber"
+```
 
 ## Cache Configuration
 
@@ -671,6 +749,18 @@ export FELIX_BROKER_PUBLISH_INFLIGHT_BYTES="67108864"
 
 ```bash
 export FELIX_PUB_INGRESS_WAIT="1"
+```
+
+### `FELIX_CORE_SHARDS`
+
+**Description**: Number of core-pinned shard executors owning stream work (thread-per-core, shared-nothing). Each stream is owned by one shard: its publish worker and its subscriptions' lane feeders run on that shard's dedicated single-threaded runtime, pinned to a CPU core on Linux. Benefits scale with stream count; single-stream workloads serialize on one shard by design.
+
+**Type**: Positive integer (count; `0` = disabled)
+
+**Default**: `0`
+
+```bash
+export FELIX_CORE_SHARDS="4"
 ```
 
 ## QUIC Transport Tuning
