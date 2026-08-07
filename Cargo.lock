@@ -887,7 +887,6 @@ dependencies = [
  "parking_lot",
  "serial_test",
  "slab",
- "smallvec",
  "thiserror 2.0.18",
  "tokio",
 ]

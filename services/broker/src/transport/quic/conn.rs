@@ -28,7 +28,9 @@ use crate::config::BrokerConfig;
 use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
-use super::handlers::publish::{PublishAdmission, PublishContext, PublishJob, decrement_depth};
+use super::handlers::publish::{
+    PublishAdmission, PublishContext, PublishJob, PublishTarget, decrement_depth,
+};
 
 use super::streams::{handle_stream, handle_uni_stream};
 
@@ -116,11 +118,25 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
                 );
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
-                let result = broker_for_worker
-                    .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
-                    .await
-                    .map(|_| ())
-                    .map_err(Into::into);
+                let result = match &job.target {
+                    PublishTarget::Resolved(handle) => {
+                        broker_for_worker
+                            .publish_batch_to_handle(handle, &job.payloads)
+                            .await
+                    }
+                    #[cfg(test)]
+                    PublishTarget::Named {
+                        tenant_id,
+                        namespace,
+                        stream,
+                    } => {
+                        broker_for_worker
+                            .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                            .await
+                    }
+                }
+                .map(|_| ())
+                .map_err(Into::into);
                 #[cfg(feature = "perf_debug")]
                 {
                     let ns = worker_start.elapsed().as_nanos() as u64;
@@ -269,9 +285,11 @@ mod tests {
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
             .send(PublishJob {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "demo".to_string(),
+                target: PublishTarget::Named {
+                    tenant_id: "t1".to_string(),
+                    namespace: "default".to_string(),
+                    stream: "demo".to_string(),
+                },
                 payloads: vec![Bytes::from_static(b"ok")],
                 response: Some(response_tx),
                 admission_permit: None,
@@ -293,9 +311,11 @@ mod tests {
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
             .send(PublishJob {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "missing".to_string(),
+                target: PublishTarget::Named {
+                    tenant_id: "t1".to_string(),
+                    namespace: "default".to_string(),
+                    stream: "missing".to_string(),
+                },
                 payloads: vec![Bytes::from_static(b"payload")],
                 response: Some(response_tx),
                 admission_permit: None,

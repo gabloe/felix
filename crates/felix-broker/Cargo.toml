@@ -11,10 +11,10 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 metrics = "0.24"
 felix-storage = { path = "../felix-storage", version = "0.1.0" }
+felix-wire = { path = "../felix-wire", version = "0.1.0" }
 arc-swap = "1.8"
 ahash = "0.8"
 hashbrown = { version = "0.16", features = ["equivalent"] }
-smallvec = "1.13"
 slab = "0.4"
 parking_lot = "0.12"
 
@@ -25,4 +25,3 @@ perf_debug = []
 
 [dev-dependencies]
 serial_test = "3"
-felix-wire = { path = "../felix-wire", version = "0.1.0" }

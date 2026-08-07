@@ -56,6 +56,7 @@ use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishAdmission, PublishContext, PublishJob,
+    PublishTarget,
 };
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
@@ -519,16 +520,22 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
     let (tx, mut rx) = mpsc::channel::<PublishJob>(8);
     tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
-            let result = broker
-                .publish_batch(
-                    job.tenant_id.as_str(),
-                    job.namespace.as_str(),
-                    job.stream.as_str(),
-                    &job.payloads,
-                )
-                .await
-                .map(|_| ())
-                .map_err(anyhow::Error::from);
+            let result = match &job.target {
+                PublishTarget::Resolved(handle) => {
+                    broker.publish_batch_to_handle(handle, &job.payloads).await
+                }
+                PublishTarget::Named {
+                    tenant_id,
+                    namespace,
+                    stream,
+                } => {
+                    broker
+                        .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                        .await
+                }
+            }
+            .map(|_| ())
+            .map_err(anyhow::Error::from);
             if let Some(response) = job.response {
                 let _ = response.send(result);
             }

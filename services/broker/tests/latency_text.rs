@@ -135,7 +135,7 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
         let count = remaining.min(batch_size);
         let payloads = (0..count).map(|_| payload.clone()).collect::<Vec<_>>();
         publisher
-            .publish_batch(
+            .publish_batch_json(
                 "t1",
                 "default",
                 "latency",
