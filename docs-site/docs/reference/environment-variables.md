@@ -704,11 +704,11 @@ export FELIX_INITIAL_MTU="1200"
 
 ### `FELIX_INITIAL_CWND`
 
-**Description**: Initial congestion window in bytes. By default Felix scales it to 10 full-size datagrams (RFC 9002 IW10) based on the MTU bound — quinn's stock 14720-byte window holds less than one large-MTU packet and stalls the sender into delayed-ACK cadence. Set explicitly to override.
+**Description**: Optional initial congestion window override in bytes. By default Felix keeps Quinn's RFC 9002 behavior, including raising the minimum window to two datagrams after path-MTU discovery. Increase only on trusted low-loss paths where a larger initial burst is acceptable.
 
 **Type**: Positive integer (bytes)
 
-**Default**: `10 × MTU upper bound` (min 14720)
+**Default**: Quinn's RFC 9002 default
 
 ```bash
 export FELIX_INITIAL_CWND="1048576"

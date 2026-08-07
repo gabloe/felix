@@ -123,18 +123,15 @@ impl TransportConfig {
         let mut mtud = quinn::MtuDiscoveryConfig::default();
         mtud.upper_bound(mtu_bound);
         config.mtu_discovery_config(Some(mtud));
-        // RFC 9002 scales the initial congestion window with datagram size
-        // (IW10), but quinn's CubicConfig hardcodes 14720 bytes. Once the path
-        // MTU exceeds that, the window holds less than one packet and the
-        // sender degrades to one-packet-per-ACK-delay (~25 ms) cadence. Keep
-        // the window at 10 full-size datagrams unless explicitly overridden.
-        let iw10 = 10u64 * u64::from(mtu_bound);
-        let window = self
-            .initial_congestion_window_bytes
-            .unwrap_or_else(|| iw10.max(14720));
-        let mut cubic = quinn::congestion::CubicConfig::default();
-        cubic.initial_window(window);
-        config.congestion_controller_factory(Arc::new(cubic));
+        // Quinn follows RFC 9002 by default and raises the minimum window to
+        // two datagrams when path-MTU discovery finds a larger MTU. Keep that
+        // safe default unless a trusted low-loss deployment explicitly opts
+        // into a larger initial burst.
+        if let Some(window) = self.initial_congestion_window_bytes {
+            let mut cubic = quinn::congestion::CubicConfig::default();
+            cubic.initial_window(window);
+            config.congestion_controller_factory(Arc::new(cubic));
+        }
         config
     }
 

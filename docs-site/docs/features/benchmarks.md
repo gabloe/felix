@@ -78,7 +78,7 @@ These findings came out of profiling the QUIC path and are wired into
 |---|---|---|
 | `FELIX_MTU_UPPER_BOUND` | 16384 | Path-MTU discovery bound. quinn's stock 1452 caps loopback/jumbo paths at Ethernet size; bounding at the real path MTU (loopback lo0 = 16384) cut per-byte syscall and crypto costs ~7x for byte-heavy workloads. Small-message workloads can prefer ~4096 (finer ACK clocking, measured ~1.5x for 0-byte messages). |
 | `FELIX_INITIAL_MTU` | 1200 | RFC-safe starting datagram size. Raise on known-good paths to skip discovery entirely. |
-| `FELIX_INITIAL_CWND` | 10 × MTU bound | Initial congestion window. RFC 9002 scales this with datagram size, but quinn hardcodes 14 720 bytes — *less than one 16 KiB packet*, which degrades the sender to one-packet-per-delayed-ACK (~25 ms stalls). Felix scales it automatically; the env var overrides. |
+| `FELIX_INITIAL_CWND` | Quinn RFC default | Optional initial congestion-window override for trusted low-loss paths. Quinn raises its minimum window to two datagrams when path-MTU discovery finds a larger MTU; the measured default workloads did not benefit from a larger initial burst. |
 | `FELIX_UDP_SEND_BUFFER` / `FELIX_UDP_RECV_BUFFER` | 8 MiB | Socket buffers absorb bursts; kernel-level drops surface as QUIC retransmits and tail-latency spikes. Applied best-effort (halved until the OS accepts). |
 | `FELIX_MAX_UDP_PAYLOAD` | 65527 | Receive-side datagram cap. Must exceed the peer's discovered MTU or large datagrams are silently rejected. |
 
