@@ -1337,7 +1337,7 @@ async fn publish_batch(
         .collect::<Vec<_>>();
     if batch_size == 1 {
         publisher
-            .publish(
+            .publish_json(
                 "t1",
                 "default",
                 stream.as_str(),
@@ -1351,7 +1351,7 @@ async fn publish_batch(
             .await?;
     } else {
         publisher
-            .publish_batch(
+            .publish_batch_json(
                 "t1",
                 "default",
                 stream.as_str(),

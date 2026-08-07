@@ -187,24 +187,144 @@ async fn run_subscription_dispatch_task(
         #[cfg(feature = "telemetry")]
         let decode_start = crate::t_now_if(sample);
 
-        let payloads = if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH != 0
-        {
-            match felix_wire::binary::decode_event_batch(&queued_frame.frame)
-                .context("decode binary event batch")
-            {
-                Ok(batch) => {
-                    if batch.subscription_id != subscription_id {
-                        tracing::debug!(
-                            expected = subscription_id,
-                            got = batch.subscription_id,
-                            "subscription id mismatch in dispatch"
-                        );
+        let payloads =
+            if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
+                match felix_wire::binary::decode_shared_event_batch(&queued_frame.frame)
+                    .context("decode shared binary event batch")
+                {
+                    Ok(batch) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        batch.payloads
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                        }
+                        log_decode_error("shared_binary_event_batch", &err, &queued_frame.frame);
+                        let _ = enqueue_event(
+                            &event_tx,
+                            QueuedEvent::Error(err.context("decode shared binary event batch")),
+                            queue_policy,
+                            queue_capacity,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            } else if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH != 0 {
+                match felix_wire::binary::decode_event_batch(&queued_frame.frame)
+                    .context("decode binary event batch")
+                {
+                    Ok(batch) => {
+                        if batch.subscription_id != subscription_id {
+                            tracing::debug!(
+                                expected = subscription_id,
+                                got = batch.subscription_id,
+                                "subscription id mismatch in dispatch"
+                            );
+                            let _ = enqueue_event(
+                                &event_tx,
+                                QueuedEvent::Error(anyhow::anyhow!(
+                                    "subscription id mismatch: expected {} got {}",
+                                    subscription_id,
+                                    batch.subscription_id
+                                )),
+                                queue_policy,
+                                queue_capacity,
+                            )
+                            .await;
+                            return;
+                        }
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        batch.payloads
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                        }
+                        log_decode_error("binary_event_batch", &err, &queued_frame.frame);
+                        let _ = enqueue_event(
+                            &event_tx,
+                            QueuedEvent::Error(err.context("decode binary event batch")),
+                            queue_policy,
+                            queue_capacity,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            } else {
+                let message =
+                    match Message::decode(queued_frame.frame.clone()).context("decode message") {
+                        Ok(message) => message,
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                            }
+                            log_decode_error("event_message", &err, &queued_frame.frame);
+                            let _ = enqueue_event(
+                                &event_tx,
+                                QueuedEvent::Error(err.context("decode message")),
+                                queue_policy,
+                                queue_capacity,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                #[cfg(feature = "telemetry")]
+                {
+                    let counters = frame_counters();
+                    counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                }
+                match message {
+                    Message::Event { payload, .. } => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_items_in_ok.fetch_add(1, Ordering::Relaxed);
+                        }
+                        vec![Bytes::from(payload)]
+                    }
+                    Message::EventBatch { payloads, .. } => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        payloads.into_iter().map(Bytes::from).collect()
+                    }
+                    _ => {
                         let _ = enqueue_event(
                             &event_tx,
                             QueuedEvent::Error(anyhow::anyhow!(
-                                "subscription id mismatch: expected {} got {}",
-                                subscription_id,
-                                batch.subscription_id
+                                "unexpected message on subscription stream"
                             )),
                             queue_policy,
                             queue_capacity,
@@ -212,95 +332,8 @@ async fn run_subscription_dispatch_task(
                         .await;
                         return;
                     }
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let counters = frame_counters();
-                        counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
-                        counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
-                        counters
-                            .sub_items_in_ok
-                            .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
-                    }
-                    batch.payloads
                 }
-                Err(err) => {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let counters = frame_counters();
-                        counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
-                    }
-                    log_decode_error("binary_event_batch", &err, &queued_frame.frame);
-                    let _ = enqueue_event(
-                        &event_tx,
-                        QueuedEvent::Error(err.context("decode binary event batch")),
-                        queue_policy,
-                        queue_capacity,
-                    )
-                    .await;
-                    return;
-                }
-            }
-        } else {
-            let message =
-                match Message::decode(queued_frame.frame.clone()).context("decode message") {
-                    Ok(message) => message,
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        {
-                            let counters = frame_counters();
-                            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
-                        }
-                        log_decode_error("event_message", &err, &queued_frame.frame);
-                        let _ = enqueue_event(
-                            &event_tx,
-                            QueuedEvent::Error(err.context("decode message")),
-                            queue_policy,
-                            queue_capacity,
-                        )
-                        .await;
-                        return;
-                    }
-                };
-            #[cfg(feature = "telemetry")]
-            {
-                let counters = frame_counters();
-                counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
-            }
-            match message {
-                Message::Event { payload, .. } => {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let counters = frame_counters();
-                        counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
-                        counters.sub_items_in_ok.fetch_add(1, Ordering::Relaxed);
-                    }
-                    vec![Bytes::from(payload)]
-                }
-                Message::EventBatch { payloads, .. } => {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let counters = frame_counters();
-                        counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
-                        counters
-                            .sub_items_in_ok
-                            .fetch_add(payloads.len() as u64, Ordering::Relaxed);
-                    }
-                    payloads.into_iter().map(Bytes::from).collect()
-                }
-                _ => {
-                    let _ = enqueue_event(
-                        &event_tx,
-                        QueuedEvent::Error(anyhow::anyhow!(
-                            "unexpected message on subscription stream"
-                        )),
-                        queue_policy,
-                        queue_capacity,
-                    )
-                    .await;
-                    return;
-                }
-            }
-        };
+            };
 
         #[cfg(feature = "telemetry")]
         if let Some(start) = decode_start {

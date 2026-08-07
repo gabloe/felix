@@ -62,6 +62,7 @@ D) Protocol invariants we rely on
    - Any acked publish (AckMode != None) must have a request_id.
    - Acks must match request_id (server is allowed to pipeline / reorder).
    - For subscriptions, the first frame on the uni stream must be EventStreamHello.
+   - Subsequent shared event batches are bound by that stream and carry no subscription_id.
 */
 #[macro_use]
 mod macros;

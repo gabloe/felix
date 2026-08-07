@@ -69,6 +69,16 @@ Sub-millisecond p999 at fanout 1; low-single-digit-ms p999 at fanout 10.
 Every row completes with `delivery drops 0`: these are sustainable rates under
 end-to-end backpressure, not burst rates measured while shedding load.
 
+### Encode-once fanout CPU efficiency
+
+An A/B run of 200 K deliveries at 1 KiB × fanout 10 showed broker/client
+user-space CPU falling from 1.43–1.61 s to 0.58–0.67 s after shared event-frame
+fanout: roughly **60% less user CPU per delivered message**. Delivered
+throughput remained within variance at 410–431 K msg/s because macOS loopback
+was dominated by UDP kernel time; the same change improved 4 KiB × fanout 10
+p99 latency from 365 ms to 221 ms. Linux GSO/GRO results should be measured
+separately before extrapolating throughput gains.
+
 ## The transport levers that matter
 
 These findings came out of profiling the QUIC path and are wired into

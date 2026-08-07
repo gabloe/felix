@@ -26,10 +26,12 @@
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
-use felix_broker::Broker;
+use felix_broker::{Broker, StreamHandle};
 use felix_wire::{Frame, Message};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::collections::hash_map::DefaultHasher;
+#[cfg(test)]
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,24 +48,34 @@ use crate::transport::quic::{
     GLOBAL_INGRESS_DEPTH, STREAM_CACHE_TTL,
 };
 
+pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Instant)>;
+
 /// Work item consumed by publish workers.
 ///
 /// A publish job is the unit the broker’s ingress pipeline processes:
-/// - It identifies the target stream (`tenant_id`, `namespace`, `stream`).
+/// - It identifies the target stream with a resolved handle.
 /// - It carries one or more payloads (single publish or batch).
 /// - `response` is **only** used when the publish was received on the control stream and the
 ///   client requested an ack in commit-ack mode (`ack_on_commit = true`).
 ///
 /// For uni-stream publishes and enqueue-ack mode, `response` is `None`.
 pub(crate) struct PublishJob {
-    pub(crate) tenant_id: String,
-    pub(crate) namespace: String,
-    pub(crate) stream: String,
+    pub(crate) target: PublishTarget,
     pub(crate) payloads: Vec<Bytes>,
     pub(crate) response: Option<oneshot::Sender<Result<()>>>,
     /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
     /// without ever being enqueued). See [`PublishAdmission`].
     pub(crate) admission_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+pub(crate) enum PublishTarget {
+    Resolved(StreamHandle),
+    #[cfg(test)]
+    Named {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+    },
 }
 
 /// Bounds total bytes queued-or-processing across all publish workers, independent of the
@@ -266,6 +278,7 @@ impl AckTimeoutState {
 ///
 /// This *must* be stable across processes for predictable performance; it does not need to be
 /// cryptographically secure.
+#[cfg(test)]
 pub(crate) fn publish_worker_index(
     tenant_id: &str,
     namespace: &str,
@@ -298,12 +311,15 @@ pub(crate) async fn enqueue_publish(
     mut job: PublishJob,
     policy: EnqueuePolicy,
 ) -> Result<bool> {
-    let worker_index = publish_worker_index(
-        &job.tenant_id,
-        &job.namespace,
-        &job.stream,
-        publish_ctx.worker_count,
-    );
+    let worker_index = match &job.target {
+        PublishTarget::Resolved(handle) => handle.id() as usize % publish_ctx.worker_count.max(1),
+        #[cfg(test)]
+        PublishTarget::Named {
+            tenant_id,
+            namespace,
+            stream,
+        } => publish_worker_index(tenant_id, namespace, stream, publish_ctx.worker_count),
+    };
     let worker = publish_ctx
         .workers
         .get(worker_index)
@@ -512,9 +528,11 @@ mod tests {
 
     fn make_job() -> PublishJob {
         PublishJob {
-            tenant_id: "tenant".to_string(),
-            namespace: "ns".to_string(),
-            stream: "stream".to_string(),
+            target: PublishTarget::Named {
+                tenant_id: "tenant".to_string(),
+                namespace: "ns".to_string(),
+                stream: "stream".to_string(),
+            },
             payloads: vec![Bytes::from_static(b"payload")],
             response: None,
             admission_permit: None,
@@ -2096,14 +2114,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_exists_cached_uses_cached_entry_until_cleared() {
+    async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         let broker = Broker::new(EphemeralCache::new().into());
         let mut cache = HashMap::new();
         let mut key = String::new();
 
-        let exists =
-            stream_exists_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
-        assert!(!exists, "no tenant/namespace yet");
+        let handle =
+            resolve_stream_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
+        assert!(handle.is_none(), "no tenant/namespace yet");
 
         broker.register_tenant("t1").await.expect("tenant");
         broker
@@ -2121,16 +2139,16 @@ mod tests {
             .expect("stream");
 
         let cached =
-            stream_exists_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
+            resolve_stream_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
         assert!(
-            !cached,
+            cached.is_none(),
             "cached miss should be returned until cache expires or clears"
         );
 
         cache.clear();
         let refreshed =
-            stream_exists_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
-        assert!(refreshed, "cache refresh should see stream");
+            resolve_stream_cached(&broker, &mut cache, &mut key, "t1", "ns", "stream").await;
+        assert!(refreshed.is_some(), "cache refresh should see stream");
     }
 
     #[tokio::test]
@@ -2973,7 +2991,7 @@ pub(crate) async fn handle_ack_enqueue_result(
 
 pub(crate) async fn handle_binary_publish_batch_control(
     broker: &Broker,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     frame: &Frame,
@@ -3023,7 +3041,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         timings::record_decode_ns(decode_ns);
         t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
     }
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3032,10 +3050,10 @@ pub(crate) async fn handle_binary_publish_batch_control(
         &batch.stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(());
-    }
+    };
     let span = tracing::info_span!(
         "publish_batch_binary",
         tenant_id = %batch.tenant_id,
@@ -3053,9 +3071,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id: batch.tenant_id,
-            namespace: batch.namespace,
-            stream: batch.stream,
+            target: PublishTarget::Resolved(stream_handle),
             payloads,
             response: None,
             admission_permit: None,
@@ -3088,7 +3104,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
 pub(crate) async fn handle_publish_message(
     broker: &Broker,
     publish_ctx: &PublishContext,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     throttled: bool,
     ack_on_commit: bool,
@@ -3209,7 +3225,7 @@ pub(crate) async fn handle_publish_message(
     } else {
         (None, None)
     };
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3218,7 +3234,7 @@ pub(crate) async fn handle_publish_message(
         &stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
@@ -3243,13 +3259,11 @@ pub(crate) async fn handle_publish_message(
             .await?;
         }
         return Ok(());
-    }
+    };
     let enqueue_result = enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id: tenant_id.clone(),
-            namespace: namespace.clone(),
-            stream: stream.clone(),
+            target: PublishTarget::Resolved(stream_handle),
             payloads: vec![Bytes::from(payload)],
             response: response_tx,
             admission_permit: None,
@@ -3444,7 +3458,7 @@ pub(crate) async fn handle_publish_message(
 pub(crate) async fn handle_publish_batch_message(
     broker: &Broker,
     publish_ctx: &PublishContext,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     throttled: bool,
     ack_on_commit: bool,
@@ -3563,7 +3577,7 @@ pub(crate) async fn handle_publish_batch_message(
         .await?;
         return Ok(());
     }
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3572,7 +3586,7 @@ pub(crate) async fn handle_publish_batch_message(
         &stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
@@ -3597,7 +3611,7 @@ pub(crate) async fn handle_publish_batch_message(
             .await?;
         }
         return Ok(());
-    }
+    };
     let payload_bytes = payloads
         .iter()
         .map(|payload| payload.len())
@@ -3613,9 +3627,7 @@ pub(crate) async fn handle_publish_batch_message(
     let enqueue_result = enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id: tenant_id.clone(),
-            namespace: namespace.clone(),
-            stream: stream.clone(),
+            target: PublishTarget::Resolved(stream_handle),
             payloads,
             response: response_tx,
             admission_permit: None,
@@ -3796,7 +3808,7 @@ pub(crate) async fn handle_publish_batch_message(
 
 pub(crate) async fn handle_binary_publish_batch_uni(
     broker: &Broker,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     frame: &Frame,
@@ -3842,7 +3854,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             .pub_items_in_ok
             .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
     }
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3851,10 +3863,10 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         &batch.stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
-    }
+    };
     let payloads = batch
         .payloads
         .into_iter()
@@ -3863,9 +3875,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
     match enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id: batch.tenant_id,
-            namespace: batch.namespace,
-            stream: batch.stream,
+            target: PublishTarget::Resolved(stream_handle),
             payloads,
             response: None,
             admission_permit: None,
@@ -3891,7 +3901,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_message_uni(
     broker: &Broker,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     tenant_id: String,
@@ -3906,7 +3916,7 @@ pub(crate) async fn handle_publish_message_uni(
         counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
         counters.pub_items_in_ok.fetch_add(1, Ordering::Relaxed);
     }
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3915,17 +3925,15 @@ pub(crate) async fn handle_publish_message_uni(
         &stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
-    }
+    };
 
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id,
-            namespace,
-            stream,
+            target: PublishTarget::Resolved(stream_handle),
             payloads: vec![Bytes::from(payload)],
             response: None,
             admission_permit: None,
@@ -3952,7 +3960,7 @@ pub(crate) async fn handle_publish_message_uni(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_batch_message_uni(
     broker: &Broker,
-    stream_cache: &mut HashMap<String, (bool, Instant)>,
+    stream_cache: &mut StreamHandleCache,
     stream_cache_key: &mut String,
     publish_ctx: &PublishContext,
     tenant_id: String,
@@ -3969,7 +3977,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
             .pub_items_in_ok
             .fetch_add(payloads.len() as u64, Ordering::Relaxed);
     }
-    if !stream_exists_cached(
+    let Some(stream_handle) = resolve_stream_cached(
         broker,
         stream_cache,
         stream_cache_key,
@@ -3978,18 +3986,16 @@ pub(crate) async fn handle_publish_batch_message_uni(
         &stream,
     )
     .await
-    {
+    else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
-    }
+    };
     let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
 
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            tenant_id,
-            namespace,
-            stream,
+            target: PublishTarget::Resolved(stream_handle),
             payloads,
             response: None,
             admission_permit: None,
@@ -4013,14 +4019,14 @@ pub(crate) async fn handle_publish_batch_message_uni(
     Ok(true)
 }
 
-pub(crate) async fn stream_exists_cached(
+pub(crate) async fn resolve_stream_cached(
     broker: &Broker,
-    cache: &mut HashMap<String, (bool, Instant)>,
+    cache: &mut StreamHandleCache,
     key_scratch: &mut String,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
-) -> bool {
+) -> Option<StreamHandle> {
     // Short-lived cache to avoid repeated stream lookups on hot paths.
     key_scratch.clear();
     let needed = tenant_id.len() + namespace.len() + stream.len() + 2;
@@ -4032,15 +4038,19 @@ pub(crate) async fn stream_exists_cached(
     key_scratch.push_str(namespace);
     key_scratch.push('\0');
     key_scratch.push_str(stream);
-    if let Some((exists, expires)) = cache.get(key_scratch.as_str())
+    if let Some((handle, expires)) = cache.get(key_scratch.as_str())
         && *expires > Instant::now()
+        && handle.as_ref().is_none_or(StreamHandle::is_active)
     {
-        return *exists;
+        return handle.clone();
     }
-    let exists = broker.stream_exists(tenant_id, namespace, stream).await;
+    let handle = broker
+        .resolve_stream_handle(tenant_id, namespace, stream)
+        .await
+        .ok();
     cache.insert(
         key_scratch.clone(),
-        (exists, Instant::now() + STREAM_CACHE_TTL),
+        (handle.clone(), Instant::now() + STREAM_CACHE_TTL),
     );
-    exists
+    handle
 }

@@ -248,7 +248,28 @@ impl Publisher {
         Ok(&workers[index])
     }
 
+    /// Publish one payload. Unacked publishes use the binary data-plane encoding by default;
+    /// acked publishes retain the JSON control encoding until binary acknowledgements are
+    /// negotiated by the protocol.
     pub async fn publish(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary(tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_json(tenant_id, namespace, stream, payload, ack)
+            .await
+    }
+
+    /// Publish one payload using the JSON compatibility encoding.
+    pub async fn publish_json(
         &self,
         tenant_id: &str,
         namespace: &str,
@@ -306,7 +327,26 @@ impl Publisher {
         response_rx.await.context("publish response dropped")?
     }
 
+    /// Publish a batch. Unacked batches use binary encoding by default.
     pub async fn publish_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary(tenant_id, namespace, stream, &payloads)
+                .await;
+        }
+        self.publish_batch_json(tenant_id, namespace, stream, payloads, ack)
+            .await
+    }
+
+    /// Publish a batch using the JSON compatibility encoding.
+    pub async fn publish_batch_json(
         &self,
         tenant_id: &str,
         namespace: &str,
@@ -958,6 +998,84 @@ mod tests {
             .await
             .expect("publish ack");
         publisher.finish().await.expect("finish");
+    }
+
+    #[tokio::test]
+    async fn unacked_publish_defaults_to_binary_and_json_is_explicit() {
+        let (tx, mut rx) = mpsc::channel::<PublishRequest>(2);
+        let publisher = Publisher {
+            inner: Arc::new(PublisherInner::new(
+                Arc::new(vec![PublishWorker {
+                    tx,
+                    handle: tokio::sync::Mutex::new(None),
+                    request_counter: AtomicU64::new(1),
+                }]),
+                PublishSharding::RoundRobin,
+            )),
+        };
+
+        let binary_publish = tokio::spawn({
+            let publisher = publisher.clone();
+            async move {
+                publisher
+                    .publish("t", "ns", "s", b"binary".to_vec(), AckMode::None)
+                    .await
+            }
+        });
+        let request = rx.recv().await.expect("binary request");
+        match request {
+            PublishRequest::BinaryBytes {
+                bytes,
+                item_count,
+                response,
+                ..
+            } => {
+                let frame = felix_wire::Frame::decode(bytes).expect("binary frame");
+                let batch = felix_wire::binary::decode_publish_batch(&frame).expect("binary batch");
+                assert_eq!(item_count, 1);
+                assert_eq!(batch.payloads.len(), 1);
+                // In telemetry builds, `runtime_config()` is a process-global OnceLock:
+                // parallel #[serial] env tests can leave FELIX_BENCH_EMBED_TS enabled at
+                // first initialization, which appends an 8-byte bench timestamp to the
+                // payload. Accept either shape — this test asserts the *encoding path*,
+                // not the embed feature.
+                let payload = &batch.payloads[0];
+                assert!(payload.starts_with(b"binary"));
+                assert!(
+                    payload.len() == b"binary".len() || payload.len() == b"binary".len() + 8,
+                    "unexpected payload shape: {payload:?}"
+                );
+                let _ = response.send(Ok(()));
+            }
+            _ => panic!("unacked publish should use binary encoding"),
+        }
+        binary_publish
+            .await
+            .expect("binary task")
+            .expect("binary publish");
+
+        let json_publish = tokio::spawn({
+            let publisher = publisher.clone();
+            async move {
+                publisher
+                    .publish_json("t", "ns", "s", b"json".to_vec(), AckMode::None)
+                    .await
+            }
+        });
+        let request = rx.recv().await.expect("json request");
+        match request {
+            PublishRequest::Message {
+                message, response, ..
+            } => {
+                assert!(matches!(message, Message::Publish { .. }));
+                let _ = response.send(Ok(()));
+            }
+            _ => panic!("explicit JSON publish should use message encoding"),
+        }
+        json_publish
+            .await
+            .expect("json task")
+            .expect("json publish");
     }
 
     #[tokio::test]
