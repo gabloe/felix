@@ -16,7 +16,8 @@ use std::sync::OnceLock;
 
 use crate::client::sharding::PublishSharding;
 
-pub(crate) const PUBLISH_QUEUE_DEPTH: usize = 1024;
+pub(crate) const DEFAULT_PUBLISH_QUEUE_DEPTH: usize = 64;
+pub(crate) const DEFAULT_PUBLISH_INFLIGHT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CACHE_WORKER_QUEUE_DEPTH: usize = 1024;
 pub(crate) const EVENT_ROUTER_QUEUE_DEPTH: usize = 1024;
 pub(crate) const DEFAULT_PUBLISH_CHUNK_BYTES: usize = 16 * 1024;
@@ -53,7 +54,7 @@ pub(crate) const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 /// Either case can happen due to bugs or a malicious peer; we cap memory usage.
 /// Override with `FELIX_EVENT_ROUTER_MAX_PENDING`.
 pub(crate) const DEFAULT_EVENT_ROUTER_MAX_PENDING: usize = 16 * 1024;
-pub(crate) const DEFAULT_CLIENT_SUB_QUEUE_CAPACITY: usize = 4096;
+pub(crate) const DEFAULT_CLIENT_SUB_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientSubQueuePolicy {
@@ -79,6 +80,8 @@ pub struct ClientConfig {
     pub publish_conn_pool: usize,
     pub publish_streams_per_conn: usize,
     pub publish_chunk_bytes: usize,
+    pub publish_queue_depth: usize,
+    pub publish_inflight_bytes: usize,
     pub publish_sharding: PublishSharding,
     pub auth_tenant_id: Option<String>,
     pub auth_token: Option<String>,
@@ -116,6 +119,8 @@ struct ClientConfigOverride {
     publish_conn_pool: Option<usize>,
     publish_streams_per_conn: Option<usize>,
     publish_chunk_bytes: Option<usize>,
+    publish_queue_depth: Option<usize>,
+    publish_inflight_bytes: Option<usize>,
     publish_sharding: Option<String>,
     auth_tenant_id: Option<String>,
     auth_token: Option<String>,
@@ -164,6 +169,8 @@ impl ClientConfig {
             publish_conn_pool: DEFAULT_PUB_CONN_POOL,
             publish_streams_per_conn: DEFAULT_PUB_STREAMS_PER_CONN,
             publish_chunk_bytes: DEFAULT_PUBLISH_CHUNK_BYTES,
+            publish_queue_depth: DEFAULT_PUBLISH_QUEUE_DEPTH,
+            publish_inflight_bytes: DEFAULT_PUBLISH_INFLIGHT_BYTES,
             publish_sharding: PublishSharding::HashStream,
             auth_tenant_id: None,
             auth_token: None,
@@ -178,7 +185,7 @@ impl ClientConfig {
             cache_send_window: DEFAULT_CACHE_SEND_WINDOW,
             event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
             client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
-            client_sub_queue_policy: ClientSubQueuePolicy::Block,
+            client_sub_queue_policy: ClientSubQueuePolicy::DropNew,
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             bench_embed_ts: false,
         }
@@ -194,6 +201,12 @@ impl ClientConfig {
         }
         if let Some(value) = read_usize_env("FELIX_PUBLISH_CHUNK_BYTES") {
             config.publish_chunk_bytes = value;
+        }
+        if let Some(value) = read_usize_env("FELIX_PUBLISH_QUEUE_DEPTH") {
+            config.publish_queue_depth = value;
+        }
+        if let Some(value) = read_usize_env("FELIX_PUBLISH_INFLIGHT_BYTES") {
+            config.publish_inflight_bytes = value;
         }
         if let Some(value) = PublishSharding::from_env() {
             config.publish_sharding = value;
@@ -285,6 +298,16 @@ impl ClientConfigOverride {
             && value > 0
         {
             config.publish_chunk_bytes = value;
+        }
+        if let Some(value) = self.publish_queue_depth
+            && value > 0
+        {
+            config.publish_queue_depth = value;
+        }
+        if let Some(value) = self.publish_inflight_bytes
+            && value > 0
+        {
+            config.publish_inflight_bytes = value;
         }
         if let Some(value) = &self.publish_sharding
             && let Some(parsed) = parse_sharding(value)
@@ -381,7 +404,7 @@ pub(crate) fn runtime_config() -> &'static ClientRuntimeConfig {
         event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
         max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
         client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
-        client_sub_queue_policy: ClientSubQueuePolicy::Block,
+        client_sub_queue_policy: ClientSubQueuePolicy::DropNew,
         #[cfg(feature = "telemetry")]
         bench_embed_ts: false,
     })

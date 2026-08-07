@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 #[cfg(feature = "telemetry")]
 use crate::counters::frame_counters;
@@ -32,17 +32,64 @@ pub(crate) struct PublisherInner {
     pub(crate) workers: Arc<Vec<PublishWorker>>,
     pub(crate) sharding: PublishSharding,
     pub(crate) rr: AtomicUsize,
+    admission: Arc<PublishAdmission>,
     stream_cache: Mutex<StreamShardCache>,
 }
 
 impl PublisherInner {
+    #[cfg(test)]
     pub(crate) fn new(workers: Arc<Vec<PublishWorker>>, sharding: PublishSharding) -> Self {
+        Self::with_admission(
+            workers,
+            sharding,
+            Arc::new(PublishAdmission::new(
+                crate::config::DEFAULT_PUBLISH_INFLIGHT_BYTES,
+            )),
+        )
+    }
+
+    pub(crate) fn with_admission(
+        workers: Arc<Vec<PublishWorker>>,
+        sharding: PublishSharding,
+        admission: Arc<PublishAdmission>,
+    ) -> Self {
         Self {
             workers,
             sharding,
             rr: AtomicUsize::new(0),
+            admission,
             stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
         }
+    }
+}
+
+pub(crate) struct PublishAdmission {
+    semaphore: Arc<Semaphore>,
+    limit: usize,
+}
+
+impl PublishAdmission {
+    pub(crate) fn new(limit: usize) -> Self {
+        let limit = limit.clamp(1, u32::MAX as usize);
+        Self {
+            semaphore: Arc::new(Semaphore::new(limit)),
+            limit,
+        }
+    }
+
+    async fn acquire(&self, wire_bytes: usize) -> Result<OwnedSemaphorePermit> {
+        let wire_bytes = wire_bytes.max(1);
+        if wire_bytes > self.limit {
+            return Err(anyhow::anyhow!(
+                "publish frame estimate {wire_bytes} exceeds in-flight byte limit {}",
+                self.limit
+            ));
+        }
+        self.semaphore
+            .clone()
+            .acquire_many_owned(wire_bytes as u32)
+            .await
+            .map_err(|_| anyhow::anyhow!("publish admission closed"))
     }
 }
 
@@ -57,12 +104,14 @@ pub(crate) enum PublishRequest {
         message: Message,
         ack: AckMode,
         request_id: Option<u64>,
+        _permit: OwnedSemaphorePermit,
         response: oneshot::Sender<Result<()>>,
     },
     BinaryBytes {
         bytes: Bytes,
         item_count: usize,
         sample: bool,
+        _permit: OwnedSemaphorePermit,
         response: oneshot::Sender<Result<()>>,
     },
     Finish {
@@ -155,6 +204,18 @@ fn hash_stream_index(tenant_id: &str, namespace: &str, stream: &str, worker_coun
     (hasher.finish() as usize) % worker_count
 }
 
+fn estimate_text_publish_bytes(message: &Message) -> usize {
+    let payload_bytes = match message {
+        Message::Publish { payload, .. } => payload.len(),
+        Message::PublishBatch { payloads, .. } => payloads.iter().map(Vec::len).sum(),
+        _ => 0,
+    };
+    // JSON byte arrays can require up to four characters per byte including separators.
+    FrameHeader::LEN
+        .saturating_add(payload_bytes.saturating_mul(4))
+        .saturating_add(1024)
+}
+
 impl Publisher {
     fn select_worker(
         &self,
@@ -204,6 +265,19 @@ impl Publisher {
         } else {
             Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
         };
+        let message = Message::Publish {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            payload,
+            request_id,
+            ack: Some(ack),
+        };
+        let permit = self
+            .inner
+            .admission
+            .acquire(estimate_text_publish_bytes(&message))
+            .await?;
         #[cfg(feature = "telemetry")]
         let sample = crate::t_should_sample();
         #[cfg(not(feature = "telemetry"))]
@@ -215,16 +289,10 @@ impl Publisher {
         worker
             .tx
             .send(PublishRequest::Message {
-                message: Message::Publish {
-                    tenant_id: tenant_id.to_string(),
-                    namespace: namespace.to_string(),
-                    stream: stream.to_string(),
-                    payload,
-                    request_id,
-                    ack: Some(ack),
-                },
+                message,
                 ack,
                 request_id,
+                _permit: permit,
                 response: response_tx,
             })
             .await
@@ -255,6 +323,19 @@ impl Publisher {
         } else {
             Some(worker.request_counter.fetch_add(1, Ordering::Relaxed))
         };
+        let message = Message::PublishBatch {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            payloads,
+            request_id,
+            ack: Some(ack),
+        };
+        let permit = self
+            .inner
+            .admission
+            .acquire(estimate_text_publish_bytes(&message))
+            .await?;
         #[cfg(feature = "telemetry")]
         let sample = crate::t_should_sample();
         #[cfg(not(feature = "telemetry"))]
@@ -266,16 +347,10 @@ impl Publisher {
         worker
             .tx
             .send(PublishRequest::Message {
-                message: Message::PublishBatch {
-                    tenant_id: tenant_id.to_string(),
-                    namespace: namespace.to_string(),
-                    stream: stream.to_string(),
-                    payloads,
-                    request_id,
-                    ack: Some(ack),
-                },
+                message,
                 ack,
                 request_id,
+                _permit: permit,
                 response: response_tx,
             })
             .await
@@ -336,6 +411,7 @@ impl Publisher {
                 .binary_encode_reallocs
                 .fetch_add(stats.reallocs, Ordering::Relaxed);
         }
+        let permit = self.inner.admission.acquire(bytes.len()).await?;
         let (response_tx, response_rx) = oneshot::channel();
         #[cfg(feature = "telemetry")]
         let enqueue_start = crate::t_now_if(sample);
@@ -345,6 +421,7 @@ impl Publisher {
                 bytes,
                 item_count: payloads.len(),
                 sample,
+                _permit: permit,
                 response: response_tx,
             })
             .await
@@ -393,6 +470,7 @@ impl Publisher {
                 .binary_encode_reallocs
                 .fetch_add(stats.reallocs, Ordering::Relaxed);
         }
+        let permit = self.inner.admission.acquire(bytes.len()).await?;
         let (response_tx, response_rx) = oneshot::channel();
         #[cfg(feature = "telemetry")]
         let enqueue_start = crate::t_now_if(sample);
@@ -402,6 +480,7 @@ impl Publisher {
                 bytes,
                 item_count: payloads.len(),
                 sample,
+                _permit: permit,
                 response: response_tx,
             })
             .await
@@ -461,6 +540,7 @@ pub(crate) async fn run_publisher_writer(
                 message,
                 ack,
                 request_id,
+                _permit,
                 response,
             } => match message {
                 Message::PublishBatch {
@@ -679,6 +759,7 @@ pub(crate) async fn run_publisher_writer(
                 bytes,
                 item_count,
                 sample,
+                _permit,
                 response,
             } => {
                 #[cfg(not(feature = "telemetry"))]
@@ -793,6 +874,35 @@ mod tests {
     use rustls::RootCertStore;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    fn test_publish_permit() -> OwnedSemaphorePermit {
+        Arc::new(Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("test publish permit")
+    }
+
+    #[tokio::test]
+    async fn publish_admission_bounds_shared_inflight_bytes() {
+        let admission = PublishAdmission::new(4);
+        let permit = admission.acquire(4).await.expect("initial permit");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), admission.acquire(1))
+                .await
+                .is_err()
+        );
+        drop(permit);
+        let _permit = admission.acquire(1).await.expect("released permit");
+    }
+
+    #[tokio::test]
+    async fn publish_admission_rejects_oversized_frame() {
+        let err = PublishAdmission::new(4)
+            .acquire(5)
+            .await
+            .expect_err("oversized publish");
+        assert!(err.to_string().contains("exceeds in-flight byte limit"));
+    }
 
     fn make_publisher(sharding: PublishSharding, workers: usize) -> Publisher {
         let mut publish_workers = Vec::with_capacity(workers);
@@ -1052,12 +1162,10 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
-            let (_send, mut recv) = connection.accept_bi().await?;
-            let drain_task = tokio::spawn(async move {
-                let _ = recv.read_to_end(1024 * 1024).await;
-            });
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            recv.read_to_end(1024 * 1024).await?;
+            send.finish()?;
             let _ = shutdown_rx.await;
-            drain_task.abort();
             Ok::<(), anyhow::Error>(())
         });
 
@@ -1079,6 +1187,7 @@ mod tests {
             },
             ack: AckMode::None,
             request_id: None,
+            _permit: test_publish_permit(),
             response: response_tx,
         })
         .await
@@ -1086,8 +1195,8 @@ mod tests {
 
         let response = response_rx.await.context("response dropped");
         drop(tx);
-        let _ = shutdown_tx.send(());
         let writer_result = writer_task.await.context("writer join");
+        let _ = shutdown_tx.send(());
         let server_result = server_task.await.context("server join");
         if let Err(err) = server_result {
             return Err(err);
@@ -1113,12 +1222,10 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
-            let (_send, mut recv) = connection.accept_bi().await?;
-            let drain_task = tokio::spawn(async move {
-                let _ = recv.read_to_end(1024 * 1024).await;
-            });
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            recv.read_to_end(1024 * 1024).await?;
+            send.finish()?;
             let _ = shutdown_rx.await;
-            drain_task.abort();
             Ok::<(), anyhow::Error>(())
         });
 
@@ -1136,6 +1243,7 @@ mod tests {
             bytes,
             item_count: payloads.len(),
             sample: false,
+            _permit: test_publish_permit(),
             response: response_tx,
         })
         .await
@@ -1143,8 +1251,8 @@ mod tests {
 
         let response = response_rx.await.context("response dropped");
         drop(tx);
-        let _ = shutdown_tx.send(());
         let writer_result = writer_task.await.context("writer join");
+        let _ = shutdown_tx.send(());
         let server_result = server_task.await.context("server join");
         if let Err(err) = server_result {
             return Err(err);
@@ -1211,6 +1319,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(1),
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1226,6 +1335,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(2),
+            _permit: test_publish_permit(),
             response: resp_tx2,
         })
         .await
@@ -1293,6 +1403,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(9),
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1308,6 +1419,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(10),
+            _permit: test_publish_permit(),
             response: resp_tx2,
         })
         .await
@@ -1361,6 +1473,7 @@ mod tests {
             bytes,
             item_count: payloads.len(),
             sample: false,
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1418,6 +1531,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(7),
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1483,6 +1597,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(99),
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1498,6 +1613,7 @@ mod tests {
             },
             ack: AckMode::PerMessage,
             request_id: Some(100),
+            _permit: test_publish_permit(),
             response: resp_tx2,
         })
         .await
@@ -1546,6 +1662,7 @@ mod tests {
             },
             ack: AckMode::None,
             request_id: None,
+            _permit: test_publish_permit(),
             response: resp_tx,
         })
         .await
@@ -1577,6 +1694,7 @@ mod tests {
             },
             ack: AckMode::None,
             request_id: None,
+            _permit: test_publish_permit(),
             response: resp_tx1,
         })
         .await
@@ -1585,6 +1703,7 @@ mod tests {
             bytes: Bytes::from_static(b"bin"),
             item_count: 1,
             sample: false,
+            _permit: test_publish_permit(),
             response: resp_tx2,
         })
         .await
