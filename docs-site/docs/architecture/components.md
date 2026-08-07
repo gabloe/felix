@@ -198,7 +198,7 @@ The publish pipeline is optimized for both latency and throughput:
 
 ```yaml
 pub_workers_per_conn: 4      # Worker parallelism per connection
-pub_queue_depth: 1024         # Bounded queue size
+pub_queue_depth: 64           # Bounded queue size
 publish_chunk_bytes: 16384    # Chunking for large payloads
 ```
 
