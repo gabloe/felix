@@ -1106,23 +1106,38 @@ async fn setup_subscribers(
 }
 
 async fn publish_batches(publisher: &Publisher, config: &PublishBatchConfig) -> Result<()> {
-    let mut remaining = config.total;
+    // Send each stream exactly `per_stream_events(total, ...)` events — the
+    // same split subscriber accounting assumes. Batch-granular round-robin
+    // over a single global counter would skew per-stream totals (whole batches
+    // land on early streams), misclassifying warmup boundaries and leaving
+    // drain tasks waiting on events that never arrive.
+    let stream_count = config.stream_count.max(1);
+    let mut remaining: Vec<usize> = (0..stream_count)
+        .map(|index| per_stream_events(config.total, stream_count, index))
+        .collect();
     let mut stream_index = 0usize;
     let mut sent_batches = 0usize;
-    while remaining > 0 {
-        let count = remaining.min(config.batch_size);
+    while remaining.iter().any(|&count| count > 0) {
+        // Round-robin across streams that still have events to send.
+        let mut probes = 0usize;
+        while remaining[stream_index % stream_count] == 0 && probes < stream_count {
+            stream_index = stream_index.wrapping_add(1);
+            probes += 1;
+        }
+        let index = stream_index % stream_count;
+        let count = remaining[index].min(config.batch_size);
         publish_batch(
             publisher,
             config.payload_bytes,
             count,
             config.binary,
             config.use_ack,
-            stream_index,
+            index,
             config.stream_count,
         )
         .await?;
+        remaining[index] -= count;
         stream_index = stream_index.wrapping_add(1);
-        remaining -= count;
         sent_batches = sent_batches.wrapping_add(1);
         if config.pub_yield_every_batches > 0
             && sent_batches.is_multiple_of(config.pub_yield_every_batches)

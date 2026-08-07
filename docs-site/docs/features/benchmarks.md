@@ -122,9 +122,12 @@ backpressure vs. shed-on-overload), subscriber queue policies
 (`block` / `drop_new` / `drop_old`) and depths, and `core_shards`
 (`FELIX_CORE_SHARDS`) — thread-per-core stream ownership: each stream's
 publish worker and lane feeders run on a dedicated core-pinned runtime
-(Linux pinning; dedicated threads elsewhere). Measured +34% delivered
-throughput on a 4-stream × fanout-4 workload with 4 shards, unpinned macOS;
-benefits scale with stream count, single-stream shapes are neutral.
+(Linux pinning; dedicated threads elsewhere). Measured lossless (zero drops):
++27% on a 4-stream × fanout-4 workload (1.24M → 1.59M msg/s, unpinned macOS);
+on Linux (devcontainer), +25% single-stream (1 KiB × fanout 10: 1.63M → 2.04M
+msg/s) and parity-to-2.5× multi-stream with high environment variance — never
+below baseline in any run. Opt-in until bare-metal numbers tighten the
+multi-stream claim.
 
 ## Saturation behavior
 
