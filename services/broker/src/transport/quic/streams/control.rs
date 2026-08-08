@@ -38,12 +38,11 @@ use felix_authz::{
 };
 use felix_broker::Broker;
 use felix_wire::Message;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
 use crate::auth::{AuthContext, BrokerAuth};
@@ -51,9 +50,9 @@ use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::transport::quic::handlers::publish::{
-    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, handle_ack_enqueue_result,
-    handle_binary_publish_batch_control, handle_publish_batch_message, handle_publish_message,
-    send_outgoing_best_effort, send_outgoing_critical,
+    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
+    handle_ack_enqueue_result, handle_binary_publish_batch_control, handle_publish_batch_message,
+    handle_publish_message, send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::transport::quic::handlers::subscribe::handle_subscribe_message;
 use crate::transport::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
@@ -82,7 +81,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     config: BrokerConfig,
     auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
-    mut stream_cache: HashMap<String, (bool, Instant)>,
+    mut stream_cache: StreamHandleCache,
     mut stream_cache_key: String,
     out_ack_tx: mpsc::Sender<Outgoing>,
     out_ack_depth: Arc<AtomicUsize>,

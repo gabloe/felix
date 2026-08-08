@@ -8,9 +8,8 @@ use felix_storage::StorageApi;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 use slab::Slab;
-use smallvec::SmallVec;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
@@ -78,6 +77,8 @@ pub enum BrokerError {
         namespace: String,
         stream: String,
     },
+    #[error("stream handle {0} is no longer active")]
+    StreamHandleInactive(u64),
     #[error("tenant not found: {0}")]
     TenantNotFound(String),
     #[error("namespace not found: tenant={tenant_id} namespace={namespace}")]
@@ -118,6 +119,8 @@ struct LogEntry {
 
 #[derive(Debug)]
 struct StreamState {
+    handle_id: u64,
+    active: AtomicBool,
     // Snapshot used by publish hot path: lock-free read, no per-publish allocation.
     subscribers_snapshot: ArcSwap<Vec<SubscriberEntry>>,
     // Inner registry mutated only on subscribe/unsubscribe paths.
@@ -145,21 +148,51 @@ struct SubscriberEntry {
 
 #[derive(Debug, Clone)]
 pub struct DeliveryEnvelope {
-    payload: Bytes,
+    inner: Arc<DeliveryBatch>,
+}
+
+#[derive(Debug)]
+struct DeliveryBatch {
+    payloads: Arc<[Bytes]>,
     enqueued_at: Instant,
+    encoded_frame: Mutex<Option<Bytes>>,
 }
 
 impl DeliveryEnvelope {
-    pub fn payload(&self) -> &Bytes {
-        &self.payload
+    fn new(payloads: &[Bytes]) -> Self {
+        Self {
+            inner: Arc::new(DeliveryBatch {
+                payloads: Arc::from(payloads),
+                enqueued_at: Instant::now(),
+                encoded_frame: Mutex::new(None),
+            }),
+        }
     }
 
-    pub fn into_payload(self) -> Bytes {
-        self.payload
+    pub fn payloads(&self) -> &[Bytes] {
+        &self.inner.payloads
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.payloads.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.payloads.is_empty()
+    }
+
+    pub fn shared_event_frame(&self) -> felix_wire::Result<Bytes> {
+        let mut cached = self.inner.encoded_frame.lock();
+        if let Some(frame) = cached.as_ref() {
+            return Ok(frame.clone());
+        }
+        let frame = felix_wire::binary::encode_shared_event_batch_bytes(&self.inner.payloads)?;
+        *cached = Some(frame.clone());
+        Ok(frame)
     }
 
     pub fn enqueued_at(&self) -> Instant {
-        self.enqueued_at
+        self.inner.enqueued_at
     }
 }
 
@@ -172,8 +205,14 @@ struct LogState {
 }
 
 impl StreamState {
-    fn new(subscriber_queue_capacity: usize, subscriber_queue_policy: SubQueuePolicy) -> Self {
+    fn new(
+        handle_id: u64,
+        subscriber_queue_capacity: usize,
+        subscriber_queue_policy: SubQueuePolicy,
+    ) -> Self {
         Self {
+            handle_id,
+            active: AtomicBool::new(true),
             subscribers_snapshot: ArcSwap::from_pointee(Vec::new()),
             subscribers: Mutex::new(SubscriberRegistry::default()),
             log_state: Mutex::new(LogState {
@@ -184,6 +223,10 @@ impl StreamState {
             subscriber_queue_policy,
             queued_items: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
     }
 
     fn register_subscriber(&self) -> (u64, SubscriptionReceiver) {
@@ -314,11 +357,11 @@ impl StreamState {
         state.next_seq
     }
 
-    fn increment_queue_depth(&self) {
-        let _ = self.queued_items.fetch_add(1, Ordering::Relaxed) + 1;
-        let global = GLOBAL_SUB_QUEUE_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+    fn increment_queue_depth(&self, count: usize) {
+        let _ = self.queued_items.fetch_add(count, Ordering::Relaxed) + count;
+        let global = GLOBAL_SUB_QUEUE_DEPTH.fetch_add(count, Ordering::Relaxed) + count;
         metrics::gauge!("felix_sub_queue_len").set(global as f64);
-        metrics::counter!("felix_sub_queue_enqueued_total").increment(1);
+        metrics::counter!("felix_sub_queue_enqueued_total").increment(count as u64);
     }
 }
 
@@ -342,18 +385,28 @@ impl Drop for SubscriptionGuard {
 pub struct Subscription {
     receiver: SubscriptionReceiver,
     guard: SubscriptionGuard,
+    pending: VecDeque<Bytes>,
 }
 
 impl Subscription {
     pub async fn recv(&mut self) -> Option<Bytes> {
-        self.receiver
-            .recv()
-            .await
-            .map(DeliveryEnvelope::into_payload)
+        if let Some(payload) = self.pending.pop_front() {
+            return Some(payload);
+        }
+        let envelope = self.receiver.recv().await?;
+        self.pending.extend(envelope.payloads().iter().cloned());
+        self.pending.pop_front()
     }
 
     pub fn try_recv(&mut self) -> std::result::Result<Bytes, mpsc::error::TryRecvError> {
-        self.receiver.try_recv().map(DeliveryEnvelope::into_payload)
+        if let Some(payload) = self.pending.pop_front() {
+            return Ok(payload);
+        }
+        let envelope = self.receiver.try_recv()?;
+        self.pending.extend(envelope.payloads().iter().cloned());
+        self.pending
+            .pop_front()
+            .ok_or(mpsc::error::TryRecvError::Empty)
     }
 
     pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
@@ -377,14 +430,14 @@ impl SubscriptionReceiver {
 
     pub async fn recv(&mut self) -> Option<DeliveryEnvelope> {
         let value = self.receiver.recv().await?;
-        self.decrement_depth(1);
+        self.decrement_depth(value.len());
         Some(value)
     }
 
     pub fn try_recv(&mut self) -> std::result::Result<DeliveryEnvelope, mpsc::error::TryRecvError> {
         match self.receiver.try_recv() {
             Ok(value) => {
-                self.decrement_depth(1);
+                self.decrement_depth(value.len());
                 Ok(value)
             }
             Err(err) => Err(err),
@@ -412,7 +465,10 @@ impl SubscriptionReceiver {
 
 impl Drop for SubscriptionReceiver {
     fn drop(&mut self) {
-        let remaining = self.receiver.len();
+        let mut remaining = 0usize;
+        while let Ok(envelope) = self.receiver.try_recv() {
+            remaining = remaining.saturating_add(envelope.len());
+        }
         if remaining > 0 {
             self.decrement_depth(remaining);
         }
@@ -473,6 +529,7 @@ pub struct Broker {
     log_capacity: usize,
     // Subscriber queue backpressure policy.
     subscriber_queue_policy: SubQueuePolicy,
+    next_stream_handle: AtomicU64,
 }
 
 unsafe impl Send for Broker {}
@@ -481,6 +538,21 @@ unsafe impl Send for Broker {}
 pub struct StreamMetadata {
     pub durable: bool,
     pub shards: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamHandle {
+    state: Arc<StreamState>,
+}
+
+impl StreamHandle {
+    pub fn id(&self) -> u64 {
+        self.state.handle_id
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.state.active.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -636,6 +708,7 @@ impl Broker {
             topic_capacity: DEFAULT_TOPIC_CAPACITY,
             log_capacity: DEFAULT_LOG_CAPACITY,
             subscriber_queue_policy: DEFAULT_SUB_QUEUE_POLICY,
+            next_stream_handle: AtomicU64::new(1),
         }
     }
 
@@ -680,23 +753,34 @@ impl Broker {
         stream: &str,
         payloads: &[Bytes],
     ) -> Result<usize> {
-        self.assert_stream_exists(tenant_id, namespace, stream)
+        let sample = t_should_sample();
+        let lookup_start = t_now_if(sample);
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
             .await?;
+        if let Some(start) = lookup_start {
+            let lookup_ns = start.elapsed().as_nanos() as u64;
+            timings::record_lookup_ns(lookup_ns);
+            t_histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
+        }
+        self.publish_batch_to_handle(&handle, payloads).await
+    }
+
+    pub async fn publish_batch_to_handle(
+        &self,
+        handle: &StreamHandle,
+        payloads: &[Bytes],
+    ) -> Result<usize> {
+        if !handle.state.active.load(Ordering::Acquire) {
+            return Err(BrokerError::StreamHandleInactive(handle.id()));
+        }
 
         // Fan-out to current subscribers.
         // We intentionally avoid a global broadcast channel here:
         // each subscriber has a bounded queue and publish uses try_send so a slow consumer
         // drops locally instead of stalling all publishers.
         let sample = t_should_sample();
-        let lookup_start = t_now_if(sample);
-        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
-
-        if let Some(start) = lookup_start {
-            let lookup_ns = start.elapsed().as_nanos() as u64;
-            timings::record_lookup_ns(lookup_ns);
-            t_histogram!("broker_publish_lookup_ns").record(lookup_ns as f64);
-        }
-
+        let stream_state = &handle.state;
         let append_start = t_now_if(sample);
         // Append to the in-memory log first so cursors can replay.
         stream_state.append_batch(payloads, self.log_capacity);
@@ -722,132 +806,46 @@ impl Broker {
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
-        let mut payload_times: SmallVec<[Instant; 8]> = SmallVec::with_capacity(payloads.len());
-        payload_times.extend(payloads.iter().map(|_| Instant::now()));
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+        let envelope = DeliveryEnvelope::new(payloads);
+        let item_count = envelope.len();
         let enqueue_start = t_now_if(sample);
-        'subscribers: for subscriber in senders.iter() {
-            for (payload_idx, payload) in payloads.iter().enumerate() {
-                let enqueued_at = payload_times[payload_idx];
-                match stream_state.subscriber_queue_policy {
-                    SubQueuePolicy::Block => {
-                        metrics::counter!("felix_sub_shared_payload_clones_total").increment(1);
-                        let envelope = DeliveryEnvelope {
-                            payload: payload.clone(),
-                            enqueued_at,
-                        };
-                        if subscriber.sender.send(envelope).await.is_ok() {
-                            stream_state.increment_queue_depth();
-                            sent += 1;
-                        } else {
-                            closed_subscribers.push(subscriber.id as u64);
-                            break;
-                        }
+        for subscriber in senders.iter() {
+            match stream_state.subscriber_queue_policy {
+                SubQueuePolicy::Block => {
+                    metrics::counter!("felix_sub_shared_batch_handles_total").increment(1);
+                    if subscriber.sender.send(envelope.clone()).await.is_ok() {
+                        stream_state.increment_queue_depth(item_count);
+                        sent += item_count;
+                    } else {
+                        closed_subscribers.push(subscriber.id as u64);
                     }
-                    SubQueuePolicy::DropNew => {
-                        if payload_idx == 0 && payloads.len() > 1 {
-                            match subscriber.sender.try_reserve_many(payloads.len()) {
-                                Ok(mut permits) => {
-                                    for (payload_idx, payload) in payloads.iter().enumerate() {
-                                        let Some(permit) = permits.next() else {
-                                            break;
-                                        };
-                                        let enqueued_at = payload_times[payload_idx];
-                                        metrics::counter!("felix_sub_shared_payload_clones_total")
-                                            .increment(1);
-                                        let envelope = DeliveryEnvelope {
-                                            payload: payload.clone(),
-                                            enqueued_at,
-                                        };
-                                        permit.send(envelope);
-                                        stream_state.increment_queue_depth();
-                                        sent += 1;
-                                    }
-                                    continue 'subscribers;
-                                }
-                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                    closed_subscribers.push(subscriber.id as u64);
-                                    continue 'subscribers;
-                                }
-                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                    // Fall back to per-payload reservation to preserve drop-new semantics.
-                                }
-                            }
+                }
+                SubQueuePolicy::DropNew | SubQueuePolicy::DropOld => {
+                    match subscriber.sender.try_reserve() {
+                        Ok(permit) => {
+                            metrics::counter!("felix_sub_shared_batch_handles_total").increment(1);
+                            permit.send(envelope.clone());
+                            stream_state.increment_queue_depth(item_count);
+                            sent += item_count;
                         }
-                        match subscriber.sender.try_reserve() {
-                            Ok(permit) => {
-                                metrics::counter!("felix_sub_shared_payload_clones_total")
-                                    .increment(1);
-                                let envelope = DeliveryEnvelope {
-                                    payload: payload.clone(),
-                                    enqueued_at,
-                                };
-                                permit.send(envelope);
-                                stream_state.increment_queue_depth();
-                                sent += 1;
-                            }
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                metrics::counter!("felix_subscribe_dropped_total").increment(1);
-                                metrics::counter!("felix_sub_queue_dropped_total").increment(1);
-                            }
-                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                closed_subscribers.push(subscriber.id as u64);
-                                break;
-                            }
-                        }
-                    }
-                    SubQueuePolicy::DropOld => {
-                        // tokio::mpsc does not expose drop-head; emulate with drop-new semantics.
-                        if payload_idx == 0 && payloads.len() > 1 {
-                            match subscriber.sender.try_reserve_many(payloads.len()) {
-                                Ok(mut permits) => {
-                                    for (payload_idx, payload) in payloads.iter().enumerate() {
-                                        let Some(permit) = permits.next() else {
-                                            break;
-                                        };
-                                        let enqueued_at = payload_times[payload_idx];
-                                        metrics::counter!("felix_sub_shared_payload_clones_total")
-                                            .increment(1);
-                                        let envelope = DeliveryEnvelope {
-                                            payload: payload.clone(),
-                                            enqueued_at,
-                                        };
-                                        permit.send(envelope);
-                                        stream_state.increment_queue_depth();
-                                        sent += 1;
-                                    }
-                                    continue 'subscribers;
-                                }
-                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                    closed_subscribers.push(subscriber.id as u64);
-                                    continue 'subscribers;
-                                }
-                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                    // Fall back to per-payload reservation to preserve drop-old emulation.
-                                }
-                            }
-                        }
-                        match subscriber.sender.try_reserve() {
-                            Ok(permit) => {
-                                metrics::counter!("felix_sub_shared_payload_clones_total")
-                                    .increment(1);
-                                let envelope = DeliveryEnvelope {
-                                    payload: payload.clone(),
-                                    enqueued_at,
-                                };
-                                permit.send(envelope);
-                                stream_state.increment_queue_depth();
-                                sent += 1;
-                            }
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                metrics::counter!("felix_subscribe_dropped_total").increment(1);
-                                metrics::counter!("felix_sub_queue_dropped_total").increment(1);
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            metrics::counter!("felix_subscribe_dropped_total")
+                                .increment(item_count as u64);
+                            metrics::counter!("felix_sub_queue_dropped_total")
+                                .increment(item_count as u64);
+                            if matches!(
+                                stream_state.subscriber_queue_policy,
+                                SubQueuePolicy::DropOld
+                            ) {
                                 metrics::counter!("felix_sub_queue_drop_old_emulated_total")
-                                    .increment(1);
+                                    .increment(item_count as u64);
                             }
-                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                closed_subscribers.push(subscriber.id as u64);
-                                break;
-                            }
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            closed_subscribers.push(subscriber.id as u64);
                         }
                     }
                 }
@@ -907,11 +905,10 @@ impl Broker {
         namespace: &str,
         stream: &str,
     ) -> Result<Subscription> {
-        // Fast-path guard: reject unknown scopes before opening a receiver.
-        self.assert_stream_exists(tenant_id, namespace, stream)
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
             .await?;
-
-        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
+        let stream_state = handle.state;
         let (subscriber_id, receiver) = stream_state.register_subscriber();
         Ok(Subscription {
             receiver,
@@ -919,6 +916,7 @@ impl Broker {
                 stream_state: Arc::downgrade(&stream_state),
                 subscriber_id,
             },
+            pending: VecDeque::new(),
         })
     }
 
@@ -929,13 +927,12 @@ impl Broker {
         namespace: &str,
         stream: &str,
     ) -> Result<Cursor> {
-        // Fast-path guard: reject unknown scopes before touching the stream map.
-        self.assert_stream_exists(tenant_id, namespace, stream)
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
             .await?;
-        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
 
         Ok(Cursor {
-            next_seq: stream_state.tail_seq(),
+            next_seq: handle.state.tail_seq(),
         })
     }
 
@@ -948,11 +945,10 @@ impl Broker {
         stream: &str,
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, Subscription)> {
-        // Fast-path guard: reject unknown scopes before touching the stream map.
-        self.assert_stream_exists(tenant_id, namespace, stream)
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
             .await?;
-
-        let stream_state = self.get_stream_state(tenant_id, namespace, stream).await?;
+        let stream_state = handle.state;
 
         let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
         // TODO: Should we really return an error? Would this not just be all entries?
@@ -972,6 +968,7 @@ impl Broker {
                     stream_state: Arc::downgrade(&stream_state),
                     subscriber_id,
                 },
+                pending: VecDeque::new(),
             },
         ))
     }
@@ -1006,8 +1003,10 @@ impl Broker {
         let key = StreamKey::new(tenant_id, namespace, stream);
         self.streams.write().await.insert(key.clone(), metadata);
         let mut guard = self.topics.write().await;
+        let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
         guard.entry(key).or_insert_with(|| {
             Arc::new(StreamState::new(
+                handle_id,
                 self.topic_capacity,
                 self.subscriber_queue_policy,
             ))
@@ -1071,7 +1070,11 @@ impl Broker {
         let key = StreamKey::new(tenant_id, namespace, stream);
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
-            self.topics.write().await.remove(&key);
+            let mut topics = self.topics.write().await;
+            if let Some(state) = topics.get(&key) {
+                state.deactivate();
+            }
+            topics.remove(&key);
         }
         Ok(removed)
     }
@@ -1198,22 +1201,17 @@ impl Broker {
             })
     }
 
-    /// It is up to the caller to check for the error or not.
-    async fn assert_stream_exists(
+    pub async fn resolve_stream_handle(
         &self,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-    ) -> Result<()> {
-        if !self.stream_exists(tenant_id, namespace, stream).await {
-            return Err(BrokerError::StreamNotFound {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-            });
+    ) -> Result<StreamHandle> {
+        let state = self.get_stream_state(tenant_id, namespace, stream).await?;
+        if !state.active.load(Ordering::Acquire) {
+            return Err(BrokerError::StreamHandleInactive(state.handle_id));
         }
-
-        Ok(())
+        Ok(StreamHandle { state })
     }
 
     /// It is up to the caller to check for the error or not.
@@ -1316,7 +1314,7 @@ mod tests {
 
     #[test]
     fn append_batch_keeps_monotonic_sequences_and_trims_once() {
-        let stream = StreamState::new(8, SubQueuePolicy::DropNew);
+        let stream = StreamState::new(1, 8, SubQueuePolicy::DropNew);
         let first = vec![
             Bytes::from_static(b"a"),
             Bytes::from_static(b"b"),
@@ -1518,6 +1516,43 @@ mod tests {
             sub_b.recv().await.expect("recv"),
             Bytes::from_static(b"fanout")
         );
+    }
+
+    #[tokio::test]
+    async fn publish_batch_shares_one_encoded_frame_across_subscribers() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("register");
+        let (mut rx_a, _guard_a) = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe a")
+            .into_parts();
+        let (mut rx_b, _guard_b) = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe b")
+            .into_parts();
+        let payloads = [Bytes::from_static(b"one"), Bytes::from_static(b"two")];
+        broker
+            .publish_batch("t1", "default", "orders", &payloads)
+            .await
+            .expect("publish");
+
+        let envelope_a = rx_a.recv().await.expect("recv a");
+        let envelope_b = rx_b.recv().await.expect("recv b");
+        let frame_a = envelope_a.shared_event_frame().expect("encode a");
+        let frame_b = envelope_b.shared_event_frame().expect("encode b");
+
+        assert_eq!(frame_a, frame_b);
+        assert_eq!(frame_a.as_ptr(), frame_b.as_ptr());
     }
 
     #[tokio::test]
@@ -1734,6 +1769,65 @@ mod tests {
             .await
             .expect_err("stream");
         assert!(matches!(err, BrokerError::StreamNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn resolved_stream_handle_publishes_without_name_lookup() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("stream");
+        let mut sub = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe");
+        let handle = broker
+            .resolve_stream_handle("t1", "default", "orders")
+            .await
+            .expect("handle");
+
+        broker
+            .publish_batch_to_handle(&handle, &[Bytes::from_static(b"handled")])
+            .await
+            .expect("publish");
+        assert_eq!(
+            sub.recv().await.expect("delivery"),
+            Bytes::from_static(b"handled")
+        );
+    }
+
+    #[tokio::test]
+    async fn removed_stream_invalidates_resolved_handle() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("stream");
+        let handle = broker
+            .resolve_stream_handle("t1", "default", "orders")
+            .await
+            .expect("handle");
+        broker
+            .remove_stream("t1", "default", "orders")
+            .await
+            .expect("remove");
+
+        let err = broker
+            .publish_batch_to_handle(&handle, &[Bytes::from_static(b"stale")])
+            .await
+            .expect_err("stale handle");
+        assert!(matches!(err, BrokerError::StreamHandleInactive(id) if id == handle.id()));
     }
 
     #[tokio::test]

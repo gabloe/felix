@@ -10,18 +10,7 @@ Felix is a low-latency, QUIC-based distributed data backend that unifies three c
 
 Felix is built around core principles that differentiate it from traditional message brokers and caches:
 
-### 1. Sovereignty by Default
-
-Each Felix cluster represents a **single sovereign region**. Data cannot leave the region unless an explicit, configured bridge exists. This isn't just a deployment suggestion—it's enforced in routing, metadata, and encryption boundaries.
-
-This design is critical for:
-
-- Financial services with regional data regulations
-- Healthcare systems with patient data residency requirements
-- Government systems with strict data sovereignty rules
-- Multi-tenant SaaS platforms with customer-specific compliance needs
-
-### 2. Low Latency First
+### 1. Low Latency First
 
 Felix prioritizes **predictable low latency** over maximum batch throughput:
 
@@ -36,7 +25,7 @@ Real-world results (single-node localhost):
 - **Pub/Sub:** p50 ~40-50μs, p99 ~300-500μs (varies by payload and fanout)
 - **Cache:** p50 ~160-180μs, p99 ~350-450μs at concurrency=32
 
-### 3. One Core Log, Many Semantics
+### 2. One Core Log, Many Semantics
 
 Internally, Felix uses a single append-only log abstraction. Different external semantics are projections over this core:
 
@@ -46,7 +35,7 @@ Internally, Felix uses a single append-only log abstraction. Different external 
 
 This eliminates the operational complexity and consistency bugs from running multiple systems (Kafka + Redis + RabbitMQ) side-by-side.
 
-### 4. Kubernetes-Native
+### 3. Kubernetes-Native
 
 Felix assumes Kubernetes for:
 
