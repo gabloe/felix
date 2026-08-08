@@ -178,7 +178,7 @@ pub struct Subscription {
 
 **Buffer behavior**:
 
-- Each subscriber has `subscriber_queue_capacity` buffer slots (default: 128)
+- Each subscriber has `subscriber_queue_capacity` buffer slots (default: 512)
 - When buffer fills, new events are **dropped for that subscriber only**
 - Other subscribers continue receiving events normally
 - No explicit notification of drops in MVP (future: lag metrics)
@@ -187,12 +187,12 @@ pub struct Subscription {
 
 ```yaml
 # Broker config
-subscriber_queue_capacity: 128  # Per-subscriber buffer size
+subscriber_queue_capacity: 512  # Per-subscriber buffer size
 subscriber_writer_lanes: 4
 subscriber_lane_shard: auto
 
 # Larger buffer tolerates more bursty subscribers
-subscriber_queue_capacity: 256  # Trade memory for burst tolerance
+subscriber_queue_capacity: 4096  # Trade memory for burst tolerance
 ```
 
 !!! tip "Sizing Buffer Depth"
@@ -233,7 +233,7 @@ sequenceDiagram
 Publishers write to a bounded queue with configurable depth:
 
 ```yaml
-pub_queue_depth: 1024  # Bounded publish queue
+pub_queue_depth: 64  # Bounded publish queue
 publish_queue_wait_timeout_ms: 2000  # Timeout if queue full
 ```
 
@@ -249,7 +249,7 @@ When the publish queue is full:
 pub_workers_per_conn: 4
 
 # Increase buffer (trades latency for burst tolerance)
-pub_queue_depth: 2048
+pub_queue_depth: 256
 
 # Faster timeout for fail-fast behavior
 publish_queue_wait_timeout_ms: 1000

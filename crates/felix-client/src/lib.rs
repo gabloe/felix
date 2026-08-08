@@ -62,6 +62,7 @@ D) Protocol invariants we rely on
    - Any acked publish (AckMode != None) must have a request_id.
    - Acks must match request_id (server is allowed to pipeline / reorder).
    - For subscriptions, the first frame on the uni stream must be EventStreamHello.
+   - Subsequent shared event batches are bound by that stream and carry no subscription_id.
 */
 #[macro_use]
 mod macros;
@@ -78,7 +79,7 @@ pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
 pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
-pub use config::ClientConfig;
+pub use config::{ClientConfig, ClientSubQueuePolicy};
 pub use counters::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
 
 pub(crate) use macros::{t_now_if, t_should_sample};

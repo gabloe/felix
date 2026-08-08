@@ -1426,6 +1426,11 @@ fn config_optimized_defaults() {
         DEFAULT_PUB_STREAMS_PER_CONN
     );
     assert_eq!(config.publish_chunk_bytes, DEFAULT_PUBLISH_CHUNK_BYTES);
+    assert_eq!(config.publish_queue_depth, DEFAULT_PUBLISH_QUEUE_DEPTH);
+    assert_eq!(
+        config.publish_inflight_bytes,
+        DEFAULT_PUBLISH_INFLIGHT_BYTES
+    );
     assert_eq!(config.cache_conn_pool, DEFAULT_CACHE_CONN_POOL);
     assert_eq!(
         config.cache_streams_per_conn,
@@ -1458,7 +1463,10 @@ fn config_optimized_defaults() {
         config.client_sub_queue_capacity,
         DEFAULT_CLIENT_SUB_QUEUE_CAPACITY
     );
-    assert_eq!(config.client_sub_queue_policy, ClientSubQueuePolicy::Block);
+    assert_eq!(
+        config.client_sub_queue_policy,
+        ClientSubQueuePolicy::DropNew
+    );
     assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
     assert!(!config.bench_embed_ts);
 }
@@ -1473,6 +1481,8 @@ fn config_from_env_variables() {
         std::env::set_var("FELIX_PUB_CONN_POOL", "2");
         std::env::set_var("FELIX_PUB_STREAMS_PER_CONN", "3");
         std::env::set_var("FELIX_PUBLISH_CHUNK_BYTES", "32768");
+        std::env::set_var("FELIX_PUBLISH_QUEUE_DEPTH", "32");
+        std::env::set_var("FELIX_PUBLISH_INFLIGHT_BYTES", "2097152");
         std::env::set_var("FELIX_PUBLISH_SHARDING", "rr");
         std::env::set_var("FELIX_CACHE_CONN_POOL", "4");
         std::env::set_var("FELIX_CACHE_STREAMS_PER_CONN", "5");
@@ -1496,6 +1506,8 @@ fn config_from_env_variables() {
     assert_eq!(config.publish_conn_pool, 2);
     assert_eq!(config.publish_streams_per_conn, 3);
     assert_eq!(config.publish_chunk_bytes, 32768);
+    assert_eq!(config.publish_queue_depth, 32);
+    assert_eq!(config.publish_inflight_bytes, 2097152);
     assert_eq!(config.cache_conn_pool, 4);
     assert_eq!(config.cache_streams_per_conn, 5);
     assert_eq!(config.event_conn_pool, 6);
@@ -1516,6 +1528,8 @@ fn config_from_env_variables() {
         std::env::remove_var("FELIX_PUB_CONN_POOL");
         std::env::remove_var("FELIX_PUB_STREAMS_PER_CONN");
         std::env::remove_var("FELIX_PUBLISH_CHUNK_BYTES");
+        std::env::remove_var("FELIX_PUBLISH_QUEUE_DEPTH");
+        std::env::remove_var("FELIX_PUBLISH_INFLIGHT_BYTES");
         std::env::remove_var("FELIX_PUBLISH_SHARDING");
         std::env::remove_var("FELIX_CACHE_CONN_POOL");
         std::env::remove_var("FELIX_CACHE_STREAMS_PER_CONN");
@@ -1545,6 +1559,8 @@ fn config_from_yaml_file() {
 publish_conn_pool: 10
 publish_streams_per_conn: 20
 publish_chunk_bytes: 65536
+publish_queue_depth: 48
+publish_inflight_bytes: 3145728
 publish_sharding: "hash_stream"
 cache_conn_pool: 30
 cache_streams_per_conn: 40
@@ -1572,6 +1588,8 @@ bench_embed_ts: true
     assert_eq!(config.publish_conn_pool, 10);
     assert_eq!(config.publish_streams_per_conn, 20);
     assert_eq!(config.publish_chunk_bytes, 65536);
+    assert_eq!(config.publish_queue_depth, 48);
+    assert_eq!(config.publish_inflight_bytes, 3145728);
     assert_eq!(config.cache_conn_pool, 30);
     assert_eq!(config.cache_streams_per_conn, 40);
     assert_eq!(config.event_conn_pool, 50);
