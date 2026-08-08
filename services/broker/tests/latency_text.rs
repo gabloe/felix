@@ -112,7 +112,9 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let broker_config = broker::config::BrokerConfig::from_env()?;
+    let mut broker_config = broker::config::BrokerConfig::from_env()?;
+    broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
+    broker_config.subscriber_lane_queue_depth = 8192;
     let auth = auth_fixture("t1");
     let server_task = tokio::spawn(broker::quic::serve(
         Arc::clone(&server),
@@ -133,7 +135,7 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
         let count = remaining.min(batch_size);
         let payloads = (0..count).map(|_| payload.clone()).collect::<Vec<_>>();
         publisher
-            .publish_batch(
+            .publish_batch_json(
                 "t1",
                 "default",
                 "latency",
@@ -194,6 +196,8 @@ fn build_client_config(cert: CertificateDer<'static>, auth: &AuthFixture) -> Res
     roots.add(cert)?;
     let quinn = QuinnClientConfig::with_root_certificates(Arc::new(roots))?;
     let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
+    config.client_sub_queue_policy = felix_client::ClientSubQueuePolicy::Block;
+    config.client_sub_queue_capacity = 8192;
     config.auth_tenant_id = Some(auth.tenant_id.clone());
     config.auth_token = Some(auth.token.clone());
     Ok(config)

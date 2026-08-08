@@ -46,6 +46,15 @@ pub struct BrokerConfig {
     pub pub_workers_per_conn: usize,
     // Per-worker publish queue depth.
     pub pub_queue_depth: usize,
+    // Shared in-flight publish byte budget across all publish workers (process-wide).
+    pub pub_inflight_bytes: usize,
+    // If true, un-acked publishes wait (bounded) for ingress capacity instead of shedding.
+    // Off by default: fire-and-forget load should shed visibly under overload.
+    pub pub_ingress_wait: bool,
+    // Number of core-pinned shard executors owning stream work (0 = disabled).
+    // When enabled, publish workers and subscription lane feeders run on the
+    // shard owning their stream, keeping the per-message path core-local.
+    pub core_shards: usize,
     // Per-subscriber queue capacity in broker core.
     pub subscriber_queue_capacity: usize,
     // Subscriber queue policy for publish->fanout enqueue.
@@ -134,17 +143,18 @@ const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
-const DEFAULT_PUB_QUEUE_DEPTH: usize = 1024;
-const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 4096;
+const DEFAULT_PUB_QUEUE_DEPTH: usize = 64;
+const DEFAULT_PUB_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 512;
 const DEFAULT_SUBSCRIBER_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
 const DEFAULT_SUBSCRIBER_WRITER_LANES: usize = 4;
-const DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH: usize = 8192;
-const DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::Block;
+const DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH: usize = 64;
+const DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
 const DEFAULT_MAX_SUBSCRIBER_WRITER_LANES: usize = 8;
 const DEFAULT_SUBSCRIBER_LANE_SHARD: SubscriberLaneShard = SubscriberLaneShard::Auto;
-const DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS: usize = 64;
-const DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US: u64 = 200;
-const DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE: usize = 256 * 1024;
+const DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS: usize = 16;
+const DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US: u64 = 50;
+const DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE: usize = 64 * 1024;
 const DEFAULT_SUB_STREAMS_PER_CONN: usize = 4;
 const DEFAULT_SUB_STREAM_MODE: SubStreamMode = SubStreamMode::PerSubscriber;
 
@@ -169,6 +179,9 @@ struct BrokerConfigOverride {
     fanout_batch_size: Option<usize>,
     pub_workers_per_conn: Option<usize>,
     pub_queue_depth: Option<usize>,
+    pub_inflight_bytes: Option<usize>,
+    pub_ingress_wait: Option<bool>,
+    core_shards: Option<usize>,
     subscriber_queue_capacity: Option<usize>,
     subscriber_queue_policy: Option<String>,
     subscriber_writer_lanes: Option<usize>,
@@ -274,6 +287,19 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_PUB_QUEUE_DEPTH);
+        let pub_inflight_bytes = std::env::var("FELIX_BROKER_PUBLISH_INFLIGHT_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_INFLIGHT_BYTES);
+        let pub_ingress_wait = std::env::var("FELIX_PUB_INGRESS_WAIT")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let core_shards = std::env::var("FELIX_CORE_SHARDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
         let subscriber_queue_capacity = std::env::var("FELIX_SUBSCRIBER_QUEUE_CAPACITY")
             .ok()
             .or_else(|| std::env::var("FELIX_SUB_QUEUE_CAPACITY").ok())
@@ -357,6 +383,9 @@ impl BrokerConfig {
             fanout_batch_size,
             pub_workers_per_conn,
             pub_queue_depth,
+            pub_inflight_bytes,
+            pub_ingress_wait,
+            core_shards,
             subscriber_queue_capacity,
             subscriber_queue_policy,
             subscriber_writer_lanes,
@@ -473,6 +502,17 @@ impl BrokerConfig {
             {
                 config.pub_queue_depth = value;
             }
+            if let Some(value) = override_cfg.pub_inflight_bytes
+                && value > 0
+            {
+                config.pub_inflight_bytes = value;
+            }
+            if let Some(value) = override_cfg.pub_ingress_wait {
+                config.pub_ingress_wait = value;
+            }
+            if let Some(value) = override_cfg.core_shards {
+                config.core_shards = value;
+            }
             if let Some(value) = override_cfg.subscriber_queue_capacity
                 && value > 0
             {
@@ -575,6 +615,8 @@ mod tests {
             config.control_stream_drain_timeout_ms,
             DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS
         );
+        assert_eq!(config.pub_inflight_bytes, DEFAULT_PUB_INFLIGHT_BYTES);
+        assert_eq!(config.core_shards, 0);
         assert_eq!(
             config.subscriber_queue_capacity,
             DEFAULT_SUBSCRIBER_QUEUE_CAPACITY
@@ -940,6 +982,34 @@ max_frame_bytes: 8000000
 
     #[serial]
     #[test]
+    fn from_env_respects_core_shards() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CORE_SHARDS", "4");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.core_shards, 4);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn from_env_respects_pub_inflight_bytes() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_BROKER_PUBLISH_INFLIGHT_BYTES", "8388608");
+        }
+
+        let config = BrokerConfig::from_env().expect("from_env");
+        assert_eq!(config.pub_inflight_bytes, 8388608);
+
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
     fn from_env_respects_batch_settings() {
         clear_felix_env();
         unsafe {
@@ -970,6 +1040,7 @@ cache_stream_recv_window: 32000000
 cache_send_window: 128000000
 pub_workers_per_conn: 16
 pub_queue_depth: 4096
+pub_inflight_bytes: 134217728
 subscriber_queue_capacity: 96
 subscriber_queue_policy: block
 subscriber_single_writer_per_conn: false
@@ -986,6 +1057,7 @@ subscriber_single_writer_per_conn: false
         assert_eq!(config.cache_send_window, 128000000);
         assert_eq!(config.pub_workers_per_conn, 16);
         assert_eq!(config.pub_queue_depth, 4096);
+        assert_eq!(config.pub_inflight_bytes, 134217728);
         assert_eq!(config.subscriber_queue_capacity, 96);
         assert_eq!(config.subscriber_queue_policy, SubQueuePolicy::Block);
         assert!(!config.subscriber_single_writer_per_conn);

@@ -5,7 +5,8 @@ QUIC transport protocol overview:
 - Bidirectional streams are the control plane: clients send Publish/PublishBatch, Subscribe,
   and Cache requests, and the broker returns acks/responses on the same stream.
 - Subscribe on the control stream causes the broker to open a uni stream for event delivery;
-  that uni stream starts with EventStreamHello and then carries Event/EventBatch frames.
+  that uni stream starts with EventStreamHello and then carries subscriber-independent
+  Event/EventBatch frames.
 - Client-initiated uni streams are publish-only (no acks); they accept Publish/PublishBatch
   and are treated as fire-and-forget ingress.
 - Frames use felix-wire; high-throughput paths may carry binary batch frames to avoid JSON

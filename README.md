@@ -54,27 +54,28 @@ Cache data flow (current architecture)
 - Broker processes request frames in a read loop and replies on the same stream.
 - This avoids per-request stream setup costs and improves tail latency under concurrency.
 
-Performance knobs
-- Event delivery: `FELIX_EVENT_CONN_POOL`, `FELIX_EVENT_*_WINDOW`,
-  `FELIX_EVENT_BATCH_MAX_DELAY_US`, `FELIX_SUBSCRIBER_QUEUE_CAPACITY`,
-  `FELIX_SUB_WRITER_LANES`, `FELIX_SUB_LANE_SHARD`.
-- Cache delivery: `FELIX_CACHE_CONN_POOL`, `FELIX_CACHE_STREAMS_PER_CONN`,
-  `FELIX_CACHE_*_WINDOW`.
-- Publishing: `FELIX_PUBLISH_CHUNK_BYTES`.
+Performance
+
+Felix is tuned end-to-end: QUIC transport (path MTU discovery, congestion
+window, socket buffers), a shared-frame fanout path that encodes a publish
+batch once regardless of subscriber count, dense stream handles on the
+publish hot path, byte-budgeted admission control at both client and broker
+ingest, and an opt-in thread-per-core mode (`core_shards`) for stream
+ownership. Measured, lossless, with TLS 1.3 always on: sub-millisecond
+p999 latency at low fanout, millions of deliveries/sec for small payloads,
+and multi-hundred-MB/s sustained for KB-sized payloads at fanout 10. See
+[Benchmarks](https://gabloe.github.io/felix/features/benchmarks/) for
+current numbers and methodology, and
+[Environment Variables](https://gabloe.github.io/felix/reference/environment-variables/) /
+[Configuration](https://gabloe.github.io/felix/reference/configuration/) for
+the full set of tuning knobs (transport, queue depths/policies, batching,
+admission control, core sharding).
+
 - Instrumentation: build with `--features telemetry` to enable per-stage
   timings and frame counters. Default builds compile telemetry out
   (`cfg(feature = "telemetry")`, no runtime branches when disabled) to avoid
-  instrumentation overhead on hot paths.
-- Telemetry overhead is workload-dependent. Example (`latency-demo`,
-  localhost, payload=4096B, fanout=1, batch=64, 10 runs): medians were similar
-  with and without telemetry, but tail latency showed higher variance. Text:
-  p999 median 5.15ms (min/max 3.27/8.89) vs 4.82ms (3.24/12.47);
-  throughput 160.6k (141.6k/167.2k) vs 160.1k (137.9k/166.0k). Binary:
-  p999 median 3.65ms (2.34/5.69) vs 3.40ms (2.57/9.03);
-  throughput 207.0k (188.6k/228.2k) vs 208.2k (171.9k/227.4).
-  Validate on your workload; fanout/payload/batching can amplify tail effects.
-  In other scenarios (e.g., high fanout + binary batching), telemetry can
-  materially impact throughput/latency; see benchmarks/ for additional results.
+  instrumentation overhead on hot paths — validate overhead on your own
+  workload before enabling it in production.
 
 Use cases
 - Real-time streaming with high fanout and tunable latency/throughput trade-offs.
@@ -157,16 +158,25 @@ flowchart LR
 
 ## Docs
 
-- `docs/architecture.md`
-- `docs/protocol.md`
-- `docs/control-plane.md`
-- `docs/semantics.md`
-- `docs/todos.md`
-- `services/broker/README.md` (performance profiles + tuning)
-- Defining a stable wire envelope and internal data model
-- Measuring latency/backpressure behavior early to keep p99/p999 predictable
+Full documentation site: **https://gabloe.github.io/felix** — architecture,
+wire protocol, configuration/environment-variable reference, benchmarks,
+and (for contributors) function-by-function internals walkthroughs of the
+publish path, subscribe/fanout path, and backpressure/concurrency model.
 
-The project is intentionally building depth before breadth.
+In-repo design docs (`docs/`):
+- `docs/architecture.md` — system architecture
+- `docs/protocol.md` — wire protocol specification
+- `docs/control-plane.md` — control plane + RAFT plan (draft)
+- `docs/semantics.md` — delivery semantics and guarantees
+- `docs/design.md` — product and protocol design notes
+- `docs/auth.md` — authentication and authorization
+- `docs/broker-config.md`, `docs/client-config.md` — config field reference with example profiles
+- `docs/demos.md` — demo binaries and what each one shows
+- `docs/todos.md` — implementation checklist
+
+The project is intentionally building depth before breadth: defining a
+stable wire envelope and internal data model, and measuring
+latency/backpressure behavior early to keep p99/p999 predictable.
 
 ---
 

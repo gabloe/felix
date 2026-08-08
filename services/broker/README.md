@@ -9,6 +9,19 @@ Responsibilities:
 
 See `README.md` for the system overview.
 
+> **The numbers below are stale.** They predate transport-layer tuning
+> (path MTU discovery, congestion window, socket buffers), shared-frame
+> fanout (event batches are now encoded once per publish regardless of
+> subscriber count, not once per subscriber), dense stream-handle routing,
+> and the opt-in `core_shards` thread-per-core mode — all of which
+> materially changed these results (the same `--binary --fanout 10 --batch
+> 64 --payload 4096` command cited below now measures ~560-590K delivered
+> msg/s, not ~70k). For current, methodology-documented numbers see
+> [Benchmarks](https://gabloe.github.io/felix/features/benchmarks/).
+> The profile *names and env vars* below are still valid starting points;
+> only the specific latency/throughput figures and charts need
+> regenerating via `task perf:latency-matrix` (see below).
+
 ## Performance profiles
 
 These profiles tune the event delivery path for different latency/throughput trade-offs.
