@@ -25,8 +25,8 @@ use crate::client::publisher::{PublishWorker, run_publisher_writer};
 use crate::client::sharding::PublishSharding;
 use crate::client::subscription::{Subscription, SubscriptionPipelineConfig};
 use crate::config::{
-    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, ClientSubQueuePolicy, PUBLISH_QUEUE_DEPTH,
-    cache_transport_config, event_transport_config, runtime_config,
+    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, ClientSubQueuePolicy, cache_transport_config,
+    event_transport_config, runtime_config,
 };
 use crate::wire::{read_message, write_message};
 
@@ -44,6 +44,7 @@ pub struct Client {
     // Publish worker pool: multiple streams across multiple connections.
     publish_workers: Arc<Vec<PublishWorker>>,
     publish_sharding: PublishSharding,
+    publish_admission: Arc<super::publisher::PublishAdmission>,
 
     // Per-stream cache workers: each owns exactly one bi-directional QUIC stream and
     // serializes cache round-trips (encode -> write -> read -> decode).
@@ -105,6 +106,10 @@ impl Client {
             return Err(anyhow::anyhow!("publish pool misconfigured"));
         }
         let publish_chunk_bytes = client_config.publish_chunk_bytes;
+        let publish_queue_depth = client_config.publish_queue_depth.max(1);
+        let publish_admission = Arc::new(super::publisher::PublishAdmission::new(
+            client_config.publish_inflight_bytes,
+        ));
         let mut publish_connections = Vec::with_capacity(publish_pool_size);
         for _ in 0..publish_pool_size {
             let connection = publish_client.connect(addr, server_name).await?;
@@ -118,7 +123,7 @@ impl Client {
                 debug!("client opened publish stream");
                 authenticate_stream(&mut send, &mut recv, &auth_tenant_id, &auth_token).await?;
                 debug!("client publish stream authenticated");
-                let (tx, rx) = mpsc::channel(PUBLISH_QUEUE_DEPTH);
+                let (tx, rx) = mpsc::channel(publish_queue_depth);
                 let handle =
                     tokio::spawn(run_publisher_writer(send, recv, rx, publish_chunk_bytes));
                 publish_workers.push(PublishWorker {
@@ -196,6 +201,7 @@ impl Client {
             _event_client: event_client,
             publish_workers: Arc::new(publish_workers),
             publish_sharding,
+            publish_admission,
             cache_workers,
             event_connections,
             subscription_counter: AtomicU64::new(1),
@@ -212,9 +218,10 @@ impl Client {
 
     pub async fn publisher(&self) -> Result<super::publisher::Publisher> {
         Ok(super::publisher::Publisher {
-            inner: Arc::new(super::publisher::PublisherInner::new(
+            inner: Arc::new(super::publisher::PublisherInner::with_admission(
                 Arc::clone(&self.publish_workers),
                 self.publish_sharding,
+                Arc::clone(&self.publish_admission),
             )),
         })
     }

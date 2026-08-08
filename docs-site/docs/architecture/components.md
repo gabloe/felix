@@ -189,74 +189,85 @@ The publish pipeline is optimized for both latency and throughput:
 **Stages**:
 
 1. **Ingestion**: Receive publish frame from client stream
-2. **Validation**: Check tenant/namespace/stream authorization
-3. **Queueing**: Enqueue to bounded publish queue
-4. **Worker processing**: Parallel workers dequeue and prepare for fanout
-5. **Fanout**: Distribute to all active subscribers
+2. **Stream resolution**: Resolve `(tenant, namespace, stream)` to a dense `StreamHandle` (cached)
+3. **Admission**: Byte-budget and queue-depth backpressure before the job is committed to a worker
+4. **Worker processing**: A global, stream-sharded worker pool dequeues and appends to the stream's log
+5. **Fanout**: One shared, `Arc`-wrapped envelope handed to every active subscriber
 
 **Configuration**:
 
 ```yaml
-pub_workers_per_conn: 4      # Worker parallelism per connection
-pub_queue_depth: 1024         # Bounded queue size
+pub_workers_per_conn: 4      # Worker parallelism (ignored when core_shards > 0)
+pub_queue_depth: 64           # Bounded queue size (items)
+pub_inflight_bytes: 67108864  # Bounded queue size (bytes, independent budget)
 publish_chunk_bytes: 16384    # Chunking for large payloads
 ```
 
 !!! tip "Worker Sizing"
     Set `pub_workers_per_conn` to match your active publish stream count. Excess workers increase contention without improving throughput. For single-stream publishers, use 1-2 workers.
 
+!!! note "Want the real code path?"
+    This section is a conceptual overview. For an accurate, function-by-function
+    walkthrough with file references — including exactly how admission,
+    stream resolution, and fanout work — see
+    [Internals: The Publish Path](../development/internals-publish.md).
+
 ### Subscription Management
 
-Each subscription maintains isolated state:
-
-```rust
-pub struct Subscription {
-    subscription_id: String,
-    tenant_id: String,
-    namespace: String,
-    stream: String,
-    event_stream: UnidirectionalStream,
-    buffer: BoundedQueue<Event>,
-}
-```
+Each subscription's broker-core state is a channel slot in its stream's
+subscriber registry, plus a dedicated feeder task and QUIC event stream —
+see [Internals: Subscribe & Fanout](../development/internals-subscribe.md)
+for the exact types (`SubscriptionReceiver`, `WriterLaneManager`,
+`run_lane_feeder`) and handshake sequence.
 
 **Isolation guarantees**:
 
-- Slow subscribers never block fast subscribers
-- Per-subscription buffering with configurable depth
+- Slow subscribers never block fast subscribers *by default* (`drop_new` queue policy — see [backpressure internals](../development/internals-concurrency.md) for the opt-in `block` mode and why it inverts this guarantee)
+- Per-subscription buffering with configurable depth (`subscriber_queue_capacity`)
 - Independent flow control per subscription stream
-- Lag detection and optional subscriber backpressure
+- Overload is counted (`felix_subscribe_dropped_total`), not silently absorbed
 
 ### Fanout Architecture
 
-When a message is published, the broker fans it out to all subscribers:
+When a message is published, the broker fans it out to all subscribers. The
+key property: the event frame is encoded **once per publish batch**, not
+once per subscriber — every subscriber's feeder gets a clone of the same
+`Arc`-wrapped, lazily-encoded frame.
 
 ```mermaid
 sequenceDiagram
     participant P as Publisher
-    participant B as Broker Queue
-    participant W as Worker
-    participant S1 as Subscriber 1
-    participant S2 as Subscriber 2
-    participant S3 as Subscriber 3
-    
-    P->>B: publish_batch
-    B->>W: dequeue
-    W->>W: prepare event frames
-    par Parallel Fanout
-        W->>S1: event batch
+    participant B as Broker core
+    participant S1 as Subscriber 1 feeder
+    participant S2 as Subscriber 2 feeder
+    participant S3 as Subscriber 3 feeder
+
+    P->>B: publish_batch_to_handle
+    B->>B: append to log (one lock, whole batch)
+    B->>B: DeliveryEnvelope::new(payloads)
+    par Fan out the same envelope (Arc clones)
+        B->>S1: envelope.clone()
     and
-        W->>S2: event batch
+        B->>S2: envelope.clone()
     and
-        W->>S3: event batch
+        B->>S3: envelope.clone()
     end
+    S1->>S1: shared_event_frame() — encodes, caches in envelope
+    S2->>S2: shared_event_frame() — cache hit, no re-encode
+    S3->>S3: shared_event_frame() — cache hit, no re-encode
 ```
 
 **Batching behavior**:
 
 - Events are accumulated up to `event_batch_max_events` (default: 64)
 - Or until `event_batch_max_delay_us` elapses (default: 250 µs)
-- Or until `event_batch_max_bytes` is reached (default: 256 KB)
+- Or until `event_batch_max_bytes` is reached (default: 64 KB)
+
+!!! note "Want the real code path?"
+    See [Internals: Subscribe & Fanout](../development/internals-subscribe.md)
+    for the exact mechanics of `DeliveryEnvelope`, `shared_event_frame()`,
+    writer lanes, and the connection-writer pipelining that schedules the
+    actual QUIC writes.
 
 ### Cache Engine
 

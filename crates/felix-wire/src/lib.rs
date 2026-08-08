@@ -16,6 +16,7 @@ pub const VERSION: u16 = 1;
 // Flags describe how to interpret the frame payload.
 pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
 pub const FLAG_BINARY_EVENT_BATCH: u16 = 0x0002;
+pub const FLAG_BINARY_EVENT_BATCH_SHARED: u16 = 0x0004;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -878,6 +879,11 @@ pub mod binary {
         pub payloads: Vec<Bytes>,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SharedEventBatch {
+        pub payloads: Vec<Bytes>,
+    }
+
     #[derive(Debug, Clone)]
     pub struct EncodedEventBatchParts {
         frame_len: usize,
@@ -950,6 +956,29 @@ pub mod binary {
         })
     }
 
+    pub fn encode_shared_event_batch_bytes(payloads: &[Bytes]) -> Result<Bytes> {
+        let mut payload_len = 4usize;
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len = payload_len
+                .checked_add(4 + len as usize)
+                .ok_or(Error::FrameTooLarge)?;
+        }
+        if payload_len > u32::MAX as usize {
+            return Err(Error::FrameTooLarge);
+        }
+
+        let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+        FrameHeader::new(FLAG_BINARY_EVENT_BATCH_SHARED, payload_len as u32).encode(&mut buf);
+        buf.extend_from_slice(&(payloads.len() as u32).to_be_bytes());
+        for payload in payloads {
+            let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(payload);
+        }
+        Ok(buf.freeze())
+    }
+
     // Decode binary event batch frame into its structured form.
     pub fn decode_event_batch(frame: &Frame) -> Result<EventBatch> {
         let mut buf = frame.payload.clone();
@@ -974,6 +1003,26 @@ pub mod binary {
             subscription_id,
             payloads,
         })
+    }
+
+    pub fn decode_shared_event_batch(frame: &Frame) -> Result<SharedEventBatch> {
+        let mut buf = frame.payload.clone();
+        if buf.remaining() < 4 {
+            return Err(Error::Incomplete);
+        }
+        let count = buf.get_u32() as usize;
+        let mut payloads = Vec::with_capacity(count);
+        for _ in 0..count {
+            if buf.remaining() < 4 {
+                return Err(Error::Incomplete);
+            }
+            let len = buf.get_u32() as usize;
+            if buf.remaining() < len {
+                return Err(Error::Incomplete);
+            }
+            payloads.push(buf.copy_to_bytes(len));
+        }
+        Ok(SharedEventBatch { payloads })
     }
 }
 
@@ -1042,6 +1091,16 @@ mod tests {
         assert_eq!(frame.header.flags, FLAG_BINARY_EVENT_BATCH);
         let decoded = binary::decode_event_batch(&frame).expect("decode batch");
         assert_eq!(decoded.subscription_id, 7);
+        assert_eq!(decoded.payloads, payloads);
+    }
+
+    #[test]
+    fn shared_binary_event_batch_round_trip() {
+        let payloads = vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")];
+        let encoded = binary::encode_shared_event_batch_bytes(&payloads).expect("encode");
+        let frame = Frame::decode(encoded).expect("decode");
+        assert_eq!(frame.header.flags, FLAG_BINARY_EVENT_BATCH_SHARED);
+        let decoded = binary::decode_shared_event_batch(&frame).expect("decode batch");
         assert_eq!(decoded.payloads, payloads);
     }
 

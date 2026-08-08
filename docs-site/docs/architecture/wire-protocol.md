@@ -318,12 +318,13 @@ For high-throughput publish workloads, Felix supports binary encodings that redu
 
 ### When to Use Binary Mode
 
-Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). Use when:
-
-- Publishing large batches (64+ messages)
-- Payload sizes exceed 512 bytes
-- Throughput is more important than debuggability
-- You've validated the binary encoding implementation
+Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). **Unacknowledged
+publishes (`AckMode::None`) use binary encoding by default** — the Rust client's
+`Publisher::publish`/`publish_batch` methods select it automatically; call
+`publish_json`/`publish_batch_json` explicitly to opt into JSON instead (e.g.
+for debugging or a non-Rust client that hasn't implemented the binary decoder
+yet). Acknowledged publishes still use the JSON control encoding until binary
+ack framing is added.
 
 !!! tip "Performance Impact"
     Binary batches can achieve 30-40% higher throughput, especially with large payloads and high fanout.
@@ -374,6 +375,37 @@ Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). Use when:
 - tenant_id, namespace, stream limited to 65535 bytes each
 - count limited to 2^32 - 1 payloads per batch
 - Each payload limited to 2^32 - 1 bytes
+
+## Shared Binary EventBatch Encoding
+
+Subscriber event delivery is always binary in practice. When `flags & 0x0004
+!= 0`, the event-stream frame carries a **shared** batch: it omits the
+per-subscriber `subscription_id` entirely.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     count (u32 BE)                          │
+├─────────────────────────────────────────────────────────────┤
+│  payload_1_len (u32 BE)                                     │
+├─────────────────────────────────────────────────────────────┤
+│  payload_1 (bytes)                                          │
+│  ...                                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why no subscription id in the frame**: the subscription is already bound to
+its uni-directional event stream by the `EventStreamHello` frame sent when
+the stream opens (see [EventStreamHello](#eventstreamhello)) — every
+subsequent frame on that stream belongs to that subscription, so repeating
+the id per batch is redundant. This is also what makes the encoding
+*shareable*: the broker encodes one `Bytes` buffer per publish batch and
+fans out clones of the same buffer to every subscriber of that stream,
+instead of re-encoding a subscriber-specific frame for each one. Encode cost
+is then O(1) per publish batch regardless of fanout, rather than O(fanout).
+
+The legacy per-subscriber format (`flags & 0x0002`, `subscription_id` +
+`count` + payloads) remains decodable for backward compatibility, but the
+broker only emits the shared (`0x0004`) format.
 
 ## Protocol Flows
 

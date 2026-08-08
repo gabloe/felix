@@ -151,7 +151,7 @@ sequenceDiagram
     B-->>C: cache_value (request_id, value|null)
 ```
 
-## Binary PublishBatch (experimental)
+## Binary PublishBatch
 When `flags & 0x0001 != 0`, the frame payload is a binary publish batch:
 
 ```
@@ -167,8 +167,23 @@ repeated count times:
   u8[payload_len] payload
 ```
 
-This is a throughput optimization for the data plane and is not used by control
-plane APIs.
+This is the default encoding for unacknowledged client publishes. Acked publishes
+currently use the JSON control encoding. Clients can explicitly select JSON for
+compatibility.
+
+## Shared Binary EventBatch
+When `flags & 0x0004 != 0`, the event-stream frame payload is:
+
+```
+u32 count
+repeated count times:
+  u32 payload_len
+  u8[payload_len] payload
+```
+
+The subscription is identified by the preceding `EventStreamHello`, so event
+batches carry no per-subscriber identifier and the broker can share one encoded
+frame across subscribers. The legacy `0x0002` format remains decodable.
 
 ## Future Compatibility
 - Non-zero `flags` are reserved for compression/encryption negotiation.
