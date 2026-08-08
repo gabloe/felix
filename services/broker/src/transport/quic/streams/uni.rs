@@ -16,7 +16,6 @@ use bytes::BytesMut;
 use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Message;
-use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
@@ -24,8 +23,8 @@ use std::sync::atomic::Ordering;
 use crate::auth::{AuthContext, BrokerAuth};
 use crate::config::BrokerConfig;
 use crate::transport::quic::handlers::publish::{
-    PublishContext, handle_binary_publish_batch_uni, handle_publish_batch_message_uni,
-    handle_publish_message_uni,
+    PublishContext, StreamHandleCache, handle_binary_publish_batch_uni,
+    handle_publish_batch_message_uni, handle_publish_message_uni,
 };
 use crate::transport::quic::telemetry::t_counter;
 
@@ -35,7 +34,7 @@ pub(super) struct UniLoopArgs {
     pub config: BrokerConfig,
     pub auth: Arc<BrokerAuth>,
     pub publish_ctx: PublishContext,
-    pub stream_cache: HashMap<String, (bool, std::time::Instant)>,
+    pub stream_cache: StreamHandleCache,
     pub stream_cache_key: String,
 }
 

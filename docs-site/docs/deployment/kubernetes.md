@@ -303,10 +303,10 @@ data:
     cache_stream_recv_window: 67108864
     cache_send_window: 268435456
     pub_workers_per_conn: 4
-    pub_queue_depth: 1024
-    subscriber_queue_capacity: 128
+    pub_queue_depth: 64
+    subscriber_queue_capacity: 512
     subscriber_writer_lanes: 4
-    subscriber_lane_queue_depth: 8192
+    subscriber_lane_queue_depth: 64
     max_subscriber_writer_lanes: 8
     subscriber_lane_shard: auto
     disable_timings: false

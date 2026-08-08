@@ -31,6 +31,11 @@ let cfg = ClientConfig::from_env_or_yaml(quinn, Some("client.yml"))?;
   - Number of bidirectional publish streams per connection.
 - `publish_chunk_bytes` (env: `FELIX_PUBLISH_CHUNK_BYTES`)
   - Chunk size for large publish writes.
+- `publish_queue_depth` (env: `FELIX_PUBLISH_QUEUE_DEPTH`)
+  - Bounded request queue per publish worker. Default: `64`.
+- `publish_inflight_bytes` (env: `FELIX_PUBLISH_INFLIGHT_BYTES`)
+  - Shared byte budget across all publish workers. Default: `4194304` (4 MiB).
+  - Publishers wait for budget before enqueueing and reject a single publish larger than the limit.
 - `publish_sharding` (env: `FELIX_PUB_SHARDING`)
   - Sharding mode across publish streams.
   - Values: `rr` or `hash_stream`.
@@ -46,6 +51,11 @@ let cfg = ClientConfig::from_env_or_yaml(quinn, Some("client.yml"))?;
 
 - `event_conn_pool` (env: `FELIX_EVENT_CONN_POOL`)
   - QUIC connection pool size for subscription event streams.
+- `client_sub_queue_capacity` (env: `FELIX_CLIENT_SUB_QUEUE_CAPACITY`)
+  - Per-subscription delivery queue depth. Default: `256`.
+- `client_sub_queue_policy` (env: `FELIX_CLIENT_SUB_QUEUE_POLICY`)
+  - Behavior when the delivery queue is full: `block`, `drop_new`, or `drop_old`.
+  - Default: `drop_new`, which bounds latency and exposes overload through dropped-event telemetry.
 
 ### QUIC Flow Control Windows
 
@@ -76,10 +86,14 @@ All window values are raw bytes.
 publish_conn_pool: 4
 publish_streams_per_conn: 2
 publish_chunk_bytes: 16384
+publish_queue_depth: 64
+publish_inflight_bytes: 4194304
 publish_sharding: "hash_stream"
 cache_conn_pool: 8
 cache_streams_per_conn: 4
 event_conn_pool: 8
+client_sub_queue_capacity: 256
+client_sub_queue_policy: "drop_new"
 event_conn_recv_window: 268435456
 event_stream_recv_window: 67108864
 event_send_window: 268435456
@@ -94,4 +108,5 @@ bench_embed_ts: false
 ## Notes
 
 - Client throughput is gated by publish parallelism. A single connection with one stream will bottleneck regardless of broker tuning.
+- The shared in-flight byte budget prevents additional publish streams from multiplying hidden backlog.
 - `publish_sharding=hash_stream` preserves per-stream ordering while spreading across workers; `rr` is best for uniform, high-concurrency loads.

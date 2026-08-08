@@ -21,7 +21,9 @@ use felix_broker::{Broker, CacheMetadata};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
-use felix_wire::{AckMode, FLAG_BINARY_EVENT_BATCH, Frame, FrameHeader, Message};
+use felix_wire::{
+    AckMode, FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, Frame, FrameHeader, Message,
+};
 use jsonwebtoken::Algorithm;
 use quinn::{ClientConfig as QuinnClientConfig, ReadExactError, RecvStream};
 use rcgen::generate_simple_self_signed;
@@ -449,6 +451,17 @@ fn handle_event_frame(
     pending: &mut VecDeque<Vec<u8>>,
     allow_hello: bool,
 ) -> Result<()> {
+    if frame.header.flags & FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
+        if allow_hello {
+            return Err(anyhow!("missing event stream hello for subscription"));
+        }
+        let batch = felix_wire::binary::decode_shared_event_batch(&frame)
+            .context("decode shared binary event batch")?;
+        for payload in batch.payloads {
+            pending.push_back(payload.to_vec());
+        }
+        return Ok(());
+    }
     if frame.header.flags & FLAG_BINARY_EVENT_BATCH != 0 {
         if allow_hello {
             return Err(anyhow!("missing event stream hello for subscription"));

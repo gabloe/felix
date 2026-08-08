@@ -36,15 +36,21 @@ without sacrificing performance or security.
 
 ## 2. Design Philosophy
 
-### 2.1 Sovereignty First
-Felix treats **data sovereignty as a core architectural constraint**, not an
-operational afterthought.
+### 2.1 Sovereignty First (target design, not yet implemented)
+Felix's target design treats **data sovereignty as a core architectural
+constraint**, not an operational afterthought — this is a design goal for a
+later milestone, not current behavior. Today, `felix-router` is a basic
+region-pair allowlist with no wired-in encryption-boundary or metadata-level
+enforcement; treat everything below as intent to be validated, not a
+guarantee to build on.
 
-- One Felix cluster represents exactly one sovereign region.
-- No implicit cross‑region replication exists.
-- Any cross‑region data movement is explicit, auditable, and cryptographically isolated.
+- One Felix cluster is intended to represent exactly one sovereign region.
+- No implicit cross‑region replication should exist.
+- Any cross‑region data movement should be explicit, auditable, and cryptographically isolated.
 
-If data is not allowed to leave a region, Felix enforces that in code.
+The goal is that if data is not allowed to leave a region, Felix enforces
+that in code — but this is not enforced today, and no sovereignty or
+compliance claim should be made about Felix until it is.
 
 ### 2.2 Unified Core, Multiple Semantics
 Felix is built around **one internal abstraction**:
