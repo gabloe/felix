@@ -501,7 +501,11 @@ impl WriterLaneManager {
         let key = Self::config_key(config, scope_key);
         let managers = SUB_EGRESS_MANAGERS.get_or_init(DashMap::new);
         if let Some(existing) = managers.get(&key) {
-            return existing.clone();
+            if existing.lanes.iter().all(|lane| !lane.is_closed()) {
+                return existing.clone();
+            }
+            drop(existing);
+            managers.remove(&key);
         }
         let manager = Self::new(config);
         managers.insert(key, Arc::clone(&manager));
