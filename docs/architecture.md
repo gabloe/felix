@@ -1,28 +1,27 @@
 
 # Felix Architecture
 
-Felix is a sovereign-first, low-latency distributed data backend designed to unify the roles of
+Felix is a low-latency distributed data backend designed to unify the roles of
 event streaming, message-oriented middleware, and distributed caching. It is built for Kubernetes
 from day one and optimized for real-time workloads where latency, isolation, and security matter
 as much as throughput and durability.
 
 Felix is **not** a Kafka clone. It deliberately optimizes for:
-- Region and data sovereignty as a first-class concept
 - Low tail latency (p99/p999), not just aggregate throughput
 - Unified primitives (streams, queues, cache) over a single core log
-- Explicit, auditable cross-region data movement
-- Strong cryptographic boundaries, including optional end-to-end encryption
+- Strong cryptographic boundaries, including optional end-to-end encryption (planned)
+
+Region and data sovereignty as a first-class concept, with explicit, auditable
+cross-region data movement, is a design goal for a later milestone — not
+current behavior. See [Status](#status) and
+[Multi-Region and Bridges](#multi-region-and-bridges) below; do not rely on
+region isolation for compliance purposes until it ships.
 
 ---
 
 ## Core Design Principles
 
-### 1. Sovereignty by Default
-Each Felix cluster represents a **single sovereign region**. Data is isolated by default and cannot
-leave the region unless an explicit, configured bridge exists. This is enforced in routing, metadata,
-and encryption boundaries — not left to deployment discipline.
-
-### 2. One Core Log, Many Semantics
+### 1. One Core Log, Many Semantics
 Internally, Felix is built around a single append-only log abstraction. Different external semantics
 are projections over this core:
 - **Streams (Pub/Sub):** fanout cursors per subscription
@@ -32,14 +31,14 @@ are projections over this core:
 This drastically reduces operational complexity and consistency bugs compared to running Kafka,
 Redis, and a queueing system side-by-side.
 
-### 3. Low-Latency First
+### 2. Low-Latency First
 Felix prioritizes predictable low latency over maximum batch throughput. Design choices reflect this:
 - QUIC for transport (multiplexed, encrypted, congestion-aware)
 - Optional non-persistent (ephemeral) streams with no disk on the hot path
 - Aggressive backpressure and bounded memory everywhere
 - Leader-based writes with tunable acknowledgement policies
 
-### 4. Kubernetes-Native
+### 3. Kubernetes-Native
 Felix assumes Kubernetes for:
 - Process lifecycle
 - Identity (ServiceAccounts)
@@ -143,10 +142,10 @@ This model is designed to satisfy strict data residency and regulatory requireme
 
 ## Intended Use Cases
 
-- Sovereign SaaS platforms (finance, healthcare, government)
 - Real-time microservice backbones
 - Cache + event unification to reduce system sprawl
 - Edge-to-cloud data pipelines
+- Regionally-isolated SaaS platforms (finance, healthcare, government) — once region isolation ships; see [Multi-Region and Bridges](#multi-region-and-bridges)
 - Regulated environments requiring strong auditability
 
 ---

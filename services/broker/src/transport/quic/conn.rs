@@ -28,7 +28,9 @@ use crate::config::BrokerConfig;
 use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
-use super::handlers::publish::{PublishContext, PublishJob, decrement_depth};
+use super::handlers::publish::{
+    PublishAdmission, PublishContext, PublishJob, PublishTarget, decrement_depth,
+};
 
 use super::streams::{handle_stream, handle_uni_stream};
 
@@ -88,8 +90,16 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
-    let worker_count = config.pub_workers_per_conn.max(1);
+    let shards = crate::core_shards::global_shards(config);
+    // With core shards enabled, run exactly one publish worker per shard so
+    // each stream's state has a single owning core (worker i lives on shard i,
+    // and `publish_worker_index` maps handle id -> worker == shard).
+    let worker_count = match &shards {
+        Some(shards) => shards.len(),
+        None => config.pub_workers_per_conn.max(1),
+    };
     let publish_queue_depth = config.pub_queue_depth.max(1);
+    let admission = Arc::new(PublishAdmission::new(config.pub_inflight_bytes));
     let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut worker_txs = Vec::with_capacity(worker_count);
     for worker_id in 0..worker_count {
@@ -100,7 +110,7 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(publish_queue_depth);
         let queue_depth_worker = Arc::clone(&queue_depth);
         let broker_for_worker = Arc::clone(&broker);
-        tokio::spawn(async move {
+        let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
                 metrics::counter!(
@@ -115,11 +125,25 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
                 );
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
-                let result = broker_for_worker
-                    .publish_batch(&job.tenant_id, &job.namespace, &job.stream, &job.payloads)
-                    .await
-                    .map(|_| ())
-                    .map_err(Into::into);
+                let result = match &job.target {
+                    PublishTarget::Resolved(handle) => {
+                        broker_for_worker
+                            .publish_batch_to_handle(handle, &job.payloads)
+                            .await
+                    }
+                    #[cfg(test)]
+                    PublishTarget::Named {
+                        tenant_id,
+                        namespace,
+                        stream,
+                    } => {
+                        broker_for_worker
+                            .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                            .await
+                    }
+                }
+                .map(|_| ())
+                .map_err(Into::into);
                 #[cfg(feature = "perf_debug")]
                 {
                     let ns = worker_start.elapsed().as_nanos() as u64;
@@ -135,7 +159,15 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
                     let _ = response.send(result);
                 }
             }
-        });
+        };
+        match &shards {
+            Some(shards) => {
+                shards.handle_for(worker_id as u64).spawn(worker_task);
+            }
+            None => {
+                tokio::spawn(worker_task);
+            }
+        }
         worker_txs.push(publish_tx);
     }
     PublishContext {
@@ -143,6 +175,8 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         worker_count,
         depth: queue_depth,
         wait_timeout: Duration::from_millis(config.publish_queue_wait_timeout_ms),
+        admission,
+        ingress_wait: config.pub_ingress_wait,
     }
 }
 
@@ -266,11 +300,14 @@ mod tests {
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
             .send(PublishJob {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "demo".to_string(),
+                target: PublishTarget::Named {
+                    tenant_id: "t1".to_string(),
+                    namespace: "default".to_string(),
+                    stream: "demo".to_string(),
+                },
                 payloads: vec![Bytes::from_static(b"ok")],
                 response: Some(response_tx),
+                admission_permit: None,
             })
             .await
             .expect("enqueue publish");
@@ -289,11 +326,14 @@ mod tests {
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
             .send(PublishJob {
-                tenant_id: "t1".to_string(),
-                namespace: "default".to_string(),
-                stream: "missing".to_string(),
+                target: PublishTarget::Named {
+                    tenant_id: "t1".to_string(),
+                    namespace: "default".to_string(),
+                    stream: "missing".to_string(),
+                },
                 payloads: vec![Bytes::from_static(b"payload")],
                 response: Some(response_tx),
+                admission_permit: None,
             })
             .await
             .expect("enqueue publish");

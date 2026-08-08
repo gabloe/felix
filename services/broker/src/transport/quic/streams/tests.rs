@@ -55,7 +55,8 @@ use crate::auth::{BrokerAuth, ControlPlaneKeyStore};
 use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::handlers::publish::{
-    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, PublishJob,
+    AckTimeoutState, AckWaiterMessage, Outgoing, PublishAdmission, PublishContext, PublishJob,
+    PublishTarget,
 };
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
@@ -519,16 +520,22 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
     let (tx, mut rx) = mpsc::channel::<PublishJob>(8);
     tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
-            let result = broker
-                .publish_batch(
-                    job.tenant_id.as_str(),
-                    job.namespace.as_str(),
-                    job.stream.as_str(),
-                    &job.payloads,
-                )
-                .await
-                .map(|_| ())
-                .map_err(anyhow::Error::from);
+            let result = match &job.target {
+                PublishTarget::Resolved(handle) => {
+                    broker.publish_batch_to_handle(handle, &job.payloads).await
+                }
+                PublishTarget::Named {
+                    tenant_id,
+                    namespace,
+                    stream,
+                } => {
+                    broker
+                        .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                        .await
+                }
+            }
+            .map(|_| ())
+            .map_err(anyhow::Error::from);
             if let Some(response) = job.response {
                 let _ = response.send(result);
             }
@@ -539,6 +546,8 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
+        admission: Arc::new(PublishAdmission::unlimited()),
+        ingress_wait: false,
     }
 }
 
@@ -3411,6 +3420,8 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
+        admission: Arc::new(PublishAdmission::unlimited()),
+        ingress_wait: false,
     };
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     let binary =
@@ -3581,6 +3592,8 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             worker_count: 1,
             depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(50),
+            admission: Arc::new(PublishAdmission::unlimited()),
+            ingress_wait: false,
         };
         let mut config = BrokerConfig::from_env()?;
         config.ack_on_commit = true;

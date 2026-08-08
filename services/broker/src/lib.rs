@@ -10,6 +10,7 @@ pub mod auth;
 pub mod auth_demo;
 pub mod config;
 pub mod controlplane;
+pub mod core_shards;
 pub mod quic;
 pub mod timings;
 pub mod transport;

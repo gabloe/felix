@@ -287,7 +287,7 @@ Broker-side tuning for publish pipeline:
 ```yaml
 # Broker config.yml
 pub_workers_per_conn: 4        # Workers per connection
-pub_queue_depth: 1024           # Publish queue bound
+pub_queue_depth: 64             # Publish queue bound
 publish_queue_wait_timeout_ms: 2000  # Queue full timeout
 publish_chunk_bytes: 16384      # Large payload chunking
 ```
@@ -407,9 +407,9 @@ let config = ClientConfig {
 Broker-side configuration:
 
 ```yaml
-subscriber_queue_capacity: 128       # Per-subscriber broker-core buffer
+subscriber_queue_capacity: 512       # Per-subscriber broker-core buffer
 subscriber_writer_lanes: 4           # Outbound writer lanes
-subscriber_lane_queue_depth: 8192    # Per-lane queue depth
+subscriber_lane_queue_depth: 64      # Per-lane queue depth
 max_subscriber_writer_lanes: 8       # Safety clamp
 subscriber_lane_shard: auto          # auto|subscriber_id_hash|connection_id_hash|round_robin_pin
 event_batch_max_events: 64           # Max events per batch
@@ -737,7 +737,8 @@ async fn publish_with_retry(client: &Client, retries: u32) -> Result<()> {
 ```yaml
 # Broker config
 pub_workers_per_conn: 8
-pub_queue_depth: 4096
+pub_queue_depth: 256
+pub_inflight_bytes: 268435456
 event_batch_max_events: 256
 event_batch_max_delay_us: 2000
 ```
@@ -777,7 +778,7 @@ publisher
 **High fanout tuning**:
 
 ```yaml
-subscriber_queue_capacity: 256    # Larger per-subscriber burst buffer
+subscriber_queue_capacity: 4096   # Larger per-subscriber burst buffer
 subscriber_writer_lanes: 4        # Start with 4, benchmark before increasing
 subscriber_lane_shard: auto
 fanout_batch_size: 128            # Batch fanout operations
