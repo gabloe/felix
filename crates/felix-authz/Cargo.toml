@@ -13,7 +13,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 casbin = { version = "2.20.0", default-features = false, features = ["runtime-tokio", "logging", "incremental"] }
-tokio = { version = "1.10.0", features = ["fs", "io-util"] }
+tokio = { version = "1.50.0", features = ["fs", "io-util"] }
 
 [dev-dependencies]
-tokio = { version = "1.10.0", features = ["macros", "rt"] }
+tokio = { version = "1.50.0", features = ["macros", "rt"] }
