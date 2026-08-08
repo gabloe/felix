@@ -15,7 +15,7 @@ axum = "0.8"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
