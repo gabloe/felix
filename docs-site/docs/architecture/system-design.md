@@ -1,21 +1,10 @@
 # System Design
 
-Felix is a sovereign-first, low-latency distributed data backend that unifies event streaming, message queueing, and distributed caching over a single QUIC-based transport layer.
+Felix is a low-latency distributed data backend that unifies event streaming, message queueing, and distributed caching over a single QUIC-based transport layer.
 
 ## Design Principles
 
-### 1. Sovereignty by Default
-
-Each Felix cluster represents a **single sovereign region**. Data is isolated by default and cannot leave the region unless an explicit, configured bridge exists. This is enforced in routing, metadata, and encryption boundaries—not left to deployment discipline.
-
-**Why this matters:**
-
-- **Regulatory Compliance:** GDPR, CCPA, HIPAA require data residency
-- **Data Sovereignty:** Government and enterprise data governance
-- **Security:** Reduced attack surface with explicit data movement
-- **Auditability:** Complete visibility into cross-region data flow
-
-### 2. One Core Log, Many Semantics
+### 1. One Core Log, Many Semantics
 
 Internally, Felix is built around a single append-only log abstraction. Different external semantics are projections over this core:
 
@@ -25,7 +14,7 @@ Internally, Felix is built around a single append-only log abstraction. Differen
 
 This drastically reduces operational complexity and consistency bugs compared to running Kafka, Redis, and a queueing system side-by-side.
 
-### 3. Low-Latency First
+### 2. Low-Latency First
 
 Felix prioritizes predictable low latency over maximum batch throughput:
 
@@ -34,7 +23,7 @@ Felix prioritizes predictable low latency over maximum batch throughput:
 - **Aggressive backpressure:** Bounded memory everywhere
 - **Leader-based writes:** Tunable acknowledgement policies
 
-### 4. Kubernetes-Native
+### 3. Kubernetes-Native
 
 Felix assumes Kubernetes for process lifecycle, identity (ServiceAccounts), networking and service discovery, and failure detection. Felix does **not** attempt to reimplement scheduling or node membership logic that Kubernetes already provides.
 
@@ -302,7 +291,14 @@ sequenceDiagram
 
 ## Multi-Region Architecture (Planned)
 
-Felix enforces regional isolation with explicit bridges:
+!!! warning "Not yet implemented"
+    Everything in this section describes a target design, not current
+    behavior. `felix-router` today is a simple allowlist of permitted
+    region pairs; there is no encryption-boundary enforcement, audit
+    logging, or metadata-level isolation wired into the broker yet, and no
+    compliance claim should be inferred until this actually lands.
+
+The target design has Felix enforce regional isolation with explicit bridges:
 
 ```mermaid
 flowchart LR
@@ -328,13 +324,15 @@ flowchart LR
     style Bridge fill:#ffe1e1
 ```
 
-**Bridge characteristics:**
+**Target bridge characteristics (not yet built):**
 
 - **Explicit Configuration:** No implicit data movement
 - **Stream Allowlist:** Only specified streams replicate
 - **Independent Encryption:** Per-region key contexts
 - **Audit Trail:** Complete log of cross-region data movement
-- **Compliance:** Satisfies strict data sovereignty requirements
+
+None of this has been implemented or audited; do not rely on it for
+regulatory or compliance purposes until it ships.
 
 ## Scalability Considerations
 

@@ -23,7 +23,7 @@
 
 ## Low-Latency QUIC-Based Pub/Sub and Distributed Cache
 
-Felix is a **sovereign-first**, **low-latency** distributed data backend that unifies event streaming, message-oriented middleware, and distributed caching over a single QUIC-based transport layer.
+Felix is a **low-latency** distributed data backend that unifies event streaming, message-oriented middleware, and distributed caching over a single QUIC-based transport layer.
 
 !!! warning "Early Development"
     Felix is in **early active development**. The design and implementation are evolving quickly. This documentation reflects the current state and planned architecture.
@@ -32,9 +32,6 @@ Felix is a **sovereign-first**, **low-latency** distributed data backend that un
 
 ### 🚀 Low Tail Latency
 Designed for predictable p99/p999 latency under load, not just aggregate throughput. QUIC transport provides multiplexed streams without head-of-line blocking, and explicit backpressure prevents cascade failures.
-
-### 🔒 Sovereignty by Default
-Each Felix cluster represents a single sovereign region. Data is isolated by default and cannot leave the region unless an explicit bridge is configured—enforced in routing, metadata, and encryption boundaries.
 
 ### 🎯 Unified Primitives
 A single core log abstraction supports multiple semantics:
@@ -161,7 +158,6 @@ flowchart LR
 ✅ **Event pipelines** with batch publishing and batch delivery for efficient fanout  
 ✅ **Low-latency caching** over QUIC with predictable tail latency under load  
 ✅ **Microservice communication** with unified pub/sub and cache semantics  
-✅ **Edge-to-cloud data pipelines** with explicit regional isolation  
 
 ## Current Status
 

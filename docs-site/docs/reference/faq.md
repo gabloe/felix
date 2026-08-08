@@ -14,7 +14,7 @@ Key features:
 - **Unified protocol**: Single wire protocol for pub/sub and cache
 - **Predictable latency**: Optimized for p99/p999, not just throughput
 - **Kubernetes-native**: Designed for cloud-native deployments
-- **Region-aware**: Built-in support for data sovereignty
+- **Region-aware routing** *(planned)*: `felix-router` has a basic region-bridge allowlist today; enforced data-residency guarantees are not yet implemented — see [System Design: Multi-Region Architecture](../architecture/system-design.md#multi-region-architecture-planned)
 
 ### How is Felix different from Kafka?
 
