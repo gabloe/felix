@@ -10,12 +10,12 @@
 //! - Sending `Message::Subscribed` back on the control stream as the acknowledgement.
 //! - Opening a uni stream and sending a `Message::EventStreamHello` so the client can bind
 //!   `subscription_id -> stream`.
-//! - Handing the broker-provided subscriber queue directly to the writer task.
+//! - Handing the broker-provided shared batch queue directly to the writer task.
 //! - Running lane-sharded event writers that preserve per-subscriber ordering.
 //!
 //! ## Buffering and drops
 //! The broker core owns bounded per-subscriber queues and uses `try_send` for fanout:
-//! - If a subscriber queue is full, that event is **dropped** and
+//! - If a subscriber queue is full, that delivery batch is **dropped** and
 //!   `felix_subscribe_dropped_total` is incremented in the broker.
 //! - This keeps backpressure localized to the subscriber rather than stalling publish.
 //!
@@ -29,7 +29,9 @@
 //!   falls back to subscriber-id hashing.
 //!
 //! ## Encoding / batching
-//! Events are framed as binary `EventBatch` using `felix-wire` binary framing.
+//! Multi-event publishes are encoded once as subscriber-independent binary `EventBatch` frames.
+//! `EventStreamHello` provides the subscription binding, so the same frame bytes can be shared
+//! across every subscriber.
 //!
 //! In batch mode, we coalesce by whichever triggers first:
 //! - max events (`max_events`)
@@ -47,9 +49,10 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
-use felix_broker::{Broker, SubscriptionReceiver};
+use felix_broker::{Broker, DeliveryEnvelope, SubscriptionReceiver};
 use felix_wire::Message;
-use std::collections::{HashMap, VecDeque};
+use futures::{StreamExt, stream::FuturesUnordered};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -273,7 +276,7 @@ pub(crate) async fn handle_subscribe_message(
         cancel_tx,
     )
     .await?;
-    tokio::spawn(async move {
+    let feeder = async move {
         run_lane_feeder(
             event_rx,
             manager,
@@ -282,7 +285,33 @@ pub(crate) async fn handle_subscribe_message(
             writer_config,
         )
         .await;
-    });
+    };
+    // With core shards enabled, run this subscription's feeder on the shard
+    // that owns its stream: the fanout enqueue (publish worker) and this
+    // dequeue then happen on the same core, so the subscriber queue becomes a
+    // core-local handoff instead of a cross-core wakeup. Mapping must match
+    // `publish_worker_index` (handle id % shard count).
+    let shard_runtime = match crate::core_shards::global_shards(&config) {
+        Some(shards) => match broker
+            .resolve_stream_handle(&tenant_id, &namespace, &stream)
+            .await
+        {
+            Ok(handle) => Some(shards.handle_for(handle.id()).clone()),
+            Err(err) => {
+                tracing::warn!(error = %err, "stream handle unavailable; feeder on main runtime");
+                None
+            }
+        },
+        None => None,
+    };
+    match shard_runtime {
+        Some(runtime) => {
+            runtime.spawn(feeder);
+        }
+        None => {
+            tokio::spawn(feeder);
+        }
+    }
     Ok(true)
 }
 
@@ -341,13 +370,11 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 async fn write_parts(
     send: &mut quinn::SendStream,
     parts: felix_wire::binary::EncodedEventBatchParts,
 ) -> Result<()> {
-    // Perf note (measured with `latency-demo` + telemetry, 4096B payload, fanout=10):
-    // publish-side fanout/enqueue is small, while subscriber write-await dominates the
-    // broker hot path. Use a single `write_all_chunks` call per flush to cut await points.
     let mut segments = parts.into_segments();
     send.write_all_chunks(segments.as_mut_slice())
         .await
@@ -355,6 +382,7 @@ async fn write_parts(
     Ok(())
 }
 
+#[cfg(test)]
 async fn write_parts_many(
     send: &mut quinn::SendStream,
     frames: Vec<felix_wire::binary::EncodedEventBatchParts>,
@@ -368,6 +396,21 @@ async fn write_parts_many(
     send.write_all_chunks(segments.as_mut_slice())
         .await
         .context("write subscription coalesced frame chunks")?;
+    Ok(total)
+}
+
+async fn write_frame(send: &mut quinn::SendStream, frame: Bytes) -> Result<()> {
+    send.write_all(frame.as_ref())
+        .await
+        .context("write subscription frame")?;
+    Ok(())
+}
+
+async fn write_frames_many(send: &mut quinn::SendStream, mut frames: Vec<Bytes>) -> Result<usize> {
+    let total = frames.iter().map(Bytes::len).sum();
+    send.write_all_chunks(frames.as_mut_slice())
+        .await
+        .context("write subscription coalesced frames")?;
     Ok(total)
 }
 
@@ -391,7 +434,7 @@ enum ConnectionCommand {
     },
     Delivery {
         subscriber_id: u64,
-        frame_parts: felix_wire::binary::EncodedEventBatchParts,
+        frame: Bytes,
         item_count: usize,
         first_enqueued_at: Instant,
         enqueue_at: Instant,
@@ -412,7 +455,7 @@ enum LaneCommand {
     },
     Delivery {
         subscriber_id: u64,
-        frame_parts: felix_wire::binary::EncodedEventBatchParts,
+        frame: Bytes,
         item_count: usize,
         first_enqueued_at: Instant,
         enqueue_at: Instant,
@@ -447,7 +490,7 @@ struct LaneRuntimeConfig {
 #[derive(Debug)]
 struct LaneDelivery {
     subscriber_id: u64,
-    frame_parts: felix_wire::binary::EncodedEventBatchParts,
+    frame: Bytes,
     item_count: usize,
     first_enqueued_at: Instant,
     enqueue_at: Instant,
@@ -611,9 +654,16 @@ impl WriterLaneManager {
         let sender = self.ensure_connection_writer(connection_id);
         let conn_label = connection_id.to_string();
         let wait_start = Instant::now();
-        let result = match self.lane_queue_policy {
-            felix_broker::SubQueuePolicy::Block => sender.send(cmd).await.map_err(|_| ()),
-            felix_broker::SubQueuePolicy::DropNew | felix_broker::SubQueuePolicy::DropOld => {
+        let is_control = matches!(
+            &cmd,
+            ConnectionCommand::Register { .. } | ConnectionCommand::Unregister { .. }
+        );
+        let result = match (self.lane_queue_policy, is_control) {
+            (_, true) | (felix_broker::SubQueuePolicy::Block, false) => {
+                sender.send(cmd).await.map_err(|_| ())
+            }
+            (felix_broker::SubQueuePolicy::DropNew, false)
+            | (felix_broker::SubQueuePolicy::DropOld, false) => {
                 sender.try_send(cmd).map_err(|_| ())
             }
         };
@@ -656,15 +706,21 @@ impl WriterLaneManager {
         let lane = lane_idx.to_string();
         let sender = &self.lanes[lane_idx];
         let enqueue_wait_start = Instant::now();
-        let result = match self.lane_queue_policy {
-            felix_broker::SubQueuePolicy::Block => sender.send(cmd).await.map_err(|_| ()),
-            felix_broker::SubQueuePolicy::DropNew => sender.try_send(cmd).map_err(|err| {
+        let is_control = matches!(
+            &cmd,
+            LaneCommand::Register { .. } | LaneCommand::Unregister { .. }
+        );
+        let result = match (self.lane_queue_policy, is_control) {
+            (_, true) | (felix_broker::SubQueuePolicy::Block, false) => {
+                sender.send(cmd).await.map_err(|_| ())
+            }
+            (felix_broker::SubQueuePolicy::DropNew, false) => sender.try_send(cmd).map_err(|err| {
                 if matches!(err, tokio::sync::mpsc::error::TrySendError::Full(_)) {
                     t_counter!("broker_sub_lane_queue_full_total", "lane" => lane.clone())
                         .increment(1);
                 }
             }),
-            felix_broker::SubQueuePolicy::DropOld => sender.try_send(cmd).map_err(|err| {
+            (felix_broker::SubQueuePolicy::DropOld, false) => sender.try_send(cmd).map_err(|err| {
                 if matches!(err, tokio::sync::mpsc::error::TrySendError::Full(_)) {
                     t_counter!("broker_sub_lane_queue_full_total", "lane" => lane.clone())
                         .increment(1);
@@ -760,7 +816,7 @@ async fn run_writer_lane(
                 }
                 LaneCommand::Delivery {
                     subscriber_id,
-                    frame_parts,
+                    frame,
                     item_count,
                     first_enqueued_at,
                     enqueue_at,
@@ -777,7 +833,7 @@ async fn run_writer_lane(
                             connection_id,
                             ConnectionCommand::Delivery {
                                 subscriber_id,
-                                frame_parts,
+                                frame,
                                 item_count,
                                 first_enqueued_at,
                                 enqueue_at,
@@ -840,7 +896,7 @@ async fn run_connection_writer(
                 }
                 ConnectionCommand::Delivery {
                     subscriber_id,
-                    frame_parts,
+                    frame,
                     item_count,
                     first_enqueued_at,
                     enqueue_at,
@@ -850,7 +906,7 @@ async fn run_connection_writer(
                         .or_default()
                         .push_back(LaneDelivery {
                             subscriber_id,
-                            frame_parts,
+                            frame,
                             item_count,
                             first_enqueued_at,
                             enqueue_at,
@@ -859,71 +915,109 @@ async fn run_connection_writer(
             }
         }
 
-        let mut rr_order: VecDeque<u64> = deliveries.keys().copied().collect();
-        while let Some(subscriber_id) = rr_order.pop_front() {
-            let Some(queue) = deliveries.get_mut(&subscriber_id) else {
-                continue;
-            };
-            let Some(first) = queue.pop_front() else {
-                continue;
-            };
-            debug_dequeues = debug_dequeues.saturating_add(1);
-            if !queue.is_empty() {
-                rr_order.push_back(subscriber_id);
-            }
-            let Some(subscriber) = subscribers.get_mut(&subscriber_id) else {
-                continue;
-            };
+        // Pipeline writes across subscribers instead of gating on a full round: each subscriber
+        // starts its next write as soon as its own previous write completes, so one slow/backpressured
+        // stream can't stall delivery to the others sharing this connection writer.
+        let mut in_flight: HashSet<u64> = HashSet::new();
+        let mut writes = FuturesUnordered::new();
+        loop {
+            let ready: Vec<u64> = deliveries
+                .iter()
+                .filter_map(|(subscriber_id, queue)| {
+                    (!queue.is_empty() && !in_flight.contains(subscriber_id))
+                        .then_some(*subscriber_id)
+                })
+                .collect();
 
-            let mut frames = vec![first.frame_parts];
-            let mut item_count = first.item_count;
-            let mut coalesced_bytes = frames[0].frame_len();
-            while let Some(next) = queue.front() {
-                let next_len = next.frame_parts.frame_len();
-                if coalesced_bytes.saturating_add(next_len) > max_bytes_per_write {
-                    break;
-                }
-                if let Some(next_frame) = queue.pop_front() {
-                    item_count = item_count.saturating_add(next_frame.item_count);
-                    coalesced_bytes =
-                        coalesced_bytes.saturating_add(next_frame.frame_parts.frame_len());
-                    frames.push(next_frame.frame_parts);
-                }
-            }
-            if !queue.is_empty() {
-                rr_order.push_back(subscriber_id);
-            }
+            for subscriber_id in ready {
+                let Some(queue) = deliveries.get_mut(&subscriber_id) else {
+                    continue;
+                };
+                let Some(first) = queue.pop_front() else {
+                    continue;
+                };
+                debug_dequeues = debug_dequeues.saturating_add(1);
+                let Some(mut subscriber) = subscribers.remove(&subscriber_id) else {
+                    continue;
+                };
 
-            let sample = t_should_sample();
-            let queue_wait_ns = first.enqueue_at.elapsed().as_nanos() as u64;
-            let first_dequeue_ns = first.first_enqueued_at.elapsed().as_nanos() as u64;
-            t_histogram!("broker_sub_lane_queue_wait_ns", "connection_id" => conn_label.clone())
+                let first_subscriber_id = first.subscriber_id;
+                let mut frames = vec![first.frame];
+                let mut item_count = first.item_count;
+                let mut coalesced_bytes = frames[0].len();
+                while let Some(next) = queue.front() {
+                    let next_len = next.frame.len();
+                    if coalesced_bytes.saturating_add(next_len) > max_bytes_per_write {
+                        break;
+                    }
+                    if let Some(next_frame) = queue.pop_front() {
+                        item_count = item_count.saturating_add(next_frame.item_count);
+                        coalesced_bytes = coalesced_bytes.saturating_add(next_frame.frame.len());
+                        frames.push(next_frame.frame);
+                    }
+                }
+
+                let sample = t_should_sample();
+                let queue_wait_ns = first.enqueue_at.elapsed().as_nanos() as u64;
+                let first_dequeue_ns = first.first_enqueued_at.elapsed().as_nanos() as u64;
+                t_histogram!("broker_sub_lane_queue_wait_ns", "connection_id" => conn_label.clone())
+                    .record(queue_wait_ns as f64);
+                t_histogram!(
+                    "broker_sub_lane_dequeue_to_write_start_ns",
+                    "connection_id" => conn_label.clone()
+                )
                 .record(queue_wait_ns as f64);
-            t_histogram!(
-                "broker_sub_lane_dequeue_to_write_start_ns",
-                "connection_id" => conn_label.clone()
-            )
-            .record(queue_wait_ns as f64);
-            t_histogram!("broker_sub_time_to_first_dequeue_ns", "connection_id" => conn_label.clone())
+                t_histogram!(
+                    "broker_sub_time_to_first_dequeue_ns",
+                    "connection_id" => conn_label.clone()
+                )
                 .record(first_dequeue_ns as f64);
 
-            let write_start = t_now_if(sample);
-            t_counter!("broker_sub_conn_write_calls_total", "connection_id" => conn_label.clone())
-                .increment(1);
-            t_histogram!("broker_sub_conn_writes_per_flush", "connection_id" => conn_label.clone())
-                .record(frames.len() as f64);
-            let write_result = if frames.len() == 1 {
-                write_parts(
-                    &mut subscriber.event_send,
-                    frames.pop().expect("single frame"),
-                )
-                .await
-                .map(|_| coalesced_bytes)
-            } else {
-                write_parts_many(&mut subscriber.event_send, frames).await
+                let write_start = t_now_if(sample);
+                t_counter!("broker_sub_conn_write_calls_total", "connection_id" => conn_label.clone())
+                    .increment(1);
+                t_histogram!("broker_sub_conn_writes_per_flush", "connection_id" => conn_label.clone())
+                    .record(frames.len() as f64);
+                in_flight.insert(subscriber_id);
+                writes.push(async move {
+                    let write_result = if frames.len() == 1 {
+                        write_frame(
+                            &mut subscriber.event_send,
+                            frames.pop().expect("single frame"),
+                        )
+                        .await
+                        .map(|_| coalesced_bytes)
+                    } else {
+                        write_frames_many(&mut subscriber.event_send, frames).await
+                    };
+                    let write_ns = write_start.map(|start| start.elapsed().as_nanos() as u64);
+                    (
+                        subscriber_id,
+                        first_subscriber_id,
+                        subscriber,
+                        item_count,
+                        write_result,
+                        write_ns,
+                    )
+                });
+            }
+
+            let Some((
+                subscriber_id,
+                first_subscriber_id,
+                subscriber,
+                _item_count,
+                write_result,
+                write_ns,
+            )) = writes.next().await
+            else {
+                // No in-flight writes and nothing newly ready: this connection is fully drained.
+                break;
             };
+            in_flight.remove(&subscriber_id);
             match write_result {
                 Ok(bytes_written) => {
+                    subscribers.insert(subscriber_id, subscriber);
                     debug_writes = debug_writes.saturating_add(1);
                     debug_bytes = debug_bytes.saturating_add(bytes_written as u64);
                     t_histogram!(
@@ -953,16 +1047,18 @@ async fn run_connection_writer(
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         counters
                             .sub_items_out_ok
-                            .fetch_add(item_count as u64, std::sync::atomic::Ordering::Relaxed);
+                            .fetch_add(_item_count as u64, std::sync::atomic::Ordering::Relaxed);
                     }
-                    if let Some(start) = write_start {
-                        let write_ns = start.elapsed().as_nanos() as u64;
+                    if let Some(write_ns) = write_ns {
                         timings::record_sub_write_ns(write_ns);
                         timings::record_sub_write_await_ns(write_ns);
                         timings::record_quic_write_ns(write_ns);
                         t_histogram!("broker_sub_write_blocked_ns").record(write_ns as f64);
-                        t_histogram!("broker_sub_conn_write_ns", "connection_id" => conn_label.clone())
-                            .record(write_ns as f64);
+                        t_histogram!(
+                            "broker_sub_conn_write_ns",
+                            "connection_id" => conn_label.clone()
+                        )
+                        .record(write_ns as f64);
                         t_histogram!(
                             "broker_sub_conn_write_await_ns",
                             "connection_id" => conn_label.clone()
@@ -979,11 +1075,10 @@ async fn run_connection_writer(
                     metrics::counter!("felix_subscriber_disconnect_total").increment(1);
                     tracing::info!(
                         connection_id,
-                        subscriber_id = first.subscriber_id,
+                        subscriber_id = first_subscriber_id,
                         error = %err,
                         "connection writer subscriber stream closed"
                     );
-                    subscribers.remove(&first.subscriber_id);
                 }
             }
         }
@@ -1074,19 +1169,87 @@ async fn run_lane_feeder(
         config.flush_max_delay,
         config.max_bytes_per_write,
     );
-    let mut pending: Option<(Bytes, Instant)> = None;
+    let mut pending: Option<DeliveryEnvelope> = None;
 
     loop {
-        let (first, first_enqueued_at) = match pending.take() {
-            Some((payload, enqueued_at)) => (payload, enqueued_at),
+        let envelope = match pending.take() {
+            Some(envelope) => envelope,
             None => match event_rx.recv().await {
-                Some(envelope) => {
-                    let enqueued_at = envelope.enqueued_at();
-                    (envelope.into_payload(), enqueued_at)
-                }
+                Some(envelope) => envelope,
                 None => break,
             },
         };
+        let first_enqueued_at = envelope.enqueued_at();
+
+        if envelope.len() > 1 || config.single_event_mode {
+            let payloads = envelope.payloads();
+            let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+            if payloads.len() <= max_events && payload_bytes <= max_bytes {
+                let prefix_start = t_now_if(t_should_sample());
+                let frame = match envelope.shared_event_frame() {
+                    Ok(frame) => frame,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            subscriber_id = config.subscription_id,
+                            "encode shared lane delivery failed"
+                        );
+                        continue;
+                    }
+                };
+                if let Some(start) = prefix_start {
+                    let prefix_ns = start.elapsed().as_nanos() as u64;
+                    timings::record_sub_prefix_ns(prefix_ns);
+                    t_histogram!("felix_broker_sub_prefix_build_ns").record(prefix_ns as f64);
+                }
+                enqueue_lane_frame(
+                    &manager,
+                    lane_idx,
+                    config.subscription_id,
+                    frame,
+                    payloads.len(),
+                    first_enqueued_at,
+                )
+                .await;
+                continue;
+            }
+
+            let mut start = 0usize;
+            while start < payloads.len() {
+                let mut end = start;
+                let mut bytes = 0usize;
+                while end < payloads.len()
+                    && end - start < max_events
+                    && (end == start || bytes.saturating_add(payloads[end].len()) <= max_bytes)
+                {
+                    bytes = bytes.saturating_add(payloads[end].len());
+                    end += 1;
+                }
+                let batch = &payloads[start..end];
+                match felix_wire::binary::encode_shared_event_batch_bytes(batch) {
+                    Ok(frame) => {
+                        enqueue_lane_frame(
+                            &manager,
+                            lane_idx,
+                            config.subscription_id,
+                            frame,
+                            batch.len(),
+                            first_enqueued_at,
+                        )
+                        .await;
+                    }
+                    Err(err) => tracing::warn!(
+                        error = %err,
+                        subscriber_id = config.subscription_id,
+                        "encode split lane delivery failed"
+                    ),
+                }
+                start = end;
+            }
+            continue;
+        }
+
+        let first = envelope.payloads()[0].clone();
 
         let mut batch = Vec::with_capacity(max_events);
         let mut batch_bytes = first.len();
@@ -1097,18 +1260,20 @@ async fn run_lane_feeder(
                 None
             } else {
                 match tokio::time::timeout(config.flush_delay, event_rx.recv()).await {
-                    Ok(Some(envelope)) => {
-                        let enqueued_at = envelope.enqueued_at();
-                        Some((envelope.into_payload(), enqueued_at))
-                    }
+                    Ok(Some(envelope)) => Some(envelope),
                     Ok(None) | Err(_) => None,
                 }
             };
-            let Some((payload, enqueued_at)) = next else {
+            let Some(envelope) = next else {
                 break;
             };
+            if envelope.len() != 1 {
+                pending = Some(envelope);
+                break;
+            }
+            let payload = envelope.payloads()[0].clone();
             if batch_bytes.saturating_add(payload.len()) > max_bytes {
-                pending = Some((payload, enqueued_at));
+                pending = Some(envelope);
                 break;
             }
             batch_bytes += payload.len();
@@ -1118,34 +1283,33 @@ async fn run_lane_feeder(
         let sample = t_should_sample();
         let enqueue_start = t_now_if(sample);
         let prefix_start = t_now_if(sample);
-        let parts =
-            match felix_wire::binary::encode_event_batch_parts(config.subscription_id, &batch) {
-                Ok(parts) => parts,
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        subscriber_id = config.subscription_id,
-                        "encode lane delivery failed"
-                    );
-                    continue;
-                }
-            };
+        let frame = match felix_wire::binary::encode_shared_event_batch_bytes(&batch) {
+            Ok(frame) => frame,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    subscriber_id = config.subscription_id,
+                    "encode lane delivery failed"
+                );
+                continue;
+            }
+        };
         if let Some(start) = prefix_start {
             let prefix_ns = start.elapsed().as_nanos() as u64;
             timings::record_sub_prefix_ns(prefix_ns);
             t_histogram!("felix_broker_sub_prefix_build_ns").record(prefix_ns as f64);
         }
 
-        let cmd = LaneCommand::Delivery {
-            subscriber_id: config.subscription_id,
-            frame_parts: parts,
-            item_count: batch.len(),
+        enqueue_lane_frame(
+            &manager,
+            lane_idx,
+            config.subscription_id,
+            frame,
+            batch.len(),
             first_enqueued_at,
-            enqueue_at: Instant::now(),
-        };
-        if manager.enqueue(lane_idx, cmd).await.is_err() {
-            metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
-        } else if let Some(start) = enqueue_start {
+        )
+        .await;
+        if let Some(start) = enqueue_start {
             let enqueue_ns = start.elapsed().as_nanos() as u64;
             t_histogram!("broker_sub_lane_enqueue_ns", "lane" => lane_idx.to_string())
                 .record(enqueue_ns as f64);
@@ -1160,6 +1324,26 @@ async fn run_lane_feeder(
         )
         .await;
     manager.unregister_subscriber(config.subscription_id, connection_id);
+}
+
+async fn enqueue_lane_frame(
+    manager: &WriterLaneManager,
+    lane_idx: usize,
+    subscriber_id: u64,
+    frame: Bytes,
+    item_count: usize,
+    first_enqueued_at: Instant,
+) {
+    let cmd = LaneCommand::Delivery {
+        subscriber_id,
+        frame,
+        item_count,
+        first_enqueued_at,
+        enqueue_at: Instant::now(),
+    };
+    if manager.enqueue(lane_idx, cmd).await.is_err() {
+        metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
+    }
 }
 
 /// Drain subscriber events from an `mpsc` queue and write them onto a uni QUIC stream.
@@ -1559,6 +1743,9 @@ mod tests {
             fanout_batch_size: 1,
             pub_workers_per_conn: 1,
             pub_queue_depth: 8,
+            pub_inflight_bytes: 64 * 1024 * 1024,
+            pub_ingress_wait: false,
+            core_shards: 0,
             subscriber_queue_capacity: 8,
             subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,
@@ -1577,6 +1764,13 @@ mod tests {
 
     fn make_payload(payload: &[u8]) -> Bytes {
         Bytes::from(payload.to_vec())
+    }
+
+    fn decode_delivery_payloads(frame: &felix_wire::Frame) -> Result<Vec<Bytes>> {
+        if frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
+            return Ok(felix_wire::binary::decode_shared_event_batch(frame)?.payloads);
+        }
+        Ok(felix_wire::binary::decode_event_batch(frame)?.payloads)
     }
 
     async fn spawn_event_writer(
@@ -1891,10 +2085,9 @@ mod tests {
         )
         .await?
         .expect("event frame");
-        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
-        assert_eq!(batch.subscription_id, 7);
-        assert_eq!(batch.payloads.len(), 1);
-        assert_eq!(batch.payloads[0].as_ref(), b"hello");
+        let payloads = decode_delivery_payloads(&frame).context("decode batch")?;
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].as_ref(), b"hello");
 
         let _ = felix_broker::timings::take_samples();
         let handled = server_task.await.context("server join")??;
@@ -2054,11 +2247,10 @@ mod tests {
         )
         .await?
         .expect("frame1");
-        let batch1 = felix_wire::binary::decode_event_batch(&frame1).expect("batch1");
-        assert_eq!(batch1.subscription_id, 21);
-        assert_eq!(batch1.payloads.len(), 2);
-        assert_eq!(batch1.payloads[0].as_ref(), b"aa");
-        assert_eq!(batch1.payloads[1].as_ref(), b"bbbb");
+        let payloads1 = decode_delivery_payloads(&frame1).expect("batch1");
+        assert_eq!(payloads1.len(), 2);
+        assert_eq!(payloads1[0].as_ref(), b"aa");
+        assert_eq!(payloads1[1].as_ref(), b"bbbb");
 
         let frame2 = crate::transport::quic::codec::read_frame_limited_into(
             &mut event_recv,
@@ -2067,10 +2259,9 @@ mod tests {
         )
         .await?
         .expect("frame2");
-        let batch2 = felix_wire::binary::decode_event_batch(&frame2).expect("batch2");
-        assert_eq!(batch2.subscription_id, 21);
-        assert_eq!(batch2.payloads.len(), 1);
-        assert_eq!(batch2.payloads[0].as_ref(), b"ccccc");
+        let payloads2 = decode_delivery_payloads(&frame2).expect("batch2");
+        assert_eq!(payloads2.len(), 1);
+        assert_eq!(payloads2[0].as_ref(), b"ccccc");
 
         let _ = felix_broker::timings::take_samples();
         server_task.await.context("server join")??;
@@ -2152,7 +2343,8 @@ mod tests {
                 Outgoing::Message(Message::Subscribed { subscription_id }) => {
                     subscribed.push(subscription_id);
                 }
-                _ => panic!("unexpected ack"),
+                Outgoing::Message(other) => panic!("unexpected ack message: {other:?}"),
+                Outgoing::CacheMessage(other) => panic!("unexpected cache ack: {other:?}"),
             }
         }
         subscribed.sort_unstable();
@@ -2207,8 +2399,8 @@ mod tests {
             )
             .await?
             .expect("event frame 1");
-            let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch 1")?;
-            recv_1.push(batch.payloads[0].to_vec());
+            let payloads = decode_delivery_payloads(&frame).context("decode batch 1")?;
+            recv_1.push(payloads[0].to_vec());
 
             let frame = crate::transport::quic::codec::read_frame_limited_into(
                 &mut event_recv_2,
@@ -2217,8 +2409,8 @@ mod tests {
             )
             .await?
             .expect("event frame 2");
-            let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch 2")?;
-            recv_2.push(batch.payloads[0].to_vec());
+            let payloads = decode_delivery_payloads(&frame).context("decode batch 2")?;
+            recv_2.push(payloads[0].to_vec());
         }
 
         assert_eq!(recv_1, expected);
@@ -2368,8 +2560,8 @@ mod tests {
         )
         .await?
         .expect("event frame");
-        let batch = felix_wire::binary::decode_event_batch(&frame).context("decode batch")?;
-        assert_eq!(batch.payloads[0].as_ref(), b"ok");
+        let payloads = decode_delivery_payloads(&frame).context("decode batch")?;
+        assert_eq!(payloads[0].as_ref(), b"ok");
 
         let _ = felix_broker::timings::take_samples();
         server_task.await.context("server join")??;
@@ -2734,13 +2926,13 @@ mod tests {
         .await
         .context("register")?;
 
-        let frame_a = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        let frame_a = felix_wire::binary::encode_event_batch_bytes(1, &[Bytes::from_static(b"a")])?;
         let frame_b =
-            felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"bb")])?;
+            felix_wire::binary::encode_event_batch_bytes(1, &[Bytes::from_static(b"bb")])?;
         let now = Instant::now();
         tx.send(ConnectionCommand::Delivery {
             subscriber_id: 1,
-            frame_parts: frame_a,
+            frame: frame_a,
             item_count: 1,
             first_enqueued_at: now,
             enqueue_at: now,
@@ -2749,7 +2941,7 @@ mod tests {
         .context("delivery a")?;
         tx.send(ConnectionCommand::Delivery {
             subscriber_id: 1,
-            frame_parts: frame_b,
+            frame: frame_b,
             item_count: 1,
             first_enqueued_at: now,
             enqueue_at: now,
@@ -2830,11 +3022,11 @@ mod tests {
         .await
         .context("register")?;
 
-        let frame = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        let frame = felix_wire::binary::encode_event_batch_bytes(1, &[Bytes::from_static(b"a")])?;
         let now = Instant::now();
         tx.send(ConnectionCommand::Delivery {
             subscriber_id: 1,
-            frame_parts: frame,
+            frame,
             item_count: 1,
             first_enqueued_at: now,
             enqueue_at: now,
@@ -2892,10 +3084,10 @@ mod tests {
         .context("register")?;
 
         let now = Instant::now();
-        let frame = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"a")])?;
+        let frame = felix_wire::binary::encode_event_batch_bytes(1, &[Bytes::from_static(b"a")])?;
         tx.send(ConnectionCommand::Delivery {
             subscriber_id: 1,
-            frame_parts: frame,
+            frame,
             item_count: 1,
             first_enqueued_at: now,
             enqueue_at: now,
@@ -2921,10 +3113,10 @@ mod tests {
             .await
             .context("unregister")?;
 
-        let late = felix_wire::binary::encode_event_batch_parts(1, &[Bytes::from_static(b"late")])?;
+        let late = felix_wire::binary::encode_event_batch_bytes(1, &[Bytes::from_static(b"late")])?;
         tx.send(ConnectionCommand::Delivery {
             subscriber_id: 1,
-            frame_parts: late,
+            frame: late,
             item_count: 1,
             first_enqueued_at: now,
             enqueue_at: now,

@@ -255,12 +255,12 @@ Subscription event delivery uses binary `EventBatch` frames by default.
 
 **Type**: Positive integer (count)
 
-**Default**: `4096`
+**Default**: `512`
 
 ```bash
-export FELIX_SUBSCRIBER_QUEUE_CAPACITY="4096"
+export FELIX_SUBSCRIBER_QUEUE_CAPACITY="512"
 # Alias (same behavior):
-export FELIX_SUB_QUEUE_CAPACITY="4096"
+export FELIX_SUB_QUEUE_CAPACITY="512"
 ```
 
 ### `FELIX_SUB_QUEUE_POLICY`
@@ -269,7 +269,7 @@ export FELIX_SUB_QUEUE_CAPACITY="4096"
 
 **Type**: Enum (`block`, `drop_new`, `drop_old`)
 
-**Default**: `block`
+**Default**: `drop_new`
 
 ```bash
 export FELIX_SUB_QUEUE_POLICY="drop_new"
@@ -286,7 +286,7 @@ export FELIX_SUB_QUEUE_POLICY="drop_new"
 
 **Type**: Boolean (`1|true|yes` to enable)
 
-**Default**: `true`
+**Default**: `false`
 
 ```bash
 export FELIX_SUB_SINGLE_WRITER_PER_CONN="true"
@@ -302,6 +302,8 @@ export FELIX_SUB_SINGLE_WRITER_PER_CONN="true"
 
 ```bash
 export FELIX_SUB_WRITER_LANES="4"
+# Alias (checked first, same behavior):
+export FELIX_SUB_EGRESS_LANES="4"
 ```
 
 ### `FELIX_SUB_LANE_QUEUE_DEPTH`
@@ -310,10 +312,26 @@ export FELIX_SUB_WRITER_LANES="4"
 
 **Type**: Positive integer (count)
 
-**Default**: `8192`
+**Default**: `64`
 
 ```bash
-export FELIX_SUB_LANE_QUEUE_DEPTH="8192"
+export FELIX_SUB_LANE_QUEUE_DEPTH="64"
+# Alias (same behavior):
+export FELIX_SUB_QUEUE_BOUND="64"
+```
+
+### `FELIX_SUB_QUEUE_MODE`
+
+**Description**: Backpressure policy for the writer-lane command queue (downstream of `FELIX_SUB_QUEUE_POLICY`, which gates the earlier broker-core fanout enqueue).
+
+**Type**: Enum (`block`, `drop_new`, `drop_old`)
+
+**Default**: `drop_new`
+
+```bash
+export FELIX_SUB_QUEUE_MODE="drop_new"
+# Alias (same behavior):
+export FELIX_SUB_LANE_QUEUE_POLICY="drop_new"
 ```
 
 ### `FELIX_MAX_SUB_WRITER_LANES`
@@ -345,6 +363,66 @@ export FELIX_SUB_LANE_SHARD="auto"
 - `subscriber_id_hash`: stable by subscriber id.
 - `connection_id_hash`: stable by connection id.
 - `round_robin_pin`: pinned RR assignment per subscriber.
+
+### `FELIX_SUB_FLUSH_MAX_ITEMS`
+
+**Description**: Maximum queued lane commands drained per flush before a write is issued.
+
+**Type**: Positive integer (count)
+
+**Default**: `16`
+
+```bash
+export FELIX_SUB_FLUSH_MAX_ITEMS="16"
+```
+
+### `FELIX_SUB_FLUSH_MAX_DELAY_US`
+
+**Description**: Maximum time spent waiting to fill a lane flush buffer before writing what's accumulated.
+
+**Type**: Unsigned integer (microseconds)
+
+**Default**: `50`
+
+```bash
+export FELIX_SUB_FLUSH_MAX_DELAY_US="50"
+```
+
+### `FELIX_SUB_MAX_BYTES_PER_WRITE`
+
+**Description**: Upper bound on coalesced bytes per QUIC write call to a subscriber stream.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `65536` (64 KiB)
+
+```bash
+export FELIX_SUB_MAX_BYTES_PER_WRITE="65536"
+```
+
+### `FELIX_SUB_STREAMS_PER_CONN`
+
+**Description**: Number of delivery streams per connection in hashed-pool mode.
+
+**Type**: Positive integer (count)
+
+**Default**: `4`
+
+```bash
+export FELIX_SUB_STREAMS_PER_CONN="4"
+```
+
+### `FELIX_SUB_STREAM_MODE`
+
+**Description**: Strategy for mapping subscribers to event streams. `hashed_pool` is not yet enabled — the broker falls back to `per_subscriber` and logs a debug warning if requested.
+
+**Type**: Enum (`per_subscriber`, `hashed_pool`)
+
+**Default**: `per_subscriber`
+
+```bash
+export FELIX_SUB_STREAM_MODE="per_subscriber"
+```
 
 ## Cache Configuration
 
@@ -530,10 +608,10 @@ export FELIX_EVENT_SEND_WINDOW="268435456"
 
 **Type**: Positive integer (count)
 
-**Default**: `4096`
+**Default**: `256`
 
 ```bash
-export FELIX_CLIENT_SUB_QUEUE_CAPACITY="4096"
+export FELIX_CLIENT_SUB_QUEUE_CAPACITY="256"
 ```
 
 ### `FELIX_CLIENT_SUB_QUEUE_POLICY`
@@ -545,7 +623,7 @@ export FELIX_CLIENT_SUB_QUEUE_CAPACITY="4096"
 **Default**: `drop_new`
 
 ```bash
-export FELIX_CLIENT_SUB_QUEUE_POLICY="block"
+export FELIX_CLIENT_SUB_QUEUE_POLICY="drop_new"
 ```
 
 ## Publishing Pool (Client)
@@ -593,6 +671,30 @@ export FELIX_PUBLISH_CHUNK_BYTES="32768"    # 32 KiB
 export FELIX_PUBLISH_CHUNK_BYTES="8192"     # 8 KiB
 ```
 
+### `FELIX_PUBLISH_QUEUE_DEPTH`
+
+**Description**: Bounded request queue depth per client publish worker.
+
+**Type**: Positive integer (count)
+
+**Default**: `64`
+
+```bash
+export FELIX_PUBLISH_QUEUE_DEPTH="64"
+```
+
+### `FELIX_PUBLISH_INFLIGHT_BYTES`
+
+**Description**: Shared queued and in-flight publish byte budget across client workers.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `4194304` (4 MiB)
+
+```bash
+export FELIX_PUBLISH_INFLIGHT_BYTES="4194304"
+```
+
 ## Broker Workers and Queues
 
 ### `FELIX_BROKER_PUB_WORKERS_PER_CONN`
@@ -616,13 +718,115 @@ export FELIX_BROKER_PUB_WORKERS_PER_CONN="2"   # Lower overhead
 
 **Type**: Positive integer (count)
 
-**Default**: `1024`
+**Default**: `64`
 
 **Example**:
 ```bash
-export FELIX_BROKER_PUB_QUEUE_DEPTH="1024"
-export FELIX_BROKER_PUB_QUEUE_DEPTH="2048"  # More buffering
-export FELIX_BROKER_PUB_QUEUE_DEPTH="512"   # Less memory
+export FELIX_BROKER_PUB_QUEUE_DEPTH="64"
+export FELIX_BROKER_PUB_QUEUE_DEPTH="256"  # More buffering
+export FELIX_BROKER_PUB_QUEUE_DEPTH="32"   # Less memory
+```
+
+### `FELIX_BROKER_PUBLISH_INFLIGHT_BYTES`
+
+**Description**: Shared in-flight publish byte budget across all publish workers (process-wide). Bounds queued-or-processing bytes independent of `FELIX_BROKER_PUB_QUEUE_DEPTH`'s item count, so a handful of large payloads/batches can't blow past the intended ingress memory budget.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `67108864` (64 MiB)
+
+```bash
+export FELIX_BROKER_PUBLISH_INFLIGHT_BYTES="67108864"
+```
+
+### `FELIX_PUB_INGRESS_WAIT`
+
+**Description**: When enabled, un-acked (fire-and-forget) publishes wait — bounded by `FELIX_PUBLISH_QUEUE_WAIT_MS` — for ingress capacity instead of being shed when the publish queue or byte budget is full. Backpressure then propagates through QUIC flow control to the publisher. Leave off in production for visible shedding under overload; turn on for lossless pipelines and sustainable-throughput benchmarking.
+
+**Type**: Boolean (`1`, `true`, `yes` = enabled)
+
+**Default**: disabled
+
+```bash
+export FELIX_PUB_INGRESS_WAIT="1"
+```
+
+### `FELIX_CORE_SHARDS`
+
+**Description**: Number of core-pinned shard executors owning stream work (thread-per-core, shared-nothing). Each stream is owned by one shard: its publish worker and its subscriptions' lane feeders run on that shard's dedicated single-threaded runtime, pinned to a CPU core on Linux. Benefits scale with stream count; single-stream workloads serialize on one shard by design.
+
+**Type**: Positive integer (count; `0` = disabled)
+
+**Default**: `0`
+
+```bash
+export FELIX_CORE_SHARDS="4"
+```
+
+## QUIC Transport Tuning
+
+Process-wide levers read by every Felix QUIC endpoint (broker, client, demos). See [Benchmarks](../features/benchmarks.md) for measured impact.
+
+### `FELIX_MTU_UPPER_BOUND`
+
+**Description**: Upper bound for QUIC path-MTU discovery. Probes are loss-tolerant, so the bound is safe on any network; discovery converges to the real path MTU at or below it. The default matches loopback/jumbo ceilings; small-message-dominated workloads may prefer `4096` (finer ACK clocking).
+
+**Type**: Positive integer (bytes, clamped to 1200–65527)
+
+**Default**: `16384`
+
+```bash
+export FELIX_MTU_UPPER_BOUND="16384"
+export FELIX_MTU_UPPER_BOUND="4096"   # small-message optimized
+```
+
+### `FELIX_INITIAL_MTU`
+
+**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (loopback, jumbo-frame LAN) skips the discovery ramp.
+
+**Type**: Positive integer (bytes, clamped to 1200–65527)
+
+**Default**: `1200`
+
+```bash
+export FELIX_INITIAL_MTU="1200"
+```
+
+### `FELIX_INITIAL_CWND`
+
+**Description**: Optional initial congestion window override in bytes. By default Felix keeps Quinn's RFC 9002 behavior, including raising the minimum window to two datagrams after path-MTU discovery. Increase only on trusted low-loss paths where a larger initial burst is acceptable.
+
+**Type**: Positive integer (bytes)
+
+**Default**: Quinn's RFC 9002 default
+
+```bash
+export FELIX_INITIAL_CWND="1048576"
+```
+
+### `FELIX_UDP_SEND_BUFFER` / `FELIX_UDP_RECV_BUFFER`
+
+**Description**: Requested UDP socket buffer sizes (SO_SNDBUF / SO_RCVBUF). Applied best-effort: halved until the OS accepts. Kernel-level datagram drops surface as QUIC retransmits and tail-latency spikes, so large buffers matter at high message rates.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `8388608` (8 MiB)
+
+```bash
+export FELIX_UDP_SEND_BUFFER="8388608"
+export FELIX_UDP_RECV_BUFFER="8388608"
+```
+
+### `FELIX_MAX_UDP_PAYLOAD`
+
+**Description**: Largest UDP datagram the endpoint accepts (receive side). Must be at least the peer's discovered MTU or large datagrams are rejected.
+
+**Type**: Positive integer (bytes, clamped to 1200–65527)
+
+**Default**: `65527`
+
+```bash
+export FELIX_MAX_UDP_PAYLOAD="65527"
 ```
 
 ## Performance and Monitoring

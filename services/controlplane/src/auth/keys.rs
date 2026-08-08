@@ -43,7 +43,7 @@ use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 use anyhow::Result;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use jsonwebtoken::Algorithm;
-use rand::RngCore;
+use rand::Rng;
 
 /// Generate a fresh Ed25519 signing key set for a tenant.
 ///
