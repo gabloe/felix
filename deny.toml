@@ -5,6 +5,11 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 [licenses]
 allow = [
   "Apache-2.0",
+  # First-party server crates/services are Elastic-2.0 (source-available) as of the
+  # BUSL/ELv2-vs-Apache split; see LICENSING.md. Not OSI-approved, allowed here
+  # deliberately for our own workspace members, not because we'd accept it from a
+  # third-party dependency without the same deliberate review.
+  "Elastic-2.0",
   "MIT",
   "BSD-3-Clause",
   "BSD-2-Clause",

@@ -64,13 +64,12 @@ use tokio::sync::mpsc;
 
 use crate::timings;
 
-use super::publish::{Outgoing, send_outgoing_critical};
+use super::publish::{Outgoing, SubscriptionLimiter, send_outgoing_critical};
 use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::write_message;
 use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
 
 static ACTIVE_SUB_CONN_COUNTS: OnceLock<DashMap<u64, usize>> = OnceLock::new();
-static SUB_EGRESS_MANAGERS: OnceLock<DashMap<u64, Arc<WriterLaneManager>>> = OnceLock::new();
 
 /// Handle a subscribe request received on the bi-directional control stream.
 ///
@@ -97,6 +96,8 @@ pub(crate) async fn handle_subscribe_message(
     broker: Arc<Broker>,
     connection: felix_transport::QuicConnection,
     config: crate::config::BrokerConfig,
+    subscriptions: &Arc<SubscriptionLimiter>,
+    lane_manager: &Arc<WriterLaneManager>,
     out_ack_tx: &mpsc::Sender<Outgoing>,
     out_ack_depth: &Arc<std::sync::atomic::AtomicUsize>,
     ack_throttle_tx: &tokio::sync::watch::Sender<bool>,
@@ -122,11 +123,36 @@ pub(crate) async fn handle_subscribe_message(
     let subscription_id = subscription_id
         .unwrap_or_else(|| SUBSCRIPTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
+    // Enforce the per-connection subscription cap before asking the broker core for a
+    // subscriber queue — no point allocating one just to reject it immediately after.
+    if !subscriptions.try_reserve(config.max_subscriptions_per_conn) {
+        t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
+        t_counter!("felix_broker_subscribe_conn_limit_rejected_total").increment(1);
+        super::publish::handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                Outgoing::Message(Message::Error {
+                    message: "max subscriptions per connection exceeded".to_string(),
+                }),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await?;
+        return Ok(true);
+    }
+
     // Ask broker core for a managed subscriber queue.
     // On failure, respond on the control stream (through the ack queue) and keep the stream alive.
     let subscription = match broker.subscribe(&tenant_id, &namespace, &stream).await {
         Ok(subscription) => subscription,
         Err(err) => {
+            subscriptions.release();
             t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
             super::publish::handle_ack_enqueue_result(
                 send_outgoing_critical(
@@ -162,6 +188,7 @@ pub(crate) async fn handle_subscribe_message(
     let mut event_send = match connection.open_uni().await {
         Ok(send) => send,
         Err(err) => {
+            subscriptions.release();
             t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
             super::publish::handle_ack_enqueue_result(
                 send_outgoing_critical(
@@ -192,6 +219,7 @@ pub(crate) async fn handle_subscribe_message(
     )
     .await
     {
+        subscriptions.release();
         tracing::info!(error = %err, "subscription event stream closed");
         return Ok(true);
     }
@@ -216,7 +244,7 @@ pub(crate) async fn handle_subscribe_message(
         max_bytes_per_write: config.subscriber_max_bytes_per_write.max(1),
     };
     let connection_id = connection.info().id.0;
-    let manager = WriterLaneManager::init(&config, connection_id);
+    let manager = Arc::clone(lane_manager);
     let lane_idx = manager.select_lane(subscription_id, Some(connection_id));
     let (event_rx, unsubscribe_guard) = subscription.into_parts();
     if manager
@@ -235,6 +263,7 @@ pub(crate) async fn handle_subscribe_message(
     {
         metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
         manager.unregister_subscriber(subscription_id, Some(connection_id));
+        subscriptions.release();
         tracing::warn!(
             lane = lane_idx,
             subscription_id,
@@ -276,6 +305,7 @@ pub(crate) async fn handle_subscribe_message(
         cancel_tx,
     )
     .await?;
+    let feeder_subscriptions = Arc::clone(subscriptions);
     let feeder = async move {
         run_lane_feeder(
             event_rx,
@@ -283,6 +313,7 @@ pub(crate) async fn handle_subscribe_message(
             lane_idx,
             Some(connection_id),
             writer_config,
+            feeder_subscriptions,
         )
         .await;
     };
@@ -445,7 +476,7 @@ enum ConnectionCommand {
 }
 
 #[derive(Debug)]
-enum LaneCommand {
+pub(crate) enum LaneCommand {
     Register {
         subscriber_id: u64,
         connection_id: Option<u64>,
@@ -465,8 +496,16 @@ enum LaneCommand {
     },
 }
 
+/// One instance per QUIC connection (see `handle_connection`'s `PublishContext`
+/// construction). Previously this was cached in a process-wide static keyed on
+/// `connection.info().id.0` (QUIC's `stable_id()`), which is only unique *within one
+/// QUIC endpoint* — across independently created endpoints (e.g. one per test) it can
+/// collide, silently sharing lane state (and its background tasks) between unrelated
+/// connections, and the cache never evicted entries, leaking a manager + its spawned
+/// tasks per historical connection for the life of the process. Constructing a fresh
+/// instance per connection and letting it drop with the connection avoids both.
 #[derive(Debug)]
-struct WriterLaneManager {
+pub(crate) struct WriterLaneManager {
     lanes: Vec<mpsc::Sender<LaneCommand>>,
     lane_queue_capacity: usize,
     lane_queue_policy: felix_broker::SubQueuePolicy,
@@ -497,48 +536,7 @@ struct LaneDelivery {
 }
 
 impl WriterLaneManager {
-    fn init(config: &crate::config::BrokerConfig, scope_key: u64) -> Arc<Self> {
-        let key = Self::config_key(config, scope_key);
-        let managers = SUB_EGRESS_MANAGERS.get_or_init(DashMap::new);
-        if let Some(existing) = managers.get(&key) {
-            if existing.lanes.iter().all(|lane| !lane.is_closed()) {
-                return existing.clone();
-            }
-            drop(existing);
-            managers.remove(&key);
-        }
-        let manager = Self::new(config);
-        managers.insert(key, Arc::clone(&manager));
-        manager
-    }
-
-    fn config_key(config: &crate::config::BrokerConfig, scope_key: u64) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        scope_key.hash(&mut hasher);
-        config.quic_bind.hash(&mut hasher);
-        config.subscriber_writer_lanes.hash(&mut hasher);
-        config.subscriber_lane_queue_depth.hash(&mut hasher);
-        match config.subscriber_lane_queue_policy {
-            felix_broker::SubQueuePolicy::Block => 0u8,
-            felix_broker::SubQueuePolicy::DropNew => 1u8,
-            felix_broker::SubQueuePolicy::DropOld => 2u8,
-        }
-        .hash(&mut hasher);
-        match config.subscriber_lane_shard {
-            crate::config::SubscriberLaneShard::Auto => 0u8,
-            crate::config::SubscriberLaneShard::SubscriberIdHash => 1u8,
-            crate::config::SubscriberLaneShard::ConnectionIdHash => 2u8,
-            crate::config::SubscriberLaneShard::RoundRobinPin => 3u8,
-        }
-        .hash(&mut hasher);
-        config.subscriber_single_writer_per_conn.hash(&mut hasher);
-        config.subscriber_flush_max_items.hash(&mut hasher);
-        config.subscriber_flush_max_delay_us.hash(&mut hasher);
-        config.subscriber_max_bytes_per_write.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn new(config: &crate::config::BrokerConfig) -> Arc<Self> {
+    pub(crate) fn new(config: &crate::config::BrokerConfig) -> Arc<Self> {
         let requested_lanes = config.subscriber_writer_lanes.max(1);
         let max_lanes = config.max_subscriber_writer_lanes.max(1);
         let lane_count = requested_lanes.min(max_lanes);
@@ -599,7 +597,7 @@ impl WriterLaneManager {
             .or_insert_with(|| hash64(connection_id) as usize % lanes)
     }
 
-    fn select_lane(&self, subscriber_id: u64, connection_id: Option<u64>) -> usize {
+    pub(crate) fn select_lane(&self, subscriber_id: u64, connection_id: Option<u64>) -> usize {
         if self.single_writer_per_conn
             && let Some(connection_id) = connection_id
         {
@@ -628,7 +626,7 @@ impl WriterLaneManager {
         }
     }
 
-    fn unregister_subscriber(&self, subscriber_id: u64, connection_id: Option<u64>) {
+    pub(crate) fn unregister_subscriber(&self, subscriber_id: u64, connection_id: Option<u64>) {
         self.subscriber_pins.remove(&subscriber_id);
         self.subscriber_connections.remove(&subscriber_id);
         if let Some(connection_id) = connection_id {
@@ -706,7 +704,11 @@ impl WriterLaneManager {
         }
     }
 
-    async fn enqueue(&self, lane_idx: usize, cmd: LaneCommand) -> std::result::Result<(), ()> {
+    pub(crate) async fn enqueue(
+        &self,
+        lane_idx: usize,
+        cmd: LaneCommand,
+    ) -> std::result::Result<(), ()> {
         let lane = lane_idx.to_string();
         let sender = &self.lanes[lane_idx];
         let enqueue_wait_start = Instant::now();
@@ -1165,6 +1167,7 @@ async fn run_lane_feeder(
     lane_idx: usize,
     connection_id: Option<u64>,
     config: EventWriterConfig,
+    subscriptions: Arc<SubscriptionLimiter>,
 ) {
     let max_events = config.max_events.max(1);
     let max_bytes = config.max_bytes.max(1);
@@ -1328,6 +1331,7 @@ async fn run_lane_feeder(
         )
         .await;
     manager.unregister_subscriber(config.subscription_id, connection_id);
+    subscriptions.release();
 }
 
 async fn enqueue_lane_frame(
@@ -1748,9 +1752,11 @@ mod tests {
             pub_workers_per_conn: 1,
             pub_queue_depth: 8,
             pub_inflight_bytes: 64 * 1024 * 1024,
+            pub_conn_inflight_bytes: 16 * 1024 * 1024,
             pub_ingress_wait: false,
             core_shards: 0,
             subscriber_queue_capacity: 8,
+            max_subscriptions_per_conn: 4096,
             subscriber_queue_policy: felix_broker::SubQueuePolicy::DropNew,
             subscriber_writer_lanes: 4,
             subscriber_lane_queue_depth: 8192,
@@ -2027,6 +2033,8 @@ mod tests {
                 broker_for_server,
                 connection,
                 test_config(),
+                &Arc::new(SubscriptionLimiter::new()),
+                &WriterLaneManager::new(&test_config()),
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2125,6 +2133,8 @@ mod tests {
                 broker_for_server,
                 connection,
                 test_config(),
+                &Arc::new(SubscriptionLimiter::new()),
+                &WriterLaneManager::new(&test_config()),
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2195,6 +2205,8 @@ mod tests {
                 broker_for_server,
                 connection,
                 config,
+                &Arc::new(SubscriptionLimiter::new()),
+                &WriterLaneManager::new(&test_config()),
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2313,6 +2325,8 @@ mod tests {
                     broker_for_server.clone(),
                     connection,
                     config.clone(),
+                    &Arc::new(SubscriptionLimiter::new()),
+                    &WriterLaneManager::new(&test_config()),
                     &out_ack_tx,
                     &out_ack_depth,
                     &ack_throttle_tx,
@@ -2514,6 +2528,8 @@ mod tests {
                 broker_for_server,
                 connection,
                 config,
+                &Arc::new(SubscriptionLimiter::new()),
+                &WriterLaneManager::new(&test_config()),
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2607,6 +2623,8 @@ mod tests {
                 broker_for_server,
                 connection,
                 test_config(),
+                &Arc::new(SubscriptionLimiter::new()),
+                &WriterLaneManager::new(&test_config()),
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,

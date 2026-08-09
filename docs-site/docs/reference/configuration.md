@@ -51,7 +51,9 @@ fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 64
 pub_inflight_bytes: 67108864
+pub_conn_inflight_bytes: 16777216
 subscriber_queue_capacity: 512
+max_subscriptions_per_conn: 4096
 subscriber_writer_lanes: 4
 subscriber_lane_queue_depth: 64
 max_subscriber_writer_lanes: 8
@@ -326,6 +328,20 @@ high fanout / large payload workloads.
 
 ```yaml
 subscriber_queue_capacity: 512
+```
+
+#### `max_subscriptions_per_conn`
+
+**Description**: Max concurrent subscriptions a single QUIC connection may hold. `subscriber_queue_capacity` bounds the size of *one* subscription's buffer; this bounds *how many* subscriptions one connection can open in total, which is otherwise unbounded — a connection issuing unlimited `Subscribe` requests could grow broker memory without limit.
+
+**Type**: `usize` (count)
+
+**Default**: `4096`
+
+**Environment**: `FELIX_MAX_SUBSCRIPTIONS_PER_CONN`
+
+```yaml
+max_subscriptions_per_conn: 4096
 ```
 
 #### `subscriber_queue_policy`
@@ -638,6 +654,25 @@ pub_inflight_bytes: 67108864
 - The budget is acquired before a job is handed to a worker queue and released only once the job finishes processing, so it reflects real resident memory, not just admission-time bytes.
 - Should be set well above `max_frame_bytes` — a job larger than the remaining budget waits (and can time out under `EnqueuePolicy::Wait`) rather than being admitted.
 - Lower this to shrink worst-case ingress memory under large-payload workloads; raise it to allow more large batches in flight concurrently.
+
+### `pub_conn_inflight_bytes`
+
+**Description**: Per-connection share of `pub_inflight_bytes`. `pub_inflight_bytes` is intentionally process-wide (see its description above), which on its own means nothing stops one connection from occupying the entire shared budget. `pub_conn_inflight_bytes` closes that gap: it's a second, independent byte-budget gate sized per connection, checked before the shared budget on every publish admission.
+
+**Type**: `usize` (bytes)
+
+**Default**: `16777216` (16 MiB)
+
+**Environment**: `FELIX_BROKER_PUBLISH_CONN_INFLIGHT_BYTES`
+
+**Example**:
+```yaml
+pub_conn_inflight_bytes: 16777216
+```
+
+**Tuning**:
+- Must be smaller than `pub_inflight_bytes` to have any effect; setting it equal to or above `pub_inflight_bytes` means a single connection can once again claim the whole shared budget.
+- Roughly `pub_inflight_bytes / N` for the expected number of concurrently active connections gives each a fair share while still allowing the shared budget to absorb bursts from fewer connections.
 
 ### `pub_ingress_wait`
 

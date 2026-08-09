@@ -56,8 +56,9 @@ use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishAdmission, PublishContext, PublishJob,
-    PublishTarget,
+    PublishTarget, SubscriptionLimiter,
 };
+use crate::transport::quic::handlers::subscribe::WriterLaneManager;
 use crate::transport::quic::telemetry;
 use crate::transport::quic::{ACK_HI_WATER, ACK_LO_WATER};
 
@@ -547,6 +548,9 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
         admission: Arc::new(PublishAdmission::unlimited()),
+        conn_admission: Arc::new(PublishAdmission::unlimited()),
+        subscriptions: Arc::new(SubscriptionLimiter::new()),
+        lane_manager: WriterLaneManager::new(&BrokerConfig::from_env().expect("test config")),
         ingress_wait: false,
     }
 }
@@ -3421,6 +3425,9 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         wait_timeout: Duration::from_millis(50),
         admission: Arc::new(PublishAdmission::unlimited()),
+        conn_admission: Arc::new(PublishAdmission::unlimited()),
+        subscriptions: Arc::new(SubscriptionLimiter::new()),
+        lane_manager: WriterLaneManager::new(&BrokerConfig::from_env()?),
         ingress_wait: false,
     };
     let mut scratch = BytesMut::with_capacity(64 * 1024);
@@ -3593,6 +3600,9 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(50),
             admission: Arc::new(PublishAdmission::unlimited()),
+            conn_admission: Arc::new(PublishAdmission::unlimited()),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: WriterLaneManager::new(&BrokerConfig::from_env()?),
             ingress_wait: false,
         };
         let mut config = BrokerConfig::from_env()?;
