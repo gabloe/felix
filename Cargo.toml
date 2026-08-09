@@ -18,6 +18,19 @@ members = [
   "services/broker",
 ]
 
+[profile.release]
+# The hot path spans crate boundaries — felix-wire encode/decode, felix-broker
+# fanout, and the broker service's QUIC handlers are separate crates — so
+# cross-crate inlining is where the wins are. `codegen-units = 1` costs build
+# time but is what lets LTO see the whole picture.
+#
+# Deliberately NOT `panic = "abort"`. Tokio contains a panicking task by
+# unwinding it; aborting would turn any single request-triggered panic into a
+# whole-broker outage, which is the opposite of what docs/security/panic-audit.md
+# concluded the panic surface should do.
+lto = "fat"
+codegen-units = 1
+
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
