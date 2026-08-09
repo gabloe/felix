@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786316110174,
+  "lastUpdate": 1786318455712,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -988,6 +988,58 @@ window.BENCHMARK_DATA = {
             "range": "74516.12",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 577485.40\nmean: 545239.33\nstdev: 74516.12\ncv: 13.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51136f5e2c7d265a6f92ebddc2a7d84eb5263ee9",
+          "message": "feat: update licensing and metadata for multiple crates (#162)\n\n- Updated `Cargo.toml` for `controlplane` to set workspace-level license and prevent publishing.\n- Added `LICENSE` files for `felix-authz`, `felix-broker`, `felix-consensus`, `felix-crypto`, `felix-metadata`, `felix-router`, `felix-storage`, `agent`, and `broker` with Elastic License 2.0.\n- Created `README.md` for `felix-conformance` detailing its purpose and licensing.\n- Introduced `check_publish_metadata.py` script to enforce licensing and publish readiness across the workspace.",
+          "timestamp": "2026-08-09T16:32:29-07:00",
+          "tree_id": "d0f34818cd6468fcbd06ad62c683350089f8b238",
+          "url": "https://github.com/gabloe/felix/commit/51136f5e2c7d265a6f92ebddc2a7d84eb5263ee9"
+        },
+        "date": 1786318454899,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 194791.3,
+            "range": "17690.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 194791.30\nmean: 190294.04\nstdev: 17690.65\ncv: 9.30%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 194791.3,
+            "range": "17690.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 194791.30\nmean: 190294.04\nstdev: 17690.65\ncv: 9.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56172.49,
+            "range": "2188.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56172.49\nmean: 55869.55\nstdev: 2188.58\ncv: 3.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 561724.87,
+            "range": "21885.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 561724.87\nmean: 558695.47\nstdev: 21885.75\ncv: 3.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
