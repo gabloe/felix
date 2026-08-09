@@ -532,7 +532,15 @@ pub struct Broker {
     next_stream_handle: AtomicU64,
 }
 
-unsafe impl Send for Broker {}
+// `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
+// an atomic, a `usize`, or `Box<dyn StorageApi + Send>` — and `StorageApi`
+// already requires `Send + Sync`. The compiler's auto-impls cover this, so no
+// `unsafe impl` is needed. This assertion fails the build if a future field
+// breaks the property instead of letting it be papered over again.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Broker>();
+};
 
 #[derive(Debug, Clone)]
 pub struct StreamMetadata {

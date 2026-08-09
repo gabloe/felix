@@ -124,7 +124,14 @@ impl StorageApi for EphemeralCache {
     }
 }
 
-unsafe impl Send for EphemeralCache {}
+// `EphemeralCache` is `Send + Sync` from its fields alone (`RwLock<HashMap<..>>`
+// and `Option<usize>`), so the compiler's auto-impls suffice and no `unsafe impl`
+// is needed. `StorageApi: Send + Sync` means this must hold; assert it here so a
+// future field change is a build error rather than a trait-bound puzzle.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<EphemeralCache>();
+};
 
 impl Default for EphemeralCache {
     fn default() -> Self {

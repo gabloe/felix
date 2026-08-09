@@ -645,6 +645,27 @@ pub mod binary {
     use bytes::BufMut;
     use serde::de::Error as SerdeError;
 
+    // Every payload in a batch is encoded as a 4-byte length prefix followed by its
+    // bytes, so a frame can never carry more payloads than it has 4-byte groups left.
+    const PAYLOAD_LEN_PREFIX: usize = 4;
+
+    // Bound an attacker-declared payload count against what the frame can actually
+    // hold, before it ever reaches `Vec::with_capacity`. The count is read straight
+    // off the wire, so without this a ~20-byte frame declaring `u32::MAX` payloads
+    // reserves 95-127 GiB of address space. Overcommit means one such frame usually
+    // succeeds, but roughly a thousand concurrent ones exhaust the address space and
+    // the failing allocation calls `handle_alloc_error`, which aborts the process
+    // instead of unwinding — so it is not contained by per-task panic recovery. A
+    // memory cgroup or strict overcommit, as in a typical container deployment,
+    // brings that threshold far lower. The loop below still validates each payload
+    // individually; this only stops the count itself from being trusted.
+    fn checked_payload_count(count: usize, remaining: usize) -> Result<usize> {
+        if count > remaining / PAYLOAD_LEN_PREFIX {
+            return Err(Error::Incomplete);
+        }
+        Ok(count)
+    }
+
     // Parsed representation of a binary publish batch frame.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PublishBatch {
@@ -851,7 +872,7 @@ pub mod binary {
         let stream_bytes = buf.copy_to_bytes(stream_len);
         let stream = String::from_utf8(stream_bytes.to_vec())
             .map_err(|_| Error::Deserialize(SerdeError::custom("invalid stream name")))?;
-        let count = buf.get_u32() as usize;
+        let count = checked_payload_count(buf.get_u32() as usize, buf.remaining())?;
         let mut payloads = Vec::with_capacity(count);
         for _ in 0..count {
             if buf.remaining() < 4 {
@@ -986,7 +1007,7 @@ pub mod binary {
             return Err(Error::Incomplete);
         }
         let subscription_id = buf.get_u64();
-        let count = buf.get_u32() as usize;
+        let count = checked_payload_count(buf.get_u32() as usize, buf.remaining())?;
         let mut payloads = Vec::with_capacity(count);
         for _ in 0..count {
             if buf.remaining() < 4 {
@@ -1010,7 +1031,7 @@ pub mod binary {
         if buf.remaining() < 4 {
             return Err(Error::Incomplete);
         }
-        let count = buf.get_u32() as usize;
+        let count = checked_payload_count(buf.get_u32() as usize, buf.remaining())?;
         let mut payloads = Vec::with_capacity(count);
         for _ in 0..count {
             if buf.remaining() < 4 {
@@ -1238,6 +1259,65 @@ mod tests {
         let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze()).expect("frame");
         let result = binary::decode_publish_batch(&frame);
         assert!(result.is_err());
+    }
+
+    // A declared payload count is attacker-controlled and was previously passed
+    // straight to `Vec::with_capacity`. These frames are ~20 bytes but claim
+    // `u32::MAX` payloads; before the bound each reserved 95-127 GiB of address
+    // space, and enough concurrent ones turn that into an abort. See
+    // `checked_payload_count`.
+    #[test]
+    fn binary_decode_publish_batch_rejects_oversized_payload_count() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u16(2); // tenant_id len
+        buf.extend_from_slice(b"t1");
+        buf.put_u16(2); // namespace len
+        buf.extend_from_slice(b"ns");
+        buf.put_u16(2); // stream len
+        buf.extend_from_slice(b"st");
+        buf.put_u32(u32::MAX); // count, with no payload bytes following
+        let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze()).expect("frame");
+        let err = binary::decode_publish_batch(&frame).expect_err("oversized count");
+        assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn binary_decode_event_batch_rejects_oversized_payload_count() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u64(1); // subscription id
+        buf.put_u32(u32::MAX); // count, with no payload bytes following
+        let frame = Frame::new(FLAG_BINARY_EVENT_BATCH, buf.freeze()).expect("frame");
+        let err = binary::decode_event_batch(&frame).expect_err("oversized count");
+        assert!(matches!(err, Error::Incomplete));
+    }
+
+    #[test]
+    fn binary_decode_shared_event_batch_rejects_oversized_payload_count() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u32(u32::MAX); // count, with no payload bytes following
+        let frame = Frame::new(FLAG_BINARY_EVENT_BATCH_SHARED, buf.freeze()).expect("frame");
+        let err = binary::decode_shared_event_batch(&frame).expect_err("oversized count");
+        assert!(matches!(err, Error::Incomplete));
+    }
+
+    // The bound must reject only counts the frame cannot back, never a legitimate
+    // batch sitting exactly at the limit.
+    #[test]
+    fn binary_decode_event_batch_accepts_maximum_supportable_count() {
+        use bytes::BufMut;
+        let mut buf = BytesMut::new();
+        buf.put_u64(7);
+        buf.put_u32(3); // three zero-length payloads: 3 * 4 bytes of prefix follow
+        for _ in 0..3 {
+            buf.put_u32(0);
+        }
+        let frame = Frame::new(FLAG_BINARY_EVENT_BATCH, buf.freeze()).expect("frame");
+        let batch = binary::decode_event_batch(&frame).expect("decode");
+        assert_eq!(batch.subscription_id, 7);
+        assert_eq!(batch.payloads.len(), 3);
     }
 
     #[test]
