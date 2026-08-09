@@ -59,5 +59,8 @@ jobs:
       - name: cargo-deny
         run: task deny
 
+      - name: Publish-readiness and licence split
+        run: task publish:check
+
       - name: RSA dependency check (non-controlplane crates)
         run: task deny:rsa:default

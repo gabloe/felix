@@ -2,8 +2,14 @@
 name = "felix-metadata"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Metadata model for Felix tenants, namespaces, streams, and caches"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "metadata"]
+categories = ["network-programming"]
 
 [dependencies]
 tokio = { workspace = true }

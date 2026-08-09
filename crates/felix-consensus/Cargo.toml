@@ -2,7 +2,13 @@
 name = "felix-consensus"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Consensus primitives for multi-node Felix deployments"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "consensus"]
+categories = ["network-programming"]
 
 [dependencies]

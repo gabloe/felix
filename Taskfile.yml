@@ -89,6 +89,10 @@ tasks:
     cmds:
       - "cargo install cargo-deny --version 0.19.0 --locked"
       - "cargo-deny check"
+  publish:check:
+    desc: "Assert the LICENSING.md licence split and crates.io publish-readiness"
+    cmds:
+      - "python3 scripts/check_publish_metadata.py"
   deny:rsa:default:
     cmds:
       - |

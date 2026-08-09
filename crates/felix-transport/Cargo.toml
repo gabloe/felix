@@ -2,8 +2,14 @@
 name = "felix-transport"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 rust-version.workspace = true
+description = "QUIC transport primitives shared by Felix clients and brokers"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "quic", "transport", "networking"]
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 anyhow = { workspace = true }

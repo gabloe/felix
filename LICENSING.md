@@ -18,8 +18,27 @@ service.
 
 The root [`LICENSE`](LICENSE) file is Elastic License 2.0 (the license for
 the project as a whole / the deployable server). [`LICENSE-APACHE`](LICENSE-APACHE)
-holds the Apache-2.0 text; each Apache-licensed directory above also carries
-its own `LICENSE` file, which takes precedence for that subtree.
+holds the Apache-2.0 text.
+
+**Every crate directory carries its own `LICENSE` file**, holding the text that
+applies to that subtree, and it takes precedence for that subtree. This is not
+just tidiness: `cargo package` only bundles files from inside the crate
+directory, so a crate without its own `LICENSE` would publish to a registry with
+no license text at all.
+
+## How the split is kept honest
+
+The table above is the authoritative statement, and it is enforced rather than
+trusted. `Cargo.toml`'s `[workspace.package]` sets `license = "Elastic-2.0"` as a
+**fail-closed default**: a crate added without thinking inherits the restrictive
+license, and the five permissive crates opt in by setting
+`license = "Apache-2.0"` explicitly. The previous default was Apache-2.0, which
+meant a new server crate that forgot to override became silently permissive.
+
+`task publish:check` (run in CI) asserts that every workspace member's resolved
+license matches this table, that a crate is not left unclassified, that each has
+its own `LICENSE` file, and that the `publish` flags are what we intend. Adding a
+crate fails CI until it is deliberately classified here.
 
 ## What Elastic License 2.0 actually restricts
 
