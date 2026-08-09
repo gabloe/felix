@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786316108000,
+  "lastUpdate": 1786318453332,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -1254,6 +1254,72 @@ window.BENCHMARK_DATA = {
             "range": "297.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 745.00\nmean: 801.20\nstdev: 297.04\ncv: 37.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51136f5e2c7d265a6f92ebddc2a7d84eb5263ee9",
+          "message": "feat: update licensing and metadata for multiple crates (#162)\n\n- Updated `Cargo.toml` for `controlplane` to set workspace-level license and prevent publishing.\n- Added `LICENSE` files for `felix-authz`, `felix-broker`, `felix-consensus`, `felix-crypto`, `felix-metadata`, `felix-router`, `felix-storage`, `agent`, and `broker` with Elastic License 2.0.\n- Created `README.md` for `felix-conformance` detailing its purpose and licensing.\n- Introduced `check_publish_metadata.py` script to enforce licensing and publish readiness across the workspace.",
+          "timestamp": "2026-08-09T16:32:29-07:00",
+          "tree_id": "d0f34818cd6468fcbd06ad62c683350089f8b238",
+          "url": "https://github.com/gabloe/felix/commit/51136f5e2c7d265a6f92ebddc2a7d84eb5263ee9"
+        },
+        "date": 1786318451567,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 149,
+            "range": "2.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 149.00\nmean: 149.00\nstdev: 2.12\ncv: 1.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 197,
+            "range": "24.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 206.60\nstdev: 24.50\ncv: 11.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 257,
+            "range": "124.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 257.00\nmean: 298.40\nstdev: 124.82\ncv: 41.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 197.60\nstdev: 1.14\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 513,
+            "range": "24.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 513.00\nmean: 504.40\nstdev: 24.71\ncv: 4.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1058,
+            "range": "259.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1058.00\nmean: 1057.60\nstdev: 259.21\ncv: 24.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
