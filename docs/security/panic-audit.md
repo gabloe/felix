@@ -46,15 +46,15 @@ trait-bound error at a distant call site — which is the pressure that produces
 
 ### Invariant-protected (verified, not assumed)
 
-- `handlers/publish.rs` — 12 × `request_id.expect("request id checked")`. The protocol
+- `handlers/publish/control.rs` — 12 × `request_id.expect("request id checked")`. The protocol
   invariant is enforced earlier in `handle_publish_message`: an acked publish missing
   `request_id` is rejected with `missing request_id for acked publish` before any of
   these sites run. A malformed client frame produces an error response, not a panic.
-- `handlers/publish.rs` — 2 × `unreachable!("Wait handled above")`. `EnqueuePolicy` is
+- `handlers/publish/ingress.rs` — 2 × `unreachable!("Wait handled above")`. `EnqueuePolicy` is
   config-derived, not request-derived, and `Wait` is handled in an earlier branch.
-- `handlers/subscribe.rs:995` — `frames.pop().expect("single frame")` is guarded by an
+- `handlers/subscribe/writer.rs` — `frames.pop().expect("single frame")` is guarded by an
   enclosing `frames.len() == 1`.
-- `felix-broker/src/lib.rs` — `next_seq.checked_add(1).expect("log sequence overflow")`
+- `felix-broker/src/stream_state.rs` — `next_seq.checked_add(1).expect("log sequence overflow")`
   requires 2^64 publishes to a single stream.
 - `felix-wire` — `encode_slice(..).expect("base64 encode slice")` writes into a buffer
   resized to exactly `base64_len(payload.len())?`, and that helper returns `Err` on

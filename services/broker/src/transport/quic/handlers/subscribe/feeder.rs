@@ -1,0 +1,211 @@
+// Feeder task: drains the broker subscription queue into a writer lane.
+
+use bytes::Bytes;
+use felix_broker::{DeliveryEnvelope, SubscriptionReceiver};
+use std::sync::{Arc, Weak};
+use std::time::Instant;
+
+use crate::timings;
+use crate::transport::quic::handlers::publish::SubscriptionLimiter;
+use crate::transport::quic::handlers::subscribe::config::EventWriterConfig;
+use crate::transport::quic::handlers::subscribe::lane::{LaneCommand, WriterLaneManager};
+use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
+
+pub(super) async fn run_lane_feeder(
+    mut event_rx: SubscriptionReceiver,
+    manager: Weak<WriterLaneManager>,
+    lane_idx: usize,
+    connection_id: Option<u64>,
+    config: EventWriterConfig,
+    subscriptions: Arc<SubscriptionLimiter>,
+) {
+    let max_events = config.max_events.max(1);
+    let max_bytes = config.max_bytes.max(1);
+    let _lane_flush_hints = (
+        config.flush_max_items,
+        config.flush_max_delay,
+        config.max_bytes_per_write,
+    );
+    let mut pending: Option<DeliveryEnvelope> = None;
+
+    loop {
+        let envelope = match pending.take() {
+            Some(envelope) => envelope,
+            None => match event_rx.recv().await {
+                Some(envelope) => envelope,
+                None => break,
+            },
+        };
+        let first_enqueued_at = envelope.enqueued_at();
+        let Some(manager) = manager.upgrade() else {
+            break;
+        };
+
+        if envelope.len() > 1 || config.single_event_mode {
+            let payloads = envelope.payloads();
+            let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
+            if payloads.len() <= max_events && payload_bytes <= max_bytes {
+                let prefix_start = t_now_if(t_should_sample());
+                let frame = match envelope.shared_event_frame() {
+                    Ok(frame) => frame,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            subscriber_id = config.subscription_id,
+                            "encode shared lane delivery failed"
+                        );
+                        continue;
+                    }
+                };
+                if let Some(start) = prefix_start {
+                    let prefix_ns = start.elapsed().as_nanos() as u64;
+                    timings::record_sub_prefix_ns(prefix_ns);
+                    t_histogram!("felix_broker_sub_prefix_build_ns").record(prefix_ns as f64);
+                }
+                enqueue_lane_frame(
+                    &manager,
+                    lane_idx,
+                    config.subscription_id,
+                    frame,
+                    payloads.len(),
+                    first_enqueued_at,
+                )
+                .await;
+                continue;
+            }
+
+            let mut start = 0usize;
+            while start < payloads.len() {
+                let mut end = start;
+                let mut bytes = 0usize;
+                while end < payloads.len()
+                    && end - start < max_events
+                    && (end == start || bytes.saturating_add(payloads[end].len()) <= max_bytes)
+                {
+                    bytes = bytes.saturating_add(payloads[end].len());
+                    end += 1;
+                }
+                let batch = &payloads[start..end];
+                match felix_wire::binary::encode_shared_event_batch_bytes(batch) {
+                    Ok(frame) => {
+                        enqueue_lane_frame(
+                            &manager,
+                            lane_idx,
+                            config.subscription_id,
+                            frame,
+                            batch.len(),
+                            first_enqueued_at,
+                        )
+                        .await;
+                    }
+                    Err(err) => tracing::warn!(
+                        error = %err,
+                        subscriber_id = config.subscription_id,
+                        "encode split lane delivery failed"
+                    ),
+                }
+                start = end;
+            }
+            continue;
+        }
+
+        let first = envelope.payloads()[0].clone();
+
+        let mut batch = Vec::with_capacity(max_events);
+        let mut batch_bytes = first.len();
+        batch.push(first);
+
+        while batch.len() < max_events && batch_bytes < max_bytes {
+            let next = if config.single_event_mode {
+                None
+            } else {
+                match tokio::time::timeout(config.flush_delay, event_rx.recv()).await {
+                    Ok(Some(envelope)) => Some(envelope),
+                    Ok(None) | Err(_) => None,
+                }
+            };
+            let Some(envelope) = next else {
+                break;
+            };
+            if envelope.len() != 1 {
+                pending = Some(envelope);
+                break;
+            }
+            let payload = envelope.payloads()[0].clone();
+            if batch_bytes.saturating_add(payload.len()) > max_bytes {
+                pending = Some(envelope);
+                break;
+            }
+            batch_bytes += payload.len();
+            batch.push(payload);
+        }
+
+        let sample = t_should_sample();
+        let enqueue_start = t_now_if(sample);
+        let prefix_start = t_now_if(sample);
+        let frame = match felix_wire::binary::encode_shared_event_batch_bytes(&batch) {
+            Ok(frame) => frame,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    subscriber_id = config.subscription_id,
+                    "encode lane delivery failed"
+                );
+                continue;
+            }
+        };
+        if let Some(start) = prefix_start {
+            let prefix_ns = start.elapsed().as_nanos() as u64;
+            timings::record_sub_prefix_ns(prefix_ns);
+            t_histogram!("felix_broker_sub_prefix_build_ns").record(prefix_ns as f64);
+        }
+
+        enqueue_lane_frame(
+            &manager,
+            lane_idx,
+            config.subscription_id,
+            frame,
+            batch.len(),
+            first_enqueued_at,
+        )
+        .await;
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            t_histogram!("broker_sub_lane_enqueue_ns", "lane" => lane_idx.to_string())
+                .record(enqueue_ns as f64);
+        }
+    }
+    if let Some(manager) = manager.upgrade() {
+        let _ = manager
+            .enqueue(
+                lane_idx,
+                LaneCommand::Unregister {
+                    subscriber_id: config.subscription_id,
+                    connection_id,
+                },
+            )
+            .await;
+        manager.unregister_subscriber(config.subscription_id, connection_id);
+    }
+    subscriptions.release();
+}
+
+pub(super) async fn enqueue_lane_frame(
+    manager: &WriterLaneManager,
+    lane_idx: usize,
+    subscriber_id: u64,
+    frame: Bytes,
+    item_count: usize,
+    first_enqueued_at: Instant,
+) {
+    let cmd = LaneCommand::Delivery {
+        subscriber_id,
+        frame,
+        item_count,
+        first_enqueued_at,
+        enqueue_at: Instant::now(),
+    };
+    if manager.enqueue(lane_idx, cmd).await.is_err() {
+        metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
+    }
+}

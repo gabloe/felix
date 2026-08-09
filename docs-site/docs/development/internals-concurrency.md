@@ -43,7 +43,7 @@ Checkpoints 1/3 (bytes) and 2/4 (items) look redundant but aren't:
 can be as large as `max_frame_bytes` (16 MiB default) — a handful of large
 batches can blow the intended memory budget long before they fill an
 item-count queue. `PublishAdmission` (`crates/felix-client/src/client/publisher.rs`
-and `services/broker/src/transport/quic/handlers/publish.rs` — two separate
+and `services/broker/src/transport/quic/handlers/publish/` — two separate
 structs, same design) is a `tokio::sync::Semaphore` sized in bytes rather
 than permits-as-items, acquired via `acquire_many_owned(byte_count)`. The
 permit is attached to the request/job and released only when it's actually
@@ -129,7 +129,7 @@ agree on which shard owns a given stream:
   `i`'s runtime via `shards.handle_for(worker_id as u64).spawn(..)`.
   `publish_worker_index` (`handle.id() % worker_count`) then routes a
   stream's publishes to the worker — and therefore the core — that owns it.
-- **Subscription lane feeders** (`subscribe.rs:handle_subscribe_message`):
+- **Subscription lane feeders** (`subscribe.rs:handle_subscribe_message`, feeding `subscribe/feeder.rs`):
   after registering with the lane manager, the broker resolves the
   subscription's `StreamHandle` and spawns `run_lane_feeder` on
   `shards.handle_for(handle.id())` instead of the default runtime.
@@ -167,7 +167,7 @@ backpressure on every producer of that stream.
 | You want to... | Look at |
 |---|---|
 | Add a new backpressure checkpoint | Decide which layer it belongs to (ingest vs. broker-core fanout vs. lane) — see the table above for precedent |
-| Change what happens when a checkpoint is full | `SubQueuePolicy` (`crates/felix-broker/src/lib.rs`) for 5/6, `EnqueuePolicy` (`publish.rs`) for 3/4 |
-| Change the byte-budget admission logic | `PublishAdmission` — separately in `crates/felix-client/src/client/publisher.rs` (client) and `services/broker/src/transport/quic/handlers/publish.rs` (broker); kept intentionally symmetric, change both if you change the design |
+| Change what happens when a checkpoint is full | `SubQueuePolicy` (`crates/felix-broker/src/config.rs`) for 5/6, `EnqueuePolicy` (`publish/ack.rs`) for 3/4 |
+| Change the byte-budget admission logic | `PublishAdmission` — separately in `crates/felix-client/src/client/publisher.rs` (client) and `services/broker/src/transport/quic/handlers/publish/admission.rs` (broker); kept intentionally symmetric, change both if you change the design |
 | Change core-sharding/stream-ownership logic | `services/broker/src/core_shards.rs`; the two call sites in `conn.rs` and `subscribe.rs` that must agree on `handle_id -> shard` |
 | Debug "why is this subscriber not getting messages" | Check `felix_subscribe_dropped_total` / `felix_sub_queue_dropped_total` counters first — if either is nonzero for a stream, you're at checkpoint 5 or 6, not a bug |

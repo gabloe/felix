@@ -49,12 +49,11 @@ application
 
 The important architectural boundary is:
 
-- `crates/felix-broker/src/lib.rs` contains the transport-independent broker
-  core.
+- `crates/felix-broker/src/` contains the transport-independent broker core.
 - `services/broker/src/` turns that core into a network service.
 - `crates/felix-client/src/` implements the client-side connection pools and
   APIs.
-- `crates/felix-wire/src/lib.rs` defines what the two sides exchange.
+- `crates/felix-wire/src/` defines what the two sides exchange.
 - `crates/felix-transport/src/lib.rs` wraps the QUIC implementation.
 
 ## 2. Repository map
@@ -193,7 +192,7 @@ enforce configured frame-size limits.
 
 ### 4.2 JSON control messages
 
-`crates/felix-wire/src/lib.rs::Message` is the version-one protocol enum. With
+`crates/felix-wire/src/message.rs::Message` is the version-one protocol enum. With
 zero flags, `Message::encode` serializes a message as JSON and places it in a
 frame. JSON is used where flexibility and request metadata matter more than
 minimum encoding overhead:
@@ -249,7 +248,7 @@ tenant -> namespace -> cache -> key
 ```
 
 The broker keeps local registries for these objects in
-`crates/felix-broker/src/lib.rs::Broker`. A stream does not become valid merely
+`crates/felix-broker/src/broker.rs::Broker`. A stream does not become valid merely
 because a client names it; it must exist in the broker's synchronized metadata.
 
 The running service obtains metadata from the control plane through
@@ -505,7 +504,7 @@ old resolutions. Removed stream states are also marked inactive, and
 ### 9.8 Broker byte and item admission
 
 The network handler constructs a `PublishJob` and calls
-`services/broker/src/transport/quic/handlers/publish.rs::enqueue_publish`.
+`services/broker/src/transport/quic/handlers/publish/ingress.rs::enqueue_publish`.
 
 Two byte budgets are acquired:
 
@@ -540,7 +539,7 @@ worker `i` runs on shard runtime `i`.
 ### 9.10 Broker core append and fanout
 
 The worker calls
-`crates/felix-broker/src/lib.rs::Broker::publish_batch_to_handle`.
+`crates/felix-broker/src/broker.rs::Broker::publish_batch_to_handle`.
 
 That function:
 
@@ -600,7 +599,7 @@ replication quorum.
 
 Commit acknowledgements use:
 
-- `handlers/publish.rs::AckWaiterMessage`;
+- `handlers/publish/ack.rs::AckWaiterMessage`;
 - a bounded waiter semaphore; and
 - `streams/ack_waiter.rs::run_ack_waiter_loop`.
 
@@ -1073,19 +1072,19 @@ Read in this order and follow each symbol with editor "go to definition":
    - `handle_stream`
 7. `services/broker/src/transport/quic/streams/control.rs`
    - `run_control_loop`
-8. `services/broker/src/transport/quic/handlers/publish.rs`
-   - `resolve_stream_cached`
-   - `enqueue_publish`
-9. `crates/felix-broker/src/lib.rs`
-   - `StreamState`
-   - `DeliveryEnvelope`
-   - `Broker::publish_batch_to_handle`
-   - `Broker::subscribe`
-10. `services/broker/src/transport/quic/handlers/subscribe.rs`
-    - `handle_subscribe_message`
-    - `run_lane_feeder`
-    - `run_writer_lane`
-    - `run_connection_writer`
+8. `services/broker/src/transport/quic/handlers/publish/`
+   - `resolve_stream_cached` (`publish.rs`)
+   - `enqueue_publish` (`ingress.rs`)
+9. `crates/felix-broker/src/`
+   - `StreamState` (`stream_state.rs`)
+   - `DeliveryEnvelope` (`delivery.rs`)
+   - `Broker::publish_batch_to_handle` (`broker.rs`)
+   - `Broker::subscribe` (`broker.rs`)
+10. `services/broker/src/transport/quic/handlers/subscribe/`
+    - `handle_subscribe_message` (`subscribe.rs`)
+    - `run_lane_feeder` (`feeder.rs`)
+    - `run_writer_lane` (`writer.rs`)
+    - `run_connection_writer` (`writer.rs`)
 11. `crates/felix-client/src/client/event_router.rs`
     - `run_event_router`
 12. `crates/felix-client/src/client/subscription.rs`

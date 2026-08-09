@@ -95,7 +95,7 @@ sequenceDiagram
 
 ## Broker side: from QUIC frame to `PublishJob`
 
-**File**: `services/broker/src/transport/quic/handlers/publish.rs`
+**File**: `services/broker/src/transport/quic/handlers/publish/` (`control.rs`, `uni.rs`, `ingress.rs`, `admission.rs`, `ack.rs`)
 
 The broker's publish workers are a **global, process-wide pool** — not
 per-connection. The comment at `conn.rs:build_publish_context` explains why:
@@ -244,11 +244,11 @@ Publishing one message to a stream with 3 active subscribers, unacked,
 |---|---|
 | Change how publishes are encoded (binary vs JSON, new wire format) | `crates/felix-client/src/client/publisher.rs` (`publish`/`publish_json`), `crates/felix-wire/src/lib.rs` |
 | Change client-side publish backpressure | `PublishAdmission` in `publisher.rs`; `publish_queue_depth`/`publish_inflight_bytes` in `crates/felix-client/src/config.rs` |
-| Change broker ingest admission/shedding behavior | `EnqueuePolicy` and `enqueue_publish()` in `services/broker/src/transport/quic/handlers/publish.rs` |
-| Change stream resolution/caching | `resolve_stream_cached`, `StreamHandleCache` in `publish.rs`; `StreamHandle`/`resolve_stream_handle` in `crates/felix-broker/src/lib.rs` |
+| Change broker ingest admission/shedding behavior | `EnqueuePolicy` in `handlers/publish/ack.rs` and `enqueue_publish()` in `handlers/publish/ingress.rs` |
+| Change stream resolution/caching | `resolve_stream_cached`, `StreamHandleCache` in `publish.rs`; `StreamHandle` in `crates/felix-broker/src/broker.rs` and `resolve_stream_handle` in `crates/felix-broker/src/registry.rs` |
 | Change fanout/queue policy for subscribers | `SubQueuePolicy` match in `Broker::publish_batch_to_handle`, `crates/felix-broker/src/lib.rs` |
 | Change the in-memory replay log | `StreamState::append_batch`/`snapshot_range`, `crates/felix-broker/src/lib.rs` |
-| Add a new publish worker sharding strategy | `PublishSharding` in `crates/felix-client/src/client/sharding.rs`; `publish_worker_index` in `publish.rs` |
+| Add a new publish worker sharding strategy | `PublishSharding` in `crates/felix-client/src/client/sharding.rs`; `publish_worker_index` in `publish/ingress.rs` |
 
 Next: [Internals: Subscribe & Fanout](internals-subscribe.md) picks up where
 this page leaves off — what happens to the `DeliveryEnvelope` after it lands

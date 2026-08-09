@@ -95,7 +95,7 @@ Fix: `LaneCommand::Unregister` now carries `connection_id`, so the worker does
 not depend on a map entry that teardown races it to delete. Verified by A/B:
 `felix_sub_active_connections` 22 → 0, `felix_sub_connection_subscribers` 24 → 0.
 Regression test:
-`subscribe.rs::lane_unregister_cleans_up_after_teardown_already_removed_the_mapping`,
+`subscribe/tests.rs::lane_unregister_cleans_up_after_teardown_already_removed_the_mapping`,
 confirmed to fail against the pre-fix code.
 
 ### F2 — Shutdown always force-aborted rather than draining (fixed)
@@ -172,8 +172,8 @@ any connection-count entries whose queued unregister command could not run after
 the manager disappeared.
 
 Regression tests:
-`subscribe.rs::writer_lane_tasks_do_not_retain_manager` and
-`subscribe.rs::manager_drop_releases_remaining_connection_counts`.
+`subscribe/tests.rs::writer_lane_tasks_do_not_retain_manager` and
+`subscribe/tests.rs::manager_drop_releases_remaining_connection_counts`.
 The same short soak that previously ended at 815 tasks and one registration now
 returns from 10 tasks to **10**, with both subscriber registration gauges at
 **0** after 30 s.

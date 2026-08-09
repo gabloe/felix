@@ -11,7 +11,7 @@ place.
 | Type | Where | What it is |
 |---|---|---|
 | `SubscriptionReceiver` | `crates/felix-broker/src/lib.rs` | The broker-core side of a subscriber's channel; yields `DeliveryEnvelope`s |
-| `WriterLaneManager` | `services/broker/src/transport/quic/handlers/subscribe.rs` | Owns a fixed set of writer lanes and the per-connection writer tasks they feed |
+| `WriterLaneManager` | `services/broker/src/transport/quic/handlers/subscribe/lane.rs` | Owns a fixed set of writer lanes and the per-connection writer tasks they feed |
 | `LaneCommand` | same | `Register` / `Delivery` / `Unregister`, sent from a subscription's feeder to its assigned lane |
 | `ConnectionCommand` | same | Same three variants, one hop further — sent from a lane to the connection that owns the subscriber's QUIC stream |
 | `run_lane_feeder` | same | One task per subscription; reads `DeliveryEnvelope`s, encodes (once), dispatches `LaneCommand`s |
@@ -62,7 +62,7 @@ coordination).
 
 ## Lane assignment: `select_lane`
 
-**File**: `subscribe.rs`, `WriterLaneManager::select_lane` /
+**File**: `subscribe/lane.rs`, `WriterLaneManager::select_lane` /
 `lane_for_subscriber` / `lane_for_connection`
 
 Controlled by `subscriber_lane_shard`:
@@ -83,7 +83,7 @@ ordering.
 
 ## `run_lane_feeder`: where encode-once actually happens
 
-**File**: `subscribe.rs`, `run_lane_feeder`
+**File**: `subscribe/feeder.rs`, `run_lane_feeder`
 
 ```rust
 async fn run_lane_feeder(
@@ -121,7 +121,7 @@ immediate flush, no batching delay).
 
 ## `run_writer_lane` → `run_connection_writer`
 
-**File**: `subscribe.rs`
+**File**: `subscribe/writer.rs` (lane routing in `subscribe/lane.rs`)
 
 A lane's job is small: receive `LaneCommand`s and forward them as
 `ConnectionCommand`s to whichever connection the subscriber belongs to
@@ -203,11 +203,11 @@ lands as one `DeliveryEnvelope`:
 | You want to... | Look at |
 |---|---|
 | Change event batching/coalescing thresholds | `EventWriterConfig` construction in `handle_subscribe_message`; the coalescing loop in `run_lane_feeder` |
-| Change lane assignment policy | `SubscriberLaneShard` in `services/broker/src/config.rs`; `WriterLaneManager::select_lane` in `subscribe.rs` |
+| Change lane assignment policy | `SubscriberLaneShard` in `services/broker/src/config.rs`; `WriterLaneManager::select_lane` in `subscribe/lane.rs` |
 | Change subscriber backpressure policy | `SubQueuePolicy` — two separate checkpoints: `subscriber_queue_policy` (broker-core, `Broker::publish_batch_to_handle`) and `subscriber_lane_queue_policy` (lane ingress, `WriterLaneManager::enqueue`/`enqueue_connection`). See [Internals: Backpressure](internals-concurrency.md) |
-| Change write scheduling/fairness across subscribers on one connection | `run_connection_writer`'s `in_flight`/`FuturesUnordered` loop, `subscribe.rs` |
+| Change write scheduling/fairness across subscribers on one connection | `run_connection_writer`'s `in_flight`/`FuturesUnordered` loop, `subscribe/writer.rs` |
 | Change the wire format for event delivery | `encode_shared_event_batch_bytes`/`decode_shared_event_batch`, `crates/felix-wire/src/lib.rs`; update [Wire Protocol](../architecture/wire-protocol.md) too |
-| Add a new lane→connection routing mode | `WriterLaneManager::ensure_connection_writer`/`enqueue_connection`, `subscribe.rs` |
+| Add a new lane→connection routing mode | `WriterLaneManager::ensure_connection_writer`/`enqueue_connection`, `subscribe/lane.rs` |
 
 Next: [Internals: Backpressure & Core Sharding](internals-concurrency.md)
 ties the publish-side and subscribe-side admission/queue layers together
