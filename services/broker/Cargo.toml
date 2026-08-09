@@ -29,6 +29,12 @@ path = "../../demos/broker/notifications_demo.rs"
 name = "pubsub-demo-orders"
 path = "../../demos/broker/orders_demo.rs"
 
+# Soak and resource-leak harness (#154). Not a demo: it exits non-zero on a
+# finding so CI can gate on it.
+[[bin]]
+name = "soak"
+path = "src/bin/soak/main.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.22"
@@ -64,7 +70,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-opentelemetry = "0.32.1"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-only core pinning (`core_shards`) and Unix-wide SIGTERM delivery in the
+# soak harness both need libc; the pinning call site stays `target_os = "linux"`
+# gated in code.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

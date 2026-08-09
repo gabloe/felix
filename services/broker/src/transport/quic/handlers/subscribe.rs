@@ -494,6 +494,12 @@ pub(crate) enum LaneCommand {
     },
     Unregister {
         subscriber_id: u64,
+        // Carried explicitly rather than looked up in `subscriber_connections`.
+        // Teardown enqueues this command and then immediately calls
+        // `unregister_subscriber`, which removes that entry -- so by the time the
+        // lane worker dequeues, the lookup would already miss and the cleanup
+        // would be skipped entirely.
+        connection_id: Option<u64>,
     },
 }
 
@@ -810,10 +816,22 @@ async fn run_writer_lane(
                         )
                         .await;
                 }
-                LaneCommand::Unregister { subscriber_id } => {
-                    if let Some((_, connection_id)) =
-                        manager.subscriber_connections.remove(&subscriber_id)
-                    {
+                LaneCommand::Unregister {
+                    subscriber_id,
+                    connection_id,
+                } => {
+                    // Prefer the id carried on the command; fall back to the map
+                    // for any caller that still has an entry. Either way the
+                    // per-connection writer must be told and the connection
+                    // subscriber count must be decremented exactly once.
+                    let connection_id = connection_id.or_else(|| {
+                        manager
+                            .subscriber_connections
+                            .remove(&subscriber_id)
+                            .map(|(_, id)| id)
+                    });
+                    if let Some(connection_id) = connection_id {
+                        manager.subscriber_connections.remove(&subscriber_id);
                         let _ = manager
                             .enqueue_connection(
                                 connection_id,
@@ -1330,6 +1348,7 @@ async fn run_lane_feeder(
             lane_idx,
             LaneCommand::Unregister {
                 subscriber_id: config.subscription_id,
+                connection_id,
             },
         )
         .await;
@@ -2863,6 +2882,63 @@ mod tests {
 
         connection_subscriber_unregister(Some(connection_id));
         assert!(map.get(&connection_id).is_none());
+    }
+
+    // Regression test for the leak the soak harness found (#154).
+    //
+    // Subscription teardown enqueues `LaneCommand::Unregister` and then *immediately*
+    // calls `unregister_subscriber`, which removes the `subscriber_connections` entry.
+    // The lane worker dequeues afterwards, so when it used to look the connection up
+    // there it found nothing and skipped cleanup entirely — leaving an entry in
+    // `ACTIVE_SUB_CONN_COUNTS` and a per-connection metric series behind for every
+    // subscriber connection ever made. Over a long-lived broker with connection churn
+    // that is unbounded growth, and it made `felix_sub_active_connections` permanently
+    // wrong. The command now carries `connection_id` so the lookup is not needed.
+    #[tokio::test]
+    async fn lane_unregister_cleans_up_after_teardown_already_removed_the_mapping() {
+        let manager = WriterLaneManager::new(&test_config());
+        let connection_id = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            & u128::from(u64::MAX)) as u64;
+        let subscriber_id = connection_id ^ 0x5555;
+
+        connection_subscriber_register(Some(connection_id));
+        let map = ACTIVE_SUB_CONN_COUNTS
+            .get()
+            .expect("counts map should be initialized");
+        assert!(map.get(&connection_id).is_some());
+
+        // Reproduce the race: teardown has already dropped the mapping the worker
+        // used to depend on, before the worker gets to the command.
+        manager.subscriber_connections.remove(&subscriber_id);
+
+        manager
+            .enqueue(
+                0,
+                LaneCommand::Unregister {
+                    subscriber_id,
+                    connection_id: Some(connection_id),
+                },
+            )
+            .await
+            .expect("enqueue unregister");
+
+        // The worker runs on its own task, so poll rather than assume immediacy.
+        let mut cleared = false;
+        for _ in 0..200 {
+            if map.get(&connection_id).is_none() {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            cleared,
+            "lane worker must release the connection's subscriber count even when \
+             teardown already removed the subscriber_connections entry"
+        );
     }
 
     #[test]

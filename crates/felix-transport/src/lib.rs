@@ -363,6 +363,24 @@ impl QuicConnection {
         self.inner.stats()
     }
 
+    /// Close the connection, telling the peer why.
+    ///
+    /// Distinct from dropping the connection: a close sends CONNECTION_CLOSE
+    /// immediately, so the peer learns this was deliberate rather than waiting
+    /// for an idle timeout to decide the server vanished. That distinction is
+    /// what makes a graceful drain observable from the client side.
+    ///
+    /// ```no_run
+    /// use felix_transport::QuicConnection;
+    ///
+    /// fn shutdown(connection: &QuicConnection) {
+    ///     connection.close(0u32.into(), b"shutting down");
+    /// }
+    /// ```
+    pub fn close(&self, code: quinn::VarInt, reason: &[u8]) {
+        self.inner.close(code, reason);
+    }
+
     /// Open a bidirectional stream to the peer.
     ///
     /// ```no_run
