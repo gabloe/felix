@@ -91,8 +91,6 @@ pub enum BrokerError {
 const DEFAULT_TOPIC_CAPACITY: usize = 1024;
 const DEFAULT_LOG_CAPACITY: usize = 1024;
 const DEFAULT_SUB_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
-static GLOBAL_SUB_QUEUE_DEPTH: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubQueuePolicy {
     Block,
@@ -137,18 +135,46 @@ struct StreamState {
 
 #[derive(Debug, Default)]
 struct SubscriberRegistry {
-    senders: Slab<mpsc::Sender<DeliveryEnvelope>>,
+    senders: Slab<mpsc::Sender<QueuedDelivery>>,
 }
 
 #[derive(Debug, Clone)]
 struct SubscriberEntry {
     id: usize,
-    sender: mpsc::Sender<DeliveryEnvelope>,
+    sender: mpsc::Sender<QueuedDelivery>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DeliveryEnvelope {
     inner: Arc<DeliveryBatch>,
+}
+
+#[derive(Debug)]
+struct QueuedDelivery {
+    envelope: Option<DeliveryEnvelope>,
+    item_count: usize,
+    queued_items: Arc<AtomicUsize>,
+}
+
+impl QueuedDelivery {
+    fn new(envelope: DeliveryEnvelope, queued_items: Arc<AtomicUsize>) -> Self {
+        let item_count = envelope.len();
+        Self {
+            envelope: Some(envelope),
+            item_count,
+            queued_items,
+        }
+    }
+
+    fn into_envelope(mut self) -> DeliveryEnvelope {
+        self.envelope.take().expect("queued delivery has envelope")
+    }
+}
+
+impl Drop for QueuedDelivery {
+    fn drop(&mut self) {
+        decrement_queue_depth(&self.queued_items, self.item_count);
+    }
 }
 
 #[derive(Debug)]
@@ -234,10 +260,7 @@ impl StreamState {
         let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
         let id = state.senders.insert(tx);
         self.rebuild_subscriber_snapshot(&state);
-        (
-            id as u64,
-            SubscriptionReceiver::new(rx, Arc::clone(&self.queued_items)),
-        )
+        (id as u64, SubscriptionReceiver::new(rx))
     }
 
     fn remove_subscriber(&self, id: u64) {
@@ -358,10 +381,21 @@ impl StreamState {
     }
 
     fn increment_queue_depth(&self, count: usize) {
-        let _ = self.queued_items.fetch_add(count, Ordering::Relaxed) + count;
-        let global = GLOBAL_SUB_QUEUE_DEPTH.fetch_add(count, Ordering::Relaxed) + count;
-        metrics::gauge!("felix_sub_queue_len").set(global as f64);
+        self.queued_items.fetch_add(count, Ordering::Relaxed);
+        metrics::gauge!("felix_sub_queue_len").increment(count as f64);
         metrics::counter!("felix_sub_queue_enqueued_total").increment(count as u64);
+    }
+}
+
+fn decrement_queue_depth(queued_items: &AtomicUsize, count: usize) {
+    if queued_items
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_sub(count)
+        })
+        .is_ok()
+    {
+        metrics::gauge!("felix_sub_queue_len").decrement(count as f64);
+        metrics::counter!("felix_sub_queue_dequeued_total").increment(count as u64);
     }
 }
 
@@ -416,62 +450,26 @@ impl Subscription {
 
 #[derive(Debug)]
 pub struct SubscriptionReceiver {
-    receiver: mpsc::Receiver<DeliveryEnvelope>,
-    queued_items: Arc<AtomicUsize>,
+    receiver: mpsc::Receiver<QueuedDelivery>,
 }
 
 impl SubscriptionReceiver {
-    fn new(receiver: mpsc::Receiver<DeliveryEnvelope>, queued_items: Arc<AtomicUsize>) -> Self {
-        Self {
-            receiver,
-            queued_items,
-        }
+    fn new(receiver: mpsc::Receiver<QueuedDelivery>) -> Self {
+        Self { receiver }
     }
 
     pub async fn recv(&mut self) -> Option<DeliveryEnvelope> {
-        let value = self.receiver.recv().await?;
-        self.decrement_depth(value.len());
-        Some(value)
+        Some(self.receiver.recv().await?.into_envelope())
     }
 
     pub fn try_recv(&mut self) -> std::result::Result<DeliveryEnvelope, mpsc::error::TryRecvError> {
-        match self.receiver.try_recv() {
-            Ok(value) => {
-                self.decrement_depth(value.len());
-                Ok(value)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn decrement_depth(&self, n: usize) {
-        for _ in 0..n {
-            if self
-                .queued_items
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
-                .is_ok()
-            {
-                metrics::counter!("felix_sub_queue_dequeued_total").increment(1);
-            }
-            if let Ok(prev) =
-                GLOBAL_SUB_QUEUE_DEPTH
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
-            {
-                metrics::gauge!("felix_sub_queue_len").set((prev.saturating_sub(1)) as f64);
-            }
-        }
+        self.receiver.try_recv().map(QueuedDelivery::into_envelope)
     }
 }
 
 impl Drop for SubscriptionReceiver {
     fn drop(&mut self) {
-        let mut remaining = 0usize;
-        while let Ok(envelope) = self.receiver.try_recv() {
-            remaining = remaining.saturating_add(envelope.len());
-        }
-        if remaining > 0 {
-            self.decrement_depth(remaining);
-        }
+        self.receiver.close();
     }
 }
 
@@ -823,9 +821,13 @@ impl Broker {
         for subscriber in senders.iter() {
             match stream_state.subscriber_queue_policy {
                 SubQueuePolicy::Block => {
-                    metrics::counter!("felix_sub_shared_batch_handles_total").increment(1);
-                    if subscriber.sender.send(envelope.clone()).await.is_ok() {
+                    if let Ok(permit) = subscriber.sender.reserve().await {
+                        metrics::counter!("felix_sub_shared_batch_handles_total").increment(1);
                         stream_state.increment_queue_depth(item_count);
+                        permit.send(QueuedDelivery::new(
+                            envelope.clone(),
+                            Arc::clone(&stream_state.queued_items),
+                        ));
                         sent += item_count;
                     } else {
                         closed_subscribers.push(subscriber.id as u64);
@@ -835,8 +837,11 @@ impl Broker {
                     match subscriber.sender.try_reserve() {
                         Ok(permit) => {
                             metrics::counter!("felix_sub_shared_batch_handles_total").increment(1);
-                            permit.send(envelope.clone());
                             stream_state.increment_queue_depth(item_count);
+                            permit.send(QueuedDelivery::new(
+                                envelope.clone(),
+                                Arc::clone(&stream_state.queued_items),
+                            ));
                             sent += item_count;
                         }
                         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -1561,6 +1566,46 @@ mod tests {
 
         assert_eq!(frame_a, frame_b);
         assert_eq!(frame_a.as_ptr(), frame_b.as_ptr());
+    }
+
+    #[tokio::test]
+    async fn queue_depth_returns_to_zero_after_receive_and_receiver_drop() {
+        let broker = Broker::new(EphemeralCache::new().into());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream("t1", "default", "orders", StreamMetadata::default())
+            .await
+            .expect("register");
+        let stream_state = broker
+            .get_stream_state("t1", "default", "orders")
+            .await
+            .expect("stream state");
+        let (mut receiver, _guard) = broker
+            .subscribe("t1", "default", "orders")
+            .await
+            .expect("subscribe")
+            .into_parts();
+        let payloads = [Bytes::from_static(b"one"), Bytes::from_static(b"two")];
+
+        broker
+            .publish_batch("t1", "default", "orders", &payloads)
+            .await
+            .expect("publish");
+        assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 2);
+        receiver.recv().await.expect("receive");
+        assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 0);
+
+        broker
+            .publish_batch("t1", "default", "orders", &payloads)
+            .await
+            .expect("publish");
+        assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 2);
+        drop(receiver);
+        assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

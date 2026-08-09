@@ -889,6 +889,7 @@ async fn run_writer_lane(
             }
         }
     }
+    metrics::gauge!("felix_sub_lane_queue_len", "lane" => lane_label).set(0.0);
 }
 
 async fn run_connection_writer(
@@ -2884,13 +2885,22 @@ mod tests {
         Ok(())
     }
 
+    // Unique per call, which `SystemTime::now()` is not: consecutive reads can
+    // return an identical value (observed on macOS, 0 ns between reads). These
+    // tests key into the process-global `ACTIVE_SUB_CONN_COUNTS`, so colliding
+    // ids meant tests running in parallel clobbered each other's entries — a
+    // ~1-in-30 flake that never reproduced when a test ran alone.
+    //
+    // The high bit is set so these can never collide with a real quinn
+    // `stable_id()` in the same process either.
+    fn unique_test_connection_id() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        0x8000_0000_0000_0000 | NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
     #[test]
     fn connection_subscriber_register_unregister_tracks_counts() {
-        let connection_id = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos()
-            & u128::from(u64::MAX)) as u64;
+        let connection_id = unique_test_connection_id();
 
         connection_subscriber_unregister(None);
         connection_subscriber_register(Some(connection_id));
@@ -2928,11 +2938,7 @@ mod tests {
     #[tokio::test]
     async fn lane_unregister_cleans_up_after_teardown_already_removed_the_mapping() {
         let manager = WriterLaneManager::new(&test_config());
-        let connection_id = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos()
-            & u128::from(u64::MAX)) as u64;
+        let connection_id = unique_test_connection_id();
         let subscriber_id = connection_id ^ 0x5555;
 
         connection_subscriber_register(Some(connection_id));
@@ -2974,11 +2980,7 @@ mod tests {
 
     #[test]
     fn connection_subscriber_unregister_no_map_is_noop() {
-        let connection_id = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos()
-            & u128::from(u64::MAX)) as u64;
+        let connection_id = unique_test_connection_id();
         connection_subscriber_unregister(Some(connection_id));
     }
 
@@ -3033,11 +3035,7 @@ mod tests {
     #[tokio::test]
     async fn manager_drop_releases_remaining_connection_counts() {
         let manager = WriterLaneManager::new(&test_config());
-        let connection_id = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos()
-            & u128::from(u64::MAX)) as u64;
+        let connection_id = unique_test_connection_id();
         let subscriber_id = connection_id ^ 0xaaaa;
 
         connection_subscriber_register(Some(connection_id));
