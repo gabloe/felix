@@ -28,6 +28,9 @@ pub struct BrokerConfig {
     pub disable_timings: bool,
     // Max time to wait for control-stream writer to drain.
     pub control_stream_drain_timeout_ms: u64,
+    // Total budget for draining in-flight work after SIGTERM/SIGINT before
+    // remaining tasks are force-cancelled.
+    pub shutdown_drain_timeout_ms: u64,
     // Cache connection flow-control window.
     pub cache_conn_recv_window: u64,
     // Cache stream flow-control window.
@@ -150,6 +153,12 @@ const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
+// Total budget for draining in-flight work after a termination signal. Kubernetes
+// defaults `terminationGracePeriodSeconds` to 30, and it sends SIGKILL once that
+// expires, so the default leaves headroom to finish the drain, log the outcome, and
+// exit before being killed. Deployments that raise the grace period should raise
+// this to match.
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 64;
 const DEFAULT_PUB_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
@@ -180,6 +189,7 @@ struct BrokerConfigOverride {
     ack_wait_timeout_ms: Option<u64>,
     disable_timings: Option<bool>,
     control_stream_drain_timeout_ms: Option<u64>,
+    shutdown_drain_timeout_ms: Option<u64>,
     cache_conn_recv_window: Option<u64>,
     cache_stream_recv_window: Option<u64>,
     cache_send_window: Option<u64>,
@@ -255,6 +265,11 @@ impl BrokerConfig {
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| *value > 0)
                 .unwrap_or(DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS);
+        let shutdown_drain_timeout_ms = std::env::var("FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS);
         let cache_conn_recv_window = std::env::var("FELIX_CACHE_CONN_RECV_WINDOW")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -396,6 +411,7 @@ impl BrokerConfig {
             ack_wait_timeout_ms,
             disable_timings,
             control_stream_drain_timeout_ms,
+            shutdown_drain_timeout_ms,
             cache_conn_recv_window,
             cache_stream_recv_window,
             cache_send_window,
@@ -482,6 +498,11 @@ impl BrokerConfig {
             }
             if let Some(value) = override_cfg.control_stream_drain_timeout_ms {
                 config.control_stream_drain_timeout_ms = value;
+            }
+            if let Some(value) = override_cfg.shutdown_drain_timeout_ms
+                && value > 0
+            {
+                config.shutdown_drain_timeout_ms = value;
             }
             if let Some(value) = override_cfg.cache_conn_recv_window
                 && value > 0

@@ -14,6 +14,10 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 pub const DEFAULT_CHANGES_LIMIT: u64 = 1000;
+// Total budget for draining in-flight HTTP requests after a termination signal.
+// Kubernetes defaults `terminationGracePeriodSeconds` to 30 and sends SIGKILL once
+// it expires, so this leaves headroom to finish the drain and exit before then.
+pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 pub const DEFAULT_CHANGE_RETENTION_MAX_ROWS: i64 = 10_000;
 const DEFAULT_PG_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_PG_CONNECT_TIMEOUT_MS: u64 = 5_000;
@@ -69,6 +73,9 @@ pub struct ControlPlaneConfig {
     pub change_retention_max_rows: Option<i64>,
     pub oidc_allowed_algorithms: Vec<Algorithm>,
     pub bootstrap: BootstrapConfig,
+    // Total budget for draining in-flight requests after SIGTERM/SIGINT before
+    // remaining tasks are force-cancelled.
+    pub shutdown_drain_timeout_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +89,7 @@ struct ControlPlaneConfigOverride {
     change_retention_max_rows: Option<i64>,
     oidc_allowed_algorithms: Option<Vec<String>>,
     bootstrap: Option<BootstrapOverride>,
+    shutdown_drain_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +140,11 @@ impl ControlPlaneConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_CHANGES_LIMIT);
+        let shutdown_drain_timeout_ms = std::env::var("FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS);
         let change_retention_max_rows =
             std::env::var("FELIX_CONTROLPLANE_CHANGE_RETENTION_MAX_ROWS")
                 .ok()
@@ -187,6 +200,7 @@ impl ControlPlaneConfig {
                     .with_context(|| "parse FELIX_BOOTSTRAP_BIND_ADDR")?,
                 token: std::env::var("FELIX_BOOTSTRAP_TOKEN").ok(),
             },
+            shutdown_drain_timeout_ms,
         };
         config.validate()?;
         Ok(config)
@@ -214,6 +228,11 @@ impl ControlPlaneConfig {
             }
             if let Some(value) = override_cfg.change_retention_max_rows {
                 config.change_retention_max_rows = Some(value);
+            }
+            if let Some(value) = override_cfg.shutdown_drain_timeout_ms
+                && value > 0
+            {
+                config.shutdown_drain_timeout_ms = value;
             }
             if let Some(values) = override_cfg.oidc_allowed_algorithms {
                 config.oidc_allowed_algorithms = parse_oidc_allowed_algorithms(values)?;

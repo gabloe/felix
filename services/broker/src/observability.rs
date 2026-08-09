@@ -5,6 +5,7 @@
 //! Metrics serving is asynchronous and uses `axum` to handle requests.
 //! In tests, metrics recorder initialization is cached to avoid conflicts, and subscriber initialization is adapted accordingly.
 
+use felix_common::lifecycle::Readiness;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_exporter_prometheus::PrometheusHandle;
 use opentelemetry::KeyValue;
@@ -119,19 +120,51 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
 /// Starts an asynchronous HTTP server exposing:
 /// - `/metrics`: Prometheus metrics endpoint.
 /// - `/live`: liveness probe returning "ok".
-/// - `/ready`: readiness probe returning "ok".
+/// - `/ready`: readiness probe, gated on `readiness`.
 ///
-/// Returns an I/O error if binding or serving fails.
-pub async fn serve_metrics(handle: PrometheusHandle, addr: SocketAddr) -> std::io::Result<()> {
-    let app = axum::Router::new()
+/// Runs until `shutdown` resolves, then stops accepting new requests and lets
+/// in-flight ones finish. Returns an I/O error if binding or serving fails.
+pub async fn serve_metrics<F>(
+    handle: PrometheusHandle,
+    addr: SocketAddr,
+    readiness: Readiness,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(
+        listener,
+        health_router(handle, readiness).into_make_service(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
+/// Build the metrics/health router.
+///
+/// `/live` stays "ok" for the whole process lifetime: during a drain the process is
+/// alive and working, and reporting otherwise would make Kubernetes restart a pod
+/// that is shutting down correctly. `/ready` is the one that flips, which is what
+/// removes the instance from load-balancer rotation.
+fn health_router(handle: PrometheusHandle, readiness: Readiness) -> axum::Router {
+    axum::Router::new()
         .route(
             "/metrics",
             axum::routing::get(move || async move { handle.render() }),
         )
         .route("/live", axum::routing::get(|| async { "ok" }))
-        .route("/ready", axum::routing::get(|| async { "ok" }));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await
+        .route(
+            "/ready",
+            axum::routing::get(move || async move {
+                if readiness.is_ready() {
+                    (axum::http::StatusCode::OK, "ok")
+                } else {
+                    (axum::http::StatusCode::SERVICE_UNAVAILABLE, "draining")
+                }
+            }),
+        )
 }
 
 /// Installs the Prometheus metrics recorder globally.

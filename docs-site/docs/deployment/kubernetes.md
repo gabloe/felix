@@ -112,6 +112,10 @@ spec:
           value: "0.0.0.0:8080"
         - name: RUST_LOG
           value: "info"
+        # preStop sleep (5s) + drain budget (20s) must fit inside
+        # terminationGracePeriodSeconds, or SIGKILL arrives mid-drain.
+        - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
+          value: "20000"
         resources:
           requests:
             memory: "2Gi"
@@ -121,17 +125,29 @@ spec:
             cpu: "2000m"
         livenessProbe:
           httpGet:
-            path: /healthz
+            path: /live
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
-            path: /healthz
+            path: /ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
+        lifecycle:
+          preStop:
+            exec:
+              # Give the endpoints controller time to remove this pod from rotation
+              # before SIGTERM starts the drain.
+              command: ["/bin/sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30
 ```
+
+On SIGTERM the broker sets `/ready` to `503` before it stops accepting connections,
+then drains in-flight work within `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`. `/live` stays
+healthy throughout, so Kubernetes does not restart a pod that is shutting down
+correctly. See [Graceful Shutdown](graceful-shutdown.md).
 
 ## StatefulSet Deployment
 
@@ -216,6 +232,10 @@ spec:
           value: "4"
         - name: FELIX_DISABLE_TIMINGS
           value: "false"
+        # preStop sleep (15s) + drain budget (40s) fits inside the 60s
+        # terminationGracePeriodSeconds set below.
+        - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
+          value: "40000"
         - name: RUST_LOG
           value: "info"
         - name: POD_NAME
@@ -242,7 +262,7 @@ spec:
           mountPath: /data
         livenessProbe:
           httpGet:
-            path: /healthz
+            path: /live
             port: 8080
           initialDelaySeconds: 15
           periodSeconds: 10
@@ -250,7 +270,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /healthz
+            path: /ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
@@ -259,7 +279,10 @@ spec:
         lifecycle:
           preStop:
             exec:
+              # Give the endpoints controller time to remove this pod from rotation
+              # before SIGTERM starts the drain.
               command: ["/bin/sh", "-c", "sleep 15"]
+      terminationGracePeriodSeconds: 60
   volumeClaimTemplates:
   - metadata:
       name: data

@@ -20,6 +20,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Standard GitHub-hosted Linux runners expose 4 CPUs. Leave two for the
+  # tokio/QUIC runtime and dedicate two to stream-owned broker work.
+  FELIX_CORE_SHARDS: "2"
 
 jobs:
   perf-publish:

@@ -22,6 +22,8 @@ use felix_transport::{QuicConnection, QuicServer};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::auth::BrokerAuth;
 use crate::config::BrokerConfig;
@@ -66,6 +68,43 @@ pub async fn serve(
     config: BrokerConfig,
     auth: Arc<BrokerAuth>,
 ) -> Result<()> {
+    // Runs until the listener errors. Callers that need to stop accepting without
+    // killing in-flight connections should use `serve_with_shutdown`.
+    serve_with_shutdown(
+        server,
+        broker,
+        config,
+        auth,
+        CancellationToken::new(),
+        TaskTracker::new(),
+    )
+    .await
+}
+
+/// Accept loop with cooperative shutdown.
+///
+/// # What it does
+/// Same as [`serve`], but stops accepting when `shutdown` is cancelled and registers
+/// every per-connection task with `connections` so a drain can wait for in-flight
+/// work to finish.
+///
+/// # Why it exists
+/// Aborting the accept task kills the loop but says nothing about the connections it
+/// already spawned — those are detached and die with the process. Separating "stop
+/// admitting" from "wait for in-flight" is what makes a bounded drain possible.
+///
+/// # Invariants
+/// - Cancelling `shutdown` stops admission only; accepted connections keep running.
+/// - The caller owns `connections`, and must `close()` it before `wait()`ing or the
+///   wait never resolves.
+pub async fn serve_with_shutdown(
+    server: Arc<QuicServer>,
+    broker: Arc<Broker>,
+    config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
+    shutdown: CancellationToken,
+    connections: TaskTracker,
+) -> Result<()> {
     let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
     // Main accept loop: spawn a task per incoming QUIC connection.
     if config.disable_timings {
@@ -73,13 +112,22 @@ pub async fn serve(
         broker_publish_timings::set_enabled(false);
     }
     loop {
-        // Accept the next QUIC connection.
-        let connection = server.accept().await?;
+        // Accept the next QUIC connection, unless we have been asked to stop
+        // admitting. Selecting here rather than checking between accepts means a
+        // loop parked on an idle listener still exits promptly.
+        let connection = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!("quic accept loop stopping; no longer admitting connections");
+                return Ok(());
+            }
+            accepted = server.accept() => accepted?,
+        };
         let broker = Arc::clone(&broker);
         let config = config.clone();
         let auth = Arc::clone(&auth);
         let publish_ctx = publish_ctx.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             if let Err(err) = handle_connection(broker, connection, config, auth, publish_ctx).await
             {
                 tracing::warn!(error = %err, "quic connection handler failed");

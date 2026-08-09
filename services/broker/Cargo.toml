@@ -33,6 +33,7 @@ path = "../../demos/broker/orders_demo.rs"
 anyhow = { workspace = true }
 base64 = "0.22"
 felix-broker = { path = "../../crates/felix-broker", version = "0.1.0" }
+felix-common = { path = "../../crates/felix-common", version = "0.1.0", features = ["lifecycle"] }
 felix-client = { path = "../../crates/felix-client", version = "0.1.0" }
 felix-authz = { path = "../../crates/felix-authz", version = "0.1.0" }
 felix-transport = { path = "../../crates/felix-transport", version = "0.1.0" }
@@ -57,6 +58,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
+# `TaskTracker` and `CancellationToken` back the graceful drain in `shutdown.rs`.
+tokio-util = { version = "0.7", features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-opentelemetry = "0.32.1"

@@ -9,3 +9,15 @@ rust-version.workspace = true
 serde = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+# Only needed by the `lifecycle` module; optional so pure-library consumers of this
+# crate do not inherit an async runtime.
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[features]
+default = []
+# Signal handling, readiness gating, and bounded drain for service binaries.
+lifecycle = ["dep:tokio", "dep:tracing"]

@@ -891,6 +891,28 @@ export FELIX_CONTROL_STREAM_DRAIN_TIMEOUT_MS="100"  # More graceful
 export FELIX_CONTROL_STREAM_DRAIN_TIMEOUT_MS="20"   # Faster shutdown
 ```
 
+### `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`
+
+**Description**: Total budget for draining in-flight work after SIGTERM or SIGINT,
+before remaining tasks are force-cancelled. Applies to both the broker and the
+control plane. This is a single budget shared by every subsystem, not a per-subsystem
+timeout, so total shutdown time stays bounded by this value.
+
+**Type**: Positive integer (milliseconds)
+
+**Default**: `25000`
+
+**Example**:
+```bash
+export FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS="25000"
+export FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS="55000"  # With terminationGracePeriodSeconds: 60
+export FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS="5000"   # Fast rollouts, short-lived requests
+```
+
+**Note**: Keep this below the platform's kill deadline — Kubernetes'
+`terminationGracePeriodSeconds` (default `30`) — so the drain finishes and logs its
+outcome before SIGKILL. See [Graceful Shutdown](../deployment/graceful-shutdown.md).
+
 ## Configuration File
 
 ### `FELIX_BROKER_CONFIG`

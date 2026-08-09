@@ -6,6 +6,7 @@
 //!
 //! # Notes
 //! Initialization is guarded by `OnceLock` to keep startup idempotent in tests.
+use felix_common::lifecycle::Readiness;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_exporter_prometheus::PrometheusHandle;
 use opentelemetry::KeyValue;
@@ -110,37 +111,71 @@ impl<'a> Extractor for HeaderMapExtractor<'a> {
     }
 }
 
-pub async fn serve_metrics(handle: PrometheusHandle, addr: SocketAddr) -> std::io::Result<()> {
-    serve_metrics_with_shutdown(handle, addr, std::future::pending()).await
+pub async fn serve_metrics<F>(
+    handle: PrometheusHandle,
+    addr: SocketAddr,
+    readiness: Readiness,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    serve_metrics_with_shutdown(handle, addr, readiness, shutdown).await
 }
 
 async fn serve_metrics_with_shutdown<F>(
     handle: PrometheusHandle,
     addr: SocketAddr,
+    readiness: Readiness,
     shutdown: F,
 ) -> std::io::Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_metrics_with_listener(handle, listener, shutdown).await
+    serve_metrics_with_listener(handle, listener, readiness, shutdown).await
 }
 
 async fn serve_metrics_with_listener<F>(
     handle: PrometheusHandle,
     listener: tokio::net::TcpListener,
+    readiness: Readiness,
     shutdown: F,
 ) -> std::io::Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let app = axum::Router::new().route(
-        "/metrics",
-        axum::routing::get(move || async move { handle.render() }),
-    );
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown)
-        .await
+    axum::serve(
+        listener,
+        health_router(handle, readiness).into_make_service(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
+/// Build the metrics/health router.
+///
+/// `/live` stays "ok" for the whole process lifetime: during a drain the process is
+/// alive and still serving, and reporting otherwise would make Kubernetes restart a
+/// pod that is shutting down correctly. `/ready` is the one that flips, which is what
+/// removes the instance from load-balancer rotation.
+fn health_router(handle: PrometheusHandle, readiness: Readiness) -> axum::Router {
+    axum::Router::new()
+        .route(
+            "/metrics",
+            axum::routing::get(move || async move { handle.render() }),
+        )
+        .route("/live", axum::routing::get(|| async { "ok" }))
+        .route(
+            "/ready",
+            axum::routing::get(move || async move {
+                if readiness.is_ready() {
+                    (axum::http::StatusCode::OK, "ok")
+                } else {
+                    (axum::http::StatusCode::SERVICE_UNAVAILABLE, "draining")
+                }
+            }),
+        )
 }
 
 fn install_metrics_recorder() -> PrometheusHandle {
@@ -324,19 +359,34 @@ mod tests {
         oneshot::Sender<()>,
         tokio::task::JoinHandle<std::io::Result<()>>,
     ) {
+        let (addr, shutdown_tx, server_handle, _readiness) =
+            spawn_metrics_server_with_readiness(handle, Readiness::ready()).await;
+        (addr, shutdown_tx, server_handle)
+    }
+
+    async fn spawn_metrics_server_with_readiness(
+        handle: PrometheusHandle,
+        readiness: Readiness,
+    ) -> (
+        SocketAddr,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+        Readiness,
+    ) {
         let addr: SocketAddr = "127.0.0.1:0".parse().expect("parse addr");
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .expect("bind listener");
         let bound_addr = listener.local_addr().expect("local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_readiness = readiness.clone();
         let server_handle = tokio::spawn(async move {
-            serve_metrics_with_listener(handle, listener, async move {
+            serve_metrics_with_listener(handle, listener, server_readiness, async move {
                 let _ = shutdown_rx.await;
             })
             .await
         });
-        (bound_addr, shutdown_tx, server_handle)
+        (bound_addr, shutdown_tx, server_handle, readiness)
     }
 
     #[test]
@@ -370,6 +420,45 @@ mod tests {
             .await
             .unwrap_or_else(|err| panic!("GET /metrics failed for {}: {}", url, err));
         response.error_for_status().expect("metrics status");
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(1), server_handle)
+            .await
+            .expect("server shutdown");
+    }
+
+    // The point of the readiness flip is that a load balancer can observe it, so the
+    // assertion that matters is over HTTP, not over the flag in isolation.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn ready_reports_draining_after_readiness_flips() {
+        let handle = init_observability("controlplane-readiness-test");
+        let (addr, shutdown_tx, server_handle, readiness) =
+            spawn_metrics_server_with_readiness(handle, Readiness::ready()).await;
+        wait_for_listen(addr).await.expect("server ready");
+
+        let client = build_test_client();
+        let ready_url = format!("http://{}/ready", addr);
+        let live_url = format!("http://{}/live", addr);
+
+        let response = client.get(&ready_url).send().await.expect("GET /ready");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.expect("body"), "ok");
+
+        readiness.begin_draining();
+
+        let response = client.get(&ready_url).send().await.expect("GET /ready");
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            "/ready must fail once draining so load balancers stop routing here"
+        );
+        assert_eq!(response.text().await.expect("body"), "draining");
+
+        // Liveness must stay healthy: the process is draining correctly, and failing
+        // /live would make Kubernetes restart it mid-drain.
+        let response = client.get(&live_url).send().await.expect("GET /live");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
 
         let _ = shutdown_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(1), server_handle)

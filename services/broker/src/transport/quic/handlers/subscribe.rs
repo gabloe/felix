@@ -1745,6 +1745,7 @@ mod tests {
             ack_wait_timeout_ms: 2000,
             disable_timings: false,
             control_stream_drain_timeout_ms: 50,
+            shutdown_drain_timeout_ms: 25_000,
             cache_conn_recv_window: 256 * 1024 * 1024,
             cache_stream_recv_window: 64 * 1024 * 1024,
             cache_send_window: 256 * 1024 * 1024,
