@@ -1,0 +1,41 @@
+// Tunables for the subscription event writer: batching limits and flush pacing.
+
+use std::time::Duration;
+
+/// Configuration for the subscription event writer.
+///
+/// Fields are chosen to make the event writer a pure “I/O + framing” component:
+/// it doesn’t need the broker, only identifiers and batching policy.
+///
+/// Batching behavior:
+/// Writer always coalesces into a single binary EventBatch per flush.
+/// Flush triggers:
+/// - `max_events`
+/// - `max_bytes`
+/// - `flush_delay`
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EventWriterConfig {
+    /// Stable identifier for this subscription; used by the client to route events.
+    pub(super) subscription_id: u64,
+
+    /// Max number of events per flush in batch mode.
+    pub(super) max_events: usize,
+
+    /// Max total payload bytes per flush in batch mode.
+    pub(super) max_bytes: usize,
+
+    /// Deadline for flushing a partially-filled batch.
+    pub(super) flush_delay: Duration,
+
+    /// If true, encode each payload as its own one-item EventBatch frame.
+    pub(super) single_event_mode: bool,
+
+    /// Max number of lane commands to gather per flush.
+    pub(super) flush_max_items: usize,
+
+    /// Max delay while filling a lane flush buffer.
+    pub(super) flush_max_delay: Duration,
+
+    /// Upper bound for coalesced bytes in one write.
+    pub(super) max_bytes_per_write: usize,
+}

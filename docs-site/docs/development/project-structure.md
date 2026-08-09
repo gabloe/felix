@@ -56,10 +56,16 @@ crates/
 - Connection lifecycle management
 
 **Key modules**:
-- `broker.rs`: Main broker type
-- `subscription.rs`: Subscription handling
-- `cache.rs`: Cache implementation
-- `fanout.rs`: Fanout engine
+- `broker.rs`: The `Broker` aggregate, construction, and the publish/subscribe data path
+- `registry.rs`: Tenant / namespace / stream / cache registries
+- `stream_state.rs`: Per-stream subscriber registry, publish snapshot, and replay log
+- `subscription.rs`: Subscriber-facing receive handles and the unregister guard
+- `delivery.rs`: Shared delivery batches and subscriber queue-depth accounting
+- `keys.rs`: Map keys plus their borrowed lookup twins
+- `config.rs` / `error.rs` / `telemetry.rs`: Capacity defaults and queue policy, `BrokerError`, cfg-gated metrics shims
+
+Everything public is re-exported from `lib.rs`, so downstream code addresses these
+types as `felix_broker::<Name>` regardless of which module defines them.
 
 **Dependencies**:
 - `felix-wire`: Protocol framing
@@ -77,10 +83,20 @@ crates/
 - Protocol versioning
 - Frame validation
 
+**Key modules**:
+- `frame.rs`: Protocol constants, `FrameHeader`, and `Frame`
+- `message.rs`: The `Message` enum and its JSON codec
+- `text.rs`: Hand-rolled zero-copy JSON writer for the publish-batch hot path
+- `binary.rs`: Binary batch codec for publish and event batches
+- `error.rs` / `base64_serde.rs`: Wire `Error` type, base64 serde adapters
+
 **Key types**:
-- `Frame`: Top-level frame type
-- `BinaryBatch`: Batch frame format
-- `FrameCodec`: Encode/decode implementation
+- `Frame` / `FrameHeader`: Top-level frame and its 12-byte header
+- `Message`: The v1 message enum carried in JSON control frames
+- `binary::PublishBatch` / `binary::EventBatch`: Binary batch frame formats
+
+`frame`, `message`, and `error` items are re-exported at the crate root; `text` and
+`binary` are addressed through their module paths (`felix_wire::binary::…`).
 
 **Protocol layers**:
 1. **Envelope**: Version, type, length

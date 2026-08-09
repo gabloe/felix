@@ -90,6 +90,7 @@ copyright: Copyright &copy; 2026 Felix Authors
 nav:
   - Home: index.md
   - Getting Started:
+    - What Felix Is For: getting-started/what-felix-is-for.md
     - Overview: getting-started/overview.md
     - Quickstart: getting-started/quickstart.md
     - Installation: getting-started/installation.md
