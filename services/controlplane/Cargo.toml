@@ -2,8 +2,15 @@
 name = "controlplane"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Felix control-plane HTTP service binary"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+# Not a library anyone consumes from a registry: service binaries and a
+# dev/CI tool with hard Elastic-2.0 dependencies.
+publish = false
 
 [[bin]]
 name = "felix-controlplane"

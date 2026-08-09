@@ -2,8 +2,14 @@
 name = "felix-common"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 rust-version.workspace = true
+description = "Shared identifiers, configuration, and error types for Felix crates"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "messaging", "config"]
+categories = ["network-programming"]
 
 [dependencies]
 serde = { workspace = true }
@@ -21,3 +27,8 @@ tokio = { workspace = true }
 default = []
 # Signal handling, readiness gating, and bounded drain for service binaries.
 lifecycle = ["dep:tokio", "dep:tracing"]
+
+[package.metadata.docs.rs]
+# `lifecycle` is off by default so library consumers do not inherit tokio;
+# docs.rs should still show it.
+all-features = true

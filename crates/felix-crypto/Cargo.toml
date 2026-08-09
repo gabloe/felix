@@ -2,7 +2,13 @@
 name = "felix-crypto"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Cryptographic primitives used by the Felix control plane and broker"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "cryptography"]
+categories = ["cryptography"]
 
 [dependencies]

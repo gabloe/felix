@@ -37,8 +37,16 @@ edition = "2024"
 # `version.workspace = true`; bumping a release means editing this line only.
 # Non-member demos under demos/ keep their own literal version.
 version = "0.1.1"
-license = "Apache-2.0"
+# Fail-closed default: a new crate inherits the *restrictive* licence unless it
+# deliberately opts into Apache-2.0. The permissive crates (felix-wire,
+# felix-common, felix-transport, felix-client, felix-conformance) set
+# `license = "Apache-2.0"` explicitly. See LICENSING.md for the authoritative
+# table; `task publish:check` fails CI if a crate drifts from it.
+license = "Elastic-2.0"
 rust-version = "1.97"
+repository = "https://github.com/gabloe/felix"
+homepage = "https://github.com/gabloe/felix"
+readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1"

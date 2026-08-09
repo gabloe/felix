@@ -2,8 +2,17 @@
 name = "felix-conformance"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 rust-version.workspace = true
+description = "Conformance runner validating third-party Felix protocol implementations"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "conformance", "protocol"]
+categories = ["network-programming", "development-tools"]
+# Not a library anyone consumes from a registry: service binaries and a
+# dev/CI tool with hard Elastic-2.0 dependencies.
+publish = false
 
 [dependencies]
 anyhow = { workspace = true }

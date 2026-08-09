@@ -2,8 +2,14 @@
 name = "felix-router"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Request routing and placement logic for multi-node Felix deployments"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "routing"]
+categories = ["network-programming"]
 
 [dependencies]
 felix-common = { path = "../felix-common", version = "0.1.1" }

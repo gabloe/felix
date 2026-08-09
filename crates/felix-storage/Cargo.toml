@@ -2,8 +2,14 @@
 name = "felix-storage"
 version.workspace = true
 edition.workspace = true
-license = "Elastic-2.0"
+license.workspace = true
 rust-version.workspace = true
+description = "Storage backends and ephemeral cache implementation for the Felix broker"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "storage", "cache"]
+categories = ["network-programming", "caching"]
 
 [dependencies]
 bytes = { workspace = true }

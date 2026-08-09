@@ -2,8 +2,14 @@
 name = "felix-client"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 rust-version.workspace = true
+description = "Rust client SDK for the Felix pub/sub and cache broker"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "client", "pubsub", "messaging", "quic"]
+categories = ["network-programming", "api-bindings"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -39,3 +45,7 @@ rustls = "0.23"
 serial_test = "3"
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+
+[package.metadata.docs.rs]
+# `in-process` and `telemetry` are off by default; document them anyway.
+all-features = true
