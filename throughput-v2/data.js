@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786309406260,
+  "lastUpdate": 1786313324626,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -832,6 +832,58 @@ window.BENCHMARK_DATA = {
             "range": "27286.79",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 540864.06\nmean: 541730.77\nstdev: 27286.79\ncv: 5.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "10a94249829dbd51ffd8d58e082b135def2cabe2",
+          "message": "fix(soak): improve resource settling logic and reporting in soak harness (#158)",
+          "timestamp": "2026-08-09T15:06:48-07:00",
+          "tree_id": "77b79f82a0b6eed86e067adca8b0ba45d7bb026f",
+          "url": "https://github.com/gabloe/felix/commit/10a94249829dbd51ffd8d58e082b135def2cabe2"
+        },
+        "date": 1786313323386,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 179841.15,
+            "range": "11590.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 179841.15\nmean: 183445.95\nstdev: 11590.17\ncv: 6.32%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 179841.15,
+            "range": "11590.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 179841.15\nmean: 183445.95\nstdev: 11590.17\ncv: 6.32%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 52687.71,
+            "range": "6095.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 52687.71\nmean: 50674.11\nstdev: 6095.08\ncv: 12.03%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 526877.11,
+            "range": "60950.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 526877.11\nmean: 506741.04\nstdev: 60950.81\ncv: 12.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
