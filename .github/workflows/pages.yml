@@ -67,6 +67,15 @@ jobs:
           mkdir -p site/benchmarks
           cp -R benchmark-data/latency site/benchmarks/latency
           cp -R benchmark-data/throughput site/benchmarks/throughput
+          npm pack chart.js@2.9.2 --silent --pack-destination /tmp
+          mkdir -p /tmp/chartjs
+          tar -xzf /tmp/chart.js-2.9.2.tgz -C /tmp/chartjs
+          cp /tmp/chartjs/package/dist/Chart.min.js site/benchmarks/chart.min.js
+          for dashboard in latency throughput; do
+            sed -i \
+              's#https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js#../chart.min.js#' \
+              "site/benchmarks/$dashboard/index.html"
+          done
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
