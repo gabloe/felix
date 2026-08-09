@@ -20,8 +20,10 @@ RAW_JSONL = RAW_DIR / "latency_demo_runs.jsonl"
 
 DURATION_RE = re.compile(r"^([0-9]*\.?[0-9]+)\s*(us|ms)$")
 RESULTS_RE = re.compile(
-    r"Results \(publish n = (?P<publish>\d+), sampled (?P<sampled>\d+), received (?P<received>\d+), dropped (?P<dropped>\d+)\) "
-    r"payload=(?P<payload>\d+)B fanout=(?P<fanout>\d+) batch=(?P<batch>\d+) binary=(?P<binary>true|false):"
+    r"Results \(publish n = (?P<publish>\d+), sampled (?P<sampled>\d+), received (?P<received>\d+), "
+    r"(?:dropped|delivery drops) (?P<dropped>\d+)\) payload=(?P<payload>\d+)B "
+    r"fanout=(?P<fanout>\d+) batch=(?P<batch>\d+) "
+    r"(?:binary|publish_fastpath)=(?P<binary>true|false):"
 )
 
 TIMING_RE = re.compile(
@@ -375,7 +377,7 @@ def main():
             while True:
                 attempt += 1
                 run_id = str(uuid.uuid4())
-                timestamp = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+                timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
 
                 print(f"[{idx}/{len(matrix)}] {label} (attempt {attempt})")
 
