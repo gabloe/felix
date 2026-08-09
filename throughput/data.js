@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786244322491,
+  "lastUpdate": 1786244474477,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Benchmark": [
@@ -240,6 +240,86 @@ window.BENCHMARK_DATA = {
             "range": "12522.86",
             "unit": "msg/s",
             "extra": "n=5, mean=470786.24"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2",
+          "message": "fix(pages): update benchmark dashboards to use local Chart.js instead of CDN (#150)",
+          "timestamp": "2026-08-08T19:57:26-07:00",
+          "tree_id": "f043862276d5373cc277954f65a39d01cd4587cb",
+          "url": "https://github.com/gabloe/felix/commit/724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2"
+        },
+        "date": 1786244473714,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - throughput (msg/s)",
+            "value": 5380.78,
+            "range": "55.76",
+            "unit": "msg/s",
+            "extra": "n=5, mean=5416.81"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - delivered throughput (msg/s)",
+            "value": 5380.78,
+            "range": "55.76",
+            "unit": "msg/s",
+            "extra": "n=5, mean=5416.81"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 166499.14,
+            "range": "8238.14",
+            "unit": "msg/s",
+            "extra": "n=5, mean=171880.83"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 166499.14,
+            "range": "8238.14",
+            "unit": "msg/s",
+            "extra": "n=5, mean=171880.83"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - throughput (msg/s)",
+            "value": 4355.84,
+            "range": "79.17",
+            "unit": "msg/s",
+            "extra": "n=5, mean=4347.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - delivered throughput (msg/s)",
+            "value": 43558.36,
+            "range": "791.71",
+            "unit": "msg/s",
+            "extra": "n=5, mean=43476.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 48483.56,
+            "range": "600.05",
+            "unit": "msg/s",
+            "extra": "n=5, mean=48465.17"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 484835.58,
+            "range": "6000.49",
+            "unit": "msg/s",
+            "extra": "n=5, mean=484651.73"
           }
         ]
       }
