@@ -119,9 +119,14 @@ async fn cancelling_accept_token_exits_idle_accept_loop() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// The distinction the whole drain rests on: after cancellation the broker must stop
-// admitting new work while connections it already accepted keep running.
-async fn cancellation_stops_admission_but_keeps_accepted_connections() -> Result<()> {
+// Cancellation must stop admission *and* wind down connections already accepted.
+//
+// This originally asserted the opposite — that accepted connections keep running
+// indefinitely — which is what the soak harness showed to be the bug: a subscriber
+// holds its connection open forever, so a drain that only waits for connection
+// tasks to end never completes. It burns the whole deadline and then force-aborts,
+// dropping exactly the in-flight work the drain exists to protect.
+async fn cancellation_winds_down_accepted_connections() -> Result<()> {
     let harness = start_broker().await?;
 
     // Establish a connection before shutdown and keep it open.
@@ -152,17 +157,13 @@ async fn cancellation_stops_admission_but_keeps_accepted_connections() -> Result
         "accept loop should exit cleanly: {result:?}"
     );
 
-    // The already-accepted connection is untouched by the accept loop stopping —
-    // and still usable, not merely un-closed.
-    timeout(Duration::from_secs(2), early_conn.open_uni())
+    // The connection task winds itself down without the peer disconnecting first.
+    // This is the property that makes a bounded drain possible: the client here
+    // never goes away, exactly as a real subscriber would not.
+    harness.connections.close();
+    timeout(Duration::from_secs(10), harness.connections.wait())
         .await
-        .expect("opening a stream should not hang")
-        .expect("accepted connection must still be usable after admission stops");
-    assert_eq!(
-        harness.connections.len(),
-        1,
-        "in-flight connection task should still be tracked"
-    );
+        .expect("accepted connections must drain without waiting for the peer to disconnect");
 
     // A new connection is no longer admitted. The handshake may fail outright or
     // hang because nothing accepts it; either is "not admitted", and both are
@@ -179,14 +180,8 @@ async fn cancellation_stops_admission_but_keeps_accepted_connections() -> Result
         "broker must not admit connections after shutdown"
     );
 
-    // Once the peer goes away the tracked task finishes and the drain completes,
-    // which is what bounds the shutdown rather than an unconditional abort.
     drop(early_conn);
     drop(early_client);
-    harness.connections.close();
-    timeout(Duration::from_secs(10), harness.connections.wait())
-        .await
-        .expect("tracked connections should drain after the peer disconnects");
     Ok(())
 }
 

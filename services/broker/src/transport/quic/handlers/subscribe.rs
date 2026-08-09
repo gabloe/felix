@@ -55,9 +55,9 @@ use felix_wire::Message;
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 #[cfg(test)]
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -307,10 +307,11 @@ pub(crate) async fn handle_subscribe_message(
     )
     .await?;
     let feeder_subscriptions = Arc::clone(subscriptions);
+    let feeder_manager = Arc::downgrade(&manager);
     let feeder = async move {
         run_lane_feeder(
             event_rx,
-            manager,
+            feeder_manager,
             lane_idx,
             Some(connection_id),
             writer_config,
@@ -494,6 +495,12 @@ pub(crate) enum LaneCommand {
     },
     Unregister {
         subscriber_id: u64,
+        // Carried explicitly rather than looked up in `subscriber_connections`.
+        // Teardown enqueues this command and then immediately calls
+        // `unregister_subscriber`, which removes that entry -- so by the time the
+        // lane worker dequeues, the lookup would already miss and the cleanup
+        // would be skipped entirely.
+        connection_id: Option<u64>,
     },
 }
 
@@ -579,8 +586,14 @@ impl WriterLaneManager {
             rr_counter: AtomicUsize::new(0),
         };
         let manager = Arc::new(manager);
+        let weak_manager = Arc::downgrade(&manager);
         for (lane_id, rx) in lane_receivers.into_iter().enumerate() {
-            tokio::spawn(run_writer_lane(lane_id, rx, lane_cfg, Arc::clone(&manager)));
+            tokio::spawn(run_writer_lane(
+                lane_id,
+                rx,
+                lane_cfg,
+                Weak::clone(&weak_manager),
+            ));
         }
         manager
     }
@@ -760,14 +773,25 @@ impl WriterLaneManager {
     }
 }
 
+impl Drop for WriterLaneManager {
+    fn drop(&mut self) {
+        for entry in &self.subscriber_connections {
+            connection_subscriber_unregister(Some(*entry.value()));
+        }
+    }
+}
+
 async fn run_writer_lane(
     lane_id: usize,
     mut rx: mpsc::Receiver<LaneCommand>,
     lane_cfg: LaneRuntimeConfig,
-    manager: Arc<WriterLaneManager>,
+    manager: Weak<WriterLaneManager>,
 ) {
     let lane_label = lane_id.to_string();
     while let Some(first_cmd) = rx.recv().await {
+        let Some(manager) = manager.upgrade() else {
+            break;
+        };
         let mut pending = Vec::with_capacity(lane_cfg.flush_max_items.max(1));
         pending.push(first_cmd);
 
@@ -810,10 +834,22 @@ async fn run_writer_lane(
                         )
                         .await;
                 }
-                LaneCommand::Unregister { subscriber_id } => {
-                    if let Some((_, connection_id)) =
-                        manager.subscriber_connections.remove(&subscriber_id)
-                    {
+                LaneCommand::Unregister {
+                    subscriber_id,
+                    connection_id,
+                } => {
+                    // Prefer the id carried on the command; fall back to the map
+                    // for any caller that still has an entry. Either way the
+                    // per-connection writer must be told and the connection
+                    // subscriber count must be decremented exactly once.
+                    let connection_id = connection_id.or_else(|| {
+                        manager
+                            .subscriber_connections
+                            .remove(&subscriber_id)
+                            .map(|(_, id)| id)
+                    });
+                    if let Some(connection_id) = connection_id {
+                        manager.subscriber_connections.remove(&subscriber_id);
                         let _ = manager
                             .enqueue_connection(
                                 connection_id,
@@ -1166,7 +1202,7 @@ fn connection_subscriber_unregister(connection_id: Option<u64>) {
 
 async fn run_lane_feeder(
     mut event_rx: SubscriptionReceiver,
-    manager: Arc<WriterLaneManager>,
+    manager: Weak<WriterLaneManager>,
     lane_idx: usize,
     connection_id: Option<u64>,
     config: EventWriterConfig,
@@ -1190,6 +1226,9 @@ async fn run_lane_feeder(
             },
         };
         let first_enqueued_at = envelope.enqueued_at();
+        let Some(manager) = manager.upgrade() else {
+            break;
+        };
 
         if envelope.len() > 1 || config.single_event_mode {
             let payloads = envelope.payloads();
@@ -1325,15 +1364,18 @@ async fn run_lane_feeder(
                 .record(enqueue_ns as f64);
         }
     }
-    let _ = manager
-        .enqueue(
-            lane_idx,
-            LaneCommand::Unregister {
-                subscriber_id: config.subscription_id,
-            },
-        )
-        .await;
-    manager.unregister_subscriber(config.subscription_id, connection_id);
+    if let Some(manager) = manager.upgrade() {
+        let _ = manager
+            .enqueue(
+                lane_idx,
+                LaneCommand::Unregister {
+                    subscriber_id: config.subscription_id,
+                    connection_id,
+                },
+            )
+            .await;
+        manager.unregister_subscriber(config.subscription_id, connection_id);
+    }
     subscriptions.release();
 }
 
@@ -2031,6 +2073,8 @@ mod tests {
         let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
 
         let broker_for_server = broker.clone();
+        let lane_manager = WriterLaneManager::new(&test_config());
+        let server_lane_manager = Arc::clone(&lane_manager);
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
             let handled = handle_subscribe_message(
@@ -2038,7 +2082,7 @@ mod tests {
                 connection,
                 test_config(),
                 &Arc::new(SubscriptionLimiter::new()),
-                &WriterLaneManager::new(&test_config()),
+                &server_lane_manager,
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2203,6 +2247,8 @@ mod tests {
         config.event_batch_max_bytes = 6;
 
         let broker_for_server = broker.clone();
+        let lane_manager = WriterLaneManager::new(&test_config());
+        let server_lane_manager = Arc::clone(&lane_manager);
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
             handle_subscribe_message(
@@ -2210,7 +2256,7 @@ mod tests {
                 connection,
                 config,
                 &Arc::new(SubscriptionLimiter::new()),
-                &WriterLaneManager::new(&test_config()),
+                &server_lane_manager,
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2322,6 +2368,8 @@ mod tests {
         config.event_batch_max_events = 1;
 
         let broker_for_server = broker.clone();
+        let lane_manager = WriterLaneManager::new(&test_config());
+        let server_lane_manager = Arc::clone(&lane_manager);
         let server_task = tokio::spawn(async move {
             for sub_id in [31_u64, 32_u64] {
                 let connection = server.accept().await?;
@@ -2330,7 +2378,7 @@ mod tests {
                     connection,
                     config.clone(),
                     &Arc::new(SubscriptionLimiter::new()),
-                    &WriterLaneManager::new(&test_config()),
+                    &server_lane_manager,
                     &out_ack_tx,
                     &out_ack_depth,
                     &ack_throttle_tx,
@@ -2526,6 +2574,8 @@ mod tests {
         let mut config = test_config();
         config.sub_stream_mode = crate::config::SubStreamMode::HashedPool;
         let broker_for_server = broker.clone();
+        let lane_manager = WriterLaneManager::new(&test_config());
+        let server_lane_manager = Arc::clone(&lane_manager);
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
             handle_subscribe_message(
@@ -2533,7 +2583,7 @@ mod tests {
                 connection,
                 config,
                 &Arc::new(SubscriptionLimiter::new()),
-                &WriterLaneManager::new(&test_config()),
+                &server_lane_manager,
                 &out_ack_tx,
                 &out_ack_depth,
                 &ack_throttle_tx,
@@ -2865,6 +2915,63 @@ mod tests {
         assert!(map.get(&connection_id).is_none());
     }
 
+    // Regression test for the leak the soak harness found (#154).
+    //
+    // Subscription teardown enqueues `LaneCommand::Unregister` and then *immediately*
+    // calls `unregister_subscriber`, which removes the `subscriber_connections` entry.
+    // The lane worker dequeues afterwards, so when it used to look the connection up
+    // there it found nothing and skipped cleanup entirely — leaving an entry in
+    // `ACTIVE_SUB_CONN_COUNTS` and a per-connection metric series behind for every
+    // subscriber connection ever made. Over a long-lived broker with connection churn
+    // that is unbounded growth, and it made `felix_sub_active_connections` permanently
+    // wrong. The command now carries `connection_id` so the lookup is not needed.
+    #[tokio::test]
+    async fn lane_unregister_cleans_up_after_teardown_already_removed_the_mapping() {
+        let manager = WriterLaneManager::new(&test_config());
+        let connection_id = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            & u128::from(u64::MAX)) as u64;
+        let subscriber_id = connection_id ^ 0x5555;
+
+        connection_subscriber_register(Some(connection_id));
+        let map = ACTIVE_SUB_CONN_COUNTS
+            .get()
+            .expect("counts map should be initialized");
+        assert!(map.get(&connection_id).is_some());
+
+        // Reproduce the race: teardown has already dropped the mapping the worker
+        // used to depend on, before the worker gets to the command.
+        manager.subscriber_connections.remove(&subscriber_id);
+
+        manager
+            .enqueue(
+                0,
+                LaneCommand::Unregister {
+                    subscriber_id,
+                    connection_id: Some(connection_id),
+                },
+            )
+            .await
+            .expect("enqueue unregister");
+
+        // The worker runs on its own task, so poll rather than assume immediacy.
+        let mut cleared = false;
+        for _ in 0..200 {
+            if map.get(&connection_id).is_none() {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            cleared,
+            "lane worker must release the connection's subscriber count even when \
+             teardown already removed the subscriber_connections entry"
+        );
+    }
+
     #[test]
     fn connection_subscriber_unregister_no_map_is_noop() {
         let connection_id = (std::time::SystemTime::now()
@@ -2907,6 +3014,46 @@ mod tests {
         assert!(manager.subscriber_pins.get(&7).is_none());
         assert!(manager.subscriber_connections.get(&7).is_none());
         assert!(manager.connection_lanes.get(&88).is_none());
+    }
+
+    #[tokio::test]
+    async fn writer_lane_tasks_do_not_retain_manager() {
+        let manager = WriterLaneManager::new(&test_config());
+        let weak_manager = Arc::downgrade(&manager);
+
+        drop(manager);
+
+        assert!(
+            weak_manager.upgrade().is_none(),
+            "writer lane tasks must not keep a connection's manager alive"
+        );
+        tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn manager_drop_releases_remaining_connection_counts() {
+        let manager = WriterLaneManager::new(&test_config());
+        let connection_id = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            & u128::from(u64::MAX)) as u64;
+        let subscriber_id = connection_id ^ 0xaaaa;
+
+        connection_subscriber_register(Some(connection_id));
+        manager
+            .subscriber_connections
+            .insert(subscriber_id, connection_id);
+
+        drop(manager);
+
+        let map = ACTIVE_SUB_CONN_COUNTS
+            .get()
+            .expect("counts map should be initialized");
+        assert!(
+            map.get(&connection_id).is_none(),
+            "dropping the manager must release registrations whose queued unregister did not run"
+        );
     }
 
     #[tokio::test]

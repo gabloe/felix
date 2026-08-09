@@ -129,6 +129,7 @@ nav:
     - Contributing: development/contributing.md
     - Building & Testing: development/building.md
     - Project Structure: development/project-structure.md
+    - "How Felix Works": development/how-felix-works.md
     - "Internals: The Publish Path": development/internals-publish.md
     - "Internals: Subscribe & Fanout": development/internals-subscribe.md
     - "Internals: Backpressure & Core Sharding": development/internals-concurrency.md

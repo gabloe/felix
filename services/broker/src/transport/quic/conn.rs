@@ -127,8 +127,20 @@ pub async fn serve_with_shutdown(
         let config = config.clone();
         let auth = Arc::clone(&auth);
         let publish_ctx = publish_ctx.clone();
+        // Each connection observes the same shutdown signal, so a drain winds
+        // down accepted connections cooperatively rather than waiting for peers
+        // that may never disconnect.
+        let conn_shutdown = shutdown.clone();
         connections.spawn(async move {
-            if let Err(err) = handle_connection(broker, connection, config, auth, publish_ctx).await
+            if let Err(err) = handle_connection_with_shutdown(
+                broker,
+                connection,
+                config,
+                auth,
+                publish_ctx,
+                conn_shutdown,
+            )
+            .await
             {
                 tracing::warn!(error = %err, "quic connection handler failed");
             }
@@ -237,7 +249,8 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
     }
 }
 
-/// Handle a single QUIC connection and its streams.
+/// Handle a single QUIC connection and its streams, winding down when
+/// `shutdown` is cancelled.
 ///
 /// # What it does
 /// Creates per-connection publish workers and dispatches incoming bi/uni streams
@@ -247,18 +260,34 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
 /// Keeps per-connection state (publish queues and depth counters) scoped to the
 /// connection lifecycle.
 ///
+/// # Why it takes a shutdown token
+/// A connection task otherwise ends only when the *peer* disconnects. Subscribers
+/// hold connections open indefinitely by design, so a drain that just waits for
+/// connection tasks to finish would never complete: it would burn the entire
+/// deadline on every shutdown and then force-abort, dropping exactly the
+/// in-flight work the drain was meant to protect.
+///
+/// # Shutdown semantics
+/// Cancellation stops this connection accepting *new* streams, gives the streams
+/// already in flight a bounded grace period to finish, and then closes the QUIC
+/// connection so the peer learns this was a clean shutdown rather than a
+/// disappearance.
+///
 /// # Invariants
 /// - `worker_count` and `publish_queue_depth` are at least 1.
 /// - Global ingress depth counters are decremented when workers exit.
+/// - The stream grace is bounded, so one connection cannot outlast the caller's
+///   drain budget.
 ///
 /// # Errors
 /// - Returns on connection-level QUIC errors.
-pub(crate) async fn handle_connection(
+pub(crate) async fn handle_connection_with_shutdown(
     broker: Arc<Broker>,
     connection: QuicConnection,
     config: BrokerConfig,
     auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
+    shutdown: CancellationToken,
 ) -> Result<()> {
     // Give this connection its own slice of the shared publish byte budget, its own
     // subscription-count limiter, and its own writer-lane manager, so one connection can't
@@ -273,15 +302,26 @@ pub(crate) async fn handle_connection(
         lane_manager: WriterLaneManager::new(&config),
         ..publish_ctx
     };
+    // Tracks the per-stream handler tasks so shutdown can wait for in-flight
+    // work instead of dropping it.
+    let streams = TaskTracker::new();
     loop {
         // Accept both bidirectional control streams and uni-directional publish streams.
         tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!(
+                    stats = ?connection.stats(),
+                    "connection draining; no longer accepting streams"
+                );
+                break;
+            }
             result = connection.accept_bi() => {
                 let (send, recv) = match result {
                     Ok(streams) => streams,
                     Err(err) => {
                         tracing::info!(error = %err, stats = ?connection.stats(), "quic connection closed");
-                        return Ok(());
+                        break;
                     }
                 };
                 let broker = Arc::clone(&broker);
@@ -289,7 +329,7 @@ pub(crate) async fn handle_connection(
                 let config = config.clone();
                 let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
-                tokio::spawn(async move {
+                streams.spawn(async move {
                     // Dispatch the bidirectional control stream handler.
                     if let Err(err) = handle_stream(
                         broker,
@@ -311,14 +351,14 @@ pub(crate) async fn handle_connection(
                     Ok(recv) => recv,
                     Err(err) => {
                         tracing::info!(error = %err, stats = ?connection.stats(), "quic connection closed");
-                        return Ok(());
+                        break;
                     }
                 };
                 let broker = Arc::clone(&broker);
                 let config = config.clone();
                 let auth = Arc::clone(&auth);
                 let publish_ctx = publish_ctx.clone();
-                tokio::spawn(async move {
+                streams.spawn(async move {
                     // Dispatch the unidirectional publish stream handler.
                     if let Err(err) = handle_uni_stream(
                         broker,
@@ -335,6 +375,33 @@ pub(crate) async fn handle_connection(
             }
         }
     }
+
+    // Give the streams already accepted a bounded window to finish.
+    //
+    // The bound is essential, not defensive. Control and subscription streams are
+    // long-lived by design: a publisher holds one open and streams requests down
+    // it, a subscriber holds one open to receive events. Neither ends until the
+    // *client* closes it, so waiting unconditionally would hang exactly as long
+    // as waiting for the connection itself did. In-flight requests get the grace
+    // window; anything still open after it is ended by closing the connection.
+    //
+    // Half the process drain budget, so a connection cannot consume the whole
+    // allowance and starve the accept loop and metrics server that drain after it.
+    let grace =
+        Duration::from_millis(config.shutdown_drain_timeout_ms / 2).max(Duration::from_secs(1));
+    streams.close();
+    if tokio::time::timeout(grace, streams.wait()).await.is_err() {
+        tracing::info!(
+            ?grace,
+            stats = ?connection.stats(),
+            "connection drain grace expired with streams still open; closing"
+        );
+    }
+
+    // Tell the peer this was a deliberate close rather than a vanished server, so
+    // it can reconnect elsewhere instead of waiting out an idle timeout.
+    connection.close(0u32.into(), b"broker shutting down");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -439,7 +506,15 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
-            handle_connection(broker, connection, config, auth, publish_ctx).await
+            handle_connection_with_shutdown(
+                broker,
+                connection,
+                config,
+                auth,
+                publish_ctx,
+                CancellationToken::new(),
+            )
+            .await
         });
 
         let mut roots = RootCertStore::empty();

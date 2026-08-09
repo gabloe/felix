@@ -1,0 +1,114 @@
+name: Soak and Resource Leak Check
+
+# Runs the broker soak harness (#154) on Linux, which is the deployment target.
+# The findings recorded in docs/security/soak-report.md were gathered on macOS;
+# this is the run that should back any production claim about resource behaviour.
+#
+# Not on every PR: a meaningful soak takes minutes and its RSS signal needs
+# several identical cycles to be readable, which is the wrong shape for a
+# per-commit gate. Scheduled weekly, plus manual dispatch when shutdown,
+# connection lifecycle, or subscriber-registry code changes.
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      duration_secs:
+        description: "Seconds per load phase"
+        required: false
+        default: "60"
+      load_cycles:
+        description: "Identical load cycles (raise this to resolve slow RSS growth)"
+        required: false
+        default: "20"
+      restart_cycles:
+        description: "SIGTERM restart cycles"
+        required: false
+        default: "5"
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The harness measures the broker, not the instrumentation. Timing collection
+  # is off for the same reason production leaves it off by default.
+  FELIX_DISABLE_TIMINGS: "1"
+  # Exercise the production core-shard handoff path on the four-CPU hosted runner.
+  FELIX_CORE_SHARDS: "2"
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Build soak harness
+        run: cargo build --release -p broker --bin soak
+
+      - name: Repeat concurrency-sensitive tests
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            echo "concurrency test pass ${attempt}/10"
+            cargo test -p broker --lib transport::quic::handlers::subscribe::tests
+            cargo test -p broker --test quic_publish
+            cargo test -p broker --test quic_subscribe
+            cargo test -p broker --test graceful_shutdown
+          done
+
+      - name: Raise file descriptor limit
+        # The churn phase opens and closes connections rapidly. The default soft
+        # limit is low enough that hitting it would look like a broker failure
+        # rather than a harness constraint.
+        run: ulimit -n 65536 && ulimit -n
+
+      - name: Run soak
+        id: soak
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          mkdir -p data/soak
+          ./target/release/soak \
+            --duration-secs "${{ inputs.duration_secs || '60' }}" \
+            --quiesce-secs 30 \
+            --churn-cycles 500 \
+            --load-cycles "${{ inputs.load_cycles || '20' }}" \
+            --restart-cycles "${{ inputs.restart_cycles || '5' }}" \
+            --timeseries data/soak/ci-linux.jsonl \
+            2>&1 | tee /tmp/soak-output.txt
+
+      - name: Upload soak artifacts
+        # Always: a failing run is exactly the one whose time series is worth
+        # keeping.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-results
+          path: |
+            data/soak/ci-linux.jsonl
+            /tmp/soak-output.txt
+          retention-days: 30
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Soak result"
+            echo
+            echo '```'
+            sed -n '/== Soak report ==/,$p' /tmp/soak-output.txt || cat /tmp/soak-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
