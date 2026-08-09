@@ -14,6 +14,7 @@ pub struct ResourceSample {
     pub unix_ms: u128,
     pub rss_kb: u64,
     pub open_fds: u64,
+    pub alive_tasks: usize,
 }
 
 impl ResourceSample {
@@ -25,6 +26,9 @@ impl ResourceSample {
                 .unwrap_or(0),
             rss_kb: read_rss_kb(),
             open_fds: count_open_fds(),
+            alive_tasks: tokio::runtime::Handle::try_current()
+                .map(|handle| handle.metrics().num_alive_tasks())
+                .unwrap_or(0),
         }
     }
 }
@@ -130,6 +134,9 @@ mod tests {
             "fd reader returned {}",
             sample.open_fds
         );
+        // This unit test does not run inside a Tokio runtime. The soak itself
+        // does, where `alive_tasks` is populated from `Handle::metrics()`.
+        assert_eq!(sample.alive_tasks, 0);
     }
 
     #[test]

@@ -22,7 +22,7 @@ on:
       load_cycles:
         description: "Identical load cycles (raise this to resolve slow RSS growth)"
         required: false
-        default: "8"
+        default: "20"
       restart_cycles:
         description: "SIGTERM restart cycles"
         required: false
@@ -37,6 +37,8 @@ env:
   # The harness measures the broker, not the instrumentation. Timing collection
   # is off for the same reason production leaves it off by default.
   FELIX_DISABLE_TIMINGS: "1"
+  # Exercise the production core-shard handoff path on the four-CPU hosted runner.
+  FELIX_CORE_SHARDS: "2"
 
 jobs:
   soak:
@@ -56,6 +58,17 @@ jobs:
       - name: Build soak harness
         run: cargo build --release -p broker --bin soak
 
+      - name: Repeat concurrency-sensitive tests
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            echo "concurrency test pass ${attempt}/10"
+            cargo test -p broker --lib transport::quic::handlers::subscribe::tests
+            cargo test -p broker --test quic_publish
+            cargo test -p broker --test quic_subscribe
+            cargo test -p broker --test graceful_shutdown
+          done
+
       - name: Raise file descriptor limit
         # The churn phase opens and closes connections rapidly. The default soft
         # limit is low enough that hitting it would look like a broker failure
@@ -72,7 +85,7 @@ jobs:
             --duration-secs "${{ inputs.duration_secs || '60' }}" \
             --quiesce-secs 30 \
             --churn-cycles 500 \
-            --load-cycles "${{ inputs.load_cycles || '8' }}" \
+            --load-cycles "${{ inputs.load_cycles || '20' }}" \
             --restart-cycles "${{ inputs.restart_cycles || '5' }}" \
             --timeseries data/soak/ci-linux.jsonl \
             2>&1 | tee /tmp/soak-output.txt

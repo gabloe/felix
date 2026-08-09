@@ -462,6 +462,13 @@ impl PhaseReport {
     fn peak_fds(&self) -> u64 {
         self.samples.iter().map(|s| s.open_fds).max().unwrap_or(0)
     }
+    fn peak_tasks(&self) -> usize {
+        self.samples
+            .iter()
+            .map(|s| s.alive_tasks)
+            .max()
+            .unwrap_or(0)
+    }
     fn last(&self) -> Option<&ResourceSample> {
         self.samples.last()
     }
@@ -729,8 +736,8 @@ async fn main() -> Result<()> {
     let harness = start_broker(&auth).await?;
     let baseline = ResourceSample::capture();
     println!(
-        "baseline (broker listening, no clients): rss={} KiB fds={}",
-        baseline.rss_kb, baseline.open_fds
+        "baseline (broker listening, no clients): rss={} KiB fds={} tasks={}",
+        baseline.rss_kb, baseline.open_fds, baseline.alive_tasks
     );
 
     let mut phases = Vec::new();
@@ -842,8 +849,8 @@ async fn main() -> Result<()> {
     let quiesced = ResourceSample::capture();
     let gauges = resources::scrape_gauges(&metrics.render());
     println!(
-        "quiesced: rss={} KiB fds={}",
-        quiesced.rss_kb, quiesced.open_fds
+        "quiesced: rss={} KiB fds={} tasks={}",
+        quiesced.rss_kb, quiesced.open_fds, quiesced.alive_tasks
     );
 
     // Phase 6 — repeated real-process SIGTERM restarts under traffic.
@@ -909,12 +916,13 @@ where
             + stats.connect_errors.load(Ordering::Relaxed),
     };
     println!(
-        "  published={} received={} errors={} peak_rss={} KiB peak_fds={}",
+        "  published={} received={} errors={} peak_rss={} KiB peak_fds={} peak_tasks={}",
         report.published,
         report.received,
         report.errors,
         report.peak_rss_kb(),
-        report.peak_fds()
+        report.peak_fds(),
+        report.peak_tasks()
     );
     Ok(report)
 }
@@ -1022,6 +1030,15 @@ fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
         ));
     }
 
+    if quiesced.alive_tasks > baseline.alive_tasks {
+        findings.push(format!(
+            "Tokio tasks did not return to baseline after quiescence: {} -> {} (+{})",
+            baseline.alive_tasks,
+            quiesced.alive_tasks,
+            quiesced.alive_tasks - baseline.alive_tasks
+        ));
+    }
+
     // Memory is judged across identical repeated cycles, not against baseline.
     // Comparing a post-load RSS to a pre-load one only measures allocator
     // retention and would flag every healthy run. A leak is peak RSS still
@@ -1112,8 +1129,8 @@ fn write_timeseries(path: &str, phases: &[PhaseReport]) -> Result<()> {
         for sample in &phase.samples {
             writeln!(
                 file,
-                r#"{{"phase":"{}","unix_ms":{},"rss_kb":{},"open_fds":{}}}"#,
-                phase.name, sample.unix_ms, sample.rss_kb, sample.open_fds
+                r#"{{"phase":"{}","unix_ms":{},"rss_kb":{},"open_fds":{},"alive_tasks":{}}}"#,
+                phase.name, sample.unix_ms, sample.rss_kb, sample.open_fds, sample.alive_tasks
             )?;
         }
     }
@@ -1129,28 +1146,32 @@ fn report(outcome: &SoakOutcome, findings: &[String]) {
         ..
     } = outcome;
     println!("\n== Soak report ==");
-    println!("{:<20} {:>10} {:>8}", "phase", "peak_rss", "peak_fds");
     println!(
-        "{:<20} {:>10} {:>8}",
-        "baseline", baseline.rss_kb, baseline.open_fds
+        "{:<20} {:>10} {:>8} {:>10}",
+        "phase", "peak_rss", "peak_fds", "peak_tasks"
+    );
+    println!(
+        "{:<20} {:>10} {:>8} {:>10}",
+        "baseline", baseline.rss_kb, baseline.open_fds, baseline.alive_tasks
     );
     for phase in phases {
         println!(
-            "{:<20} {:>10} {:>8}",
+            "{:<20} {:>10} {:>8} {:>10}",
             phase.name,
             phase.peak_rss_kb(),
-            phase.peak_fds()
+            phase.peak_fds(),
+            phase.peak_tasks()
         );
         if let Some(last) = phase.last() {
             println!(
-                "{:<20} {:>10} {:>8}   (end of phase)",
-                "", last.rss_kb, last.open_fds
+                "{:<20} {:>10} {:>8} {:>10}   (end of phase)",
+                "", last.rss_kb, last.open_fds, last.alive_tasks
             );
         }
     }
     println!(
-        "{:<20} {:>10} {:>8}",
-        "quiesced", quiesced.rss_kb, quiesced.open_fds
+        "{:<20} {:>10} {:>8} {:>10}",
+        "quiesced", quiesced.rss_kb, quiesced.open_fds, quiesced.alive_tasks
     );
 
     println!("\nsteady-state gauges:");

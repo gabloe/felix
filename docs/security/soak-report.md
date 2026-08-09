@@ -48,6 +48,12 @@ return to baseline exactly. Baseline is captured *after* the broker is listening
 so the listener socket is part of it rather than appearing later as a
 one-descriptor "leak".
 
+**Tokio tasks are also checked exactly.** The harness samples
+`Handle::metrics().num_alive_tasks()` at baseline, throughout each phase, and
+after quiescence. The broker and load generators share one runtime, so transient
+phase peaks include both, but after all clients are dropped the count must return
+to the listening-broker baseline exactly.
+
 ## Findings
 
 ### F1 — Subscriber connection registry never released entries (fixed)
@@ -129,6 +135,34 @@ is still caught while this known race does not produce noise. **Follow-up issue
 should be filed**; per #154's own instruction, non-blocking improvements get
 separately scoped issues rather than being folded in.
 
+### F4 — Subscriber writer ownership cycle retained tasks (fixed)
+
+Direct task-count sampling exposed a lifecycle leak that fd sampling had missed.
+After 30 s of quiescence, a short run retained 815 Tokio tasks against a baseline
+of 10, plus one active subscriber registration, even though file descriptors had
+returned exactly to baseline.
+
+Cause: `WriterLaneManager` owned the senders for its lane and per-connection
+writer tasks, while lane tasks and subscription feeders held strong
+`Arc<WriterLaneManager>` references. The connection writer retained subscription
+guards, which kept the broker's subscription sender alive; the feeder therefore
+kept waiting for events while retaining the manager. Dropping the external
+connection context could not break either cycle.
+
+Fix: lane tasks and feeders now hold `Weak<WriterLaneManager>` and upgrade only
+while processing work. When the connection context disappears, dropping the
+manager closes the lane and connection-writer channels, releases subscription
+guards, and lets every feeder terminate. `WriterLaneManager::drop` also releases
+any connection-count entries whose queued unregister command could not run after
+the manager disappeared.
+
+Regression tests:
+`subscribe.rs::writer_lane_tasks_do_not_retain_manager` and
+`subscribe.rs::manager_drop_releases_remaining_connection_counts`.
+The same short soak that previously ended at 815 tasks and one registration now
+returns from 10 tasks to **10**, with both subscriber registration gauges at
+**0** after 30 s.
+
 ## Steady state after the fixes
 
 From the final local run (exit 0, no findings):
@@ -166,8 +200,8 @@ memory growth" claim is treated as settled.
 - [ ] **No unbounded memory growth** — not fully demonstrated. Monotonic growth
       across four cycles is unresolved; needs a longer Linux run.
 - [x] Audit scope, workload, duration, environment, and findings recorded.
-- [x] Milestone-blocking defects fixed (F1, F2); non-blocking one (F3) documented
-      for a separate issue.
+- [x] Milestone-blocking defects fixed (F1, F2, F4); non-blocking one (F3)
+      documented for a separate issue.
 
 ## Residual risk
 
