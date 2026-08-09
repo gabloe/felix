@@ -60,10 +60,12 @@ def stdev(values, mean_value):
     return var**0.5
 
 
-def build_entries(runs: list, metric_defs: list) -> list:
+def build_entries(runs: list, metric_defs: list, include_run) -> list:
     groups: dict = {}
     for run in runs:
         if run.get("parse_error") or run.get("exit_code") not in (0, None):
+            continue
+        if not include_run(run):
             continue
         groups.setdefault(group_key(run), []).append(run)
 
@@ -98,8 +100,16 @@ def main():
     args = parser.parse_args()
 
     runs = load_runs(Path(args.input))
-    latency_entries = build_entries(runs, LATENCY_METRICS)
-    throughput_entries = build_entries(runs, THROUGHPUT_METRICS)
+    latency_entries = build_entries(
+        runs,
+        LATENCY_METRICS,
+        lambda run: (run.get("workload") or {}).get("batch") == 1,
+    )
+    throughput_entries = build_entries(
+        runs,
+        THROUGHPUT_METRICS,
+        lambda run: (run.get("workload") or {}).get("batch", 0) > 1,
+    )
 
     Path(args.latency_output).write_text(json.dumps(latency_entries, indent=2), encoding="utf-8")
     Path(args.throughput_output).write_text(

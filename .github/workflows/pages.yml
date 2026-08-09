@@ -58,15 +58,21 @@ jobs:
           path: benchmark-data
           sparse-checkout: |
             latency
+            latency-v2
             throughput
+            throughput-v2
           sparse-checkout-cone-mode: false
 
       - name: Add benchmark dashboards to Pages
         run: |
           set -euo pipefail
           mkdir -p site/benchmarks
-          cp -R benchmark-data/latency site/benchmarks/latency
-          cp -R benchmark-data/throughput site/benchmarks/throughput
+          latency_dir=latency-v2
+          throughput_dir=throughput-v2
+          [ -d "benchmark-data/$latency_dir" ] || latency_dir=latency
+          [ -d "benchmark-data/$throughput_dir" ] || throughput_dir=throughput
+          cp -R "benchmark-data/$latency_dir" site/benchmarks/latency
+          cp -R "benchmark-data/$throughput_dir" site/benchmarks/throughput
           npm pack chart.js@2.9.2 --silent --pack-destination /tmp
           mkdir -p /tmp/chartjs
           tar -xzf /tmp/chart.js-2.9.2.tgz -C /tmp/chartjs
