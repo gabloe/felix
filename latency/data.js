@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786242963922,
+  "lastUpdate": 1786243927817,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Benchmark": [
@@ -108,6 +108,114 @@ window.BENCHMARK_DATA = {
             "range": "3342.16",
             "unit": "us",
             "extra": "n=5, mean=66955.00"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8731761dd9580cfab2d37888976c0ce3507519cd",
+          "message": "feat(docs): add historical benchmark dashboards to documentation (#149)",
+          "timestamp": "2026-08-08T19:50:58-07:00",
+          "tree_id": "0202858300f4337faf66c29402ce2c9f111de9e0",
+          "url": "https://github.com/gabloe/felix/commit/8731761dd9580cfab2d37888976c0ce3507519cd"
+        },
+        "date": 1786243927072,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 190,
+            "range": "2.07",
+            "unit": "us",
+            "extra": "n=5, mean=190.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 250,
+            "range": "14.24",
+            "unit": "us",
+            "extra": "n=5, mean=255.20"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 316,
+            "range": "99.56",
+            "unit": "us",
+            "extra": "n=5, mean=353.20"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p50 (us)",
+            "value": 5813,
+            "range": "811.18",
+            "unit": "us",
+            "extra": "n=5, mean=5454.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p99 (us)",
+            "value": 9533,
+            "range": "1756.45",
+            "unit": "us",
+            "extra": "n=5, mean=10245.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p999 (us)",
+            "value": 9553,
+            "range": "1756.11",
+            "unit": "us",
+            "extra": "n=5, mean=10263.80"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 238,
+            "range": "8.20",
+            "unit": "us",
+            "extra": "n=5, mean=242.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 641,
+            "range": "249.60",
+            "unit": "us",
+            "extra": "n=5, mean=790.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 2228,
+            "range": "750.95",
+            "unit": "us",
+            "extra": "n=5, mean=1874.60"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p50 (us)",
+            "value": 35742,
+            "range": "7501.44",
+            "unit": "us",
+            "extra": "n=5, mean=33591.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p99 (us)",
+            "value": 62172,
+            "range": "12065.06",
+            "unit": "us",
+            "extra": "n=5, mean=65790.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p999 (us)",
+            "value": 62192,
+            "range": "12077.79",
+            "unit": "us",
+            "extra": "n=5, mean=65825.20"
           }
         ]
       }
