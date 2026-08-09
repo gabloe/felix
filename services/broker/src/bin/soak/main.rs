@@ -79,9 +79,10 @@ use resources::ResourceSample;
 struct SoakConfig {
     // Duration of each load-bearing phase.
     phase_secs: u64,
-    // How long to wait after load stops before sampling steady state. Must be
-    // long enough for QUIC idle timeouts and connection cleanup to complete,
-    // otherwise "leaked" counts are just work still in progress.
+    // Upper bound on how long to wait for resources to settle after load stops.
+    // This is a cap, not a sleep: a healthy run returns as soon as fds and tasks
+    // are back at baseline, so raising it costs nothing and only buys tolerance
+    // for a slow or busy machine.
     quiesce_secs: u64,
     publishers: usize,
     subscribers: usize,
@@ -474,6 +475,95 @@ impl PhaseReport {
     }
 }
 
+/// How long a resource reading must hold steady before it counts as settled.
+const SETTLE_POLL: Duration = Duration::from_millis(500);
+const SETTLE_CONSECUTIVE: usize = 4;
+
+/// Result of waiting for process resources to come to rest.
+struct SettleOutcome {
+    /// Whether the target was reached before the cap expired.
+    settled: bool,
+    waited: Duration,
+    sample: ResourceSample,
+}
+
+/// Wait until the *idle broker* stops changing, then treat that as baseline.
+///
+/// # Why not just sample immediately
+/// `start_broker` returns as soon as the listener is bound, but the runtime keeps
+/// allocating for a moment afterwards — the accept task spawns, epoll registers,
+/// timers arm. Sampling right then captures a baseline lower than the broker's
+/// real idle state, which later makes an honest quiesced reading look like a leak.
+/// This was visible across platforms: the same idle broker sampled 2 tasks on
+/// Linux and 10 on macOS, purely from where the sample landed in startup.
+async fn settle_to_stable(cap: Duration) -> SettleOutcome {
+    let started = Instant::now();
+    let mut previous = ResourceSample::capture();
+    let mut stable = 0usize;
+    while started.elapsed() < cap {
+        tokio::time::sleep(SETTLE_POLL).await;
+        let current = ResourceSample::capture();
+        if current.open_fds == previous.open_fds && current.alive_tasks == previous.alive_tasks {
+            stable += 1;
+            if stable >= SETTLE_CONSECUTIVE {
+                return SettleOutcome {
+                    settled: true,
+                    waited: started.elapsed(),
+                    sample: current,
+                };
+            }
+        } else {
+            stable = 0;
+        }
+        previous = current;
+    }
+    SettleOutcome {
+        settled: false,
+        waited: started.elapsed(),
+        sample: previous,
+    }
+}
+
+/// Wait until process resources fall back to `baseline`, or the cap expires.
+///
+/// # Why polling rather than a fixed sleep
+/// Teardown latency is not a constant. It varies with load, platform, and how
+/// busy the machine is, so any fixed `--quiesce-secs` is either too short
+/// somewhere (a false leak report) or wastes minutes everywhere. Measured
+/// directly: an identical workload failed at a 15s sleep roughly half the time
+/// and passed 3/3 at 60s. Polling makes the result depend on the system reaching
+/// rest rather than on guessing how long that takes, and it returns as soon as it
+/// does — so raising the cap costs nothing on a healthy run.
+///
+/// Reaching `<=` baseline is the success condition, not `==`: the broker may
+/// legitimately hold fewer resources at rest than during startup.
+async fn settle_to_baseline(baseline: &ResourceSample, cap: Duration) -> SettleOutcome {
+    let started = Instant::now();
+    let mut stable = 0usize;
+    let mut last = ResourceSample::capture();
+    while started.elapsed() < cap {
+        if last.open_fds <= baseline.open_fds && last.alive_tasks <= baseline.alive_tasks {
+            stable += 1;
+            if stable >= SETTLE_CONSECUTIVE {
+                return SettleOutcome {
+                    settled: true,
+                    waited: started.elapsed(),
+                    sample: last,
+                };
+            }
+        } else {
+            stable = 0;
+        }
+        tokio::time::sleep(SETTLE_POLL).await;
+        last = ResourceSample::capture();
+    }
+    SettleOutcome {
+        settled: false,
+        waited: started.elapsed(),
+        sample: last,
+    }
+}
+
 /// Sample resources on a fixed cadence until `stop` flips.
 async fn sample_until(stop: Arc<AtomicBool>, interval: Duration) -> Vec<ResourceSample> {
     let mut samples = Vec::new();
@@ -720,7 +810,7 @@ async fn main() -> Result<()> {
 
     println!("== Felix soak harness ==");
     println!(
-        "phases {}s, quiesce {}s, {} publishers, {} subscribers, {} churn cycles, {} restart cycles",
+        "phases {}s, settle cap {}s, {} publishers, {} subscribers, {} churn cycles, {} restart cycles",
         config.phase_secs,
         config.quiesce_secs,
         config.publishers,
@@ -730,14 +820,23 @@ async fn main() -> Result<()> {
     );
 
     let auth = build_auth_fixture()?;
-    // Baseline is captured *after* the broker is listening, so the listener
-    // socket and its runtime are part of the baseline rather than showing up
-    // later as a one-descriptor "leak".
+    // Baseline is captured after the broker is listening *and* has come to rest,
+    // so the listener socket and the runtime's own startup allocations are part
+    // of the baseline rather than surfacing later as a phantom leak.
     let harness = start_broker(&auth).await?;
-    let baseline = ResourceSample::capture();
+    let baseline_settle = settle_to_stable(Duration::from_secs(30)).await;
+    let baseline = baseline_settle.sample;
     println!(
-        "baseline (broker listening, no clients): rss={} KiB fds={} tasks={}",
-        baseline.rss_kb, baseline.open_fds, baseline.alive_tasks
+        "baseline (broker listening, no clients, settled in {:?}{}): rss={} KiB fds={} tasks={}",
+        baseline_settle.waited,
+        if baseline_settle.settled {
+            ""
+        } else {
+            "; NOT STABLE"
+        },
+        baseline.rss_kb,
+        baseline.open_fds,
+        baseline.alive_tasks
     );
 
     let mut phases = Vec::new();
@@ -843,14 +942,27 @@ async fn main() -> Result<()> {
     // Phase 4 — identical repeated cycles, the actual memory-leak check.
     let cycle_peaks = run_repeated_load_cycles(&harness, &auth, &config).await?;
 
-    // Phase 5 — quiesce and let cleanup settle before judging steady state.
-    println!("\n[quiesce] waiting {}s", config.quiesce_secs);
-    tokio::time::sleep(Duration::from_secs(config.quiesce_secs)).await;
-    let quiesced = ResourceSample::capture();
+    // Phase 5 — wait for cleanup to actually finish, rather than sleeping a fixed
+    // amount and hoping. `quiesce_secs` is the cap, not the wait.
+    println!(
+        "\n[quiesce] waiting for resources to settle (cap {}s)",
+        config.quiesce_secs
+    );
+    let quiesce_settle =
+        settle_to_baseline(&baseline, Duration::from_secs(config.quiesce_secs)).await;
+    let quiesced = quiesce_settle.sample;
     let gauges = resources::scrape_gauges(&metrics.render());
     println!(
-        "quiesced: rss={} KiB fds={} tasks={}",
-        quiesced.rss_kb, quiesced.open_fds, quiesced.alive_tasks
+        "quiesced after {:?}{}: rss={} KiB fds={} tasks={}",
+        quiesce_settle.waited,
+        if quiesce_settle.settled {
+            ""
+        } else {
+            " (CAP EXPIRED)"
+        },
+        quiesced.rss_kb,
+        quiesced.open_fds,
+        quiesced.alive_tasks
     );
 
     // Phase 6 — repeated real-process SIGTERM restarts under traffic.
@@ -867,6 +979,7 @@ async fn main() -> Result<()> {
         restart_findings,
         unfinished,
         cycle_peaks,
+        settled: quiesce_settle.settled,
     };
     let findings = evaluate(&config, &outcome);
     report(&outcome, &findings);
@@ -1004,6 +1117,8 @@ struct SoakOutcome {
     restart_findings: Vec<String>,
     unfinished: Vec<&'static str>,
     cycle_peaks: Vec<u64>,
+    /// Whether process fds and tasks returned to the idle baseline before the cap.
+    settled: bool,
 }
 
 fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
@@ -1015,28 +1130,33 @@ fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
         restart_findings,
         unfinished,
         cycle_peaks,
+        settled,
     } = outcome;
     let mut findings: Vec<String> = restart_findings.clone();
 
-    // File descriptors are the sharpest leak signal: every leaked connection or
-    // socket shows up here, and unlike RSS there is no allocator caching to
-    // explain growth away.
-    if quiesced.open_fds > baseline.open_fds {
+    // Process-wide file descriptors and task counts are reported as a single
+    // "did it come to rest" check rather than two exact comparisons.
+    //
+    // The distinction matters because this harness runs the load generators in
+    // the *same process* as the broker. A raw `quiesced > baseline` comparison
+    // therefore charges the broker for the harness's own client teardown —
+    // `felix-client`'s `Subscription` spawns detached pipeline tasks that this
+    // harness cannot join, so they wind down on their own schedule. Exact
+    // equality at an arbitrary instant was measuring that race, not a leak.
+    //
+    // The broker's own gauges below are the authoritative assertion; these are
+    // corroborating evidence that nothing outlived the run.
+    if !settled {
         findings.push(format!(
-            "file descriptors did not return to baseline after quiescence: {} -> {} (+{})",
+            "process resources did not return to the idle baseline within the {}s cap: \
+             fds {} -> {}, tasks {} -> {}. Note both the broker and the load generators \
+             live in this process, so check the broker gauges below before reading this \
+             as a broker leak.",
+            config.quiesce_secs,
             baseline.open_fds,
             quiesced.open_fds,
-            quiesced.open_fds - baseline.open_fds
-        ));
-    }
-
-    if quiesced.alive_tasks > baseline.alive_tasks {
-        findings.push(format!(
-            "Tokio tasks did not return to baseline within {}s of quiescence: {} -> {} (+{})",
-            config.quiesce_secs,
             baseline.alive_tasks,
-            quiesced.alive_tasks,
-            quiesced.alive_tasks - baseline.alive_tasks
+            quiesced.alive_tasks
         ));
     }
 

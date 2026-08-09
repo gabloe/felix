@@ -42,17 +42,32 @@ allocators do not promptly return freed pages, so that comparison flags every
 healthy run. A leak instead shows peak RSS still climbing on the last identical
 cycle, where retention plateaus.
 
-**File descriptors are the exact check.** Every leaked connection or socket shows
-up there and there is no caching behaviour to explain growth away, so fds must
-return to baseline exactly. Baseline is captured *after* the broker is listening,
-so the listener socket is part of it rather than appearing later as a
-one-descriptor "leak".
+**The broker's own gauges are the authoritative assertion.**
+`felix_sub_active_connections`, `felix_sub_connection_subscribers`,
+`felix_sub_queue_len`, `felix_sub_lane_queue_len`, `felix_broker_ingress_queue_depth`,
+and `felix_broker_out_ack_depth` must all be exactly zero once every client has
+disconnected. These describe the broker and nothing else, so residue in them is
+unambiguously a broker leak.
 
-**Tokio tasks are also checked exactly.** The harness samples
-`Handle::metrics().num_alive_tasks()` at baseline, throughout each phase, and
-after quiescence. The broker and load generators share one runtime, so transient
-phase peaks include both, but after all clients are dropped the count must return
-to the listening-broker baseline exactly.
+**Process-wide fds and tasks are corroborating evidence, not the assertion.**
+This harness runs the load generators in the *same process* as the broker, so a
+raw `quiesced > baseline` comparison charges the broker for the harness's own
+client teardown — `felix-client`'s `Subscription` spawns detached pipeline tasks
+the harness cannot join, which wind down on their own schedule. An earlier
+version asserted exact equality at a fixed instant and was measuring that race:
+a CI run reported "+8 fds, +4 tasks" while every broker gauge sat at zero.
+
+**Both ends of the comparison are settled rather than sampled at a fixed time.**
+Baseline is taken once the idle broker stops changing, not immediately after
+`start_broker` returns — the runtime keeps allocating briefly after the listener
+binds, and sampling into that window produced a baseline below the broker's real
+idle state. The same idle broker read 2 tasks on Linux and 10 on macOS purely
+from where the sample landed. Quiescence likewise polls until fds and tasks are
+back at baseline, capped by `--quiesce-secs`. The cap is not a sleep: a healthy
+run returns as soon as it settles, so raising it costs nothing and only buys
+tolerance on a slow machine. Measured directly, a fixed 15 s sleep failed the
+same workload about half the time and passed 3/3 at 60 s; the polling version
+passed 6/6 and returned in 11.8–22.3 s.
 
 ## Findings
 
@@ -194,8 +209,9 @@ memory growth" claim is treated as settled.
 ## Acceptance criteria status
 
 - [x] Sustained-load and churn runs return resource counts to a documented
-      steady-state envelope after quiescence — fds exactly, registration gauges
-      exactly, RSS with the caveat above.
+      steady-state envelope after quiescence — broker gauges exactly zero,
+      process fds and tasks settling back to the idle baseline, RSS with the
+      caveat above.
 - [x] No deadlock, connection leak, fd leak, or task leak remains reproducible.
 - [ ] **No unbounded memory growth** — not fully demonstrated. Monotonic growth
       across four cycles is unresolved; needs a longer Linux run.
