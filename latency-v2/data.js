@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786247437983,
+  "lastUpdate": 1786247878458,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -528,6 +528,72 @@ window.BENCHMARK_DATA = {
             "range": "760.52",
             "unit": "us",
             "extra": "n=5, mean=1425.80"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "029364a1bdfe04c8c4f0df39bec8ff574a643dea",
+          "message": "fix(benchmarks): update benchmark data paths and enhance dashboard documentation (#151)",
+          "timestamp": "2026-08-08T20:17:07-07:00",
+          "tree_id": "fada4e5a008088ce0265f9738898fa07b4cd2e35",
+          "url": "https://github.com/gabloe/felix/commit/029364a1bdfe04c8c4f0df39bec8ff574a643dea"
+        },
+        "date": 1786247876367,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 92,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "n=5, mean=92.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 126,
+            "range": "9.29",
+            "unit": "us",
+            "extra": "n=5, mean=130.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 159,
+            "range": "6.58",
+            "unit": "us",
+            "extra": "n=5, mean=161.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 122,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "n=5, mean=123.20"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 313,
+            "range": "177.01",
+            "unit": "us",
+            "extra": "n=5, mean=392.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 475,
+            "range": "1560.60",
+            "unit": "us",
+            "extra": "n=5, mean=1165.40"
           }
         ]
       }
