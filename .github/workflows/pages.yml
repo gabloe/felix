@@ -77,10 +77,19 @@ jobs:
           mkdir -p /tmp/chartjs
           tar -xzf /tmp/chart.js-2.9.2.tgz -C /tmp/chartjs
           cp /tmp/chartjs/package/dist/Chart.min.js site/benchmarks/chart.min.js
+          cp scripts/perf/benchmark-chart-enhancements.js site/benchmarks/chart-enhancements.js
           for dashboard in latency throughput; do
+            index="site/benchmarks/$dashboard/index.html"
             sed -i \
               's#https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js#../chart.min.js#' \
-              "site/benchmarks/$dashboard/index.html"
+              "$index"
+            # Load Felix's enhancements after Chart.js but before the generated
+            # chart-creating script.
+            sed -i \
+              's#<script src="../chart.min.js"></script>#<script src="../chart.min.js"></script>\n    <script src="../chart-enhancements.js"></script>#' \
+              "$index"
+            grep -q 'chart-enhancements.js' "$index" \
+              || { echo "::error::failed to inject chart enhancements into $index"; exit 1; }
           done
 
       - name: Upload artifact

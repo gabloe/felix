@@ -7,6 +7,7 @@ better" (latency) and "bigger is better" (throughput) metrics, since the
 `tool` input sets one direction for the whole file.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -60,6 +61,64 @@ def stdev(values, mean_value):
     return var**0.5
 
 
+def common_value(values):
+    unique = {str(value) for value in values if value not in (None, "")}
+    if not unique:
+        return "unknown"
+    if len(unique) == 1:
+        return unique.pop()
+    return "mixed"
+
+
+def config_id(run: dict) -> str:
+    config = {
+        "broker_env": run.get("broker_env") or {},
+        "felix_env": run.get("felix_env") or {},
+        "preset_args": run.get("preset_args") or [],
+        "workload": run.get("workload") or {},
+    }
+    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def format_extra(group: list, values: list, mean_value: float, metric: str) -> str:
+    deviation = stdev(values, mean_value)
+    cv = (deviation / mean_value * 100.0) if mean_value else 0.0
+    hosts = [run.get("host_info") or {} for run in group]
+    platform_name = common_value(host.get("platform") for host in hosts)
+    machine = common_value(host.get("machine") for host in hosts)
+    cpu_count = common_value(host.get("cpu_count") for host in hosts)
+    rustc = common_value(run.get("rustc_version") for run in group)
+    configs = {config_id(run) for run in group}
+    config = configs.pop() if len(configs) == 1 else "mixed"
+    direction = "lower" if metric.endswith("_us") else "higher"
+    workload = group[0].get("workload") or {}
+    semantics = (
+        "publish-to-delivery latency"
+        if metric.endswith("_us")
+        else (
+            "aggregate subscriber deliveries"
+            if metric == "delivered_throughput"
+            else "publisher message rate"
+        )
+    )
+    return "\n".join(
+        [
+            f"trials: {len(values)}",
+            f"median: {median(values):.2f}",
+            f"mean: {mean_value:.2f}",
+            f"stdev: {deviation:.2f}",
+            f"cv: {cv:.2f}%",
+            f"direction: {direction} is better",
+            f"semantics: {semantics}",
+            f"runner: {platform_name} ({machine}, {cpu_count} CPUs)",
+            f"rustc: {rustc}",
+            f"config: {config}",
+            f"binary: {str(bool(workload.get('binary'))).lower()}",
+        ]
+    )
+
+
 def build_entries(runs: list, metric_defs: list, include_run) -> list:
     groups: dict = {}
     for run in runs:
@@ -86,7 +145,7 @@ def build_entries(runs: list, metric_defs: list, include_run) -> list:
                     "unit": "us" if metric.endswith("_us") else "msg/s",
                     "value": median(values),
                     "range": f"{stdev(values, mean_value):.2f}",
-                    "extra": f"n={len(values)}, mean={mean_value:.2f}",
+                    "extra": format_extra(group, values, mean_value, metric),
                 }
             )
     return entries
