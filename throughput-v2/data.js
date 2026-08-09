@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786313324626,
+  "lastUpdate": 1786315714751,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -884,6 +884,58 @@ window.BENCHMARK_DATA = {
             "range": "60950.81",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 526877.11\nmean: 506741.04\nstdev: 60950.81\ncv: 12.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d3aed78f2e1d92d8601fdd3b1224b83438b6e77",
+          "message": "Refactor large modules into smaller components for better maintainability (#159)",
+          "timestamp": "2026-08-09T15:46:50-07:00",
+          "tree_id": "107fddd84f31e81d2fc4e0b14553d2baef7a7f46",
+          "url": "https://github.com/gabloe/felix/commit/5d3aed78f2e1d92d8601fdd3b1224b83438b6e77"
+        },
+        "date": 1786315714462,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 182464.9,
+            "range": "18037.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 182464.90\nmean: 183893.31\nstdev: 18037.44\ncv: 9.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 182464.9,
+            "range": "18037.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 182464.90\nmean: 183893.31\nstdev: 18037.44\ncv: 9.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55875.74,
+            "range": "1562.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55875.74\nmean: 55529.11\nstdev: 1562.93\ncv: 2.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558757.41,
+            "range": "15629.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558757.41\nmean: 555291.13\nstdev: 15629.28\ncv: 2.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
