@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -452,8 +453,13 @@ def main():
                     break
                 print(
                     f"[{idx}/{len(matrix)}] {label} attempt {attempt} failed "
-                    f"({record['parse_error']}); retrying"
+                    f"({record['parse_error']}); retrying after a short pause"
                 )
+                # A back-to-back retry can land in the same transient
+                # contention window that caused the failure (e.g. a runner
+                # scheduling hiccup). A few seconds of separation makes the
+                # retry more likely to actually be independent.
+                time.sleep(5)
 
     if permanently_failed:
         print(

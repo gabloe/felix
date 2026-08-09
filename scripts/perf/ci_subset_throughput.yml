@@ -26,7 +26,10 @@
   },
   "presets": {
     "P8_hash": {
-      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream",
+        "--idle-ms", "10000"
+      ]
     }
   },
   "preset_order": ["P8_hash"]

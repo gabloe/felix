@@ -413,9 +413,19 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
     Ok(())
 }
 
+/// The client no longer generates its own subscription id and no longer requires
+/// the server to echo a requested id back. It sends `subscription_id: None` and
+/// adopts whatever globally-unique id the broker assigns.
+///
+/// This matters for correctness, not just tidiness: the client's old per-`Client`
+/// counter started at 1 in every instance, so two independent clients against one
+/// broker both requested id 1, 2, ... The broker keys its subscription/lane
+/// bookkeeping on the requested id, and the client silently drops any event batch
+/// whose subscription_id doesn't match its own, so colliding ids made events
+/// vanish with no error surfaced anywhere.
 #[tokio::test]
 #[serial_test::serial]
-async fn subscribe_rejects_mismatched_subscription_id() -> Result<()> {
+async fn subscribe_requests_no_id_and_adopts_server_assigned_id() -> Result<()> {
     let _env_guard = set_client_env();
 
     let (server_config, cert) = build_server_config()?;
@@ -426,8 +436,17 @@ async fn subscribe_rejects_mismatched_subscription_id() -> Result<()> {
     )?;
     let addr = server.local_addr()?;
 
+    // The id the "broker" assigns, deliberately NOT 1, so a client that still
+    // generated its own id (and demanded an exact echo) would fail this.
+    const SERVER_ASSIGNED_ID: u64 = 4242;
+
+    let (observed_tx, observed_rx) = tokio::sync::oneshot::channel::<Option<u64>>();
     let server_task = tokio::spawn(async move {
-        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+        let observed_tx = Arc::new(tokio::sync::Mutex::new(Some(observed_tx)));
+        async fn handle_connection(
+            connection: felix_transport::QuicConnection,
+            observed_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<Option<u64>>>>>,
+        ) -> Result<()> {
             let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
             loop {
                 let Ok((mut send, mut recv)) = connection.accept_bi().await else {
@@ -435,16 +454,25 @@ async fn subscribe_rejects_mismatched_subscription_id() -> Result<()> {
                 };
                 let _ = read_message(&mut recv, &mut frame_scratch).await?;
                 write_message(&mut send, Message::Ok).await?;
-                let next = read_message(&mut recv, &mut frame_scratch).await?;
                 if let Some(Message::Subscribe {
                     subscription_id, ..
-                }) = next
+                }) = read_message(&mut recv, &mut frame_scratch).await?
                 {
-                    let wrong = subscription_id.unwrap_or(1) + 1;
+                    if let Some(tx) = observed_tx.lock().await.take() {
+                        let _ = tx.send(subscription_id);
+                    }
                     write_message(
                         &mut send,
                         Message::Subscribed {
-                            subscription_id: wrong,
+                            subscription_id: SERVER_ASSIGNED_ID,
+                        },
+                    )
+                    .await?;
+                    let mut uni = connection.open_uni().await?;
+                    write_message(
+                        &mut uni,
+                        Message::EventStreamHello {
+                            subscription_id: SERVER_ASSIGNED_ID,
                         },
                     )
                     .await?;
@@ -456,21 +484,19 @@ async fn subscribe_rejects_mismatched_subscription_id() -> Result<()> {
         }
 
         let mut tasks = Vec::new();
-        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            let now = tokio::time::Instant::now();
-            if now >= accept_deadline {
-                break;
-            }
-            let remaining = accept_deadline.saturating_duration_since(now);
-            let result = timeout(remaining, server.accept()).await;
-            let Ok(Ok(connection)) = result else {
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < accept_deadline {
+            let remaining = accept_deadline - tokio::time::Instant::now();
+            let Ok(Ok(connection)) = timeout(remaining, server.accept()).await else {
                 break;
             };
-            tasks.push(tokio::spawn(handle_connection(connection)));
+            tasks.push(tokio::spawn(handle_connection(
+                connection,
+                Arc::clone(&observed_tx),
+            )));
         }
         for task in tasks {
-            task.await??;
+            drop(task);
         }
         Ok::<(), anyhow::Error>(())
     });
@@ -483,14 +509,24 @@ async fn subscribe_rejects_mismatched_subscription_id() -> Result<()> {
     )
     .await?;
 
-    let err = match client.subscribe("t1", "default", "updates").await {
-        Ok(_) => anyhow::bail!("expected subscription mismatch error"),
-        Err(err) => err,
-    };
-    let message = err.to_string();
-    assert!(
-        message.contains("subscription id mismatch") || message.contains("subscribe failed"),
-        "unexpected subscribe error: {message}"
+    // Succeeding at all is the assertion for id adoption: the server replies with
+    // SERVER_ASSIGNED_ID (deliberately != 1) and only hands over an event stream
+    // under that id, so a client that still demanded its own requested id back
+    // would error out here instead of returning a live subscription.
+    let _subscription = timeout(
+        Duration::from_secs(5),
+        client.subscribe("t1", "default", "updates"),
+    )
+    .await
+    .context("subscribe timed out")?
+    .context("subscribe failed")?;
+
+    let observed = timeout(Duration::from_secs(5), observed_rx)
+        .await
+        .context("did not observe a Subscribe message")??;
+    assert_eq!(
+        observed, None,
+        "client must send subscription_id: None and let the broker assign a globally-unique id"
     );
 
     server_task.abort();

@@ -26,7 +26,10 @@
   },
   "presets": {
     "P1_hash": {
-      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "1", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns", "1", "--pub-streams-per-conn", "1", "--pub-sharding", "hash_stream",
+        "--idle-ms", "10000"
+      ]
     }
   },
   "preset_order": ["P1_hash"]

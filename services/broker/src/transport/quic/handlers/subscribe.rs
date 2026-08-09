@@ -49,6 +49,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use felix_broker::{Broker, DeliveryEnvelope, SubscriptionReceiver};
 use felix_wire::Message;
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -635,17 +636,19 @@ impl WriterLaneManager {
     }
 
     fn ensure_connection_writer(&self, connection_id: u64) -> mpsc::Sender<ConnectionCommand> {
-        if let Some(existing) = self.connection_writers.get(&connection_id) {
-            return existing.clone();
+        match self.connection_writers.entry(connection_id) {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let (tx, rx) = mpsc::channel(self.connection_queue_capacity.max(1));
+                entry.insert(tx.clone());
+                tokio::spawn(run_connection_writer(
+                    connection_id,
+                    rx,
+                    self.max_bytes_per_write,
+                ));
+                tx
+            }
         }
-        let (tx, rx) = mpsc::channel(self.connection_queue_capacity.max(1));
-        tokio::spawn(run_connection_writer(
-            connection_id,
-            rx,
-            self.max_bytes_per_write,
-        ));
-        self.connection_writers.insert(connection_id, tx.clone());
-        tx
     }
 
     async fn enqueue_connection(
@@ -2903,6 +2906,33 @@ mod tests {
         assert!(manager.subscriber_pins.get(&7).is_none());
         assert!(manager.subscriber_connections.get(&7).is_none());
         assert!(manager.connection_lanes.get(&88).is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_lanes_share_one_connection_writer() {
+        let manager = WriterLaneManager::new(&test_config());
+        let barrier = Arc::new(tokio::sync::Barrier::new(16));
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let manager = Arc::clone(&manager);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                manager.ensure_connection_writer(42)
+            }));
+        }
+
+        let mut senders = Vec::new();
+        for task in tasks {
+            senders.push(task.await.expect("connection writer task"));
+        }
+
+        assert_eq!(manager.connection_writers.len(), 1);
+        assert!(
+            senders[1..]
+                .iter()
+                .all(|sender| sender.same_channel(&senders[0]))
+        );
     }
 
     #[tokio::test]
