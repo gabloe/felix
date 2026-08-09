@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299860544,
+  "lastUpdate": 1786304599297,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -924,6 +924,72 @@ window.BENCHMARK_DATA = {
             "range": "625.40",
             "unit": "us",
             "extra": "trials: 5\nmedian: 956.00\nmean: 1112.40\nstdev: 625.40\ncv: 56.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "643ddc2d2209a774001bd4bb915221e3676f8022",
+          "message": "Add resource sampling for soak harness (#156)\n\n* Add resource sampling for soak harness\n\nThis commit introduces a new module for capturing resource metrics during soak tests. It includes functionality to sample the resident set size (RSS) and count of open file descriptors, with platform-specific implementations for Linux and macOS. Additionally, a utility to scrape Prometheus gauge values is provided, focusing on summing labelled series while ignoring counters. Tests are included to ensure the correctness of the sampling and scraping functionalities.\n\n* feat(soak): enhance resource tracking and concurrency tests in soak harness",
+          "timestamp": "2026-08-09T12:39:57-07:00",
+          "tree_id": "d7da7518bf77c3252cc53acf30700f91eb5ebe10",
+          "url": "https://github.com/gabloe/felix/commit/643ddc2d2209a774001bd4bb915221e3676f8022"
+        },
+        "date": 1786304598435,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 128,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 127.40\nstdev: 0.89\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 175,
+            "range": "3.03",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 175.00\nmean: 173.80\nstdev: 3.03\ncv: 1.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 208,
+            "range": "7.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 207.80\nstdev: 7.19\ncv: 3.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 174,
+            "range": "2.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 174.00\nmean: 174.00\nstdev: 2.55\ncv: 1.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 440,
+            "range": "19.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 440.00\nmean: 443.60\nstdev: 19.81\ncv: 4.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 899,
+            "range": "603.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 899.00\nmean: 1158.40\nstdev: 603.10\ncv: 52.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
