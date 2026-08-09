@@ -33,6 +33,10 @@ codegen-units = 1
 
 [workspace.package]
 edition = "2024"
+# Single source of truth for member crate versions. Members opt in with
+# `version.workspace = true`; bumping a release means editing this line only.
+# Non-member demos under demos/ keep their own literal version.
+version = "0.1.1"
 license = "Apache-2.0"
 rust-version = "1.97"
 

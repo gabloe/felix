@@ -1,6 +1,6 @@
 [package]
 name = "broker"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license = "Elastic-2.0"
 rust-version.workspace = true
@@ -38,13 +38,13 @@ path = "src/bin/soak/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.22"
-felix-broker = { path = "../../crates/felix-broker", version = "0.1.0" }
-felix-common = { path = "../../crates/felix-common", version = "0.1.0", features = ["lifecycle"] }
-felix-client = { path = "../../crates/felix-client", version = "0.1.0" }
-felix-authz = { path = "../../crates/felix-authz", version = "0.1.0" }
-felix-transport = { path = "../../crates/felix-transport", version = "0.1.0" }
-felix-wire = { path = "../../crates/felix-wire", version = "0.1.0" }
-felix-storage = { path = "../../crates/felix-storage", version = "0.1.0" }
+felix-broker = { path = "../../crates/felix-broker", version = "0.1.1" }
+felix-common = { path = "../../crates/felix-common", version = "0.1.1", features = ["lifecycle"] }
+felix-client = { path = "../../crates/felix-client", version = "0.1.1" }
+felix-authz = { path = "../../crates/felix-authz", version = "0.1.1" }
+felix-transport = { path = "../../crates/felix-transport", version = "0.1.1" }
+felix-wire = { path = "../../crates/felix-wire", version = "0.1.1" }
+felix-storage = { path = "../../crates/felix-storage", version = "0.1.1" }
 bytes = { workspace = true }
 dashmap = "6"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
