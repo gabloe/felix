@@ -2,12 +2,12 @@
 
 Audit record for [#140](https://github.com/gabloe/felix/issues/140), covering the
 `unsafe impl Send` question and the `unwrap()`/`expect()` triage. The sustained-load
-and resource-leak portions of that issue are tracked separately and are **not**
-covered here.
+and resource-leak portions of that issue are **not** covered here; they were split
+into [#154](https://github.com/gabloe/felix/issues/154).
 
 ## Scope and environment
 
-- Commit: branch `users/gabloe/fixbenchmarking2`.
+- Commit: branch `users/gabloe/remainingm0`.
 - Crates in scope: `crates/felix-wire`, `crates/felix-broker`, `crates/felix-transport`,
   `crates/felix-storage`, `services/broker`, `services/controlplane`.
 - Method: static inventory of `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/
@@ -101,5 +101,7 @@ path involved no `unwrap` at all. Counting `unwrap` would not have found it.
   pass.
 - Fuzzing the frame and message decoders remains open in `docs/todos.md` and would be
   the natural way to gain confidence beyond this manual review.
-- Sustained-load, connection-churn, and resource-leak evidence required by #140 is not
-  covered by this document.
+- Sustained-load, connection-churn, and resource-leak evidence is not covered by this
+  document; it is tracked in [#154](https://github.com/gabloe/felix/issues/154). Until
+  that lands, M0's "no known concurrency or leak issues" criterion rests on this static
+  audit alone.
