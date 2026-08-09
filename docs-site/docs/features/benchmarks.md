@@ -213,7 +213,7 @@ the Pages workflow runs. Each chart includes:
 - the latest result and its percentage change from the prior rolling median;
 - all-history and configurable prior-commit median reference lines;
 - a one-standard-deviation noise band from the five trials;
-- the existing regression-alert threshold (relative to the prior median);
+- the existing regression-alert threshold relative to the previous commit;
 - best, worst, and latest coefficient-of-variation summaries;
 - markers when the benchmark configuration fingerprint changes; and
 - zero-based/trend-focused axis and annotation controls.

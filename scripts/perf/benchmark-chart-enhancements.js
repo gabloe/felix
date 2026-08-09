@@ -19,7 +19,7 @@
     showThreshold: readBoolean('showThreshold', true),
     showConfig: readBoolean('showConfig', true),
   };
-  var series = buildSeriesIndex();
+  var series = null;
 
   function readNumber(key, fallback) {
     var value = Number(window.localStorage.getItem(storagePrefix + key));
@@ -47,7 +47,7 @@
 
   function formatValue(value) {
     var abs = Math.abs(value);
-    if (abs >= 1000000) {
+    if (abs >= 999500) {
       return (value / 1000000).toFixed(2) + 'M';
     }
     if (abs >= 1000) {
@@ -106,9 +106,17 @@
     return index;
   }
 
+  function seriesIndex() {
+    if (series === null) {
+      series = buildSeriesIndex();
+    }
+    return series;
+  }
+
   function chartSeries(chart) {
     var datasets = (chart.data && chart.data.datasets) || [];
-    return datasets.length ? series[datasets[0].label] || [] : [];
+    var index = seriesIndex();
+    return datasets.length ? index[datasets[0].label] || [] : [];
   }
 
   function valuesFor(chart) {
@@ -563,14 +571,18 @@
           true
         );
         if (state.showThreshold) {
-          var threshold = directionFor(chart) === 'smaller' ? rolling * 1.15 : rolling * 0.87;
+          // Keep these in sync with perf-publish.yml. github-action-benchmark
+          // compares the latest point with the immediately preceding point.
+          var previous = values[values.length - 2];
+          var threshold =
+            directionFor(chart) === 'smaller' ? previous * 1.15 : previous * 0.87;
           drawLine(
             chart,
             scale,
             threshold,
             'rgba(191,135,0,.95)',
             [10, 4],
-            'alert threshold',
+            'alert threshold vs previous',
             false
           );
         }
