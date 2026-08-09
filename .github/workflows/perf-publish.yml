@@ -39,13 +39,20 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
+      # This is best-effort telemetry, not a gate -- nobody is blocked on it,
+      # so a flaky benchmark run shouldn't turn every merge to main into a
+      # failed workflow run. continue-on-error here; the publish steps below
+      # are skipped (not failed) if this didn't succeed.
       - name: Run fast benchmark subset
+        id: benchmarks
+        continue-on-error: true
         run: |
           set -euo pipefail
           python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
           python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
 
       - name: Convert to github-action-benchmark format
+        if: steps.benchmarks.outcome == 'success'
         run: |
           set -euo pipefail
           mkdir -p /tmp/felix-perf-publish
@@ -55,6 +62,7 @@ jobs:
             --throughput-output /tmp/felix-perf-publish/throughput.json
 
       - name: Publish latency data (smaller is better)
+        if: steps.benchmarks.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: "customSmallerIsBetter"
@@ -71,6 +79,7 @@ jobs:
           summary-always: true
 
       - name: Publish throughput data (bigger is better)
+        if: steps.benchmarks.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: "customBiggerIsBetter"
