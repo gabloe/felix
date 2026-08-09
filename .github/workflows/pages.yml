@@ -8,6 +8,11 @@ on:
       - 'docs-site/**'
       - 'mkdocs.yml'
       - '.github/workflows/pages.yml'
+  workflow_run:
+    workflows:
+      - Performance Data Publish
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -45,6 +50,23 @@ jobs:
       - name: Build documentation
         run: |
           mkdocs build --strict --verbose
+
+      - name: Checkout benchmark dashboards
+        uses: actions/checkout@v6
+        with:
+          ref: benchmark-data
+          path: benchmark-data
+          sparse-checkout: |
+            latency
+            throughput
+          sparse-checkout-cone-mode: false
+
+      - name: Add benchmark dashboards to Pages
+        run: |
+          set -euo pipefail
+          mkdir -p site/benchmarks
+          cp -R benchmark-data/latency site/benchmarks/latency
+          cp -R benchmark-data/throughput site/benchmarks/throughput
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
