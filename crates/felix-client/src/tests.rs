@@ -11,7 +11,9 @@
 use super::*;
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
+#[cfg(feature = "in-process")]
 use felix_broker::Broker;
+#[cfg(feature = "in-process")]
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use felix_wire::{AckMode, FrameHeader, Message};
@@ -60,6 +62,7 @@ fn set_client_env() -> EnvGuard {
     set_client_env_with_event_pool(1)
 }
 
+#[cfg(feature = "in-process")]
 #[tokio::test]
 async fn in_process_publish_and_subscribe() {
     // Smoke-test the in-process path without any network transport.
@@ -86,6 +89,7 @@ async fn in_process_publish_and_subscribe() {
     assert_eq!(msg, Bytes::from_static(b"payload"));
 }
 
+#[cfg(feature = "in-process")]
 #[tokio::test]
 async fn clients_share_broker_state() {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));

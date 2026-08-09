@@ -38,6 +38,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
+use super::subscribe::WriterLaneManager;
+
 use crate::auth::AuthContext;
 use crate::timings;
 
@@ -65,7 +67,15 @@ pub(crate) struct PublishJob {
     pub(crate) response: Option<oneshot::Sender<Result<()>>>,
     /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
     /// without ever being enqueued). See [`PublishAdmission`].
-    pub(crate) admission_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    pub(crate) admission_permit: Option<AdmissionPermit>,
+}
+
+/// Bundles the two byte-budget permits a job holds while queued/processing: its slice of the
+/// per-connection budget and its slice of the shared process-wide budget. Both are released
+/// together when the job finishes (or is dropped before ever being enqueued).
+pub(crate) struct AdmissionPermit {
+    _conn: tokio::sync::OwnedSemaphorePermit,
+    _global: tokio::sync::OwnedSemaphorePermit,
 }
 
 pub(crate) enum PublishTarget {
@@ -92,6 +102,45 @@ pub(crate) enum PublishTarget {
 /// just admission-time bytes.
 pub(crate) struct PublishAdmission {
     semaphore: Arc<Semaphore>,
+}
+
+/// Bounds concurrent subscriptions on a single connection.
+///
+/// Constructed fresh per connection in `handle_connection` (same pattern as
+/// `PublishContext::conn_admission`) rather than keyed off any shared/cached lookup — this is
+/// deliberate: a subscription cap must be scoped to one real connection, and any cache keyed by
+/// a value that isn't guaranteed globally unique (e.g. `WriterLaneManager`'s cache, keyed loosely
+/// enough that unrelated connections can collide) would let unrelated connections share a limit.
+pub(crate) struct SubscriptionLimiter {
+    count: AtomicUsize,
+}
+
+impl SubscriptionLimiter {
+    pub(crate) fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Reserve one subscription slot if room remains under `max`. Must be paired with exactly
+    /// one `release()` call (on any exit path, success or failure) once reserved.
+    pub(crate) fn try_reserve(&self, max: usize) -> bool {
+        self.count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < max).then_some(count + 1)
+            })
+            .is_ok()
+    }
+
+    /// Saturating: must never underflow even if called without a matching reserve, since
+    /// wrapping to `usize::MAX` would wedge the cap permanently closed.
+    pub(crate) fn release(&self) {
+        let _ = self
+            .count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            });
+    }
 }
 
 fn publish_admission_permits(bytes: usize) -> u32 {
@@ -207,6 +256,11 @@ pub(crate) enum AckWaiterMessage {
 /// - `depth`: best-effort local depth tracking for this publish queue set.
 /// - `wait_timeout`: bound used by `EnqueuePolicy::Wait`.
 /// - `admission`: shared in-flight-byte budget across all workers (see [`PublishAdmission`]).
+/// - `conn_admission`: this connection's slice of `admission`. `workers`/`admission`/`depth` are
+///   intentionally process-wide (see `build_publish_context`'s note on avoiding per-connection
+///   worker pools), but that means nothing bounds how much of the shared budget one connection
+///   can occupy. `conn_admission` is constructed fresh per connection
+///   (`handle_connection`) and closes that gap without touching the shared worker pool.
 #[derive(Clone)]
 pub(crate) struct PublishContext {
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
@@ -214,6 +268,16 @@ pub(crate) struct PublishContext {
     pub(crate) depth: Arc<AtomicUsize>,
     pub(crate) wait_timeout: Duration,
     pub(crate) admission: Arc<PublishAdmission>,
+    pub(crate) conn_admission: Arc<PublishAdmission>,
+    /// This connection's subscription-count limiter (see [`SubscriptionLimiter`]). Bundled here
+    /// because `PublishContext` is already the per-connection context threaded down to the
+    /// control-stream loop that handles `Subscribe` messages.
+    pub(crate) subscriptions: Arc<SubscriptionLimiter>,
+    /// This connection's writer-lane manager for subscription delivery (see
+    /// [`WriterLaneManager`]). One instance per connection, constructed fresh in
+    /// `handle_connection` — see that type's doc comment for why it's no longer a
+    /// process-wide cache.
+    pub(crate) lane_manager: Arc<WriterLaneManager>,
     /// When true, un-acked publishes wait (bounded) for ingress capacity instead
     /// of being shed. Production keeps this off so fire-and-forget load sheds
     /// visibly under overload; benchmarks and lossless pipelines turn it on so
@@ -327,25 +391,48 @@ pub(crate) async fn enqueue_publish(
 
     // Byte-based admission gate, independent of the item-count queue depth: bounds total bytes
     // queued-or-processing so a handful of large payloads/batches can't blow past the intended
-    // ingress memory budget. The permit travels with the job and is released once the job is
-    // done (or dropped without ever being enqueued).
+    // ingress memory budget. Two gates are applied: the connection's own share
+    // (`conn_admission`) first, then the shared process-wide budget (`admission`). Gating on the
+    // per-connection budget first means one connection maxing out its own share can't consume
+    // global-budget accounting cycles meant for other connections. Both permits travel with the
+    // job and are released together once the job is done (or dropped without ever being
+    // enqueued).
     let job_bytes: usize = job.payloads.iter().map(Bytes::len).sum();
-    let permit = match policy {
+    let (conn_permit, permit) = match policy {
         EnqueuePolicy::Wait => {
-            match tokio::time::timeout(
-                publish_ctx.wait_timeout,
-                publish_ctx.admission.acquire(job_bytes),
-            )
-            .await
-            {
-                Ok(Ok(permit)) => permit,
+            let acquire_both = async {
+                let conn_permit = publish_ctx.conn_admission.acquire(job_bytes).await?;
+                let permit = publish_ctx.admission.acquire(job_bytes).await?;
+                Ok::<_, tokio::sync::AcquireError>((conn_permit, permit))
+            };
+            match tokio::time::timeout(publish_ctx.wait_timeout, acquire_both).await {
+                Ok(Ok(permits)) => permits,
                 Ok(Err(_)) => return Err(anyhow!("publish admission closed")),
                 Err(_) => return Err(anyhow!("publish admission timed out")),
             }
         }
         EnqueuePolicy::Drop | EnqueuePolicy::Fail => {
-            match publish_ctx.admission.try_acquire(job_bytes) {
+            let conn_permit = match publish_ctx.conn_admission.try_acquire(job_bytes) {
                 Ok(permit) => permit,
+                Err(_) => {
+                    t_counter!("felix_broker_ingress_conn_bytes_full_total").increment(1);
+                    return match policy {
+                        EnqueuePolicy::Drop => {
+                            t_counter!("felix_broker_ingress_dropped_total").increment(1);
+                            Ok(false)
+                        }
+                        EnqueuePolicy::Fail => {
+                            t_counter!("felix_broker_ingress_rejected_total").increment(1);
+                            Err(anyhow!(
+                                "publish ingress per-connection byte budget exhausted"
+                            ))
+                        }
+                        EnqueuePolicy::Wait => unreachable!("Wait handled above"),
+                    };
+                }
+            };
+            match publish_ctx.admission.try_acquire(job_bytes) {
+                Ok(permit) => (conn_permit, permit),
                 Err(_) => {
                     t_counter!("felix_broker_ingress_bytes_full_total").increment(1);
                     return match policy {
@@ -363,7 +450,10 @@ pub(crate) async fn enqueue_publish(
             }
         }
     };
-    job.admission_permit = Some(permit);
+    job.admission_permit = Some(AdmissionPermit {
+        _conn: conn_permit,
+        _global: permit,
+    });
 
     #[cfg(feature = "perf_debug")]
     let enqueue_wait_start = Instant::now();
@@ -503,6 +593,12 @@ mod tests {
     use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, watch};
 
+    // These publish-path tests don't exercise subscription delivery; this just gives
+    // `PublishContext::lane_manager` a real (if unused) instance to satisfy the type.
+    fn test_lane_manager() -> Arc<WriterLaneManager> {
+        WriterLaneManager::new(&crate::config::BrokerConfig::from_env().expect("test config"))
+    }
+
     fn reset_global_ack_depth() {
         GLOBAL_ACK_DEPTH.store(0, Ordering::Relaxed);
     }
@@ -521,6 +617,9 @@ mod tests {
             depth: Arc::new(AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(100),
             admission: Arc::new(PublishAdmission::unlimited()),
+            conn_admission: Arc::new(PublishAdmission::unlimited()),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
             ingress_wait: false,
         };
         (context, rx, tx)
@@ -568,6 +667,9 @@ mod tests {
             depth: Arc::new(AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(50),
             admission: Arc::new(PublishAdmission::new(4)),
+            conn_admission: Arc::new(PublishAdmission::unlimited()),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
             ingress_wait: false,
         };
         // Queue depth (8) has room, but the shared byte budget (4 bytes) does not fit this
@@ -578,6 +680,73 @@ mod tests {
             .await
             .unwrap();
         assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn enqueue_publish_drop_sheds_load_when_conn_byte_budget_exhausted() {
+        let (tx, _rx) = mpsc::channel(8);
+        let ctx = PublishContext {
+            workers: Arc::new(vec![tx]),
+            worker_count: 1,
+            depth: Arc::new(AtomicUsize::new(0)),
+            wait_timeout: Duration::from_millis(50),
+            // Shared budget is generous; this connection's own share is not.
+            admission: Arc::new(PublishAdmission::unlimited()),
+            conn_admission: Arc::new(PublishAdmission::new(4)),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
+            ingress_wait: false,
+        };
+        let mut job = make_job();
+        job.payloads = vec![Bytes::from_static(b"payload")];
+        let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop)
+            .await
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
+        let (tx, mut rx) = mpsc::channel(8);
+        // Two connections sharing one global budget, each with its own conn_admission.
+        let admission = Arc::new(PublishAdmission::new(8));
+        let ctx_a = PublishContext {
+            workers: Arc::new(vec![tx.clone()]),
+            worker_count: 1,
+            depth: Arc::new(AtomicUsize::new(0)),
+            wait_timeout: Duration::from_millis(50),
+            admission: Arc::clone(&admission),
+            conn_admission: Arc::new(PublishAdmission::new(4)),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
+            ingress_wait: false,
+        };
+        let ctx_b = PublishContext {
+            conn_admission: Arc::new(PublishAdmission::new(4)),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
+            ..ctx_a.clone()
+        };
+
+        // Connection A tries to claim more than its own share (would fit in the global budget
+        // alone) and must be shed by its own per-connection gate, not the global one.
+        let mut big_job = make_job();
+        big_job.payloads = vec![Bytes::from_static(b"01234567")]; // 8 bytes > A's 4-byte share
+        assert!(
+            !enqueue_publish(&ctx_a, big_job, EnqueuePolicy::Drop)
+                .await
+                .unwrap()
+        );
+
+        // Connection B is unaffected: its own share is untouched by A's rejected attempt.
+        let mut small_job = make_job();
+        small_job.payloads = vec![Bytes::from_static(b"ok")]; // 2 bytes, fits B's 4-byte share
+        assert!(
+            enqueue_publish(&ctx_b, small_job, EnqueuePolicy::Drop)
+                .await
+                .unwrap()
+        );
+        assert!(rx.recv().await.is_some());
     }
 
     #[test]
@@ -696,6 +865,9 @@ mod tests {
             depth: Arc::new(AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(5),
             admission: Arc::new(PublishAdmission::unlimited()),
+            conn_admission: Arc::new(PublishAdmission::unlimited()),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
             ingress_wait: false,
         };
         let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Wait)
@@ -714,6 +886,9 @@ mod tests {
             depth: Arc::new(AtomicUsize::new(0)),
             wait_timeout: Duration::from_millis(10),
             admission: Arc::new(PublishAdmission::unlimited()),
+            conn_admission: Arc::new(PublishAdmission::unlimited()),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: test_lane_manager(),
             ingress_wait: false,
         };
         let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Fail)

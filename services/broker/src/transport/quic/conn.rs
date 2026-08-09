@@ -29,8 +29,10 @@ use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
 use super::handlers::publish::{
-    PublishAdmission, PublishContext, PublishJob, PublishTarget, decrement_depth,
+    PublishAdmission, PublishContext, PublishJob, PublishTarget, SubscriptionLimiter,
+    decrement_depth,
 };
+use super::handlers::subscribe::WriterLaneManager;
 
 use super::streams::{handle_stream, handle_uni_stream};
 
@@ -176,6 +178,13 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         depth: queue_depth,
         wait_timeout: Duration::from_millis(config.publish_queue_wait_timeout_ms),
         admission,
+        // Placeholder; `handle_connection` replaces this (and `subscriptions`/`lane_manager`)
+        // with fresh per-connection instances before this context is used by any stream on
+        // that connection. These template values are never themselves shared across
+        // connections.
+        conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
+        subscriptions: Arc::new(SubscriptionLimiter::new()),
+        lane_manager: WriterLaneManager::new(config),
         ingress_wait: config.pub_ingress_wait,
     }
 }
@@ -203,6 +212,19 @@ pub(crate) async fn handle_connection(
     auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
 ) -> Result<()> {
+    // Give this connection its own slice of the shared publish byte budget, its own
+    // subscription-count limiter, and its own writer-lane manager, so one connection can't
+    // exhaust the process-wide publish budget (`publish_ctx.admission`), open unbounded
+    // subscriptions, or (via a stale/colliding cache) share subscription delivery state with
+    // an unrelated connection. `workers`/`admission`/`depth` stay the shared, process-wide
+    // instances from `build_publish_context` — only `conn_admission`, `subscriptions`, and
+    // `lane_manager` are fresh per connection.
+    let publish_ctx = PublishContext {
+        conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
+        subscriptions: Arc::new(SubscriptionLimiter::new()),
+        lane_manager: WriterLaneManager::new(&config),
+        ..publish_ctx
+    };
     loop {
         // Accept both bidirectional control streams and uni-directional publish streams.
         tokio::select! {

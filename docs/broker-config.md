@@ -42,9 +42,11 @@ fanout_batch_size: 64
 pub_workers_per_conn: 4
 pub_queue_depth: 64
 pub_inflight_bytes: 67108864
+pub_conn_inflight_bytes: 16777216
 pub_ingress_wait: false
 core_shards: 0
 subscriber_queue_capacity: 512
+max_subscriptions_per_conn: 4096
 subscriber_queue_policy: drop_new
 subscriber_writer_lanes: 4
 subscriber_lane_queue_depth: 64
@@ -176,6 +178,15 @@ A single connection with a single publish stream will bottleneck regardless of b
 - `pub_inflight_bytes` bounds actual queued-or-processing publish *bytes*, independent of
   `pub_queue_depth`'s item count — a handful of large batches can't blow past the ingress
   memory budget even with a small queue depth.
+- `pub_conn_inflight_bytes` is a per-connection share of `pub_inflight_bytes`: it bounds how
+  much of the shared budget a single connection can occupy, so one connection publishing large
+  batches can't starve every other connection's admission. Must be smaller than
+  `pub_inflight_bytes` to have any effect; a value equal to or larger than it degenerates to
+  "no per-connection cap."
+- `max_subscriptions_per_conn` bounds how many concurrent subscriptions a single QUIC connection
+  may hold, independent of `subscriber_queue_capacity`. It protects broker memory from a
+  connection that opens unbounded subscriptions rather than bounding any one subscription's
+  buffer size.
 - `subscriber_queue_capacity` and `subscriber_queue_policy` control broker-core per-subscriber
   buffering and drop behavior (the fanout enqueue path); `subscriber_lane_queue_depth` and
   `subscriber_lane_queue_policy` control the writer-lane stage one hop later (the actual QUIC

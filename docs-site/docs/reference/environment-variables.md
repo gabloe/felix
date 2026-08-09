@@ -263,6 +263,18 @@ export FELIX_SUBSCRIBER_QUEUE_CAPACITY="512"
 export FELIX_SUB_QUEUE_CAPACITY="512"
 ```
 
+### `FELIX_MAX_SUBSCRIPTIONS_PER_CONN`
+
+**Description**: Max concurrent subscriptions a single QUIC connection may hold. Independent of `FELIX_SUBSCRIBER_QUEUE_CAPACITY` (which bounds one subscription's buffer size) — this bounds how many subscriptions a connection can open in total, protecting broker memory from a connection that opens unbounded subscriptions.
+
+**Type**: Positive integer (count)
+
+**Default**: `4096`
+
+```bash
+export FELIX_MAX_SUBSCRIPTIONS_PER_CONN="4096"
+```
+
 ### `FELIX_SUB_QUEUE_POLICY`
 
 **Description**: Backpressure policy when broker subscriber queues are full.
@@ -737,6 +749,18 @@ export FELIX_BROKER_PUB_QUEUE_DEPTH="32"   # Less memory
 
 ```bash
 export FELIX_BROKER_PUBLISH_INFLIGHT_BYTES="67108864"
+```
+
+### `FELIX_BROKER_PUBLISH_CONN_INFLIGHT_BYTES`
+
+**Description**: Per-connection share of `FELIX_BROKER_PUBLISH_INFLIGHT_BYTES`. Bounds how much of the shared, process-wide publish byte budget a single connection can occupy at once, so one connection publishing large batches can't starve every other connection's admission into the shared budget.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `16777216` (16 MiB)
+
+```bash
+export FELIX_BROKER_PUBLISH_CONN_INFLIGHT_BYTES="16777216"
 ```
 
 ### `FELIX_PUB_INGRESS_WAIT`

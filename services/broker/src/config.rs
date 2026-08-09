@@ -48,6 +48,10 @@ pub struct BrokerConfig {
     pub pub_queue_depth: usize,
     // Shared in-flight publish byte budget across all publish workers (process-wide).
     pub pub_inflight_bytes: usize,
+    // Per-connection share of the in-flight publish byte budget. Bounds how much of the
+    // process-wide `pub_inflight_bytes` budget a single connection can occupy at once, so one
+    // connection can't starve every other connection's publishes under load.
+    pub pub_conn_inflight_bytes: usize,
     // If true, un-acked publishes wait (bounded) for ingress capacity instead of shedding.
     // Off by default: fire-and-forget load should shed visibly under overload.
     pub pub_ingress_wait: bool,
@@ -57,6 +61,10 @@ pub struct BrokerConfig {
     pub core_shards: usize,
     // Per-subscriber queue capacity in broker core.
     pub subscriber_queue_capacity: usize,
+    // Max concurrent subscriptions a single QUIC connection may hold. Prevents a single
+    // connection from unboundedly growing broker memory via subscriber queues/writer-lane
+    // registrations.
+    pub max_subscriptions_per_conn: usize,
     // Subscriber queue policy for publish->fanout enqueue.
     pub subscriber_queue_policy: SubQueuePolicy,
     // Number of outbound subscriber writer lanes.
@@ -145,7 +153,9 @@ const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 64;
 const DEFAULT_PUB_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_PUB_CONN_INFLIGHT_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 512;
+const DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN: usize = 4096;
 const DEFAULT_SUBSCRIBER_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
 const DEFAULT_SUBSCRIBER_WRITER_LANES: usize = 4;
 const DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH: usize = 64;
@@ -180,9 +190,11 @@ struct BrokerConfigOverride {
     pub_workers_per_conn: Option<usize>,
     pub_queue_depth: Option<usize>,
     pub_inflight_bytes: Option<usize>,
+    pub_conn_inflight_bytes: Option<usize>,
     pub_ingress_wait: Option<bool>,
     core_shards: Option<usize>,
     subscriber_queue_capacity: Option<usize>,
+    max_subscriptions_per_conn: Option<usize>,
     subscriber_queue_policy: Option<String>,
     subscriber_writer_lanes: Option<usize>,
     subscriber_lane_queue_depth: Option<usize>,
@@ -292,6 +304,11 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_PUB_INFLIGHT_BYTES);
+        let pub_conn_inflight_bytes = std::env::var("FELIX_BROKER_PUBLISH_CONN_INFLIGHT_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUB_CONN_INFLIGHT_BYTES);
         let pub_ingress_wait = std::env::var("FELIX_PUB_INGRESS_WAIT")
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -306,6 +323,11 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SUBSCRIBER_QUEUE_CAPACITY);
+        let max_subscriptions_per_conn = std::env::var("FELIX_MAX_SUBSCRIPTIONS_PER_CONN")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN);
         let subscriber_queue_policy = std::env::var("FELIX_SUB_QUEUE_POLICY")
             .ok()
             .and_then(|value| parse_sub_queue_policy(&value))
@@ -384,9 +406,11 @@ impl BrokerConfig {
             pub_workers_per_conn,
             pub_queue_depth,
             pub_inflight_bytes,
+            pub_conn_inflight_bytes,
             pub_ingress_wait,
             core_shards,
             subscriber_queue_capacity,
+            max_subscriptions_per_conn,
             subscriber_queue_policy,
             subscriber_writer_lanes,
             subscriber_lane_queue_depth,
@@ -507,6 +531,11 @@ impl BrokerConfig {
             {
                 config.pub_inflight_bytes = value;
             }
+            if let Some(value) = override_cfg.pub_conn_inflight_bytes
+                && value > 0
+            {
+                config.pub_conn_inflight_bytes = value;
+            }
             if let Some(value) = override_cfg.pub_ingress_wait {
                 config.pub_ingress_wait = value;
             }
@@ -517,6 +546,11 @@ impl BrokerConfig {
                 && value > 0
             {
                 config.subscriber_queue_capacity = value;
+            }
+            if let Some(value) = override_cfg.max_subscriptions_per_conn
+                && value > 0
+            {
+                config.max_subscriptions_per_conn = value;
             }
             if let Some(value) = override_cfg.subscriber_queue_policy
                 && let Some(parsed) = parse_sub_queue_policy(&value)

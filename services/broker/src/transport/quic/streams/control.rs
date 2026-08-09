@@ -346,6 +346,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     Arc::clone(&broker),
                     connection.clone(),
                     config.clone(),
+                    &publish_ctx.subscriptions,
+                    &publish_ctx.lane_manager,
                     &out_ack_tx,
                     &out_ack_depth,
                     &ack_throttle_tx,

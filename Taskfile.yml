@@ -10,7 +10,13 @@ tasks:
   clippy:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:
-    cmds: ["cargo test --workspace"]
+    cmds:
+      - "cargo test --workspace"
+      # Run separately (not --all-features on the whole workspace): felix-client's
+      # `in-process` feature only affects felix-client itself, and keeping it out of
+      # the main workspace run avoids adding unrelated concurrent test load that can
+      # perturb timing-sensitive tests elsewhere in the suite.
+      - "cargo test -p felix-client --features in-process"
   pg:up:
     cmds:
       - |

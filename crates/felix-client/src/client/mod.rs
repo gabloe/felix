@@ -3,6 +3,7 @@
 pub mod cache;
 pub mod client;
 pub mod event_router;
+#[cfg(feature = "in-process")]
 pub mod inprocess;
 pub mod publisher;
 pub mod sharding;
