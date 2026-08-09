@@ -1,0 +1,102 @@
+name: Performance Data Publish
+
+# Runs the same fast benchmark subset used by perf-pr.yml, but once (not
+# back-to-back), on every push to main, and publishes the results as a
+# historical time series via github-action-benchmark. This is the "baseline"
+# humans can browse over time; perf-pr.yml's back-to-back comparison is the
+# noise-controlled per-PR signal and does not read from this data.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "docs-site/**"
+      - "**/*.md"
+
+concurrency:
+  group: perf-publish
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      # This is best-effort telemetry, not a gate -- nobody is blocked on it,
+      # so a flaky benchmark run shouldn't turn every merge to main into a
+      # failed workflow run. continue-on-error here; the publish steps below
+      # are skipped (not failed) if this didn't succeed.
+      - name: Run fast benchmark subset
+        id: benchmarks
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
+
+      - name: Convert to github-action-benchmark format
+        if: steps.benchmarks.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/felix-perf-publish
+          python3 scripts/perf/to_benchmark_json.py \
+            --input data/raw/latency_demo_runs.jsonl \
+            --latency-output /tmp/felix-perf-publish/latency.json \
+            --throughput-output /tmp/felix-perf-publish/throughput.json
+
+      - name: Publish latency data (smaller is better)
+        if: steps.benchmarks.outcome == 'success'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "customSmallerIsBetter"
+          output-file-path: /tmp/felix-perf-publish/latency.json
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: latency
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Advisory-only, matching perf-pr.yml: don't fail the workflow, just
+          # keep the alert comment on the commit for visibility.
+          fail-on-alert: false
+          comment-on-alert: true
+          alert-threshold: "115%"
+          summary-always: true
+
+      - name: Publish throughput data (bigger is better)
+        if: steps.benchmarks.outcome == 'success'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "customBiggerIsBetter"
+          output-file-path: /tmp/felix-perf-publish/throughput.json
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: throughput
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          fail-on-alert: false
+          comment-on-alert: true
+          alert-threshold: "87%"
+          summary-always: true
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-publish-results
+          path: data/raw/
+          if-no-files-found: warn

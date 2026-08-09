@@ -1,0 +1,178 @@
+name: Performance Regression Check
+
+# Advisory-only performance gate: builds and benchmarks both the PR's
+# merge-base (baseline) and the PR head (candidate) back-to-back on the same
+# runner instance in this job, then compares them with a Welch's t-test.
+# Running both sides on the same runner controls for GitHub Actions' shared/
+# virtualized runner noise far better than comparing against a historical
+# stored baseline captured on a different runner at a different time.
+#
+# This does NOT fail the check on a regression: it's advisory only. A single
+# CI runner's noise floor isn't (yet) trusted enough to block merges on --
+# see the PR comment this workflow posts for the full caveat.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - "docs/**"
+      - "docs-site/**"
+      - "**/*.md"
+
+concurrency:
+  group: perf-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Shared target dir across the baseline and candidate worktrees below, so
+  # (usually-unchanged) third-party dependencies only compile once instead
+  # of twice.
+  CARGO_TARGET_DIR: /tmp/felix-perf-target
+
+jobs:
+  perf-compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> /tmp/felix-perf-target"
+
+      - name: Determine merge-base
+        id: mergebase
+        run: |
+          set -euo pipefail
+          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $MERGE_BASE"
+
+      - name: Add baseline worktree
+        run: git worktree add /tmp/felix-baseline "${{ steps.mergebase.outputs.sha }}"
+
+      # Every step from here through "Compare" is `continue-on-error: true` and
+      # has an `id:` so the comment step can report exactly what happened
+      # instead of the whole job going red. This isn't just belt-and-braces:
+      # the merge-base for THIS repo's very first perf-pr.yml PR predates
+      # scripts/perf/ci_subset_*.yml existing at all, so "config file missing
+      # on an older baseline commit" is a real, expected case, not just a
+      # hypothetical one -- and the whole point of this check being advisory
+      # is that infra hiccups here must never block a PR.
+      - name: Run baseline benchmarks
+        id: baseline
+        continue-on-error: true
+        working-directory: /tmp/felix-baseline
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/felix-perf-results
+          if [ ! -f scripts/perf/ci_subset_latency.yml ]; then
+            echo "::warning::scripts/perf/ci_subset_latency.yml doesn't exist at the merge-base (${{ steps.mergebase.outputs.sha }}) -- likely a commit predating this benchmarking pipeline. Skipping baseline."
+            echo "reason=config_missing_at_baseline" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
+          cp data/raw/latency_demo_runs.jsonl /tmp/felix-perf-results/baseline.jsonl
+
+      - name: Run candidate benchmarks
+        id: candidate
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/felix-perf-results
+          rm -f data/raw/latency_demo_runs.jsonl
+          rm -rf data/raw/stdout
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
+          cp data/raw/latency_demo_runs.jsonl /tmp/felix-perf-results/candidate.jsonl
+
+      - name: Compare baseline vs candidate
+        id: compare
+        if: steps.baseline.outcome == 'success' && steps.candidate.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 scripts/perf/compare_benchmarks.py \
+            --baseline /tmp/felix-perf-results/baseline.jsonl \
+            --candidate /tmp/felix-perf-results/candidate.jsonl \
+            --output-markdown /tmp/felix-perf-results/comment.md \
+            --output-json /tmp/felix-perf-results/result.json
+
+      - name: Post or update PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- felix-perf-pr-comment -->';
+
+            let body;
+            const commentPath = '/tmp/felix-perf-results/comment.md';
+            if (fs.existsSync(commentPath)) {
+              body = fs.readFileSync(commentPath, 'utf8');
+            } else {
+              const baselineOk = '${{ steps.baseline.outcome }}' === 'success';
+              const candidateOk = '${{ steps.candidate.outcome }}' === 'success';
+              const baselineReason = '${{ steps.baseline.outputs.reason }}';
+              let why;
+              if (!baselineOk && baselineReason === 'config_missing_at_baseline') {
+                why = 'the benchmark config didn\'t exist yet at this PR\'s merge-base ' +
+                      '(likely comparing against a commit that predates this pipeline).';
+              } else if (!baselineOk) {
+                why = 'the baseline benchmark run failed (see the "Run baseline benchmarks" job step).';
+              } else if (!candidateOk) {
+                why = 'the candidate benchmark run failed (see the "Run candidate benchmarks" job step).';
+              } else {
+                why = 'the comparison step failed to produce output (see the "Compare baseline vs candidate" job step).';
+              }
+              body = `:construction: Performance comparison unavailable this run: ${why}\n\n` +
+                     'This does not block merging.';
+            }
+            const fullBody = `${marker}\n## Performance comparison (fast subset)\n\n${body}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+            }
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-pr-results
+          path: /tmp/felix-perf-results/
+          if-no-files-found: warn
+
+      - name: Remove baseline worktree
+        if: always()
+        run: git worktree remove /tmp/felix-baseline --force || true

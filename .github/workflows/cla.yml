@@ -33,7 +33,15 @@ jobs:
         with:
           path-to-signatures: ".github/cla-signatures/cla.json"
           path-to-document: "https://github.com/gabloe/felix/blob/main/CLA.md"
-          branch: "main"
+          # NOT `main`: the bot commits the updated signatures file directly
+          # (no PR), which GitHub's own branch-protection rules on `main`
+          # correctly reject ("Repository rule violations found... Changes
+          # must be made through a pull request"). Store signatures on a
+          # dedicated, unprotected branch instead -- same pattern already
+          # used for `badges` (coverage) and `benchmark-data` (perf
+          # history). This branch doesn't need to exist ahead of time; the
+          # action creates it on first signature.
+          branch: "cla-signatures"
           # Automated/mechanical bots that don't need a CLA signature (version bumps,
           # coverage badge commits). The GitHub Copilot coding agent is deliberately
           # NOT allowlisted here: PRs it opens should be signed off by the human

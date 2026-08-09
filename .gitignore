@@ -20,6 +20,11 @@ Thumbs.db
 *.gz
 data/raw/stdout/
 data/raw/latency_demo_runs.jsonl
+data/derived/*.csv
+data/derived/*.parquet
+charts/
+__pycache__/
+*.pyc
 coverage.json
 lcov.info
 # MkDocs build output

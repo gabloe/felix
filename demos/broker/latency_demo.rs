@@ -710,6 +710,13 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     // - latency profile (batch=1): favor immediate flush and stable ordering
     // - throughput profile (batch>1): bound queued work while using parallel lanes
     if config.batch_size <= 1 {
+        // Block the core per-subscriber queue too, not just the lane queue below it:
+        // leaving it at production defaults (DropNew, capacity 512) let a publish burst
+        // or scheduling delay drop warmup messages, which made the dedicated
+        // subscriber's exact-count warmup detection hang until idle_timeout and error
+        // out ("dedicated subscriber warmup channel closed") instead of completing.
+        broker_config.subscriber_queue_policy = felix_broker::SubQueuePolicy::Block;
+        broker_config.subscriber_queue_capacity = 4096;
         broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
         broker_config.subscriber_flush_max_items = 1;
         broker_config.subscriber_flush_max_delay_us = 0;
@@ -774,6 +781,12 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     ));
 
     let mut client_config = apply_demo_auth(build_client_config(cert)?, auth_override);
+    // The broker-side subscriber queues above are set to Block so a publish burst can't
+    // get dropped before it reaches the client. The client's own subscriber channel
+    // (between the QUIC receive task and the code consuming events) defaults to
+    // DropNew independently of any of that, and was silently eating events under load
+    // even after the broker-side fix — same failure mode, different layer.
+    client_config.client_sub_queue_policy = felix_client::ClientSubQueuePolicy::Block;
     client_config.publish_conn_pool = config.pub_conns.max(1);
     client_config.publish_streams_per_conn = config.pub_streams_per_conn.max(1);
     if let Some(sharding) = config.pub_sharding.as_deref().and_then(parse_sharding_mode) {

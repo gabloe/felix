@@ -222,6 +222,19 @@ def main():
     parser.add_argument("--binary", dest="binary", action="store_true")
     parser.add_argument("--no-binary", dest="binary", action="store_false")
     parser.set_defaults(binary=None)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        help="Retries for a trial that exits nonzero or fails to parse, before "
+        "recording it as a failure and moving on (default: 2).",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Abort the whole matrix on the first trial that exhausts its "
+        "retries, instead of recording the failure and continuing.",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -253,7 +266,8 @@ def main():
                 "-p",
                 "broker",
                 "--bin",
-                "latency_demo",
+                "latency-demo",
+                "--all-features",
                 "--",
             ]
             if item["binary"]:
@@ -298,6 +312,8 @@ def main():
                     )
                 )
 
+    permanently_failed = []
+
     with RAW_JSONL.open("a", encoding="utf-8") as jsonl:
         for idx, item in enumerate(matrix, 1):
             key = (
@@ -311,8 +327,6 @@ def main():
             )
             if key in completed:
                 continue
-            run_id = str(uuid.uuid4())
-            timestamp = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
 
             env = os.environ.copy()
             env.update(item["profile_env"])
@@ -325,7 +339,8 @@ def main():
                 "-p",
                 "broker",
                 "--bin",
-                "latency_demo",
+                "latency-demo",
+                "--all-features",
                 "--",
             ]
             if item["binary"]:
@@ -344,74 +359,115 @@ def main():
             ]
             cmd += item["preset_args"]
 
+            label = (
+                f"profile={item['broker_profile']} preset={item['preset']} "
+                f"fanout={item['fanout']} batch={item['batch']} "
+                f"payload={item['payload_bytes']} trial={item['trial_index']}"
+            )
+
+            # A trial can fail transiently (nonzero exit, or output that doesn't parse)
+            # under ambient host load rather than a real product regression — retry a
+            # bounded number of times before giving up on it. Each attempt (including
+            # failed ones) is still recorded to the JSONL for later inspection.
+            attempt = 0
+            record = None
+            while True:
+                attempt += 1
+                run_id = str(uuid.uuid4())
+                timestamp = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+
+                print(f"[{idx}/{len(matrix)}] {label} (attempt {attempt})")
+
+                process = subprocess.run(
+                    cmd,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(ROOT),
+                )
+
+                stdout_path = STDOUT_DIR / f"{run_id}.txt"
+                with stdout_path.open("w", encoding="utf-8") as fh:
+                    fh.write("STDOUT\n")
+                    fh.write(process.stdout)
+                    fh.write("\nSTDERR\n")
+                    fh.write(process.stderr)
+
+                record = {
+                    "run_id": run_id,
+                    "timestamp": timestamp,
+                    "git_sha": git_sha,
+                    "git_dirty": bool(git_dirty),
+                    "host_info": host_info,
+                    "cargo_version": cargo_version,
+                    "rustc_version": rustc_version,
+                    "command": cmd,
+                    "command_str": " ".join(shlex.quote(c) for c in cmd),
+                    "broker_profile": item["broker_profile"],
+                    "broker_env": item["profile_env"],
+                    "workload": {
+                        "fanout": item["fanout"],
+                        "batch": item["batch"],
+                        "payload_bytes": item["payload_bytes"],
+                        "warmup": item["warmup"],
+                        "total": item["total"],
+                        "binary": item["binary"],
+                    },
+                    "preset": item["preset"],
+                    "preset_args": item["preset_args"],
+                    "trial_index": item["trial_index"],
+                    "attempt": attempt,
+                    "exit_code": process.returncode,
+                    "stdout_path": str(stdout_path),
+                    "felix_env": {
+                        k: env[k] for k in sorted(env) if k.startswith("FELIX_")
+                    },
+                }
+
+                if process.returncode != 0:
+                    record["parse_error"] = "nonzero exit"
+                    record["raw_stdout"] = process.stdout
+                else:
+                    try:
+                        record["metrics"] = parse_metrics(process.stdout)
+                    except Exception as exc:
+                        record["parse_error"] = str(exc)
+                        record["raw_stdout"] = process.stdout
+
+                jsonl.write(json.dumps(record) + "\n")
+                jsonl.flush()
+
+                if "parse_error" not in record:
+                    break  # success
+
+                if attempt > args.max_retries:
+                    msg = (
+                        f"[{idx}/{len(matrix)}] {label} failed after {attempt} "
+                        f"attempt(s): {record['parse_error']}"
+                    )
+                    if args.fail_fast:
+                        raise SystemExit(msg)
+                    print(f"WARNING: {msg} -- recording as failed, continuing")
+                    permanently_failed.append({**item, "error": record["parse_error"]})
+                    break
+                print(
+                    f"[{idx}/{len(matrix)}] {label} attempt {attempt} failed "
+                    f"({record['parse_error']}); retrying"
+                )
+
+    if permanently_failed:
+        print(
+            f"\n{len(permanently_failed)}/{len(matrix)} trial(s) failed after "
+            f"retries (see data/raw/stdout/ for captured output):"
+        )
+        for failed in permanently_failed:
             print(
-                f"[{idx}/{len(matrix)}] profile={item['broker_profile']} "
-                f"preset={item['preset']} fanout={item['fanout']} "
-                f"batch={item['batch']} payload={item['payload_bytes']} trial={item['trial_index']}"
+                f"  profile={failed['broker_profile']} preset={failed['preset']} "
+                f"fanout={failed['fanout']} batch={failed['batch']} "
+                f"payload={failed['payload_bytes']} trial={failed['trial_index']}: "
+                f"{failed['error']}"
             )
-
-            process = subprocess.run(
-                cmd,
-                env=env,
-                text=True,
-                capture_output=True,
-                cwd=str(ROOT),
-            )
-
-            stdout_path = STDOUT_DIR / f"{run_id}.txt"
-            with stdout_path.open("w", encoding="utf-8") as fh:
-                fh.write("STDOUT\n")
-                fh.write(process.stdout)
-                fh.write("\nSTDERR\n")
-                fh.write(process.stderr)
-
-            record = {
-                "run_id": run_id,
-                "timestamp": timestamp,
-                "git_sha": git_sha,
-                "git_dirty": bool(git_dirty),
-                "host_info": host_info,
-                "cargo_version": cargo_version,
-                "rustc_version": rustc_version,
-                "command": cmd,
-                "command_str": " ".join(shlex.quote(c) for c in cmd),
-                "broker_profile": item["broker_profile"],
-                "broker_env": item["profile_env"],
-                "workload": {
-                    "fanout": item["fanout"],
-                    "batch": item["batch"],
-                    "payload_bytes": item["payload_bytes"],
-                    "warmup": item["warmup"],
-                    "total": item["total"],
-                    "binary": item["binary"],
-                },
-                "preset": item["preset"],
-                "preset_args": item["preset_args"],
-                "trial_index": item["trial_index"],
-                "exit_code": process.returncode,
-                "stdout_path": str(stdout_path),
-                "felix_env": {k: env[k] for k in sorted(env) if k.startswith("FELIX_")},
-            }
-
-            if process.returncode != 0:
-                record["parse_error"] = "nonzero exit"
-                record["raw_stdout"] = process.stdout
-                jsonl.write(json.dumps(record) + "\n")
-                jsonl.flush()
-                raise SystemExit(f"Run failed with exit code {process.returncode}")
-
-            try:
-                metrics = parse_metrics(process.stdout)
-            except Exception as exc:
-                record["parse_error"] = str(exc)
-                record["raw_stdout"] = process.stdout
-                jsonl.write(json.dumps(record) + "\n")
-                jsonl.flush()
-                raise SystemExit(f"Parse error: {exc}")
-
-            record["metrics"] = metrics
-            jsonl.write(json.dumps(record) + "\n")
-            jsonl.flush()
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
