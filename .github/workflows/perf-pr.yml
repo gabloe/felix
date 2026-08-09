@@ -82,6 +82,12 @@ jobs:
             echo "reason=config_missing_at_baseline" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # Drive both revisions with the PR's harness and workload definitions.
+          # The merge-base's parser may not understand its own current output, and
+          # a workload added by the PR may intentionally exercise a baseline bug.
+          cp "$GITHUB_WORKSPACE/scripts/perf/run_latency_matrix.py" scripts/perf/run_latency_matrix.py
+          cp "$GITHUB_WORKSPACE/scripts/perf/ci_subset_latency.yml" scripts/perf/ci_subset_latency.yml
+          cp "$GITHUB_WORKSPACE/scripts/perf/ci_subset_throughput.yml" scripts/perf/ci_subset_throughput.yml
           python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
           python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
           cp data/raw/latency_demo_runs.jsonl /tmp/felix-perf-results/baseline.jsonl

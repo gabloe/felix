@@ -678,7 +678,8 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let broker = Arc::new(
         Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(total_events.saturating_add(1))?
-            .with_log_capacity(total_events.saturating_add(1))?,
+            .with_log_capacity(total_events.saturating_add(1))?
+            .with_subscriber_queue_policy(felix_broker::SubQueuePolicy::Block),
     );
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
@@ -706,10 +707,10 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let addr = server.local_addr()?;
     let mut broker_config = broker::config::BrokerConfig::from_env()?;
     broker_config.fanout_batch_size = config.batch_size.max(1);
-    // Tune subscriber egress by workload profile:
-    // - latency profile (batch=1): favor immediate flush and stable ordering
-    // - throughput profile (batch>1): bound queued work while using parallel lanes
-    if config.batch_size <= 1 {
+    // Tune the pipeline by delivery semantics. Only the single-message JSON path
+    // waits for per-message acknowledgements; binary publishes are fire-and-forget
+    // even with batch size 1 and therefore need lossless ingress backpressure.
+    if use_ack {
         // Block the core per-subscriber queue too, not just the lane queue below it:
         // leaving it at production defaults (DropNew, capacity 512) let a publish burst
         // or scheduling delay drop warmup messages, which made the dedicated
@@ -799,6 +800,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
 
     let delivery_tracker = DeliveryTracker::new();
+    let idle_timeout = Duration::from_millis(config.idle_ms);
     let (primary_sub, drain_tasks) = setup_subscribers(
         &sub_clients,
         config.fanout,
@@ -807,10 +809,10 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.pub_stream_count,
         delivery_tracker.clone(),
         config.sub_dedicated_thread,
+        idle_timeout,
     )
     .await?;
 
-    let idle_timeout = Duration::from_millis(config.idle_ms);
     let primary_total = per_stream_events(config.total, config.pub_stream_count.max(1), 0);
     let primary_warmup = per_stream_events(config.warmup, config.pub_stream_count.max(1), 0);
     let mut dedicated_handle = if config.sub_dedicated_thread {
@@ -1057,6 +1059,7 @@ async fn run_compare_sub_delivery_shaping(mut base: DemoConfig) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn setup_subscribers(
     clients: &[Client],
     fanout: usize,
@@ -1065,6 +1068,7 @@ async fn setup_subscribers(
     stream_count: usize,
     delivery_tracker: DeliveryTracker,
     reserve_primary_slot: bool,
+    idle_timeout: Duration,
 ) -> Result<(Option<Subscription>, Vec<tokio::task::JoinHandle<()>>)> {
     let mut drain_tasks = Vec::new();
     let mut primary_sub = None;
@@ -1091,7 +1095,14 @@ async fn setup_subscribers(
                 primary_sub = Some(sub);
             } else {
                 let mut sub = sub;
-                let idle_timeout = Duration::from_millis(2000);
+                // Must use the same configurable idle timeout as the primary
+                // subscriber. This was hardcoded to 2s, which deadlocked the whole
+                // run under the Block subscriber queue policy: a drain subscriber
+                // that gave up here stopped consuming, its broker-side queue filled,
+                // and Block then stalled fanout for *every* subscriber -- including
+                // the primary, which then failed its own (longer) timeout. More
+                // fanout meant more drain subscribers and better odds one tripped
+                // the 2s bound, which is why the failure scaled with fanout.
                 let tracker = delivery_tracker.clone();
                 drain_tasks.push(tokio::spawn(async move {
                     let mut remaining = per_stream_total;
@@ -1196,9 +1207,32 @@ impl DedicatedPrimaryHandle {
             .warmup_rx
             .take()
             .ok_or_else(|| anyhow::anyhow!("dedicated subscriber warmup already awaited"))?;
-        warmup_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("dedicated subscriber warmup channel closed"))
+        tokio::select! {
+            result = warmup_rx => {
+                if result.is_ok() {
+                    Ok(())
+                } else {
+                    match (&mut self.error_rx).await {
+                        Ok(Ok(())) => Err(anyhow::anyhow!(
+                            "dedicated subscriber completed before receiving all warmup events"
+                        )),
+                        Ok(Err(err)) => Err(anyhow::Error::msg(err)),
+                        Err(_) => Err(anyhow::anyhow!(
+                            "dedicated subscriber warmup and completion channels closed"
+                        )),
+                    }
+                }
+            }
+            result = &mut self.error_rx => {
+                match result {
+                    Ok(Ok(())) => Err(anyhow::anyhow!(
+                        "dedicated subscriber completed before receiving all warmup events"
+                    )),
+                    Ok(Err(err)) => Err(anyhow::Error::msg(err)),
+                    Err(_) => Err(anyhow::anyhow!("dedicated subscriber completion channel closed")),
+                }
+            }
+        }
     }
 
     async fn finish(mut self) -> Result<()> {
@@ -1283,7 +1317,12 @@ fn spawn_dedicated_primary_subscriber(
                 let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
                 let event = match next {
                     Ok(result) => result,
-                    Err(_) => break,
+                    Err(_) => {
+                        return Err(format!(
+                            "dedicated subscriber timed out after {seen} of {} events",
+                            primary_warmup + primary_total
+                        ));
+                    }
                 };
                 match event {
                     Ok(Some(event)) => {
@@ -2322,6 +2361,56 @@ mod tests {
         )
         .await
         .context("latency demo smoke flags timeout")?
+    }
+
+    #[tokio::test]
+    async fn latency_demo_dedicated_binary_warmup_exceeds_default_queue() -> Result<()> {
+        let config = DemoConfig {
+            warmup: 500,
+            total: 5000,
+            payload_bytes: 256,
+            fanout: 1,
+            batch_size: 1,
+            binary: true,
+            idle_ms: 10_000,
+            pub_conns: 1,
+            pub_streams_per_conn: 1,
+            pub_sharding: Some("hash_stream".to_string()),
+            pub_stream_count: 1,
+            sub_conns: 1,
+            sub_writer_lanes: None,
+            sub_lane_shard: None,
+            sub_delivery_shaping: true,
+            pub_yield_every_batches: 0,
+            sub_dedicated_thread: true,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            run_demo(config, false, vec![256], vec![1], false),
+        )
+        .await
+        .context("dedicated binary warmup timeout")?
+    }
+
+    #[tokio::test]
+    async fn latency_demo_binary_fanout_is_lossless() -> Result<()> {
+        let mut config = base_config();
+        config.warmup = 200;
+        config.total = 1000;
+        config.payload_bytes = 256;
+        config.fanout = 10;
+        config.binary = true;
+        config.idle_ms = 10_000;
+        config.pub_sharding = Some("hash_stream".to_string());
+        config.sub_dedicated_thread = true;
+
+        let (result, _) = tokio::time::timeout(Duration::from_secs(15), run_case(config))
+            .await
+            .context("binary fanout timeout")??;
+        assert_eq!(result.received, 1000);
+        assert_eq!(result.delivered_total, 10_000);
+        assert_eq!(result.dropped, 0);
+        Ok(())
     }
 
     #[serial]

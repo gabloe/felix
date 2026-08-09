@@ -238,9 +238,18 @@ impl Client {
                 self.auth_tenant_id
             ));
         }
-        // Round-robin subscriptions across the event connection pool.
-        let requested_id = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
-        let connection_index = requested_id as usize % self.event_pool_size;
+        // Round-robin subscriptions across the event connection pool. This local
+        // counter picks the connection only -- it must NOT be used as the
+        // subscription id itself. It starts at 1 in every Client instance, so two
+        // independent clients against the same broker would both request id 1, 2,
+        // ... and collide: the broker keys its own subscription/lane bookkeeping on
+        // the id the client asks for, and the client silently discards any event
+        // batch whose subscription_id doesn't match (see subscription.rs), so a
+        // collision manifests as events vanishing rather than any visible error.
+        // The broker assigns globally-unique ids from its own atomic counter when we
+        // send `subscription_id: None`, so let it do that and use what it returns.
+        let rr = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
+        let connection_index = rr as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
         let (mut send, mut recv) = connection.open_bi().await?;
         authenticate_stream(&mut send, &mut recv, &self.auth_tenant_id, &self.auth_token).await?;
@@ -251,21 +260,14 @@ impl Client {
                 tenant_id: tenant_id.to_string(),
                 namespace: namespace.to_string(),
                 stream: stream.to_string(),
-                subscription_id: Some(requested_id),
+                subscription_id: None,
             },
         )
         .await?;
         send.finish()?;
         let response = read_message(&mut recv, &mut frame_scratch).await?;
         let subscription_id = match response {
-            Some(Message::Subscribed { subscription_id }) => {
-                if subscription_id != requested_id {
-                    return Err(anyhow::anyhow!(
-                        "subscription id mismatch: requested {requested_id} got {subscription_id}"
-                    ));
-                }
-                subscription_id
-            }
+            Some(Message::Subscribed { subscription_id }) => subscription_id,
             Some(Message::Ok) => {
                 return Err(anyhow::anyhow!(
                     "subscribe response missing subscription id"
