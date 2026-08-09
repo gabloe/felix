@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299862354,
+  "lastUpdate": 1786304600939,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -728,6 +728,58 @@ window.BENCHMARK_DATA = {
             "range": "55214.04",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 582109.82\nmean: 566043.97\nstdev: 55214.04\ncv: 9.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "643ddc2d2209a774001bd4bb915221e3676f8022",
+          "message": "Add resource sampling for soak harness (#156)\n\n* Add resource sampling for soak harness\n\nThis commit introduces a new module for capturing resource metrics during soak tests. It includes functionality to sample the resident set size (RSS) and count of open file descriptors, with platform-specific implementations for Linux and macOS. Additionally, a utility to scrape Prometheus gauge values is provided, focusing on summing labelled series while ignoring counters. Tests are included to ensure the correctness of the sampling and scraping functionalities.\n\n* feat(soak): enhance resource tracking and concurrency tests in soak harness",
+          "timestamp": "2026-08-09T12:39:57-07:00",
+          "tree_id": "d7da7518bf77c3252cc53acf30700f91eb5ebe10",
+          "url": "https://github.com/gabloe/felix/commit/643ddc2d2209a774001bd4bb915221e3676f8022"
+        },
+        "date": 1786304600612,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 203451.04,
+            "range": "11924.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 203451.04\nmean: 199933.94\nstdev: 11924.22\ncv: 5.96%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 203451.04,
+            "range": "11924.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 203451.04\nmean: 199933.94\nstdev: 11924.22\ncv: 5.96%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56290.29,
+            "range": "1114.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56290.29\nmean: 56040.94\nstdev: 1114.75\ncv: 1.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 562902.85,
+            "range": "11147.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 562902.85\nmean: 560409.44\nstdev: 11147.48\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
