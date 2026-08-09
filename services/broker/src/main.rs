@@ -13,10 +13,15 @@
 //! ## Process lifecycle
 //! - The broker starts long-running background tasks (QUIC accept loop, metrics server,
 //!   and optional control-plane sync).
-//! - The process remains alive until the provided shutdown future completes (by default,
-//!   CTRL-C / SIGINT).
-//! - On shutdown, we abort background tasks and await them best-effort to avoid leaving
-//!   tasks detached.
+//! - The process remains alive until the provided shutdown future completes. In
+//!   production that is SIGTERM or SIGINT: SIGTERM is what Kubernetes, systemd, and
+//!   `docker stop` send, so handling only SIGINT would abort in-flight work on every
+//!   rolling update.
+//! - Shutdown then runs a bounded drain, in order: readiness goes false so load
+//!   balancers stop routing here, the listener stops admitting new connections,
+//!   in-flight connections finish, and finally the metrics server stops. Anything
+//!   still running when `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` expires is force-cancelled
+//!   and named in a warning. See `felix_common::lifecycle`.
 //!
 //! ## TLS note
 //! `build_server_config()` currently creates a **dev-only self-signed** certificate for QUIC.
@@ -31,6 +36,7 @@ mod test_support;
 use anyhow::{Context, Result};
 use broker::{auth::BrokerAuth, config, quic};
 use felix_broker::Broker;
+use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
@@ -38,18 +44,19 @@ use rcgen::generate_simple_self_signed;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 // Tokio async runtime entry point. The broker is primarily I/O-bound (QUIC + HTTP metrics)
 // and runs multiple background tasks concurrently.
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Default shutdown trigger: CTRL-C (SIGINT). `run_with_shutdown` is written so we can
-    // reuse the same startup logic in tests or alternative hosting environments by passing
-    // a different shutdown future.
-    run_with_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await
+    // Default shutdown trigger: SIGTERM or SIGINT. SIGTERM is what Kubernetes,
+    // systemd, and `docker stop` actually send; SIGINT only covers an interactive
+    // Ctrl-C. `run_with_shutdown` is written so we can reuse the same startup logic
+    // in tests or alternative hosting environments by passing a different future.
+    run_with_shutdown(lifecycle::termination_signal()).await
 }
 
 /// Start the broker and run until the provided `shutdown` future resolves.
@@ -68,6 +75,16 @@ where
     // Observability is initialized first so any subsequent startup logs/metrics are captured.
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
+    // Lifecycle coordination. `readiness` gates `/ready`; the two tokens separate
+    // "stop admitting connections" from "stop serving probes", because the metrics
+    // endpoint has to outlive the drain — that is how an operator watches the drain
+    // happen. `connections` tracks per-connection tasks so the drain can wait for
+    // in-flight work instead of aborting it.
+    let readiness = Readiness::ready();
+    let accept_shutdown = CancellationToken::new();
+    let sync_shutdown = CancellationToken::new();
+    let metrics_shutdown = CancellationToken::new();
+    let connections = TaskTracker::new();
     tracing::info!(
         lanes = config.subscriber_writer_lanes.max(1),
         queue_bound = config.subscriber_lane_queue_depth.max(1),
@@ -95,10 +112,15 @@ where
 
     // Start the Prometheus metrics HTTP server. This is separate from QUIC traffic and
     // intentionally lightweight so metrics remain available even under load.
-    let metrics_task = tokio::spawn(observability::serve_metrics(
-        metrics_handle,
-        config.metrics_bind,
-    ));
+    let metrics_task = {
+        let metrics_shutdown = metrics_shutdown.clone();
+        tokio::spawn(observability::serve_metrics(
+            metrics_handle,
+            config.metrics_bind,
+            readiness.clone(),
+            async move { metrics_shutdown.cancelled().await },
+        ))
+    };
 
     // Build and bind the QUIC listener. `build_server_config` currently uses a self-signed
     // certificate suitable for local development.
@@ -121,8 +143,19 @@ where
         let broker = Arc::clone(&broker);
         let quic_config = config.clone();
         let auth = Arc::clone(&auth);
+        let accept_shutdown = accept_shutdown.clone();
+        let connections = connections.clone();
         tokio::spawn(async move {
-            if let Err(err) = quic::serve(quic_server, broker, quic_config, auth).await {
+            if let Err(err) = quic::serve_with_shutdown(
+                quic_server,
+                broker,
+                quic_config,
+                auth,
+                accept_shutdown,
+                connections,
+            )
+            .await
+            {
                 tracing::warn!(error = %err, "quic accept loop exited");
             }
         })
@@ -133,15 +166,25 @@ where
     let controlplane_task = if let Some(base_url) = config.controlplane_url.clone() {
         let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
+        let sync_shutdown = sync_shutdown.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) = controlplane::start_sync(
-                broker,
-                base_url,
-                std::time::Duration::from_millis(interval_ms),
-            )
-            .await
-            {
-                tracing::warn!(error = %err, "control plane sync exited");
+            // `start_sync` polls forever, so cancellation is what ends it. Dropping
+            // it mid-iteration is safe: the sync is a read-only metadata refresh
+            // whose cursor only advances on success, so an interrupted iteration is
+            // the same case as a failed one and is simply re-fetched on next start.
+            tokio::select! {
+                _ = sync_shutdown.cancelled() => {
+                    tracing::info!("control plane sync stopped");
+                }
+                result = controlplane::start_sync(
+                    broker,
+                    base_url,
+                    Duration::from_millis(interval_ms),
+                ) => {
+                    if let Err(err) = result {
+                        tracing::warn!(error = %err, "control plane sync exited");
+                    }
+                }
             }
         }))
     } else {
@@ -150,23 +193,68 @@ where
     };
 
     // Block until the shutdown signal resolves so the process stays alive.
-    // After this point we initiate cooperative shutdown by aborting background tasks.
     shutdown.await;
-    // Abort background tasks. We use `abort()` (rather than graceful coordination) because:
-    // - This is an MVP wiring layer.
-    // - Individual subsystems may also implement their own shutdown in the future.
-    accept_task.abort();
-    metrics_task.abort();
-    if let Some(task) = &controlplane_task {
-        task.abort();
+
+    // Step 1: stop advertising readiness. Load balancers and the Kubernetes
+    // endpoints controller drop this instance from rotation while it can still
+    // serve, so new traffic is steered elsewhere rather than hitting a closing
+    // listener. This must happen before anything stops working.
+    readiness.begin_draining();
+    tracing::info!("readiness set to draining");
+
+    // Step 2: stop admitting new connections. In-flight ones are untouched.
+    accept_shutdown.cancel();
+
+    // Step 3: drain in-flight work against a single shared deadline.
+    let mut budget = DrainBudget::new(Duration::from_millis(config.shutdown_drain_timeout_ms));
+    tracing::info!(
+        deadline_ms = config.shutdown_drain_timeout_ms,
+        "draining in-flight work"
+    );
+
+    // Closing the tracker is what lets `wait()` resolve; without it the wait would
+    // hang until the deadline even with no connections left.
+    connections.close();
+    budget.drain("quic_connections", connections.wait()).await;
+
+    let mut accept_task = accept_task;
+    if !budget
+        .drain("quic_accept_loop", async {
+            let _ = (&mut accept_task).await;
+        })
+        .await
+    {
+        accept_task.abort();
     }
-    // Best-effort join to avoid leaving detached tasks running during tests.
-    // The `Result` values are intentionally ignored because cancellation is expected.
-    let _ = accept_task.await;
-    let _ = metrics_task.await;
-    if let Some(task) = controlplane_task {
-        let _ = task.await;
+
+    let mut controlplane_task = controlplane_task;
+    if let Some(task) = &mut controlplane_task {
+        sync_shutdown.cancel();
+        if !budget
+            .drain("controlplane_sync", async {
+                let _ = (&mut *task).await;
+            })
+            .await
+        {
+            task.abort();
+        }
     }
+
+    // Step 4: metrics last, so `/ready` keeps reporting "draining" and `/metrics`
+    // stays scrapeable for the whole drain. This is the window in which an operator
+    // can actually see what the broker is doing while it shuts down.
+    metrics_shutdown.cancel();
+    let mut metrics_task = metrics_task;
+    if !budget
+        .drain("metrics_server", async {
+            let _ = (&mut metrics_task).await;
+        })
+        .await
+    {
+        metrics_task.abort();
+    }
+
+    budget.report();
     tracing::info!("broker stopped");
     Ok(())
 }

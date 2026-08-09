@@ -119,6 +119,7 @@ nav:
     - Local Development: deployment/local.md
     - Docker Compose: deployment/docker-compose.md
     - Kubernetes: deployment/kubernetes.md
+    - Graceful Shutdown: deployment/graceful-shutdown.md
   - Reference:
     - Configuration: reference/configuration.md
     - Environment Variables: reference/environment-variables.md

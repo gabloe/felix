@@ -2,6 +2,11 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// Process lifecycle helpers shared by the service binaries. Feature-gated so that
+// library consumers which never run a process (felix-router) do not pull in tokio.
+#[cfg(feature = "lifecycle")]
+pub mod lifecycle;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]

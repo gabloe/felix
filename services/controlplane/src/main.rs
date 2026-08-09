@@ -18,17 +18,19 @@ use anyhow::Context;
 use api::types::{FeatureFlags, Region};
 use app::{AppState, build_bootstrap_router, build_router};
 use auth::oidc::UpstreamOidcValidator;
-use std::future::Future;
+use felix_common::lifecycle::{self, DrainBudget, Readiness};
+use std::future::{Future, IntoFuture};
 use std::sync::Arc;
+use std::time::Duration;
 use store::{ControlPlaneAuthStore, StoreConfig, memory::InMemoryStore, postgres::PostgresStore};
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
-    run_with_shutdown(config, async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await
+    // SIGTERM is what Kubernetes, systemd, and `docker stop` send; SIGINT only
+    // covers an interactive Ctrl-C.
+    run_with_shutdown(config, lifecycle::termination_signal()).await
 }
 
 async fn run_with_shutdown<F>(config: config::ControlPlaneConfig, shutdown: F) -> anyhow::Result<()>
@@ -38,10 +40,23 @@ where
     let metrics_handle = observability::init_observability("felix-controlplane");
     let state = build_state(config.clone()).await?;
     let _backend_name = state.store.backend_name();
-    let metrics_task = tokio::spawn(observability::serve_metrics(
-        metrics_handle,
-        config.metrics_bind,
-    ));
+
+    // `readiness` gates `/ready`. The tokens are separate because the metrics
+    // endpoint has to outlive the API drain — that is how an operator watches the
+    // drain happen.
+    let readiness = Readiness::ready();
+    let api_shutdown = CancellationToken::new();
+    let metrics_shutdown = CancellationToken::new();
+
+    let metrics_task = {
+        let metrics_shutdown = metrics_shutdown.clone();
+        tokio::spawn(observability::serve_metrics(
+            metrics_handle,
+            config.metrics_bind,
+            readiness.clone(),
+            async move { metrics_shutdown.cancelled().await },
+        ))
+    };
 
     let app = build_router(state.clone());
 
@@ -49,6 +64,7 @@ where
         let bootstrap_addr = config.bootstrap.bind_addr;
         let bootstrap_app = build_bootstrap_router(state.clone());
         let bootstrap_enabled = state.bootstrap_enabled;
+        let api_shutdown = api_shutdown.clone();
         Some(tokio::spawn(async move {
             tracing::info!(
                 %bootstrap_addr,
@@ -57,7 +73,9 @@ where
             );
             match tokio::net::TcpListener::bind(bootstrap_addr).await {
                 Ok(listener) => {
-                    let _ = axum::serve(listener, bootstrap_app.into_make_service()).await;
+                    let _ = axum::serve(listener, bootstrap_app.into_make_service())
+                        .with_graceful_shutdown(async move { api_shutdown.cancelled().await })
+                        .await;
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to bind bootstrap listener");
@@ -71,22 +89,79 @@ where
     let addr = config.bind_addr;
     tracing::info!(%addr, "control plane listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // The API server drains itself: `with_graceful_shutdown` stops accepting new
+    // connections and lets in-flight requests finish. Previously this was a
+    // `select!` against the shutdown future, which dropped the server mid-request
+    // and killed everything in flight.
+    let mut api_task = {
+        let api_shutdown = api_shutdown.clone();
+        tokio::spawn(
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move { api_shutdown.cancelled().await })
+                .into_future(),
+        )
+    };
+
     tokio::pin!(shutdown);
     tokio::select! {
-        result = axum::serve(listener, app.into_make_service()) => {
-            result?;
+        result = &mut api_task => {
+            // The listener failed on its own; there is nothing left to drain.
+            result??;
+            return Ok(());
         }
-        _ = &mut shutdown => {}
+        _ = &mut shutdown => {
+            // Step 1: stop advertising readiness so load balancers remove this
+            // instance while it can still serve. Must precede the listener stopping.
+            readiness.begin_draining();
+            tracing::info!("readiness set to draining");
+        }
     }
 
-    metrics_task.abort();
-    if let Some(task) = &bootstrap_task {
+    // Step 2: stop admitting, then drain in-flight requests against one shared
+    // deadline covering every subsystem.
+    let mut budget = DrainBudget::new(Duration::from_millis(config.shutdown_drain_timeout_ms));
+    tracing::info!(
+        deadline_ms = config.shutdown_drain_timeout_ms,
+        "draining in-flight requests"
+    );
+    api_shutdown.cancel();
+
+    if !budget
+        .drain("api_server", async {
+            let _ = (&mut api_task).await;
+        })
+        .await
+    {
+        api_task.abort();
+    }
+
+    let mut bootstrap_task = bootstrap_task;
+    if let Some(task) = &mut bootstrap_task
+        && !budget
+            .drain("bootstrap_server", async {
+                let _ = (&mut *task).await;
+            })
+            .await
+    {
         task.abort();
     }
-    let _ = metrics_task.await;
-    if let Some(task) = bootstrap_task {
-        let _ = task.await;
+
+    // Step 3: metrics last, so `/ready` keeps reporting "draining" and `/metrics`
+    // stays scrapeable for the whole drain.
+    metrics_shutdown.cancel();
+    let mut metrics_task = metrics_task;
+    if !budget
+        .drain("metrics_server", async {
+            let _ = (&mut metrics_task).await;
+        })
+        .await
+    {
+        metrics_task.abort();
     }
+
+    budget.report();
+    tracing::info!("control plane stopped");
     Ok(())
 }
 
@@ -150,6 +225,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            shutdown_drain_timeout_ms: 25_000,
         };
         let state = build_state(config).await.expect("state");
         assert_eq!(state.region.region_id, "local");
@@ -172,6 +248,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            shutdown_drain_timeout_ms: 25_000,
         };
         let err = build_state(config).await.err().expect("missing postgres");
         assert!(err.to_string().contains("postgres configuration missing"));
@@ -198,6 +275,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
             },
+            shutdown_drain_timeout_ms: 25_000,
         };
         let err = build_state(config)
             .await
@@ -224,6 +302,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            shutdown_drain_timeout_ms: 25_000,
         };
         run_with_shutdown(config, async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -249,6 +328,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
             },
+            shutdown_drain_timeout_ms: 25_000,
         };
         run_with_shutdown(config, async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
