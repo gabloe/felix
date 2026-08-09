@@ -24,11 +24,15 @@ Numbers are only useful if they are honest. The harness enforces:
 - **Truthful delivery windows.** Delivered throughput is computed from publish
   start to the instant the *last event actually arrived* — not to when drain
   tasks give up. Idle-timeout waits never inflate the denominator.
-- **Lossless backpressure in throughput mode.** The throughput profile
+- **Lossless backpressure in both profiles.** The throughput profile
   (batch > 1) runs with blocking queues end-to-end and bounded ingress waits
   (`pub_ingress_wait`), so the publisher is paced to the pipeline's sustainable
-  rate and **every message is delivered** (`delivery drops 0`). A number
-  measured while shedding is not a throughput number.
+  rate. The latency profile (batch = 1) blocks the broker's core
+  per-subscriber queue and the client's own subscriber channel, not just the
+  writer-lane queue below them — both defaulted to `DropNew` and could drop
+  warmup/measurement messages under load before that was tightened. In both
+  profiles **every message is delivered** (`delivery drops 0`). A number
+  measured while shedding is not a throughput or latency number.
 - **Latency mode measures per-message RTT.** The latency profile (batch = 1)
   publishes with per-message acks, measuring full round-trip behavior rather
   than fire-and-forget enqueue rates.
@@ -172,13 +176,47 @@ cargo run --release -p broker --bin latency-demo --all-features -- \
 Compare *delivered* (per-subscriber × fanout) rates and tail latencies, and
 match TLS configuration on both sides before drawing conclusions.
 
+## Continuous benchmarking
+
+Three CI workflows keep this data honest and current, rather than relying on
+someone remembering to re-run the harness by hand:
+
+- **`.github/workflows/perf-pr.yml`** — on every PR, builds and benchmarks
+  both the PR's merge-base and the PR head back-to-back on the same runner
+  instance (a small fast subset, not the full matrix below), then posts a
+  PR comment comparing them via a Welch's t-test
+  (`scripts/perf/compare_benchmarks.py`). Running both sides on the same
+  runner controls for GitHub Actions' shared/virtualized runner noise far
+  better than comparing against a historical stored value. Advisory only —
+  it does not block merging.
+- **`.github/workflows/perf-publish.yml`** — on every merge to `main`, runs
+  the same fast subset once and publishes it as a historical time series
+  (via `benchmark-action/github-action-benchmark`, stored on the
+  `benchmark-data` branch) so trends over time are browsable.
+- **`.github/workflows/perf-comprehensive.yml`** — the full matrix below,
+  on a weekly schedule or manual dispatch (too slow — roughly 1,000
+  individual runs — for every PR or every merge). Produces the artifacts
+  used to regenerate this page; see below.
+
 ## Regenerating this page's data
 
 ```bash
-cargo run --release -p broker --bin latency-demo --all-features 2>&1 | tee latency.log
+# Single case, quick sanity check
+cargo run --release -p broker --bin latency-demo --all-features -- \
+  --warmup 500 --total 20000 --payload 1024 --fanout 10 --batch 64
+
+# Full matrix (scripts/perf/presets.yml) + aggregation + charts + markdown.
+# Same pipeline as the perf-comprehensive.yml workflow.
+pip install -r scripts/perf/requirements.txt
+python3 scripts/perf/run_latency_matrix.py
+python3 scripts/perf/normalize_and_aggregate.py
+python3 scripts/perf/make_charts.py
+python3 scripts/perf/render_markdown_snippets.py
+# -> charts/latency_demo/latency_demo_snippet.md
 ```
 
 Key output fields: `delivered throughput` (all subscribers), `delivered
 per-sub throughput`, `p50/p99/p999` (per-message publish→delivery latency),
-`delivery drops` (must be 0 in throughput profile), `publish submit
-throughput` (client-side enqueue rate — an upper bound, not a delivery claim).
+`delivery drops` (must be 0 in both profiles — see the methodology note
+above), `publish submit throughput` (client-side enqueue rate — an upper
+bound, not a delivery claim).

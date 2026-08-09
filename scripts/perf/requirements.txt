@@ -1,0 +1,9 @@
+# Dependencies for the comprehensive benchmark pipeline
+# (run_latency_matrix.py -> normalize_and_aggregate.py -> make_charts.py ->
+# render_markdown_snippets.py). run_latency_matrix.py, compare_benchmarks.py,
+# and to_benchmark_json.py use only the standard library and don't need this
+# file.
+matplotlib>=3.8
+# Optional: enables parquet output alongside CSV in normalize_and_aggregate.py.
+# Silently skipped if not installed.
+pandas>=2.2

@@ -1,0 +1,134 @@
+name: Performance Regression Check
+
+# Advisory-only performance gate: builds and benchmarks both the PR's
+# merge-base (baseline) and the PR head (candidate) back-to-back on the same
+# runner instance in this job, then compares them with a Welch's t-test.
+# Running both sides on the same runner controls for GitHub Actions' shared/
+# virtualized runner noise far better than comparing against a historical
+# stored baseline captured on a different runner at a different time.
+#
+# This does NOT fail the check on a regression: it's advisory only. A single
+# CI runner's noise floor isn't (yet) trusted enough to block merges on --
+# see the PR comment this workflow posts for the full caveat.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - "docs/**"
+      - "docs-site/**"
+      - "**/*.md"
+
+concurrency:
+  group: perf-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Shared target dir across the baseline and candidate worktrees below, so
+  # (usually-unchanged) third-party dependencies only compile once instead
+  # of twice.
+  CARGO_TARGET_DIR: /tmp/felix-perf-target
+
+jobs:
+  perf-compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> /tmp/felix-perf-target"
+
+      - name: Determine merge-base
+        id: mergebase
+        run: |
+          set -euo pipefail
+          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $MERGE_BASE"
+
+      - name: Add baseline worktree
+        run: git worktree add /tmp/felix-baseline "${{ steps.mergebase.outputs.sha }}"
+
+      - name: Run baseline benchmarks
+        working-directory: /tmp/felix-baseline
+        run: |
+          set -euo pipefail
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
+          mkdir -p /tmp/felix-perf-results
+          cp data/raw/latency_demo_runs.jsonl /tmp/felix-perf-results/baseline.jsonl
+
+      - name: Run candidate benchmarks
+        run: |
+          set -euo pipefail
+          rm -f data/raw/latency_demo_runs.jsonl
+          rm -rf data/raw/stdout
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_latency.yml
+          python3 scripts/perf/run_latency_matrix.py --config scripts/perf/ci_subset_throughput.yml
+          cp data/raw/latency_demo_runs.jsonl /tmp/felix-perf-results/candidate.jsonl
+
+      - name: Compare baseline vs candidate
+        run: |
+          set -euo pipefail
+          python3 scripts/perf/compare_benchmarks.py \
+            --baseline /tmp/felix-perf-results/baseline.jsonl \
+            --candidate /tmp/felix-perf-results/candidate.jsonl \
+            --output-markdown /tmp/felix-perf-results/comment.md \
+            --output-json /tmp/felix-perf-results/result.json
+
+      - name: Post or update PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/felix-perf-results/comment.md', 'utf8');
+            const marker = '<!-- felix-perf-pr-comment -->';
+            const fullBody = `${marker}\n## Performance comparison (fast subset)\n\n${body}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+            }
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-pr-results
+          path: /tmp/felix-perf-results/
+          if-no-files-found: warn
+
+      - name: Remove baseline worktree
+        if: always()
+        run: git worktree remove /tmp/felix-baseline --force || true

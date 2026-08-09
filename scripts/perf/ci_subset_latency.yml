@@ -1,0 +1,33 @@
+{
+  "defaults": {
+    "trials": 5
+  },
+  "workload": {
+    "fanout": [1, 10],
+    "batch": [1],
+    "payload_bytes": [256],
+    "warmup": 500,
+    "total": 5000,
+    "binary": true
+  },
+  "profiles": {
+    "balanced": {
+      "env": {
+        "FELIX_EVENT_CONN_POOL": "8",
+        "FELIX_EVENT_CONN_RECV_WINDOW": "268435456",
+        "FELIX_EVENT_STREAM_RECV_WINDOW": "67108864",
+        "FELIX_EVENT_SEND_WINDOW": "268435456",
+        "FELIX_EVENT_BATCH_MAX_DELAY_US": "250",
+        "FELIX_PUBLISH_CHUNK_BYTES": "16384",
+        "FELIX_CACHE_CONN_POOL": "8",
+        "FELIX_CACHE_STREAMS_PER_CONN": "4"
+      }
+    }
+  },
+  "presets": {
+    "P1_hash": {
+      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "1", "--pub-sharding", "hash_stream"]
+    }
+  },
+  "preset_order": ["P1_hash"]
+}

@@ -1,0 +1,87 @@
+name: Comprehensive Performance Sweep
+
+# The full scripts/perf/presets.yml matrix (2 profiles x 2 fanout x 2 batch x
+# 4 payload sizes x 6 presets x 5 trials = ~960 individual runs). Too slow
+# and expensive for every PR or every merge -- see perf-pr.yml (fast subset,
+# per-PR, advisory) and perf-publish.yml (fast subset, per-merge, historical
+# data) for those. This is the same pipeline used to regenerate
+# docs-site/docs/features/benchmarks.md locally, just runnable from CI.
+#
+# Produces downloadable artifacts (raw JSONL, aggregated CSV, charts,
+# rendered markdown snippet) rather than auto-committing to docs: updating
+# the published benchmarks page is still a deliberate, reviewed step where a
+# human pastes in the new markdown snippet, not something this workflow does
+# unattended.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # 06:00 UTC every Monday
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: "Override trial count per config (default: presets.yml's own default, 5)"
+        required: false
+        type: string
+      filter:
+        description: "Optional --filter expression, e.g. 'fanout=1,profile=balanced'"
+        required: false
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  comprehensive-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "scripts/perf/requirements.txt"
+
+      - name: Install Python dependencies
+        run: pip install -r scripts/perf/requirements.txt
+
+      - name: Run comprehensive matrix
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ -n "${{ inputs.trials }}" ]; then
+            ARGS+=(--trials "${{ inputs.trials }}")
+          fi
+          if [ -n "${{ inputs.filter }}" ]; then
+            ARGS+=(--filter "${{ inputs.filter }}")
+          fi
+          python3 scripts/perf/run_latency_matrix.py "${ARGS[@]}"
+
+      - name: Normalize, aggregate, chart, render
+        run: |
+          set -euo pipefail
+          python3 scripts/perf/normalize_and_aggregate.py
+          python3 scripts/perf/make_charts.py
+          python3 scripts/perf/render_markdown_snippets.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-comprehensive-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/derived/
+            charts/
+          if-no-files-found: warn
