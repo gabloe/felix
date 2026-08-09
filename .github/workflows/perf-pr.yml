@@ -25,9 +25,14 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Standard GitHub-hosted Linux runners expose 4 CPUs. Leave two for the
-  # tokio/QUIC runtime and dedicate two to stream-owned broker work.
-  FELIX_CORE_SHARDS: "2"
+  # NOTE: core shards are intentionally left disabled here. `FELIX_CORE_SHARDS=N`
+  # does not simply place work on N cores -- it also *replaces* the publish worker
+  # count (`worker_count = shards.len()` in transport/quic/conn.rs), so N=2 halves
+  # publish parallelism from the default of 4. And nothing caps the main runtime,
+  # which still spawns num_cpus=4 worker threads, so 2 pinned shard threads land on
+  # cores 0-1 alongside them: 6 threads on 4 CPUs, with two cores double-booked.
+  # Measured net effect on these runners was a regression. Thread-per-core is worth
+  # evaluating on dedicated many-core hardware, not a shared 4-vCPU runner.
   # Shared target dir across the baseline and candidate worktrees below, so
   # (usually-unchanged) third-party dependencies only compile once instead
   # of twice.
