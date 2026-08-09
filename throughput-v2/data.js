@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786246425060,
+  "lastUpdate": 1786246834644,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -312,6 +312,58 @@ window.BENCHMARK_DATA = {
             "range": "19286.90",
             "unit": "msg/s",
             "extra": "n=5, mean=475365.89"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "029364a1bdfe04c8c4f0df39bec8ff574a643dea",
+          "message": "fix(benchmarks): update benchmark data paths and enhance dashboard documentation (#151)",
+          "timestamp": "2026-08-08T20:17:07-07:00",
+          "tree_id": "fada4e5a008088ce0265f9738898fa07b4cd2e35",
+          "url": "https://github.com/gabloe/felix/commit/029364a1bdfe04c8c4f0df39bec8ff574a643dea"
+        },
+        "date": 1786246834346,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 175959.62,
+            "range": "9016.60",
+            "unit": "msg/s",
+            "extra": "n=5, mean=170440.57"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 175959.62,
+            "range": "9016.60",
+            "unit": "msg/s",
+            "extra": "n=5, mean=170440.57"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 48412.04,
+            "range": "3511.23",
+            "unit": "msg/s",
+            "extra": "n=5, mean=47547.46"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 484120.36,
+            "range": "35112.28",
+            "unit": "msg/s",
+            "extra": "n=5, mean=475474.56"
           }
         ]
       }
