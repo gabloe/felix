@@ -414,7 +414,7 @@ anyhow = "1.0"
 
 ```toml
 [toolchain]
-channel = "1.92.0"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 ```
 

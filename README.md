@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/license-ELv2%20%2B%20Apache--2.0-blue.svg" alt="License: Elastic License 2.0 + Apache-2.0 (split, see LICENSING.md)" />
   </a>
   <a href="https://www.rust-lang.org/">
-    <img src="https://img.shields.io/badge/rust-1.92.0-blue" alt="Rust 1.92.0" />
+    <img src="https://img.shields.io/badge/rust-1.97.1-blue" alt="Rust 1.97.1" />
   </a>
   <a href="https://gabloe.github.io/felix">
     <img src="https://img.shields.io/badge/Documentation-8A2BE2" alt="Documentation" />

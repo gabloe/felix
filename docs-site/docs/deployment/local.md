@@ -6,7 +6,7 @@ This guide walks you through setting up Felix for local development, running the
 
 Before running Felix locally, ensure you have:
 
-- **Rust 1.92.0 or later**: Install via [rustup](https://rustup.rs/)
+- **Rust 1.97.1 or later**: Install via [rustup](https://rustup.rs/)
 - **Git**: For cloning the repository
 - **Optional**: [Task](https://taskfile.dev/) for convenience commands
 - **At least 4GB RAM**: Recommended for comfortable development
@@ -426,7 +426,7 @@ export FELIX_BROKER_METRICS_BIND="0.0.0.0:8081"
 **Solution:** Ensure correct Rust version:
 
 ```bash
-rustc --version  # Should be 1.92.0 or later
+rustc --version  # Should be 1.97.1 or later
 rustup update
 cargo clean
 cargo build --release

@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0" />
   </a>
   <a href="https://www.rust-lang.org/">
-    <img src="https://img.shields.io/badge/rust-1.92.0-blue" alt="Rust 1.92.0" />
+    <img src="https://img.shields.io/badge/rust-1.97.1-blue" alt="Rust 1.97.1" />
   </a>
 </p>
 

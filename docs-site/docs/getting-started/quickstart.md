@@ -4,7 +4,7 @@ Get Felix up and running in under 5 minutes.
 
 ## Prerequisites
 
-- **Rust:** 1.92.0 or later ([install rustup](https://rustup.rs/))
+- **Rust:** 1.97.1 or later ([install rustup](https://rustup.rs/))
 - **Git:** For cloning the repository
 - **Optional:** [Task](https://taskfile.dev/) for convenience commands
 
@@ -325,11 +325,11 @@ cargo run --release -p broker
 
 ### Build Errors
 
-Ensure you have Rust 1.92.0 or later:
+Ensure you have Rust 1.97.1 or later:
 
 ```bash
 rustc --version
-# Should show: rustc 1.92.0 or higher
+# Should show: rustc 1.97.1 or higher
 ```
 
 Update if needed:
