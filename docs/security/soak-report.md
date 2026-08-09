@@ -117,23 +117,23 @@ That test previously asserted the *opposite* — that accepted connections keep
 running after cancellation. It was encoding the bug, and was rewritten rather
 than worked around.
 
-### F3 — Subscriber queue-depth gauge drifts by a small bounded amount (open)
+### F3 — Subscriber queue-depth accounting races teardown (fixed)
 
-`felix_sub_queue_len` settles at 1 after quiescence instead of 0.
+Extended runs showed `felix_sub_queue_len` settling between 1 and 13 rather than
+at a fixed residue. The cause was an admission-order race: publishers made an
+envelope visible on the channel before incrementing its depth. A receiver could
+dequeue and attempt to decrement zero before the publisher recorded the item,
+stranding the later increment.
 
-`SubscriptionReceiver::drop` drains what is queued and decrements the global
-counter, so this is not a general accounting failure. The residue is a narrow
-race: an item enqueued between that drain loop and the channel actually closing
-is counted and never dequeued.
+Queue entries now own their accounting through an RAII wrapper. Depth is
+incremented before a reserved channel permit publishes the entry, and the
+wrapper decrements it whether the receiver consumes the entry or channel
+teardown discards it. The soak harness no longer has a queue-depth allowance:
+both `felix_sub_queue_len` and `felix_sub_lane_queue_len` must return to zero.
 
-Measured at exactly 1 across runs of very different sizes, including runs
-differing by ~2M messages — so it is bounded per teardown rather than
-proportional to load. Not milestone-blocking, and not fixed here.
-
-The harness allows up to 8 before reporting a finding, so genuine unbounded drift
-is still caught while this known race does not produce noise. **Follow-up issue
-should be filed**; per #154's own instruction, non-blocking improvements get
-separately scoped issues rather than being folded in.
+The lane gauge had a separate stale-series issue. A lane worker could exit while
+its last reported labeled value was nonzero; workers now explicitly zero their
+series on every exit path.
 
 ### F4 — Subscriber writer ownership cycle retained tasks (fixed)
 
@@ -175,7 +175,7 @@ From the final local run (exit 0, no findings):
 Registration gauges after quiescence, all zero:
 `felix_sub_active_connections`, `felix_sub_connection_subscribers`,
 `felix_sub_conn_queue_len`, `felix_sub_lane_queue_len`,
-`felix_client_sub_queue_len`. `felix_sub_queue_len` is 1, per F3.
+`felix_client_sub_queue_len`, and `felix_sub_queue_len`.
 
 Restart cycles: 3/3 clean, 3.00 s each, exit 0, with ~300k messages published
 into each child before its `SIGTERM`.
@@ -200,8 +200,8 @@ memory growth" claim is treated as settled.
 - [ ] **No unbounded memory growth** — not fully demonstrated. Monotonic growth
       across four cycles is unresolved; needs a longer Linux run.
 - [x] Audit scope, workload, duration, environment, and findings recorded.
-- [x] Milestone-blocking defects fixed (F1, F2, F4); non-blocking one (F3)
-      documented for a separate issue.
+- [x] All reproduced defects fixed (F1-F4), including exact-zero queue
+      accounting after quiescence.
 
 ## Residual risk
 

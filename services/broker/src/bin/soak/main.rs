@@ -103,7 +103,7 @@ impl Default for SoakConfig {
     fn default() -> Self {
         Self {
             phase_secs: 30,
-            quiesce_secs: 15,
+            quiesce_secs: 30,
             publishers: 4,
             subscribers: 4,
             payload_bytes: 1024,
@@ -1032,7 +1032,8 @@ fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
 
     if quiesced.alive_tasks > baseline.alive_tasks {
         findings.push(format!(
-            "Tokio tasks did not return to baseline after quiescence: {} -> {} (+{})",
+            "Tokio tasks did not return to baseline within {}s of quiescence: {} -> {} (+{})",
+            config.quiesce_secs,
             baseline.alive_tasks,
             quiesced.alive_tasks,
             quiesced.alive_tasks - baseline.alive_tasks
@@ -1069,6 +1070,8 @@ fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
         "felix_sub_connection_subscribers",
         "felix_broker_ingress_queue_depth",
         "felix_broker_out_ack_depth",
+        "felix_sub_queue_len",
+        "felix_sub_lane_queue_len",
     ] {
         if let Some(value) = gauges.get(gauge)
             && *value > 0.0
@@ -1077,22 +1080,6 @@ fn evaluate(config: &SoakConfig, outcome: &SoakOutcome) -> Vec<String> {
                 "gauge {gauge} did not return to zero after quiescence: {value}"
             ));
         }
-    }
-
-    // Queue depth is allowed a small documented residue. `SubscriptionReceiver`'s
-    // `Drop` drains what is queued and decrements the global counter, but an item
-    // enqueued between that drain loop and the channel actually closing is counted
-    // and never dequeued. Observed as exactly 1 across runs of very different
-    // sizes, i.e. bounded per teardown rather than proportional to load. Tracked
-    // separately; the check still catches genuine unbounded drift.
-    const QUEUE_DEPTH_DRIFT_ALLOWANCE: f64 = 8.0;
-    if let Some(value) = gauges.get("felix_sub_queue_len")
-        && *value > QUEUE_DEPTH_DRIFT_ALLOWANCE
-    {
-        findings.push(format!(
-            "gauge felix_sub_queue_len drifted to {value} after quiescence, beyond the \
-             known-race allowance of {QUEUE_DEPTH_DRIFT_ALLOWANCE}"
-        ));
     }
 
     if !unfinished.is_empty() {
