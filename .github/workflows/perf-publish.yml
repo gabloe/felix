@@ -65,10 +65,16 @@ jobs:
         if: steps.benchmarks.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
         with:
+          # `name` is the top-level series key in data.js -- it must stay stable.
+          # Changing it starts a brand new series and orphans existing history.
+          # It also doubles as the page heading, so it carries the "this is CI
+          # hardware" caveat; see docs-site/docs/features/benchmarks.md for why
+          # these absolute numbers are well below the documented dev-machine ones.
+          name: "Felix latency - batch=1, GitHub-hosted runner"
           tool: "customSmallerIsBetter"
           output-file-path: /tmp/felix-perf-publish/latency.json
           gh-pages-branch: benchmark-data
-          benchmark-data-dir-path: latency
+          benchmark-data-dir-path: latency-v2
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           # Advisory-only, matching perf-pr.yml: don't fail the workflow, just
@@ -82,10 +88,12 @@ jobs:
         if: steps.benchmarks.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
         with:
+          # See the note on `name` in the latency step above -- keep this stable.
+          name: "Felix throughput - batch=64, GitHub-hosted runner"
           tool: "customBiggerIsBetter"
           output-file-path: /tmp/felix-perf-publish/throughput.json
           gh-pages-branch: benchmark-data
-          benchmark-data-dir-path: throughput
+          benchmark-data-dir-path: throughput-v2
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           fail-on-alert: false
