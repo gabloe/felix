@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786244319913,
+  "lastUpdate": 1786244472121,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Benchmark": [
@@ -324,6 +324,114 @@ window.BENCHMARK_DATA = {
             "range": "2700.09",
             "unit": "us",
             "extra": "n=5, mean=81883.60"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2",
+          "message": "fix(pages): update benchmark dashboards to use local Chart.js instead of CDN (#150)",
+          "timestamp": "2026-08-08T19:57:26-07:00",
+          "tree_id": "f043862276d5373cc277954f65a39d01cd4587cb",
+          "url": "https://github.com/gabloe/felix/commit/724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2"
+        },
+        "date": 1786244470326,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 187,
+            "range": "2.41",
+            "unit": "us",
+            "extra": "n=5, mean=187.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 244,
+            "range": "6.53",
+            "unit": "us",
+            "extra": "n=5, mean=244.80"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 294,
+            "range": "12.72",
+            "unit": "us",
+            "extra": "n=5, mean=286.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p50 (us)",
+            "value": 5032,
+            "range": "1676.80",
+            "unit": "us",
+            "extra": "n=5, mean=5313.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p99 (us)",
+            "value": 7743,
+            "range": "3470.14",
+            "unit": "us",
+            "extra": "n=5, mean=9579.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p999 (us)",
+            "value": 7758,
+            "range": "3470.93",
+            "unit": "us",
+            "extra": "n=5, mean=9595.60"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 236,
+            "range": "2.55",
+            "unit": "us",
+            "extra": "n=5, mean=236.00"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 632,
+            "range": "17.71",
+            "unit": "us",
+            "extra": "n=5, mean=622.00"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1110,
+            "range": "535.60",
+            "unit": "us",
+            "extra": "n=5, mean=1309.40"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p50 (us)",
+            "value": 41548,
+            "range": "4303.90",
+            "unit": "us",
+            "extra": "n=5, mean=40929.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p99 (us)",
+            "value": 70578,
+            "range": "3497.74",
+            "unit": "us",
+            "extra": "n=5, mean=72377.40"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p999 (us)",
+            "value": 70589,
+            "range": "3496.52",
+            "unit": "us",
+            "extra": "n=5, mean=72401.20"
           }
         ]
       }
