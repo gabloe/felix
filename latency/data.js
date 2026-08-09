@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786243927817,
+  "lastUpdate": 1786244319913,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Benchmark": [
@@ -216,6 +216,114 @@ window.BENCHMARK_DATA = {
             "range": "12077.79",
             "unit": "us",
             "extra": "n=5, mean=65825.20"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2",
+          "message": "fix(pages): update benchmark dashboards to use local Chart.js instead of CDN (#150)",
+          "timestamp": "2026-08-08T19:57:26-07:00",
+          "tree_id": "f043862276d5373cc277954f65a39d01cd4587cb",
+          "url": "https://github.com/gabloe/felix/commit/724bcfd3c5e61fa27ff6b3c8e8d8a113185e4ec2"
+        },
+        "date": 1786244318161,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 191,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "n=5, mean=190.80"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 259,
+            "range": "7.54",
+            "unit": "us",
+            "extra": "n=5, mean=260.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 417,
+            "range": "64.59",
+            "unit": "us",
+            "extra": "n=5, mean=407.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p50 (us)",
+            "value": 8223,
+            "range": "4118.90",
+            "unit": "us",
+            "extra": "n=5, mean=8063.00"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p99 (us)",
+            "value": 11702,
+            "range": "6285.69",
+            "unit": "us",
+            "extra": "n=5, mean=12751.60"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - p999 (us)",
+            "value": 11713,
+            "range": "6282.93",
+            "unit": "us",
+            "extra": "n=5, mean=12765.40"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 241,
+            "range": "3.24",
+            "unit": "us",
+            "extra": "n=5, mean=239.00"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 597,
+            "range": "31.49",
+            "unit": "us",
+            "extra": "n=5, mean=600.80"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 929,
+            "range": "158.74",
+            "unit": "us",
+            "extra": "n=5, mean=972.80"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p50 (us)",
+            "value": 41956,
+            "range": "5827.36",
+            "unit": "us",
+            "extra": "n=5, mean=43853.40"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p99 (us)",
+            "value": 82055,
+            "range": "2701.09",
+            "unit": "us",
+            "extra": "n=5, mean=81856.40"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - p999 (us)",
+            "value": 82072,
+            "range": "2700.09",
+            "unit": "us",
+            "extra": "n=5, mean=81883.60"
           }
         ]
       }
