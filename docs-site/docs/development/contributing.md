@@ -38,7 +38,7 @@ What should have happened.
 
 **Environment**
 - OS: Ubuntu 22.04
-- Rust: 1.92.0
+- Rust: 1.97.1
 - Felix: main branch, commit abc123
 
 **Logs**
@@ -90,7 +90,7 @@ See [Development Workflow](#development-workflow) for details.
 
 ### Prerequisites
 
-- **Rust 1.92.0+**: Install via [rustup](https://rustup.rs/)
+- **Rust 1.97.1+**: Install via [rustup](https://rustup.rs/)
 - **Git**: For version control
 - **Task** (optional): Install from [taskfile.dev](https://taskfile.dev/)
 - **Development tools**: `cargo-fmt`, `cargo-clippy`

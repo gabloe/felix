@@ -526,7 +526,7 @@ Common causes:
 1. **Port in use**: Change `FELIX_QUIC_BIND`
 2. **Invalid config**: Check YAML syntax
 3. **Missing dependencies**: Run `cargo build`
-4. **Wrong Rust version**: Update to 1.92.0+
+4. **Wrong Rust version**: Update to 1.97.1+
 
 See [Troubleshooting guide](troubleshooting.md).
 

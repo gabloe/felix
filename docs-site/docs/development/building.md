@@ -10,7 +10,7 @@ Felix uses **Cargo** (Rust's build tool) and **Task** (optional task runner) for
 
 **Required**:
 
-- **Rust 1.92.0+**: Install via [rustup](https://rustup.rs/)
+- **Rust 1.97.1+**: Install via [rustup](https://rustup.rs/)
 - **Cargo**: Included with Rust
 
 **Optional**:
@@ -26,7 +26,7 @@ Felix uses **Cargo** (Rust's build tool) and **Task** (optional task runner) for
 rustc --version
 cargo --version
 
-# Should show 1.92.0 or later
+# Should show 1.97.1 or later
 ```
 
 ## Building
@@ -683,7 +683,7 @@ rustc --version
 rustup update
 
 # Override for project
-rustup override set 1.92.0
+rustup override set 1.97.1
 ```
 
 ### Dependency Issues

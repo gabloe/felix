@@ -12,7 +12,7 @@ Common issues and solutions when running Felix.
 error[E0658]: use of unstable library feature 'try_blocks'
 ```
 
-**Solution**: Update Rust to 1.92.0 or later.
+**Solution**: Update Rust to 1.97.1 or later.
 
 ```bash
 # Check current version
@@ -22,7 +22,7 @@ rustc --version
 rustup update
 
 # Set specific toolchain (if needed)
-rustup override set 1.92.0
+rustup override set 1.97.1
 ```
 
 ### Missing Dependencies
