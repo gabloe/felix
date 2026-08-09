@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ahash"
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "controlplane"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -866,7 +866,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "felix-authz"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "casbin",
@@ -880,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "felix-broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "felix-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "felix-conformance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -956,29 +956,29 @@ dependencies = [
 
 [[package]]
 name = "felix-consensus"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "felix-crypto"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "felix-metadata"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "felix-router"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "felix-common",
 ]
 
 [[package]]
 name = "felix-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "quinn",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "bytes",

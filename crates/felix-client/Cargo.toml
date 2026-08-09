@@ -1,6 +1,6 @@
 [package]
 name = "felix-client"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -20,10 +20,10 @@ serde_yaml_ng = { workspace = true }
 # unlike the rest of this crate's dependency graph (Apache-2.0) — keeping them optional and
 # off by default means the default felix-client build has zero Elastic-2.0 transitive
 # dependencies. See LICENSING.md at the repo root.
-felix-broker = { path = "../felix-broker", version = "0.1.0", optional = true }
-felix-storage = { path = "../felix-storage", version = "0.1.0", optional = true }
-felix-transport = { path = "../felix-transport", version = "0.1.0" }
-felix-wire = { path = "../felix-wire", version = "0.1.0" }
+felix-broker = { path = "../felix-broker", version = "0.1.1", optional = true }
+felix-storage = { path = "../felix-storage", version = "0.1.1", optional = true }
+felix-transport = { path = "../felix-transport", version = "0.1.1" }
+felix-wire = { path = "../felix-wire", version = "0.1.1" }
 quinn = "0.11"
 
 [features]

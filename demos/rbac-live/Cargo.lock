@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "controlplane"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -637,7 +637,7 @@ checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
 name = "demo-rbac-live"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "felix-authz"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "casbin",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "felix-broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -893,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "felix-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "felix-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "quinn",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "bytes",

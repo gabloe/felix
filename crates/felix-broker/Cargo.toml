@@ -1,6 +1,6 @@
 [package]
 name = "felix-broker"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license = "Elastic-2.0"
 rust-version.workspace = true
@@ -10,8 +10,8 @@ bytes = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 metrics = "0.24"
-felix-storage = { path = "../felix-storage", version = "0.1.0" }
-felix-wire = { path = "../felix-wire", version = "0.1.0" }
+felix-storage = { path = "../felix-storage", version = "0.1.1" }
+felix-wire = { path = "../felix-wire", version = "0.1.1" }
 arc-swap = "1.8"
 ahash = "0.8"
 hashbrown = { version = "0.16", features = ["equivalent"] }
