@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786318455712,
+  "lastUpdate": 1786396370315,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1040,6 +1040,58 @@ window.BENCHMARK_DATA = {
             "range": "21885.75",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 561724.87\nmean: 558695.47\nstdev: 21885.75\ncv: 3.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2539f111135ccdc609f5b8c6b7348bd74ea4fc0c",
+          "message": "Add demos for lossy/lossless state settlement and slow consumer (#163)\n\n* feat: add 2 new demos to show lossy/lossless state settlement and slow consumer under drop_new and block policies\n\n* feat: enhance slow-consumer demo with loss rate assertions and healthy consumer metrics",
+          "timestamp": "2026-08-10T14:10:56-07:00",
+          "tree_id": "12cac71af2bd690fbc69e49e3c282717a903d00b",
+          "url": "https://github.com/gabloe/felix/commit/2539f111135ccdc609f5b8c6b7348bd74ea4fc0c"
+        },
+        "date": 1786396369651,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 182292.34,
+            "range": "11280.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 182292.34\nmean: 183760.41\nstdev: 11280.85\ncv: 6.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 182292.34,
+            "range": "11280.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 182292.34\nmean: 183760.41\nstdev: 11280.85\ncv: 6.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56378.35,
+            "range": "1654.70",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56378.35\nmean: 55278.44\nstdev: 1654.70\ncv: 2.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 563783.53,
+            "range": "16547.06",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 563783.53\nmean: 552784.41\nstdev: 16547.06\ncv: 2.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
