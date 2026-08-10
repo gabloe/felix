@@ -62,7 +62,7 @@ fn draw(frame: &mut Frame, state: &LiveState) {
             Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
         ),
         Span::raw("  "),
-        Span::styled(phase.label(), phase_style),
+        Span::styled(phase.label(&state.victim), phase_style),
     ]))
     .block(
         Block::default()
@@ -154,7 +154,7 @@ pub async fn run_with_plain(config: RunConfig) -> Result<RunOutcome> {
     run_once(config, move |state| {
         let phase = state.phase();
         if last_phase != Some(phase) {
-            println!("\n-- {} --", phase.label());
+            println!("\n-- {} --", phase.label(&state.victim));
             last_phase = Some(phase);
         }
         let mut line = String::new();

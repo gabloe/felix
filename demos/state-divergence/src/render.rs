@@ -59,7 +59,7 @@ fn draw(frame: &mut Frame, state: &LiveState) {
                 Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
             ),
             Span::raw("  "),
-            Span::styled(phase.label(), phase_style),
+            Span::styled(phase.label(&state.victim), phase_style),
         ]))
         .block(
             Block::default()
@@ -144,7 +144,7 @@ pub async fn run_with_plain(config: RunConfig) -> Result<Outcome> {
     run_once(config, move |state| {
         let phase = state.phase();
         if last != Some(phase) {
-            println!("\n-- {} --", phase.label());
+            println!("\n-- {} --", phase.label(&state.victim));
             last = Some(phase);
         }
         let wrong = state

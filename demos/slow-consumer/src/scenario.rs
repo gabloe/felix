@@ -89,11 +89,13 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub fn label(self) -> &'static str {
+    /// The victim is whichever subscriber is last, so its name depends on
+    /// `--subscribers` and cannot be baked into the string.
+    pub fn label(self, victim: &str) -> String {
         match self {
-            Phase::Baseline => "baseline — all consumers healthy",
-            Phase::Degraded => "DEGRADED — dash-3 has stopped draining",
-            Phase::Recovered => "recovered — dash-3 draining again",
+            Phase::Baseline => "baseline — all consumers healthy".to_string(),
+            Phase::Degraded => format!("DEGRADED — {victim} has stopped draining"),
+            Phase::Recovered => format!("recovered — {victim} draining again"),
         }
     }
 }
@@ -153,6 +155,8 @@ pub struct PublisherStats {
 #[derive(Debug)]
 pub struct LiveState {
     pub policy: Policy,
+    /// Name of the subscriber that stalls, for labelling.
+    pub victim: String,
     pub phase: std::sync::Mutex<Phase>,
     pub subscribers: Vec<Arc<SubscriberStats>>,
     pub publisher: PublisherStats,
@@ -186,6 +190,15 @@ impl RunOutcome {
             .iter()
             .filter(|(_, _, _, stalled)| !stalled)
             .map(|(_, _, gaps, _)| *gaps)
+            .sum()
+    }
+
+    /// Events successfully received by the consumers that never stalled.
+    pub fn healthy_received(&self) -> u64 {
+        self.subscribers
+            .iter()
+            .filter(|(_, _, _, stalled)| !stalled)
+            .map(|(_, received, _, _)| *received)
             .sum()
     }
 
@@ -431,6 +444,7 @@ where
 
     let state = Arc::new(LiveState {
         policy: config.policy,
+        victim: victim.name.clone(),
         phase: std::sync::Mutex::new(Phase::Baseline),
         subscribers: stats.clone(),
         publisher: PublisherStats::default(),

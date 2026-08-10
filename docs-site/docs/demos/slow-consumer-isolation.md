@@ -102,6 +102,12 @@ Read the two blocks together:
 
 - Under `drop_new` the publisher hits its target and the healthy consumers lose
   nothing. The stalled consumer loses 120k events permanently.
+
+  On a heavily loaded machine the healthy consumers may shed a handful of events
+  themselves — their own client-side queue is bounded too, and that has nothing to
+  do with the stalled consumer. Isolation is a claim about orders of magnitude: in
+  one CI run a healthy consumer shed 3 events out of 33,933 while the stalled one
+  shed 20,108. The demo's test asserts that separation rather than perfection.
 - Under `block` nothing is lost anywhere — and the publisher drops to 16.4k/s while
   the healthy consumers receive 198k instead of 237k. One sick consumer slowed
   everyone, and all three finish in lockstep.

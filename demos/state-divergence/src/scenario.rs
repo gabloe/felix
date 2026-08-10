@@ -145,12 +145,14 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub fn label(self) -> &'static str {
+    /// The victim is whichever consumer is last, so its name depends on
+    /// `--consumers` and cannot be baked into the string.
+    pub fn label(self, victim: &str) -> String {
         match self {
-            Phase::Converged => "converged — every consumer matches the authority",
-            Phase::Stalled => "STALLED — consumer-3 has stopped applying changes",
-            Phase::Recovering => "recovering — consumer-3 is reading again",
-            Phase::Quiesced => "quiesced — publishing stopped, state has settled",
+            Phase::Converged => "converged — every consumer matches the authority".to_string(),
+            Phase::Stalled => format!("STALLED — {victim} has stopped applying changes"),
+            Phase::Recovering => format!("recovering — {victim} is reading again"),
+            Phase::Quiesced => "quiesced — publishing stopped, state has settled".to_string(),
         }
     }
 }
@@ -227,6 +229,8 @@ impl Authority {
 #[derive(Debug)]
 pub struct LiveState {
     pub mode: Mode,
+    /// Name of the consumer that stalls, for labelling.
+    pub victim: String,
     pub keys: usize,
     pub phase: std::sync::Mutex<Phase>,
     pub consumers: Vec<Arc<ConsumerState>>,
@@ -392,6 +396,7 @@ where
 
     let state = Arc::new(LiveState {
         mode: config.mode,
+        victim: victim.name.clone(),
         keys: config.keys,
         phase: std::sync::Mutex::new(Phase::Converged),
         consumers: consumers.clone(),

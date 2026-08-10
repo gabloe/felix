@@ -108,15 +108,15 @@ tasks:
           fi
         done
   demo:cache:
-    cmds: ["cargo run --release -p broker --bin cache-demo"]
+    cmds: ["cargo run --release -p broker --bin cache-demo -- {{.CLI_ARGS}}"]
   demo:latency:
-    cmds: ["cargo run --release -p broker --bin latency-demo --all-features"]
+    cmds: ["cargo run --release -p broker --bin latency-demo --all-features -- {{.CLI_ARGS}}"]
   demo:notifications:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications"]
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications -- {{.CLI_ARGS}}"]
   demo:orders:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-orders"]
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-orders -- {{.CLI_ARGS}}"]
   demo:pubsub:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple"]
+    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple -- {{.CLI_ARGS}}"]
   demo:check:
     desc: "Build the standalone demo crates and run their behavioural tests"
     cmds:
@@ -133,19 +133,19 @@ tasks:
   demo:state-divergence:
     desc: "Counterpart demo: what at-most-once costs a consumer holding local state"
     cmds:
-      - "cargo run --release --manifest-path demos/state-divergence/Cargo.toml"
+      - "cargo run --release --manifest-path demos/state-divergence/Cargo.toml -- {{.CLI_ARGS}}"
   demo:slow-consumer:
     desc: "Flagship demo: one slow consumer does not degrade the healthy ones"
     cmds:
-      - "cargo run --release --manifest-path demos/slow-consumer/Cargo.toml"
+      - "cargo run --release --manifest-path demos/slow-consumer/Cargo.toml -- {{.CLI_ARGS}}"
   demo:rbac-live:
     cmds:
-      - "cargo run --manifest-path demos/rbac-live/Cargo.toml"
+      - "cargo run --manifest-path demos/rbac-live/Cargo.toml -- {{.CLI_ARGS}}"
   demo:cross-tenant-isolation:
     cmds:
       - "task pg:down"
       - "task pg:up"
-      - "cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml"
+      - "cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml -- {{.CLI_ARGS}}"
       - "task pg:down"
   perf:latency-matrix:
     cmds:
