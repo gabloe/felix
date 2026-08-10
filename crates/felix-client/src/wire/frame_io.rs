@@ -4,21 +4,32 @@ use bytes::{Bytes, BytesMut};
 use felix_wire::{Frame, FrameHeader, Message};
 use quinn::{ReadExactError, RecvStream, SendStream};
 
-use crate::config::runtime_config;
+#[cfg(test)]
+use crate::config::DEFAULT_MAX_FRAME_BYTES;
 #[cfg(feature = "telemetry")]
 use crate::counters::frame_counters;
 #[cfg(feature = "telemetry")]
 use crate::timings;
 use crate::wire::decode_log::log_decode_error;
 
+#[cfg(test)]
 pub(crate) async fn read_message(
     recv: &mut RecvStream,
     frame_scratch: &mut BytesMut,
 ) -> Result<Option<Message>> {
-    let frame = match read_frame_into(recv, frame_scratch, false).await? {
-        Some(frame) => frame,
-        None => return Ok(None),
-    };
+    read_message_with_limit(recv, frame_scratch, DEFAULT_MAX_FRAME_BYTES).await
+}
+
+pub(crate) async fn read_message_with_limit(
+    recv: &mut RecvStream,
+    frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
+) -> Result<Option<Message>> {
+    let frame =
+        match read_frame_into_with_limit(recv, frame_scratch, false, max_frame_bytes).await? {
+            Some(frame) => frame,
+            None => return Ok(None),
+        };
     match Message::decode(frame.clone()).context("decode message") {
         Ok(message) => Ok(Some(message)),
         Err(err) => {
@@ -35,10 +46,20 @@ pub(crate) async fn read_message(
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn read_frame_into(
     recv: &mut RecvStream,
     scratch: &mut BytesMut,
     record_read_await: bool,
+) -> Result<Option<Frame>> {
+    read_frame_into_with_limit(recv, scratch, record_read_await, DEFAULT_MAX_FRAME_BYTES).await
+}
+
+pub(crate) async fn read_frame_into_with_limit(
+    recv: &mut RecvStream,
+    scratch: &mut BytesMut,
+    record_read_await: bool,
+    max_frame_bytes: usize,
 ) -> Result<Option<Frame>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = record_read_await;
@@ -60,7 +81,6 @@ pub(crate) async fn read_frame_into(
     let length = usize::try_from(header.length).context("frame length")?;
 
     // Safety: we enforce a max frame size (`FELIX_MAX_FRAME_BYTES`) before allocating.
-    let max_frame_bytes = runtime_config().max_frame_bytes;
     if length > max_frame_bytes {
         return Err(anyhow::anyhow!(
             "frame too large: {length} bytes (cap {max_frame_bytes}); refusing"
@@ -104,10 +124,11 @@ pub(crate) async fn read_frame_into(
     Ok(Some(frame))
 }
 
-pub(crate) async fn read_frame_cache_timed_into(
+pub(crate) async fn read_frame_cache_timed_into_with_limit(
     recv: &mut RecvStream,
     sample: bool,
     scratch: &mut BytesMut,
+    max_frame_bytes: usize,
 ) -> Result<Option<Frame>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = sample;
@@ -130,7 +151,6 @@ pub(crate) async fn read_frame_cache_timed_into(
     let length = usize::try_from(header.length).context("frame length")?;
 
     // Safety: we enforce a max frame size (`FELIX_MAX_FRAME_BYTES`) before allocating.
-    let max_frame_bytes = runtime_config().max_frame_bytes;
     if length > max_frame_bytes {
         return Err(anyhow::anyhow!(
             "frame too large: {length} bytes (cap {max_frame_bytes}); refusing"
@@ -194,16 +214,4 @@ pub(crate) async fn write_frame_parts(send: &mut SendStream, frame: &Frame) -> R
 pub(crate) async fn write_message(send: &mut SendStream, message: Message) -> Result<()> {
     let frame = message.encode().context("encode message")?;
     write_frame_parts(send, &frame).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_config_has_reasonable_defaults() {
-        let config = runtime_config();
-        assert!(config.max_frame_bytes > 0);
-        assert!(config.max_frame_bytes <= 64 * 1024 * 1024); // Sanity check
-    }
 }

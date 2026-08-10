@@ -96,6 +96,8 @@ nav:
     - Installation: getting-started/installation.md
   - Demos:
     - Overview: demos/overview.md
+    - Slow-consumer Isolation: demos/slow-consumer-isolation.md
+    - Local State Divergence: demos/state-divergence.md
     - Notifications: demos/notifications.md
     - Orders Pipeline: demos/orders.md
   - Architecture:

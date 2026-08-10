@@ -28,6 +28,48 @@ cargo run --release -p broker --bin pubsub-demo-orders
 - Demos rely on demo auth helpers and are not intended for production.
 - The broker demos spin up an in-process broker instance for convenience.
 
+## Slow-consumer isolation (start here)
+
+The flagship demo. One telemetry stream, three dashboard consumers, one of which
+stops draining mid-run. Runs the identical workload under both subscriber queue
+policies and compares them, so the trade-off Felix makes is visible rather than
+asserted.
+
+Location: `demos/slow-consumer/`
+
+### Run
+
+```bash
+cargo run --release --manifest-path demos/slow-consumer/Cargo.toml
+```
+
+Or with Task:
+
+```bash
+task demo:slow-consumer
+```
+
+Renders a live terminal UI, falling back to plain text automatically when stdout
+is not a terminal.
+
+## Local state divergence
+
+The counterpart to the slow-consumer demo. Consumers hold a local copy of a config
+keyspace built from a change stream; one stalls, recovers, and is still permanently
+wrong once everything settles. Demonstrates a gap rather than a feature.
+
+Location: `demos/state-divergence/`
+
+### Run
+
+```bash
+cargo run --release --manifest-path demos/state-divergence/Cargo.toml
+```
+
+```bash
+task demo:state-divergence
+```
+
 ## Live RBAC Policy Change (Control Plane Mutation)
 
 Location: `demos/rbac-live/`

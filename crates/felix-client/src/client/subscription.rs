@@ -13,7 +13,7 @@ use crate::config::ClientSubQueuePolicy;
 use crate::counters::frame_counters;
 #[cfg(feature = "telemetry")]
 use crate::timings;
-use crate::wire::{log_decode_error, read_frame_into, record_e2e_latency};
+use crate::wire::{log_decode_error, read_frame_into_with_limit, record_e2e_latency};
 
 struct QueuedFrame {
     frame: Frame,
@@ -34,6 +34,8 @@ pub struct Subscription {
     pub(crate) stream: Arc<str>,
     pub(crate) event_conn_index: usize,
     pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
+    #[cfg(feature = "telemetry")]
+    bench_embed_ts: bool,
 }
 
 pub struct Event {
@@ -53,6 +55,9 @@ pub(crate) struct SubscriptionPipelineConfig {
     pub(crate) stream: Arc<str>,
     pub(crate) event_conn_index: usize,
     pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
+    pub(crate) max_frame_bytes: usize,
+    #[cfg(feature = "telemetry")]
+    pub(crate) bench_embed_ts: bool,
 }
 
 impl Subscription {
@@ -66,6 +71,7 @@ impl Subscription {
             frame_tx,
             config.queue_policy,
             capacity,
+            config.max_frame_bytes,
         ));
         tokio::spawn(run_subscription_dispatch_task(
             frame_rx,
@@ -84,6 +90,8 @@ impl Subscription {
             stream: config.stream,
             event_conn_index: config.event_conn_index,
             event_conn_counts: config.event_conn_counts,
+            #[cfg(feature = "telemetry")]
+            bench_embed_ts: config.bench_embed_ts,
         }
     }
 
@@ -104,7 +112,11 @@ impl Subscription {
         };
         match queued {
             QueuedEvent::Payload(payload) => {
-                record_e2e_latency(&payload);
+                record_e2e_latency(
+                    &payload,
+                    #[cfg(feature = "telemetry")]
+                    self.bench_embed_ts,
+                );
                 Ok(Some(Event {
                     tenant_id: Arc::clone(&self.tenant_id),
                     namespace: Arc::clone(&self.namespace),
@@ -122,6 +134,7 @@ async fn run_subscription_io_task(
     frame_tx: mpsc::Sender<QueuedFrame>,
     queue_policy: ClientSubQueuePolicy,
     queue_capacity: usize,
+    max_frame_bytes: usize,
 ) {
     let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
     #[cfg(feature = "telemetry")]
@@ -136,14 +149,17 @@ async fn run_subscription_io_task(
             t_histogram!("client_sub_poll_gap_ns").record(poll_gap_ns as f64);
         }
 
-        let first = match read_frame_into(&mut recv, &mut frame_scratch, true).await {
-            Ok(Some(frame)) => frame,
-            Ok(None) => break,
-            Err(err) => {
-                tracing::debug!(error = %err, "subscription io task stopped");
-                break;
-            }
-        };
+        let first =
+            match read_frame_into_with_limit(&mut recv, &mut frame_scratch, true, max_frame_bytes)
+                .await
+            {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(err) => {
+                    tracing::debug!(error = %err, "subscription io task stopped");
+                    break;
+                }
+            };
         if !enqueue_frame(
             &frame_tx,
             QueuedFrame {

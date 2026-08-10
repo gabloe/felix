@@ -1,0 +1,34 @@
+[package]
+name = "demo-state-divergence"
+version = "0.1.1"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+rcgen = "0.14"
+rustls = "0.23"
+quinn = "0.11"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+
+# Terminal UI. Deliberately confined to this standalone crate: the other demos are
+# `[[bin]]` targets of the `broker` service crate, so depending on ratatui there
+# would put a UI stack into the broker's own dependency tree and into cargo-deny's
+# workspace scope. Both are MIT, which deny.toml already allows.
+ratatui = "0.30"
+crossterm = "0.29"
+
+broker = { path = "../../services/broker" }
+felix-broker = { path = "../../crates/felix-broker" }
+felix-client = { path = "../../crates/felix-client" }
+felix-storage = { path = "../../crates/felix-storage" }
+felix-transport = { path = "../../crates/felix-transport" }
+felix-wire = { path = "../../crates/felix-wire" }
+
+# Own workspace root, so this crate is excluded from the repository workspace and
+# its UI dependencies never reach `cargo build --workspace` or the broker binary.
+# Same pattern as demos/rbac-live and demos/cross_tenant_isolation.
+[workspace]

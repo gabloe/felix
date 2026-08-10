@@ -15,8 +15,8 @@ use quinn::RecvStream;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::{EVENT_ROUTER_QUEUE_DEPTH, runtime_config};
-use crate::wire::read_message;
+use crate::config::EVENT_ROUTER_QUEUE_DEPTH;
+use crate::wire::read_message_with_limit;
 
 pub(crate) enum EventRouterCommand {
     Register {
@@ -25,22 +25,40 @@ pub(crate) enum EventRouterCommand {
     },
 }
 
+#[cfg(test)]
 pub(crate) fn spawn_event_router(connection: QuicConnection) -> mpsc::Sender<EventRouterCommand> {
+    spawn_event_router_with_config(
+        connection,
+        crate::config::DEFAULT_EVENT_ROUTER_MAX_PENDING,
+        crate::config::DEFAULT_MAX_FRAME_BYTES,
+    )
+}
+
+pub(crate) fn spawn_event_router_with_config(
+    connection: QuicConnection,
+    max_pending: usize,
+    max_frame_bytes: usize,
+) -> mpsc::Sender<EventRouterCommand> {
     let (tx, rx) = mpsc::channel(EVENT_ROUTER_QUEUE_DEPTH);
-    tokio::spawn(run_event_router(connection, rx));
+    tokio::spawn(run_event_router(
+        connection,
+        rx,
+        max_pending,
+        max_frame_bytes,
+    ));
     tx
 }
 
 pub(crate) async fn run_event_router(
     connection: QuicConnection,
     mut rx: mpsc::Receiver<EventRouterCommand>,
+    max_pending: usize,
+    max_frame_bytes: usize,
 ) {
     let mut pending_waiters: HashMap<u64, oneshot::Sender<anyhow::Result<RecvStream>>> =
         HashMap::new();
     let mut pending_streams: HashMap<u64, RecvStream> = HashMap::new();
     let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
-
-    let max_pending = runtime_config().event_router_max_pending;
 
     // POTENTIAL ISSUE:
     // `pending_waiters` and `pending_streams` can grow without bound if:
@@ -95,7 +113,11 @@ pub(crate) async fn run_event_router(
                     // Best-effort: drop the stream to cap memory growth under overload.
                     continue;
                 }
-                let subscription_id = match read_message(&mut recv, &mut frame_scratch).await {
+                let subscription_id = match read_message_with_limit(
+                    &mut recv,
+                    &mut frame_scratch,
+                    max_frame_bytes,
+                ).await {
                     Ok(Some(Message::EventStreamHello { subscription_id })) => subscription_id,
                     Ok(Some(_)) => continue,
                     Ok(None) => continue,
@@ -163,8 +185,6 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_registration_is_rejected() -> Result<()> {
-        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
-        crate::config::ClientConfig::optimized_defaults(quinn).install();
         let (client_conn, server_conn, shutdown_tx) = quic_pair().await?;
         let router = spawn_event_router(client_conn);
 
@@ -200,8 +220,6 @@ mod tests {
 
     #[tokio::test]
     async fn stream_arrives_before_registration_is_delivered() -> Result<()> {
-        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
-        crate::config::ClientConfig::optimized_defaults(quinn).install();
         let (client_conn, server_conn, shutdown_tx) = quic_pair().await?;
         let router = spawn_event_router(client_conn);
 
@@ -230,8 +248,6 @@ mod tests {
 
     #[tokio::test]
     async fn router_drop_notifies_pending_waiters() -> Result<()> {
-        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
-        crate::config::ClientConfig::optimized_defaults(quinn).install();
         let (client_conn, _server_conn, shutdown_tx) = quic_pair().await?;
         let router = spawn_event_router(client_conn);
 

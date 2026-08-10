@@ -117,6 +117,27 @@ tasks:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-orders"]
   demo:pubsub:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-simple"]
+  demo:check:
+    desc: "Build the standalone demo crates and run their behavioural tests"
+    cmds:
+      - "cargo fmt --manifest-path demos/slow-consumer/Cargo.toml -- --check"
+      - "cargo fmt --manifest-path demos/state-divergence/Cargo.toml -- --check"
+      - "cargo clippy --manifest-path demos/slow-consumer/Cargo.toml --all-targets -- -D warnings"
+      - "cargo clippy --manifest-path demos/state-divergence/Cargo.toml --all-targets -- -D warnings"
+      - "cargo build --manifest-path demos/slow-consumer/Cargo.toml"
+      - "cargo build --manifest-path demos/state-divergence/Cargo.toml"
+      - "cargo build --manifest-path demos/rbac-live/Cargo.toml"
+      - "cargo build --manifest-path demos/cross_tenant_isolation/Cargo.toml"
+      - "cargo test --manifest-path demos/slow-consumer/Cargo.toml"
+      - "cargo test --manifest-path demos/state-divergence/Cargo.toml"
+  demo:state-divergence:
+    desc: "Counterpart demo: what at-most-once costs a consumer holding local state"
+    cmds:
+      - "cargo run --release --manifest-path demos/state-divergence/Cargo.toml"
+  demo:slow-consumer:
+    desc: "Flagship demo: one slow consumer does not degrade the healthy ones"
+    cmds:
+      - "cargo run --release --manifest-path demos/slow-consumer/Cargo.toml"
   demo:rbac-live:
     cmds:
       - "cargo run --manifest-path demos/rbac-live/Cargo.toml"
