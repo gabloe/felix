@@ -8,20 +8,22 @@ use quinn::RecvStream;
 use crate::counters::frame_counters;
 #[cfg(feature = "telemetry")]
 use crate::timings;
-use crate::wire::frame_io::read_frame_into;
+use crate::wire::frame_io::read_frame_into_with_limit;
 
 pub(crate) async fn read_ack_message_with_timing(
     recv: &mut RecvStream,
     frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
 ) -> Result<Option<Message>> {
     #[cfg(feature = "telemetry")]
     let sample = crate::t_should_sample();
     #[cfg(feature = "telemetry")]
     let read_start = crate::t_now_if(sample);
-    let frame = match read_frame_into(recv, frame_scratch, false).await? {
-        Some(frame) => frame,
-        None => return Ok(None),
-    };
+    let frame =
+        match read_frame_into_with_limit(recv, frame_scratch, false, max_frame_bytes).await? {
+            Some(frame) => frame,
+            None => return Ok(None),
+        };
     #[cfg(feature = "telemetry")]
     if let Some(start) = read_start {
         let read_ns = start.elapsed().as_nanos() as u64;
@@ -40,11 +42,29 @@ pub(crate) async fn read_ack_message_with_timing(
     Ok(Some(message))
 }
 
+#[cfg(test)]
 pub(crate) async fn maybe_wait_for_ack(
     recv: &mut RecvStream,
     ack: AckMode,
     request_id: Option<u64>,
     frame_scratch: &mut BytesMut,
+) -> Result<()> {
+    maybe_wait_for_ack_with_limit(
+        recv,
+        ack,
+        request_id,
+        frame_scratch,
+        crate::config::DEFAULT_MAX_FRAME_BYTES,
+    )
+    .await
+}
+
+pub(crate) async fn maybe_wait_for_ack_with_limit(
+    recv: &mut RecvStream,
+    ack: AckMode,
+    request_id: Option<u64>,
+    frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
 ) -> Result<()> {
     // AckMode::None is fire-and-forget; otherwise wait for PublishOk/PublishError.
     if ack == AckMode::None {
@@ -52,7 +72,7 @@ pub(crate) async fn maybe_wait_for_ack(
     }
     let request_id =
         request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
-    let response = read_ack_message_with_timing(recv, frame_scratch).await?;
+    let response = read_ack_message_with_timing(recv, frame_scratch, max_frame_bytes).await?;
     match response {
         Some(Message::PublishOk { request_id: ack_id }) if ack_id == request_id => {
             #[cfg(feature = "telemetry")]
@@ -248,7 +268,12 @@ mod tests {
         crate::timings::enable_collection(1);
         let (mut recv, shutdown_tx, server_task) = open_ack_stream(None).await?;
         let mut scratch = BytesMut::with_capacity(64 * 1024);
-        let response = read_ack_message_with_timing(&mut recv, &mut scratch).await?;
+        let response = read_ack_message_with_timing(
+            &mut recv,
+            &mut scratch,
+            crate::config::DEFAULT_MAX_FRAME_BYTES,
+        )
+        .await?;
         assert!(response.is_none());
         let _ = shutdown_tx.send(());
         server_task.await.context("server task join")??;
@@ -268,9 +293,13 @@ mod tests {
         let (mut recv, shutdown_tx, server_task) = open_ack_stream_bytes(Some(bytes)).await?;
         let mut scratch = BytesMut::with_capacity(64 * 1024);
         assert!(
-            read_ack_message_with_timing(&mut recv, &mut scratch)
-                .await
-                .is_err()
+            read_ack_message_with_timing(
+                &mut recv,
+                &mut scratch,
+                crate::config::DEFAULT_MAX_FRAME_BYTES,
+            )
+            .await
+            .is_err()
         );
         let _ = shutdown_tx.send(());
         server_task.await.context("server task join")??;

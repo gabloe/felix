@@ -17,8 +17,8 @@ use crate::counters::frame_counters;
 #[cfg(feature = "telemetry")]
 use crate::timings;
 use crate::wire::{
-    bench_embed_ts_enabled, maybe_append_publish_ts, maybe_append_publish_ts_batch,
-    maybe_wait_for_ack, write_frame_parts,
+    maybe_append_publish_ts, maybe_append_publish_ts_batch, maybe_wait_for_ack_with_limit,
+    write_frame_parts,
 };
 
 use super::sharding::PublishSharding;
@@ -34,6 +34,7 @@ pub(crate) struct PublisherInner {
     pub(crate) rr: AtomicUsize,
     admission: Arc<PublishAdmission>,
     stream_cache: Mutex<StreamShardCache>,
+    bench_embed_ts: bool,
 }
 
 impl PublisherInner {
@@ -59,7 +60,19 @@ impl PublisherInner {
             rr: AtomicUsize::new(0),
             admission,
             stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
+            bench_embed_ts: false,
         }
+    }
+
+    pub(crate) fn with_runtime_config(
+        workers: Arc<Vec<PublishWorker>>,
+        sharding: PublishSharding,
+        admission: Arc<PublishAdmission>,
+        bench_embed_ts: bool,
+    ) -> Self {
+        let mut inner = Self::with_admission(workers, sharding, admission);
+        inner.bench_embed_ts = bench_embed_ts;
+        inner
     }
 }
 
@@ -278,7 +291,7 @@ impl Publisher {
         ack: AckMode,
     ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
-        let payload = maybe_append_publish_ts(payload);
+        let payload = maybe_append_publish_ts(payload, self.inner.bench_embed_ts);
         // Enqueue publish on the single-writer publisher task.
         let (response_tx, response_rx) = oneshot::channel();
         let request_id = if ack == AckMode::None {
@@ -355,7 +368,7 @@ impl Publisher {
         ack: AckMode,
     ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
-        let payloads = maybe_append_publish_ts_batch(payloads);
+        let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
         // Batch publish uses the same queue/writer as single messages.
         let (response_tx, response_rx) = oneshot::channel();
         let request_id = if ack == AckMode::None {
@@ -415,10 +428,10 @@ impl Publisher {
     ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads_with_ts;
-        let payloads = if bench_embed_ts_enabled() {
+        let payloads = if self.inner.bench_embed_ts {
             payloads_with_ts = payloads
                 .iter()
-                .map(|payload| maybe_append_publish_ts(payload.clone()))
+                .map(|payload| maybe_append_publish_ts(payload.clone(), true))
                 .collect::<Vec<_>>();
             &payloads_with_ts
         } else {
@@ -565,11 +578,29 @@ impl Publisher {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn run_publisher_writer(
+    send: SendStream,
+    recv: RecvStream,
+    rx: mpsc::Receiver<PublishRequest>,
+    _chunk_bytes: usize,
+) -> Result<()> {
+    run_publisher_writer_with_limit(
+        send,
+        recv,
+        rx,
+        _chunk_bytes,
+        crate::config::DEFAULT_MAX_FRAME_BYTES,
+    )
+    .await
+}
+
+pub(crate) async fn run_publisher_writer_with_limit(
     mut send: SendStream,
     mut recv: RecvStream,
     mut rx: mpsc::Receiver<PublishRequest>,
     _chunk_bytes: usize,
+    max_frame_bytes: usize,
 ) -> Result<()> {
     // Single writer: serialize publish requests over one bi-directional stream.
     let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
@@ -679,7 +710,14 @@ pub(crate) async fn run_publisher_writer(
                                     .bytes_out
                                     .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                             }
-                            maybe_wait_for_ack(&mut recv, ack, request_id, &mut ack_scratch).await
+                            maybe_wait_for_ack_with_limit(
+                                &mut recv,
+                                ack,
+                                request_id,
+                                &mut ack_scratch,
+                                max_frame_bytes,
+                            )
+                            .await
                         }
                         Err(err) => Err(err),
                     };
@@ -745,7 +783,14 @@ pub(crate) async fn run_publisher_writer(
                     }
                     let result = match write_result {
                         Ok(()) => {
-                            maybe_wait_for_ack(&mut recv, ack, request_id, &mut ack_scratch).await
+                            maybe_wait_for_ack_with_limit(
+                                &mut recv,
+                                ack,
+                                request_id,
+                                &mut ack_scratch,
+                                max_frame_bytes,
+                            )
+                            .await
                         }
                         Err(err) => Err(err),
                     };
@@ -1034,17 +1079,7 @@ mod tests {
                 let batch = felix_wire::binary::decode_publish_batch(&frame).expect("binary batch");
                 assert_eq!(item_count, 1);
                 assert_eq!(batch.payloads.len(), 1);
-                // In telemetry builds, `runtime_config()` is a process-global OnceLock:
-                // parallel #[serial] env tests can leave FELIX_BENCH_EMBED_TS enabled at
-                // first initialization, which appends an 8-byte bench timestamp to the
-                // payload. Accept either shape — this test asserts the *encoding path*,
-                // not the embed feature.
-                let payload = &batch.payloads[0];
-                assert!(payload.starts_with(b"binary"));
-                assert!(
-                    payload.len() == b"binary".len() || payload.len() == b"binary".len() + 8,
-                    "unexpected payload shape: {payload:?}"
-                );
+                assert_eq!(batch.payloads[0], b"binary");
                 let _ = response.send(Ok(()));
             }
             _ => panic!("unacked publish should use binary encoding"),
@@ -1127,21 +1162,6 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "telemetry")]
     async fn publish_batch_binary_appends_bench_ts_when_enabled() -> Result<()> {
-        use crate::config::{
-            ClientRuntimeConfig, ClientSubQueuePolicy, DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
-            DEFAULT_EVENT_ROUTER_MAX_PENDING, DEFAULT_MAX_FRAME_BYTES,
-            install_runtime_config_for_tests, reset_runtime_config_for_tests,
-        };
-
-        reset_runtime_config_for_tests();
-        install_runtime_config_for_tests(ClientRuntimeConfig {
-            event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
-            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
-            client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
-            client_sub_queue_policy: ClientSubQueuePolicy::DropNew,
-            bench_embed_ts: true,
-        });
-
         let (tx, mut rx) = mpsc::channel::<PublishRequest>(1);
         let handle = tokio::spawn(async move {
             if let Some(PublishRequest::BinaryBytes {
@@ -1159,13 +1179,17 @@ mod tests {
         });
 
         let publisher = Publisher {
-            inner: Arc::new(PublisherInner::new(
+            inner: Arc::new(PublisherInner::with_runtime_config(
                 Arc::new(vec![PublishWorker {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
                 }]),
                 PublishSharding::RoundRobin,
+                Arc::new(PublishAdmission::new(
+                    crate::config::DEFAULT_PUBLISH_INFLIGHT_BYTES,
+                )),
+                true,
             )),
         };
         publisher

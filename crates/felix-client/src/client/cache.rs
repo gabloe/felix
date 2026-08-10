@@ -19,7 +19,7 @@ use tracing::debug;
 
 #[cfg(feature = "telemetry")]
 use crate::timings;
-use crate::wire::{read_frame_cache_timed_into, write_frame_parts};
+use crate::wire::{read_frame_cache_timed_into_with_limit, write_frame_parts};
 
 pub(crate) struct CacheWorker {
     pub(crate) tx: mpsc::Sender<CacheRequest>,
@@ -39,12 +39,13 @@ pub(crate) enum CacheRequest {
     },
 }
 
-pub(crate) async fn run_cache_worker(
+pub(crate) async fn run_cache_worker_with_limit(
     conn_index: usize,
     mut send: SendStream,
     mut recv: RecvStream,
     mut rx: mpsc::Receiver<CacheRequest>,
     cache_conn_counts: Arc<Vec<AtomicUsize>>,
+    max_frame_bytes: usize,
 ) {
     // Single writer for a cache stream; handles sequential request/response pairs.
     let sample = crate::t_should_sample();
@@ -59,7 +60,14 @@ pub(crate) async fn run_cache_worker(
     debug!(conn_index, "cache worker started");
     while let Some(request) = rx.recv().await {
         debug!(conn_index, "cache worker received request");
-        let result = handle_cache_request(&mut send, &mut recv, request, &mut frame_scratch).await;
+        let result = handle_cache_request(
+            &mut send,
+            &mut recv,
+            request,
+            &mut frame_scratch,
+            max_frame_bytes,
+        )
+        .await;
 
         // Decrement "in-flight ops" gauge for this connection, saturating at 0.
         let counter = &cache_conn_counts[conn_index];
@@ -96,6 +104,7 @@ async fn handle_cache_request(
     recv: &mut RecvStream,
     request: CacheRequest,
     frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
 ) -> Result<()> {
     let sample = crate::t_should_sample();
     match request {
@@ -104,8 +113,16 @@ async fn handle_cache_request(
             message,
             response,
         } => {
-            let result =
-                cache_round_trip(send, recv, message, sample, request_id, frame_scratch).await;
+            let result = cache_round_trip(
+                send,
+                recv,
+                message,
+                sample,
+                request_id,
+                frame_scratch,
+                max_frame_bytes,
+            )
+            .await;
             match result {
                 Ok(_) => {
                     let _ = response.send(Ok(()));
@@ -122,8 +139,16 @@ async fn handle_cache_request(
             message,
             response,
         } => {
-            let result =
-                cache_round_trip(send, recv, message, sample, request_id, frame_scratch).await;
+            let result = cache_round_trip(
+                send,
+                recv,
+                message,
+                sample,
+                request_id,
+                frame_scratch,
+                max_frame_bytes,
+            )
+            .await;
             match result {
                 Ok(value) => {
                     let _ = response.send(Ok(value));
@@ -145,6 +170,7 @@ async fn cache_round_trip(
     sample: bool,
     request_id: u64,
     frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
 ) -> Result<Option<Bytes>> {
     // Encode -> write -> read -> decode in one stream round trip.
     let encode_start = crate::t_now_if(sample);
@@ -165,10 +191,13 @@ async fn cache_round_trip(
         let write_ns = start.elapsed().as_nanos() as u64;
         timings::record_cache_write_ns(write_ns);
     }
-    let frame = match read_frame_cache_timed_into(recv, sample, frame_scratch).await? {
-        Some(frame) => frame,
-        None => return Err(anyhow::anyhow!("cache response closed")),
-    };
+    let frame =
+        match read_frame_cache_timed_into_with_limit(recv, sample, frame_scratch, max_frame_bytes)
+            .await?
+        {
+            Some(frame) => frame,
+            None => return Err(anyhow::anyhow!("cache response closed")),
+        };
     let decode_start = crate::t_now_if(sample);
     #[cfg(not(feature = "telemetry"))]
     let _ = decode_start;

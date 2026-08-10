@@ -62,5 +62,13 @@ jobs:
       - name: Publish-readiness and licence split
         run: task publish:check
 
+      # Demos under demos/ that declare their own [workspace] are excluded from the
+      # repository workspace, so `task lint` and `task test` never reach them and
+      # they can break silently. Build all three, and run the slow-consumer demo's
+      # tests: its isolation assertion is a behavioural regression test for the
+      # property Felix's one-line description rests on.
+      - name: Standalone demo crates
+        run: task demo:check
+
       - name: RSA dependency check (non-controlplane crates)
         run: task deny:rsa:default

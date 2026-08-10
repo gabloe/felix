@@ -27,6 +27,10 @@
 for high-fanout delivery with predictable tail latency and strict slow-consumer
 isolation.
 
+The slow-consumer isolation half of that sentence is runnable:
+[`task demo:slow-consumer`](../demos/slow-consumer-isolation.md) stalls one
+consumer and measures what happens to the others, under both queue policies.
+
 **Target:** Felix is a distributed data plane offering coordination-store watch
 semantics — read the current value, then receive every subsequent change with no
 gap — at messaging-system fanout and throughput. The point of that combination is

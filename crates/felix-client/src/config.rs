@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use felix_transport::TransportConfig;
 use serde::Deserialize;
 use std::fs;
-use std::sync::OnceLock;
 
 use crate::client::sharding::PublishSharding;
 
@@ -101,17 +100,14 @@ pub struct ClientConfig {
     pub bench_embed_ts: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct ClientRuntimeConfig {
     pub(crate) event_router_max_pending: usize,
     pub(crate) max_frame_bytes: usize,
     pub(crate) client_sub_queue_capacity: usize,
     pub(crate) client_sub_queue_policy: ClientSubQueuePolicy,
-    #[cfg(feature = "telemetry")]
     pub(crate) bench_embed_ts: bool,
 }
-
-static CLIENT_RUNTIME_CONFIG: OnceLock<ClientRuntimeConfig> = OnceLock::new();
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -270,15 +266,14 @@ impl ClientConfig {
         config
     }
 
-    pub(crate) fn install(&self) {
-        let _ = CLIENT_RUNTIME_CONFIG.set(ClientRuntimeConfig {
+    pub(crate) fn runtime_config(&self) -> ClientRuntimeConfig {
+        ClientRuntimeConfig {
             event_router_max_pending: self.event_router_max_pending,
             max_frame_bytes: self.max_frame_bytes,
             client_sub_queue_capacity: self.client_sub_queue_capacity,
             client_sub_queue_policy: self.client_sub_queue_policy,
-            #[cfg(feature = "telemetry")]
             bench_embed_ts: self.bench_embed_ts,
-        });
+        }
     }
 }
 
@@ -399,32 +394,6 @@ fn parse_sharding(value: &str) -> Option<PublishSharding> {
     }
 }
 
-pub(crate) fn runtime_config() -> &'static ClientRuntimeConfig {
-    CLIENT_RUNTIME_CONFIG.get_or_init(|| ClientRuntimeConfig {
-        event_router_max_pending: DEFAULT_EVENT_ROUTER_MAX_PENDING,
-        max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
-        client_sub_queue_capacity: DEFAULT_CLIENT_SUB_QUEUE_CAPACITY,
-        client_sub_queue_policy: ClientSubQueuePolicy::DropNew,
-        #[cfg(feature = "telemetry")]
-        bench_embed_ts: false,
-    })
-}
-
-#[cfg(all(test, feature = "telemetry"))]
-pub(crate) fn reset_runtime_config_for_tests() {
-    // Safety: test-only helper to reset global state between tests.
-    unsafe {
-        let ptr = &CLIENT_RUNTIME_CONFIG as *const OnceLock<ClientRuntimeConfig>
-            as *mut OnceLock<ClientRuntimeConfig>;
-        let _ = (*ptr).take();
-    }
-}
-
-#[cfg(all(test, feature = "telemetry"))]
-pub(crate) fn install_runtime_config_for_tests(config: ClientRuntimeConfig) {
-    let _ = CLIENT_RUNTIME_CONFIG.set(config);
-}
-
 pub(crate) fn event_transport_config(
     mut base: TransportConfig,
     config: &ClientConfig,
@@ -463,4 +432,46 @@ fn read_bool_env(key: &str) -> Option<bool> {
     std::env::var(key)
         .ok()
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+#[cfg(test)]
+mod runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_config_is_per_client_and_order_independent() -> Result<()> {
+        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
+        let mut block = ClientConfig::optimized_defaults(quinn.clone());
+        block.client_sub_queue_policy = ClientSubQueuePolicy::Block;
+        block.client_sub_queue_capacity = 11;
+        block.event_router_max_pending = 13;
+        block.max_frame_bytes = 17;
+        block.bench_embed_ts = true;
+
+        let mut drop_new = ClientConfig::optimized_defaults(quinn);
+        drop_new.client_sub_queue_policy = ClientSubQueuePolicy::DropNew;
+        drop_new.client_sub_queue_capacity = 19;
+        drop_new.event_router_max_pending = 23;
+        drop_new.max_frame_bytes = 29;
+
+        for (first, second) in [(&block, &drop_new), (&drop_new, &block)] {
+            let first = first.runtime_config();
+            let second = second.runtime_config();
+            assert_ne!(
+                first.client_sub_queue_policy,
+                second.client_sub_queue_policy
+            );
+            assert_ne!(
+                first.client_sub_queue_capacity,
+                second.client_sub_queue_capacity
+            );
+            assert_ne!(
+                first.event_router_max_pending,
+                second.event_router_max_pending
+            );
+            assert_ne!(first.max_frame_bytes, second.max_frame_bytes);
+            assert_ne!(first.bench_embed_ts, second.bench_embed_ts);
+        }
+        Ok(())
+    }
 }

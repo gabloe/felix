@@ -28,6 +28,69 @@ task <demo-task>
 
 ## Demo catalog
 
+### Local State Divergence (`demo-state-divergence`)
+
+**What it shows**: what at-most-once delivery costs a consumer maintaining a local
+copy of state. A consumer stalls, recovers, everything quiesces — and it is still
+permanently wrong about most of the keyspace, with no signal that it is.
+
+This demonstrates a gap rather than a feature. It is the executable form of the
+tension described in `docs-site/docs/getting-started/what-felix-is-for.md`, and it
+becomes the acceptance test for gap-free snapshot-plus-stream subscribe when that
+lands.
+
+**Run**:
+
+```bash
+cargo run --release --manifest-path demos/state-divergence/Cargo.toml
+```
+
+```bash
+task demo:state-divergence
+```
+
+**Optional flags**: `--rate`, `--keys`, `--consumers`, `--payload`,
+`--queue-capacity`, `--duration`, `--mode {lossy|lossless|both}`, `--no-tui`.
+
+**What to expect**: under production defaults the stalled consumer ends with most
+of its keyspace holding stale values. Configuring every checkpoint to block removes
+the divergence — at the cost of the slowest consumer throttling the publisher.
+
+---
+
+### Slow-consumer Isolation (`demo-slow-consumer`)
+
+**What it shows**: that one slow consumer does not degrade the healthy ones, and
+what the alternative costs. Runs the same workload twice — once under `drop_new`
+(the production default) and once under `block` — and prints them side by side.
+
+This is the demo to run first: it demonstrates the property in Felix's own one-line
+description of itself rather than a feature.
+
+**Run**:
+
+```bash
+cargo run --release --manifest-path demos/slow-consumer/Cargo.toml
+```
+
+```bash
+task demo:slow-consumer
+```
+
+**Optional flags**: `--rate`, `--subscribers`, `--payload`, `--queue-capacity`,
+`--duration`, `--policy {drop_new|block|both}`, `--no-tui`.
+
+**What to expect**: under `drop_new` the publisher holds its target rate and the
+healthy consumers lose nothing while the stalled one sheds. Under `block` nothing
+is lost anywhere and the publisher is throttled, slowing every consumer to the
+speed of the slowest. Neither is correct in general; which you want is a product
+decision.
+
+Numbers are single-node loopback at fanout 3. Lost events are gone — Felix is
+at-most-once today.
+
+---
+
 ### Live RBAC Policy Change (`demo-rbac-live`)
 
 Demonstrates a full end-to-end authorization flow using the real control plane,

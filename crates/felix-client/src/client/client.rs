@@ -19,16 +19,16 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
-use crate::client::cache::{CacheRequest, CacheWorker, run_cache_worker};
-use crate::client::event_router::{EventRouterCommand, spawn_event_router};
-use crate::client::publisher::{PublishWorker, run_publisher_writer};
+use crate::client::cache::{CacheRequest, CacheWorker, run_cache_worker_with_limit};
+use crate::client::event_router::{EventRouterCommand, spawn_event_router_with_config};
+use crate::client::publisher::{PublishWorker, run_publisher_writer_with_limit};
 use crate::client::sharding::PublishSharding;
 use crate::client::subscription::{Subscription, SubscriptionPipelineConfig};
 use crate::config::{
-    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, ClientSubQueuePolicy, cache_transport_config,
-    event_transport_config, runtime_config,
+    CACHE_WORKER_QUEUE_DEPTH, ClientConfig, ClientRuntimeConfig, cache_transport_config,
+    event_transport_config,
 };
-use crate::wire::{read_message, write_message};
+use crate::wire::{read_message_with_limit, write_message};
 
 /// Network client that speaks felix-wire over QUIC.
 pub struct Client {
@@ -70,6 +70,7 @@ pub struct Client {
     event_conn_counts: Arc<Vec<AtomicUsize>>,
     auth_tenant_id: String,
     auth_token: String,
+    runtime_config: ClientRuntimeConfig,
 }
 
 impl Client {
@@ -88,7 +89,7 @@ impl Client {
         client_config: ClientConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
-        client_config.install();
+        let runtime_config = client_config.runtime_config();
         let auth_tenant_id = client_config
             .auth_tenant_id
             .clone()
@@ -121,11 +122,23 @@ impl Client {
             for _ in 0..publish_streams_per_conn {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 debug!("client opened publish stream");
-                authenticate_stream(&mut send, &mut recv, &auth_tenant_id, &auth_token).await?;
+                authenticate_stream(
+                    &mut send,
+                    &mut recv,
+                    &auth_tenant_id,
+                    &auth_token,
+                    runtime_config.max_frame_bytes,
+                )
+                .await?;
                 debug!("client publish stream authenticated");
                 let (tx, rx) = mpsc::channel(publish_queue_depth);
-                let handle =
-                    tokio::spawn(run_publisher_writer(send, recv, rx, publish_chunk_bytes));
+                let handle = tokio::spawn(run_publisher_writer_with_limit(
+                    send,
+                    recv,
+                    rx,
+                    publish_chunk_bytes,
+                    runtime_config.max_frame_bytes,
+                ));
                 publish_workers.push(PublishWorker {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
@@ -164,15 +177,23 @@ impl Client {
             for _ in 0..cache_streams_per_conn {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 debug!(conn_index, "client opened cache stream");
-                authenticate_stream(&mut send, &mut recv, &auth_tenant_id, &auth_token).await?;
+                authenticate_stream(
+                    &mut send,
+                    &mut recv,
+                    &auth_tenant_id,
+                    &auth_token,
+                    runtime_config.max_frame_bytes,
+                )
+                .await?;
                 debug!(conn_index, "client cache stream authenticated");
                 let (tx, rx) = mpsc::channel(CACHE_WORKER_QUEUE_DEPTH);
-                tokio::spawn(run_cache_worker(
+                tokio::spawn(run_cache_worker_with_limit(
                     conn_index,
                     send,
                     recv,
                     rx,
                     Arc::clone(&cache_conn_counts),
+                    runtime_config.max_frame_bytes,
                 ));
                 cache_workers.push(CacheWorker { tx, conn_index });
             }
@@ -189,7 +210,11 @@ impl Client {
         }
         let mut event_stream_routers = Vec::with_capacity(event_pool_size);
         for connection in &event_connections {
-            event_stream_routers.push(spawn_event_router(connection.clone()));
+            event_stream_routers.push(spawn_event_router_with_config(
+                connection.clone(),
+                runtime_config.event_router_max_pending,
+                runtime_config.max_frame_bytes,
+            ));
         }
         let mut event_conn_counts = Vec::with_capacity(event_pool_size);
         for _ in 0..event_pool_size {
@@ -213,15 +238,17 @@ impl Client {
             event_conn_counts: Arc::new(event_conn_counts),
             auth_tenant_id,
             auth_token,
+            runtime_config,
         })
     }
 
     pub async fn publisher(&self) -> Result<super::publisher::Publisher> {
         Ok(super::publisher::Publisher {
-            inner: Arc::new(super::publisher::PublisherInner::with_admission(
+            inner: Arc::new(super::publisher::PublisherInner::with_runtime_config(
                 Arc::clone(&self.publish_workers),
                 self.publish_sharding,
                 Arc::clone(&self.publish_admission),
+                self.runtime_config.bench_embed_ts,
             )),
         })
     }
@@ -252,7 +279,14 @@ impl Client {
         let connection_index = rr as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
         let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(&mut send, &mut recv, &self.auth_tenant_id, &self.auth_token).await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
         let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
         write_message(
             &mut send,
@@ -265,7 +299,12 @@ impl Client {
         )
         .await?;
         send.finish()?;
-        let response = read_message(&mut recv, &mut frame_scratch).await?;
+        let response = read_message_with_limit(
+            &mut recv,
+            &mut frame_scratch,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
         let subscription_id = match response {
             Some(Message::Subscribed { subscription_id }) => subscription_id,
             Some(Message::Ok) => {
@@ -300,14 +339,17 @@ impl Client {
         .increment(1);
         Ok(Subscription::spawn_pipeline(SubscriptionPipelineConfig {
             recv,
-            queue_capacity: client_sub_queue_capacity(),
-            queue_policy: client_sub_queue_policy(),
+            queue_capacity: self.runtime_config.client_sub_queue_capacity.max(1),
+            queue_policy: self.runtime_config.client_sub_queue_policy,
             subscription_id,
             tenant_id,
             namespace,
             stream,
             event_conn_index: connection_index,
             event_conn_counts: Arc::clone(&self.event_conn_counts),
+            max_frame_bytes: self.runtime_config.max_frame_bytes,
+            #[cfg(feature = "telemetry")]
+            bench_embed_ts: self.runtime_config.bench_embed_ts,
         }))
     }
 
@@ -422,6 +464,7 @@ async fn authenticate_stream(
     recv: &mut RecvStream,
     tenant_id: &str,
     token: &str,
+    max_frame_bytes: usize,
 ) -> Result<()> {
     write_message(
         send,
@@ -433,18 +476,10 @@ async fn authenticate_stream(
     .await
     .context("send auth")?;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
-    match read_message(recv, &mut scratch).await? {
+    match read_message_with_limit(recv, &mut scratch, max_frame_bytes).await? {
         Some(Message::Ok) => Ok(()),
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
     }
-}
-
-fn client_sub_queue_capacity() -> usize {
-    runtime_config().client_sub_queue_capacity.max(1)
-}
-
-fn client_sub_queue_policy() -> ClientSubQueuePolicy {
-    runtime_config().client_sub_queue_policy
 }

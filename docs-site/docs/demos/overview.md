@@ -11,9 +11,35 @@ QUIC server on a random local port, runs the scenario, and exits.
 - Demo auth helpers are enabled for convenience (not production-safe).
 - The RBAC live demo starts a control plane, broker, and fake IdP on local ports.
 - All commands are run from the repository root.
-- If you use Task, run `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
+- If you use Task, run `task demo:slow-consumer`, `task demo:state-divergence`, `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
 
 ## Demo catalog
+
+### Local State Divergence (`demo-state-divergence`)
+
+- The counterpart to the isolation demo: what at-most-once delivery costs a
+  consumer that holds a local copy of state.
+- A stalled consumer recovers, everything settles, and it is still permanently
+  wrong about most of the keyspace — with no signal that it is.
+- Demonstrates a gap rather than a feature, and becomes the acceptance test for
+  gap-free subscribe when that lands.
+- See [Local State Divergence](state-divergence.md).
+
+```bash
+cargo run --release --manifest-path demos/state-divergence/Cargo.toml
+```
+
+### Slow-consumer Isolation (`demo-slow-consumer`)
+
+- The flagship demo: one consumer stalls, the healthy ones carry on.
+- Runs the identical workload under both subscriber queue policies and compares
+  them, so the trade-off is measured rather than claimed.
+- Live terminal UI, with automatic plain-text fallback when stdout is not a TTY.
+- See [Slow-consumer Isolation](slow-consumer-isolation.md).
+
+```bash
+cargo run --release --manifest-path demos/slow-consumer/Cargo.toml
+```
 
 ### Live RBAC Policy Change (`demo-rbac-live`)
 
