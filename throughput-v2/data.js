@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786396370315,
+  "lastUpdate": 1786578212367,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1092,6 +1092,58 @@ window.BENCHMARK_DATA = {
             "range": "16547.06",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 563783.53\nmean: 552784.41\nstdev: 16547.06\ncv: 2.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4bf20ee7fc06d966b165e7cfc14dce88e1698ff",
+          "message": "chore: update advisory for unmaintained smartstring dependency (#164)\n\n* chore: update advisory for unmaintained smartstring dependency\n\n* feat: enhance consumer outcome reporting with early termination details",
+          "timestamp": "2026-08-12T16:41:42-07:00",
+          "tree_id": "55a477d291cac7d8716b1ec8d920919af0fb9a05",
+          "url": "https://github.com/gabloe/felix/commit/e4bf20ee7fc06d966b165e7cfc14dce88e1698ff"
+        },
+        "date": 1786578211576,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 187944.55,
+            "range": "18559.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 187944.55\nmean: 186099.41\nstdev: 18559.42\ncv: 9.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 187944.55,
+            "range": "18559.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 187944.55\nmean: 186099.41\nstdev: 18559.42\ncv: 9.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54326.28,
+            "range": "2407.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54326.28\nmean: 54342.51\nstdev: 2407.96\ncv: 4.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 543262.79,
+            "range": "24079.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 543262.79\nmean: 543425.07\nstdev: 24079.64\ncv: 4.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
