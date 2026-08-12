@@ -1,6 +1,30 @@
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+  # RUSTSEC-2026-0249 — smartstring is unmaintained (repo archived 2026-05-03).
+  #
+  # This is an *unmaintained* advisory, not a vulnerability: there is no CVE and no
+  # known exploit. smartstring is a small-string-optimisation crate. The risk is
+  # future unpatched bugs, not present exposure.
+  #
+  # We do not depend on it directly. The chain is:
+  #   smartstring <- rhai <- casbin <- felix-authz / controlplane
+  # casbin uses rhai to evaluate RBAC matcher expressions.
+  #
+  # There is no upgrade path as of 2026-08-10, which is why this is an ignore
+  # rather than a version bump:
+  #   - casbin 2.20.0 is the latest release.
+  #   - rhai 1.25.1 (latest, newer than the 1.24.0 we resolve to) still declares
+  #     `smartstring = "^1.0.0"` as a non-optional dependency, so bumping rhai
+  #     does not drop it.
+  #   - The advisory itself states "No safe upgrade is available!".
+  #
+  # Resolved by either: rhai migrating to compact_str/smol_str as the advisory
+  # recommends, or Felix replacing casbin. Re-check when casbin or rhai next
+  # release; drop this entry the moment the chain clears.
+  { id = "RUSTSEC-2026-0249", reason = "unmaintained transitive dep via casbin->rhai; no upgrade exists as of 2026-08-10" },
+]
 
 [licenses]
 allow = [

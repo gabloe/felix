@@ -534,8 +534,17 @@ where
             };
             // Pace in 1 ms slices: per-message sleeps cannot resolve 50 µs, and a
             // free-running loop would measure the machine rather than the policy.
-            let per_tick = (target_rate / 1000).max(1);
-            let mut ticker = tokio::time::interval(Duration::from_millis(1));
+            // Pace by batching per tick, with a tick sized to the target rate.
+            // `rate / 1000` against a fixed 1 ms tick truncates to zero for any
+            // rate below 1000/s and then clamps to 1, which silently published at
+            // 1000/s no matter what was asked for — the documented 400/s default
+            // was really 1000/s.
+            let (tick, per_tick) = if target_rate >= 1000 {
+                (Duration::from_millis(1), target_rate / 1000)
+            } else {
+                (Duration::from_micros(1_000_000 / target_rate.max(1)), 1)
+            };
+            let mut ticker = tokio::time::interval(tick);
             // Backpressure represents publish opportunities that were missed, not
             // work to replay in an unbounded recovery burst.
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
