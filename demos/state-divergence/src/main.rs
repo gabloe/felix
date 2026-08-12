@@ -200,6 +200,12 @@ mod tests {
             .expect("demo should finish inside the timeout")
             .expect("demo run");
         let run = outcomes.first().expect("one outcome");
+        assert!(
+            run.ended_early().is_empty(),
+            "a subscription ended before the run did, so this says nothing about \
+             delivery semantics: {:?}",
+            run.ended_early()
+        );
 
         assert!(
             run.stalled_wrong() > 0,
@@ -244,6 +250,12 @@ mod tests {
             .expect("demo should finish inside the timeout")
             .expect("demo run");
         let run = outcomes.first().expect("one outcome");
+        assert!(
+            run.ended_early().is_empty(),
+            "a subscription ended before the run did, so this says nothing about \
+             delivery semantics: {:?}",
+            run.ended_early()
+        );
 
         assert_eq!(
             run.total_wrong(),

@@ -189,8 +189,18 @@ pub fn print_report(outcomes: &[Outcome]) {
     for outcome in outcomes {
         println!("\n  {}", outcome.mode.label());
         println!("    {} changes published\n", outcome.published);
-        for (name, applied, wrong, stalled) in &outcome.consumers {
-            let marker = if *stalled { "  <- stalled mid-run" } else { "" };
+        for c in &outcome.consumers {
+            let (name, applied, wrong, stalled) = (&c.name, c.applied, &c.wrong, c.stalled);
+            let marker = if stalled { "  <- stalled mid-run" } else { "" };
+            if let Some(why) = &c.ended_early {
+                // Report this separately: a consumer that stopped consuming is short
+                // for a different reason than one that had events dropped, and
+                // conflating them would misattribute a broken connection to
+                // delivery semantics.
+                println!(
+                    "    {name:<13} applied {applied:>8}   SUBSCRIPTION ENDED EARLY ({why}){marker}"
+                );
+            }
             if wrong.is_empty() {
                 println!("    {name:<13} applied {applied:>8}   state CORRECT{marker}");
             } else {

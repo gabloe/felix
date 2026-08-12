@@ -163,6 +163,11 @@ pub struct ConsumerState {
     pub name: String,
     pub stalled: AtomicBool,
     pub applied: AtomicU64,
+    /// Set if the subscription ended before the run did. A consumer that stopped
+    /// consuming looks identical to one that lost events, unless we record it:
+    /// both simply end up short. Distinguishing them matters because one is a
+    /// delivery-semantics result and the other is a broken connection.
+    pub ended_early: Mutex<Option<String>>,
     keys: usize,
     /// value per key, and the version it came from. `None` = never seen.
     local: Mutex<Vec<Option<(u64, u64)>>>,
@@ -174,6 +179,7 @@ impl ConsumerState {
             name,
             stalled: AtomicBool::new(false),
             applied: AtomicU64::new(0),
+            ended_early: Mutex::new(None),
             keys,
             local: Mutex::new(vec![None; keys]),
         }
@@ -251,27 +257,44 @@ pub struct Outcome {
     pub mode: Mode,
     pub keys: usize,
     pub published: u64,
-    /// (name, applied, permanently-wrong keys, names of those keys)
-    pub consumers: Vec<(String, u64, Vec<usize>, bool)>,
+    pub consumers: Vec<ConsumerOutcome>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumerOutcome {
+    pub name: String,
+    pub applied: u64,
+    /// Keys whose value differs from the authority once everything settled.
+    pub wrong: Vec<usize>,
+    pub stalled: bool,
+    /// Why this consumer stopped consuming early, if it did.
+    pub ended_early: Option<String>,
 }
 
 impl Outcome {
     pub fn total_wrong(&self) -> usize {
-        self.consumers.iter().map(|(_, _, w, _)| w.len()).sum()
+        self.consumers.iter().map(|c| c.wrong.len()).sum()
     }
     pub fn stalled_wrong(&self) -> usize {
         self.consumers
             .iter()
-            .filter(|(_, _, _, stalled)| *stalled)
-            .map(|(_, _, w, _)| w.len())
+            .filter(|c| c.stalled)
+            .map(|c| c.wrong.len())
             .sum()
     }
     pub fn healthy_wrong(&self) -> usize {
         self.consumers
             .iter()
-            .filter(|(_, _, _, stalled)| !*stalled)
-            .map(|(_, _, w, _)| w.len())
+            .filter(|c| !c.stalled)
+            .map(|c| c.wrong.len())
             .sum()
+    }
+    /// Consumers whose subscription ended before the run did.
+    pub fn ended_early(&self) -> Vec<(String, String)> {
+        self.consumers
+            .iter()
+            .filter_map(|c| c.ended_early.clone().map(|why| (c.name.clone(), why)))
+            .collect()
     }
 }
 
@@ -444,7 +467,16 @@ where
                             consumer.applied.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    Ok(Ok(None)) | Ok(Err(_)) => break,
+                    Ok(Ok(None)) => {
+                        *consumer.ended_early.lock().await =
+                            Some("subscription closed".to_string());
+                        break;
+                    }
+                    Ok(Err(err)) => {
+                        *consumer.ended_early.lock().await =
+                            Some(format!("subscription error: {err}"));
+                        break;
+                    }
                     Err(_) => {}
                 }
             }
@@ -480,8 +512,17 @@ where
             };
             let table = weight_table(keys);
             let mut rng = Rng::new(0x5EED);
-            let per_tick = (rate / 1000).max(1);
-            let mut ticker = tokio::time::interval(Duration::from_millis(1));
+            // Pace by batching per tick, with a tick sized to the target rate.
+            // `rate / 1000` against a fixed 1 ms tick truncates to zero for any
+            // rate below 1000/s and then clamps to 1, which silently published at
+            // 1000/s no matter what was asked for — the documented 400/s default
+            // was really 1000/s.
+            let (tick, per_tick) = if rate >= 1000 {
+                (Duration::from_millis(1), rate / 1000)
+            } else {
+                (Duration::from_micros(1_000_000 / rate.max(1)), 1)
+            };
+            let mut ticker = tokio::time::interval(tick);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
             while !publish_stop.load(Ordering::Relaxed) {
@@ -570,12 +611,13 @@ where
     let mut results = Vec::new();
     for consumer in &consumers {
         let wrong = consumer.wrong_keys(&authoritative).await;
-        results.push((
-            consumer.name.clone(),
-            consumer.applied.load(Ordering::Relaxed),
+        results.push(ConsumerOutcome {
+            name: consumer.name.clone(),
+            applied: consumer.applied.load(Ordering::Relaxed),
             wrong,
-            Arc::ptr_eq(consumer, &victim),
-        ));
+            stalled: Arc::ptr_eq(consumer, &victim),
+            ended_early: consumer.ended_early.lock().await.clone(),
+        });
     }
 
     stop.store(true, Ordering::Relaxed);
