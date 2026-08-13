@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::config::SubQueuePolicy;
 use crate::delivery::QueuedDelivery;
+use crate::durable::StreamLog;
 use crate::subscription::SubscriptionReceiver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,11 @@ pub(crate) struct StreamState {
     pub(crate) subscriber_queue_policy: SubQueuePolicy,
     // Approximate number of queued items across subscribers in this stream.
     pub(crate) queued_items: Arc<AtomicUsize>,
+    // Disk-backed log, present only for streams registered as durable. The
+    // in-memory ring above is kept either way: it is what cursor replay and
+    // fanout read from, and dropping it for durable streams would put a file
+    // read on the fanout path.
+    pub(crate) durable: Option<StreamLog>,
 }
 
 #[derive(Debug, Default)]
@@ -73,6 +79,7 @@ impl StreamState {
         handle_id: u64,
         subscriber_queue_capacity: usize,
         subscriber_queue_policy: SubQueuePolicy,
+        durable: Option<StreamLog>,
     ) -> Self {
         Self {
             handle_id,
@@ -86,6 +93,19 @@ impl StreamState {
             subscriber_queue_capacity,
             subscriber_queue_policy,
             queued_items: Arc::new(AtomicUsize::new(0)),
+            durable,
+        }
+    }
+
+    /// Start the in-memory sequence at `next_seq`.
+    ///
+    /// A durable stream that recovered records from disk must not restart its
+    /// cursor numbering at zero, or a subscriber resuming from a pre-restart
+    /// cursor would silently receive the wrong records.
+    pub(crate) fn resume_at(&self, next_seq: u64) {
+        let mut state = self.log_state.lock();
+        if state.log.is_empty() {
+            state.next_seq = next_seq;
         }
     }
 

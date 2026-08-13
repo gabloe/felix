@@ -85,7 +85,7 @@ async fn stream_delivers_in_order_to_single_subscriber() {
 
 #[test]
 fn append_batch_keeps_monotonic_sequences_and_trims_once() {
-    let stream = StreamState::new(1, 8, SubQueuePolicy::DropNew);
+    let stream = StreamState::new(1, 8, SubQueuePolicy::DropNew, None);
     let first = vec![
         Bytes::from_static(b"a"),
         Bytes::from_static(b"b"),
