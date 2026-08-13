@@ -71,12 +71,26 @@ Felix uses QUIC as its sole transport:
 The wire protocol is versioned and explicitly framed to allow forward compatibility.
 
 ### Storage Layer
-Felix supports tiered storage:
 - **Ephemeral:** in-memory ring buffers and TTL maps for ultra-low latency
-- **Durable:** append-only WAL + segmented log on persistent volumes
-- **Retention:** time-based and size-based policies per stream
+- **Durable:** a segmented, checksummed append-only log on persistent volumes,
+  selected per stream by `durable: true`. See
+  [Durable Storage](durable-storage.md).
+- **Retention:** not yet implemented. `truncate` exists for replication's
+  benefit; nothing deletes segments on age or size.
+- **Tiering:** not yet implemented. `TieredStore` is declared and unimplemented;
+  tracked as [#172](https://github.com/gabloe/felix/issues/172).
 
 Durable storage is optional and configurable per stream.
+
+Note that this is a **log-structured store, not write-ahead logging**. In a WAL
+system the log is a journal that protects a separate primary structure - a
+B-tree, a memtable, heap pages - and is replayed into it after a crash, then
+checkpointed away. Here the log *is* the primary structure: records are appended
+to segments and read back from those same segments, and recovery validates and
+truncates rather than replaying into anything. The two share most of their
+mechanisms (sequential append, group commit, fsync policy, checksums, torn-tail
+repair), which is why the techniques are borrowed freely from WAL
+implementations, but the shapes are different.
 
 ### Metadata & Control Plane
 Metadata is strongly consistent and minimal by design. It stores:
@@ -227,8 +241,8 @@ flowchart TB
   subgraph Storage["Storage (evolves over time)"]
     direction LR
     CacheStore["Cache store<br/>(in-memory + TTL)"]
-    LogStore["Durable log (future)<br/>(WAL/segments)"]
-    Snapshots["Snapshots / compaction (future)"]
+    LogStore["Durable log<br/>(segments + sparse indexes)"]
+    Snapshots["Retention / tiering (future)"]
     LogStore --> Snapshots
   end
 
