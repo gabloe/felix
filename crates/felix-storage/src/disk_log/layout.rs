@@ -148,6 +148,18 @@ mod tests {
     }
 
     #[test]
+    fn the_directory_name_in_the_format_spec_is_correct() {
+        // `docs/storage-format.md` prints this exact name as its worked example.
+        // A hash that has drifted from the documentation is worse than no
+        // example, because a reader will trust it and go looking for a
+        // directory that does not exist.
+        assert_eq!(
+            shard_dir_name(&shard("acme", "default", "orders", 0)),
+            "acme_default_orders_0-0d3aed4b998d2798"
+        );
+    }
+
+    #[test]
     fn long_components_are_truncated_but_stay_unique() {
         let long_a = "x".repeat(200);
         let long_b = format!("{}y", "x".repeat(199));

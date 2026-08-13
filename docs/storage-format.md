@@ -48,7 +48,7 @@ a segment — should be rejected on its first four bytes rather than misparsed.
 
 ```text
 <root>/
-  acme_default_orders_0-0d3af04b998d2cb1/     ← one directory per stream shard
+  acme_default_orders_0-0d3aed4b998d2798/     ← one directory per stream shard
     00000000000000000000.log                 ← segment data
     00000000000000000000.index               ← sparse offset index
     00000000000000000001.log

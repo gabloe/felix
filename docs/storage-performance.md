@@ -34,7 +34,11 @@ appends are serialising on the device and something has regressed.
 
 Records are encoded into a reusable staging buffer and handed to the kernel in a
 single `write`. At 128-byte payloads the syscall, not the copy, is what costs —
-which is why batch 16 is 5–6× the throughput of batch 1 in every row below.
+which is why batching 16 records per append is worth 4.8× to 16× the throughput
+of batching one, across every row below. The gain is largest under `on_commit`
+(13–16×), where a batch amortises a device flush as well as a syscall, and
+smallest for a single `none` publisher (4.8×), where there was little syscall
+overhead to remove in the first place.
 
 ### 3. Writes and flushes are separate operations
 
@@ -89,8 +93,9 @@ graph LR
     class F,G,H slow
 ```
 
-Three orders of magnitude separate "in the page cache" from "on the device".
-Nothing in the code can close that gap; group commit exists to *amortise* it.
+Roughly four thousand times separates "in the page cache" from "on the device"
+— about 1µs against about 4ms. Nothing in the code can close that gap; group
+commit exists to *amortise* it.
 
 ## Measured results
 
@@ -121,6 +126,12 @@ Latencies are per `append` call, so at batch 16 one sample covers 16 records.
 | `on_commit` | 16 | 8 | 28,670 | 4.00ms | 9.8ms | 12.1ms |
 | `on_commit` | 16 | 64 | 185,905 | 4.96ms | 8.1ms | 9.2ms |
 
+**Recovery is fast enough not to shape restart planning.** A 1.01 GiB active
+segment - 7,000,000 records - is fully validated in 0.32s, about 3.2 GiB/s.
+Since only the active segment is scanned in full, restart cost is bounded by
+`segment_size_bytes` rather than by total data on disk: at the 256 MiB default,
+that is under a tenth of a second.
+
 ### What this says
 
 **Durability is free until you ask for the device.** `none` and `periodic` are
@@ -135,14 +146,18 @@ device; the only variable is how many commits share one.
 
 **Throughput under `OnCommit` scales almost linearly with concurrency.**
 253 → 2,006 → 14,387 records/second at concurrency 1 → 8 → 64. Combined with
-batching, 185,905 records/second — three orders of magnitude above the
-single-publisher number, on the same disk, with the same guarantee.
+batching, 185,905 records/second — over 700× the single-publisher number, on the
+same disk, with the same guarantee.
 
 **Tail latency degrades with concurrency for the cheap policies.** `none` at
-concurrency 64 shows p999 of 1.5ms against 5µs at concurrency 1. This is queueing
-on the segment write lock, not I/O: appends must assign offsets in order. It
-matters for high-fanout publishers on non-durable streams and is the most likely
-place a future optimisation pays off.
+concurrency 64 shows p999 of 1.5ms against 5µs at concurrency 1.
+
+The likely cause is contention on the segment write lock rather than I/O —
+appends must assign offsets in order, and `none` does no device work to hide
+behind — but that is an inference from the shape of the numbers, not something
+measured. Confirming it needs lock-wait instrumentation on the append path,
+which does not exist yet. It matters for high-fanout publishers on non-durable
+streams and is the most likely place a future optimisation pays off.
 
 ## Regression budget
 
@@ -157,7 +172,7 @@ against, and a breach is a design conversation rather than an automatic failure.
 | `on_commit` throughput at concurrency 64 | ≥ 40× the concurrency-1 figure | Group commit is the design. Falling toward 1× means the flush lock has stopped batching |
 | `felix_storage_sync_batch_appends` under concurrent load | ≥ 8 | Direct measurement of the above; alertable in production |
 | Batch-16 throughput vs batch-1 | ≥ 4× | Confirms one `write` per batch, not per record |
-| Recovery time | ≤ 1s per GB of active segment | Sealed segments are not fully scanned by default; only the active one is |
+| Recovery time | ≤ 1s per GiB of active segment | Measured at 0.32s for a 1.01 GiB segment (~3.2 GiB/s), so the budget carries about 3× headroom. Only the active segment is fully scanned |
 
 ### Operating envelope
 
