@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786659470498,
+  "lastUpdate": 1786660153875,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1404,6 +1404,58 @@ window.BENCHMARK_DATA = {
             "range": "17838.34",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 573069.58\nmean: 575600.57\nstdev: 17838.34\ncv: 3.10%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c48dd67664e0b4a282f34571269e7c435507481",
+          "message": "feat: add Durable Segment Format documentation and update related files (#174)",
+          "timestamp": "2026-08-13T15:27:16-07:00",
+          "tree_id": "568a71b78b52e0622faa55d941a62a258666b7b2",
+          "url": "https://github.com/gabloe/felix/commit/9c48dd67664e0b4a282f34571269e7c435507481"
+        },
+        "date": 1786660153128,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 197830.98,
+            "range": "18573.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 197830.98\nmean: 191350.76\nstdev: 18573.86\ncv: 9.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 197830.98,
+            "range": "18573.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 197830.98\nmean: 191350.76\nstdev: 18573.86\ncv: 9.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 52640.81,
+            "range": "7504.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 52640.81\nmean: 48349.91\nstdev: 7504.08\ncv: 15.52%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 526408.13,
+            "range": "75040.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 526408.13\nmean: 483499.15\nstdev: 75040.85\ncv: 15.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
