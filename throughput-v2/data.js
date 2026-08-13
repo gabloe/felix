@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786596699659,
+  "lastUpdate": 1786600628157,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1248,6 +1248,58 @@ window.BENCHMARK_DATA = {
             "range": "88163.67",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 605930.86\nmean: 583256.23\nstdev: 88163.67\ncv: 15.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c24bf22efc7ce37091b4ad53d6c7d746fc67fe7b",
+          "message": "feat: implement capability negotiation for stream authentication (#170)",
+          "timestamp": "2026-08-12T22:55:14-07:00",
+          "tree_id": "5f87b0595ac8ffd028596c10838b13d726f5e96d",
+          "url": "https://github.com/gabloe/felix/commit/c24bf22efc7ce37091b4ad53d6c7d746fc67fe7b"
+        },
+        "date": 1786600627169,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 186453.32,
+            "range": "9042.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 186453.32\nmean: 188006.53\nstdev: 9042.18\ncv: 4.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 186453.32,
+            "range": "9042.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 186453.32\nmean: 188006.53\nstdev: 9042.18\ncv: 4.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 53687.86,
+            "range": "3394.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 53687.86\nmean: 53566.39\nstdev: 3394.39\ncv: 6.34%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 536878.61,
+            "range": "33943.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 536878.61\nmean: 535663.96\nstdev: 33943.88\ncv: 6.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
