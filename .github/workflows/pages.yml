@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'docs-site/**'
-      - 'mkdocs.yml'
       - '.github/workflows/pages.yml'
   workflow_run:
     workflows:
@@ -30,26 +29,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: 'docs-site/requirements.txt'
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'docs-site/package-lock.json'
 
       - name: Install dependencies
-        run: |
-          pip install -r docs-site/requirements.txt
-
-      - name: Configure Git for MkDocs
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+        run: npm ci --prefix docs-site
 
       - name: Build documentation
-        run: |
-          mkdocs build --strict --verbose
+        run: npm run build --prefix docs-site
 
       - name: Checkout benchmark dashboards
         uses: actions/checkout@v6
@@ -66,20 +60,20 @@ jobs:
       - name: Add benchmark dashboards to Pages
         run: |
           set -euo pipefail
-          mkdir -p site/benchmarks
+          mkdir -p docs-site/dist/benchmarks
           latency_dir=latency-v2
           throughput_dir=throughput-v2
           [ -d "benchmark-data/$latency_dir" ] || latency_dir=latency
           [ -d "benchmark-data/$throughput_dir" ] || throughput_dir=throughput
-          cp -R "benchmark-data/$latency_dir" site/benchmarks/latency
-          cp -R "benchmark-data/$throughput_dir" site/benchmarks/throughput
+          cp -R "benchmark-data/$latency_dir" docs-site/dist/benchmarks/latency
+          cp -R "benchmark-data/$throughput_dir" docs-site/dist/benchmarks/throughput
           npm pack chart.js@2.9.2 --silent --pack-destination /tmp
           mkdir -p /tmp/chartjs
           tar -xzf /tmp/chart.js-2.9.2.tgz -C /tmp/chartjs
-          cp /tmp/chartjs/package/dist/Chart.min.js site/benchmarks/chart.min.js
-          cp scripts/perf/benchmark-chart-enhancements.js site/benchmarks/chart-enhancements.js
+          cp /tmp/chartjs/package/dist/Chart.min.js docs-site/dist/benchmarks/chart.min.js
+          cp scripts/perf/benchmark-chart-enhancements.js docs-site/dist/benchmarks/chart-enhancements.js
           for dashboard in latency throughput; do
-            index="site/benchmarks/$dashboard/index.html"
+            index="docs-site/dist/benchmarks/$dashboard/index.html"
             sed -i \
               's#https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js#../chart.min.js#' \
               "$index"
@@ -95,7 +89,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: ./site
+          path: ./docs-site/dist
 
   deploy:
     needs: build

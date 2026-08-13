@@ -27,8 +27,11 @@ __pycache__/
 *.pyc
 coverage.json
 lcov.info
-# MkDocs build output
+# Documentation build output
 /site/
 site/
+docs-site/dist/
+docs-site/node_modules/
+docs-site/.astro/
 .cache/
 data/soak/

@@ -76,7 +76,7 @@ jobs:
           # `name` is the top-level series key in data.js -- it must stay stable.
           # Changing it starts a brand new series and orphans existing history.
           # It also doubles as the page heading, so it carries the "this is CI
-          # hardware" caveat; see docs-site/docs/features/benchmarks.md for why
+          # hardware" caveat; see docs-site/src/content/docs/features/benchmarks.md for why
           # these absolute numbers are well below the documented dev-machine ones.
           name: "Felix latency - batch=1, GitHub-hosted runner"
           tool: "customSmallerIsBetter"

@@ -232,7 +232,7 @@ docs/
   todos.md           # implementation checklist
   assets/            # documentation images (logo, diagrams)
 
-docs-site/           # MkDocs site sources
+docs-site/           # Astro Starlight site sources
 docker/              # local Docker assets
 scripts/             # developer tooling and utilities
 charts/              # Helm charts
@@ -240,7 +240,6 @@ data/                # sample data and artifacts
 .github/             # CI workflows and repo metadata
 Taskfile.yml         # task runner shortcuts
 Cargo.toml           # workspace manifest
-mkdocs.yml           # MkDocs config
 deny.toml            # cargo-deny policy
 ```
 

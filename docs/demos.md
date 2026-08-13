@@ -35,7 +35,7 @@ copy of state. A consumer stalls, recovers, everything quiesces — and it is st
 permanently wrong about most of the keyspace, with no signal that it is.
 
 This demonstrates a gap rather than a feature. It is the executable form of the
-tension described in `docs-site/docs/getting-started/what-felix-is-for.md`, and it
+tension described in `docs-site/src/content/docs/getting-started/what-felix-is-for.md`, and it
 becomes the acceptance test for gap-free snapshot-plus-stream subscribe when that
 lands.
 
