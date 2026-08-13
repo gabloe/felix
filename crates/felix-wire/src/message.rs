@@ -29,6 +29,23 @@ pub enum Message {
     Auth {
         tenant_id: String,
         token: String,
+        /// Frame-flag bits this client understands, offered so the broker can
+        /// reply with its own set.
+        ///
+        /// Absent means the client predates capability negotiation. Because
+        /// serde ignores unknown fields, a broker that predates it also simply
+        /// ignores this field and answers with a plain `Ok` — which is exactly
+        /// the signal the client needs to fall back. Both directions therefore
+        /// degrade without a version check.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_flags: Option<u16>,
+    },
+    // Successful auth, carrying the broker's supported frame-flag bits.
+    //
+    // Only ever sent in response to an `Auth` that offered `client_flags`, so a
+    // client old enough not to understand this variant can never receive it.
+    AuthOk {
+        server_flags: u16,
     },
     // Publish a single payload to a stream.
     Publish {

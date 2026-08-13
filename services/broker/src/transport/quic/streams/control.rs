@@ -236,7 +236,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
         match message {
-            Message::Auth { tenant_id, token } => {
+            Message::Auth {
+                tenant_id,
+                token,
+                client_flags,
+            } => {
                 if auth_ctx.is_some() {
                     send_control_error(
                         &out_ack_tx,
@@ -252,11 +256,27 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 match auth.authenticate(&tenant_id, &token).await {
                     Ok(ctx) => {
                         auth_ctx = Some(ctx);
-                        send_control_ok(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            &ack_throttle_tx,
+                        // Advertise our flag set only to a client that offered its
+                        // own. A client that sent no `client_flags` predates
+                        // negotiation and would not understand `AuthOk`, so it must
+                        // keep receiving the plain `Ok` it expects.
+                        let response = match client_flags {
+                            Some(_) => Message::AuthOk {
+                                server_flags: felix_wire::KNOWN_FLAGS,
+                            },
+                            None => Message::Ok,
+                        };
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::Message(response),
+                            )
+                            .await,
                             &ack_timeout_state,
+                            &ack_throttle_tx,
                             &cancel_tx,
                         )
                         .await?;
@@ -610,6 +630,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::EventStreamHello { .. }
             | Message::PublishOk { .. }
             | Message::PublishError { .. }
+            | Message::AuthOk { .. }
             | Message::Ok => {
                 // Protocol hygiene: these message types should never arrive on the control stream
                 // from the client. Treat as a protocol violation and close.
@@ -658,29 +679,6 @@ async fn send_control_error(
             Outgoing::Message(Message::Error {
                 message: message.to_string(),
             }),
-        )
-        .await,
-        ack_timeout_state,
-        ack_throttle_tx,
-        cancel_tx,
-    )
-    .await
-}
-
-async fn send_control_ok(
-    out_ack_tx: &mpsc::Sender<Outgoing>,
-    out_ack_depth: &Arc<AtomicUsize>,
-    ack_throttle_tx: &watch::Sender<bool>,
-    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
-    cancel_tx: &watch::Sender<bool>,
-) -> Result<()> {
-    handle_ack_enqueue_result(
-        send_outgoing_critical(
-            out_ack_tx,
-            out_ack_depth,
-            "felix_broker_out_ack_depth",
-            ack_throttle_tx,
-            Outgoing::Message(Message::Ok),
         )
         .await,
         ack_timeout_state,

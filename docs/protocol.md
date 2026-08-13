@@ -227,10 +227,50 @@ JSON `publish_ok` / `publish_error` messages do; a client that published with th
 JSON encoding still receives those JSON messages instead.
 
 **Compatibility:** `0x0008` and `0x0010` were added after the initial v1 release. A
-broker predating them matches on `0x0001`, does not know about the prefix, and will
-misparse `request_id` as `tenant_len`. Acked binary publishes therefore require a
-broker that understands `0x0008`. There is no capability negotiation in v1; client
-and broker are expected to ship together.
+broker predating them matches on `0x0001`, does not know about the prefix, and would
+misparse `request_id` as `tenant_len`. Clients therefore MUST NOT send `0x0008`
+unless the broker has advertised it — see Capability negotiation below.
+
+## Capability negotiation
+
+Flag bits change how a payload is parsed, so a peer must never guess which ones the
+other side understands. The supported set is exchanged on the `auth` handshake,
+which is already the first round trip on every control stream and therefore costs
+no extra latency.
+
+A client that implements negotiation includes its own set:
+
+```json
+{"type":"auth","tenant_id":"t1","token":"...","client_flags":25}
+```
+
+A broker that implements negotiation replies with its own:
+
+```json
+{"type":"auth_ok","server_flags":25}
+```
+
+The client MUST use the advertised value to decide which encodings it may send, and
+MUST NOT assume its own set is supported.
+
+Both directions degrade without a version check, because serde-style decoders ignore
+unknown fields:
+
+| Client | Broker | Outcome |
+| --- | --- | --- |
+| negotiating | negotiating | `auth_ok`; client uses any advertised bit |
+| negotiating | legacy | `client_flags` ignored, plain `ok` returned; client assumes `ORIGINAL_V1_FLAGS` and falls back to the JSON encoding for acked publishes |
+| legacy | negotiating | no `client_flags` offered, so the broker replies with a plain `ok` and never sends a message the client cannot parse |
+| legacy | legacy | unchanged |
+
+`ORIGINAL_V1_FLAGS` is `0x0001 | 0x0002 | 0x0004` — the bits that existed before
+negotiation. It is the only safe reading of an absent advertisement, and it is
+frozen: adding a bit to it would make clients assume support that older brokers
+do not have.
+
+A broker MUST only send `auth_ok` in response to an `auth` that offered
+`client_flags`. A client old enough not to know the variant can then never receive
+it.
 
 ## Shared Binary EventBatch
 When `flags & 0x0004 != 0`, the event-stream frame payload is:

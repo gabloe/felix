@@ -157,6 +157,9 @@ async fn run_pubsub(
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -221,6 +224,9 @@ async fn publish(
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -255,6 +261,9 @@ async fn run_cache(connection: &felix_transport::QuicConnection, auth: &AuthFixt
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -360,6 +369,9 @@ async fn cache_get(
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;

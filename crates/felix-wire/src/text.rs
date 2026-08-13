@@ -16,7 +16,11 @@ const PUBLISH_BATCH_PREFIX: &str = "{\"type\":\"publish_batch\",\"tenant_id\":\"
 const PUBLISH_BATCH_NAMESPACE: &str = "\",\"namespace\":\"";
 const PUBLISH_BATCH_STREAM: &str = "\",\"stream\":\"";
 const PUBLISH_BATCH_PAYLOADS: &str = "\",\"payloads\":[";
-const REQUEST_ID_PREFIX: &str = "\",\"request_id\":";
+// NOTE: no leading `"` here. These fields follow the `payloads` array, which
+// closes with `]`, not a string — emitting a closing quote produced `]","request_id"`
+// and made the whole frame undeserializable. Both constants are used only by the
+// publish-batch writer below, where the preceding token is always `]` or a number.
+const REQUEST_ID_PREFIX: &str = ",\"request_id\":";
 const ACK_PREFIX: &str = ",\"ack\":\"";
 
 pub fn publish_batch_json_len(

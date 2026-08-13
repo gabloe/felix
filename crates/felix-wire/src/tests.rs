@@ -325,6 +325,62 @@ fn unknown_flags_are_detected() {
     assert!(has_unknown_flags(FLAG_BINARY_PUBLISH_BATCH | 0x8000));
 }
 
+// The publish-batch JSON is written by hand rather than by serde, so nothing but
+// a test keeps it in step with the decoder. It drifted: the `request_id` prefix
+// carried a leading `"` that belongs after a string field, not after the
+// `payloads` array, so every acked JSON batch serialised to `]","request_id"` and
+// failed to deserialise. Cover every combination of the optional fields.
+#[test]
+fn text_publish_batch_json_round_trips_through_decoder() {
+    let payloads = vec![b"payload".to_vec(), b"second".to_vec()];
+    let cases = [
+        (None, None),
+        (Some(1u64), None),
+        (None, Some(AckMode::PerBatch)),
+        (Some(7), Some(AckMode::PerMessage)),
+        (Some(u64::MAX), Some(AckMode::PerBatch)),
+    ];
+    for (request_id, ack) in cases {
+        let mut buf = BytesMut::new();
+        crate::text::write_publish_batch_json(
+            &mut buf, "t1", "default", "updates", &payloads, request_id, ack,
+        )
+        .expect("write");
+
+        // The declared length must match what was actually written, or callers
+        // that pre-reserve using it will mis-size the frame.
+        let declared = crate::text::publish_batch_json_len(
+            "t1", "default", "updates", &payloads, request_id, ack,
+        )
+        .expect("len");
+        assert_eq!(
+            declared,
+            buf.len(),
+            "length mismatch for {request_id:?}/{ack:?}"
+        );
+
+        let frame = Frame::new(0, buf.freeze()).expect("frame");
+        match Message::decode(frame).expect("decode") {
+            Message::PublishBatch {
+                tenant_id,
+                namespace,
+                stream,
+                payloads: decoded,
+                request_id: decoded_id,
+                ack: decoded_ack,
+            } => {
+                assert_eq!(tenant_id, "t1");
+                assert_eq!(namespace, "default");
+                assert_eq!(stream, "updates");
+                assert_eq!(decoded, payloads);
+                assert_eq!(decoded_id, request_id);
+                assert_eq!(decoded_ack, ack);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn message_round_trip() {
     let message = Message::Publish {

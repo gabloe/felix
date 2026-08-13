@@ -10,6 +10,14 @@ use crate::counters::frame_counters;
 use crate::timings;
 use crate::wire::frame_io::read_frame_into_with_limit;
 
+/// How long a publisher will wait for an ack before giving up.
+///
+/// Deliberately well above the broker's own commit-ack budget
+/// (`FELIX_ACK_WAIT_TIMEOUT_MS`, 2s by default) so this never fires ahead of the
+/// broker's own timeout — it is a backstop for a broker that answers nothing at
+/// all, not a competing deadline.
+const ACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) async fn read_ack_message_with_timing(
     recv: &mut RecvStream,
     frame_scratch: &mut BytesMut,
@@ -89,7 +97,26 @@ pub(crate) async fn maybe_wait_for_ack_with_limit(
     }
     let request_id =
         request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
-    let response = read_ack_message_with_timing(recv, frame_scratch, max_frame_bytes).await?;
+    // Bound the wait. The publisher writer task blocks here, so an ack that never
+    // arrives wedges that stream's publishes indefinitely rather than failing.
+    // This is a real possibility whenever the broker cannot answer — it is
+    // overloaded, the stream broke, or (before capability negotiation) it
+    // misparsed the frame and produced no reply at all. A timeout turns that hang
+    // into an error the caller can see, retry, or fail on.
+    let response = match tokio::time::timeout(
+        ACK_WAIT_TIMEOUT,
+        read_ack_message_with_timing(recv, frame_scratch, max_frame_bytes),
+    )
+    .await
+    {
+        Ok(response) => response?,
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "timed out after {:?} waiting for publish ack (request_id {request_id})",
+                ACK_WAIT_TIMEOUT
+            ));
+        }
+    };
     match response {
         Some(Message::PublishOk { request_id: ack_id }) if ack_id == request_id => {
             #[cfg(feature = "telemetry")]

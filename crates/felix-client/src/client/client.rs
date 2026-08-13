@@ -122,7 +122,7 @@ impl Client {
             for _ in 0..publish_streams_per_conn {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 debug!("client opened publish stream");
-                authenticate_stream(
+                let server_flags = authenticate_stream(
                     &mut send,
                     &mut recv,
                     &auth_tenant_id,
@@ -130,7 +130,7 @@ impl Client {
                     runtime_config.max_frame_bytes,
                 )
                 .await?;
-                debug!("client publish stream authenticated");
+                debug!(server_flags, "client publish stream authenticated");
                 let (tx, rx) = mpsc::channel(publish_queue_depth);
                 let handle = tokio::spawn(run_publisher_writer_with_limit(
                     send,
@@ -143,6 +143,7 @@ impl Client {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
+                    server_flags,
                 });
             }
         }
@@ -177,7 +178,7 @@ impl Client {
             for _ in 0..cache_streams_per_conn {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 debug!(conn_index, "client opened cache stream");
-                authenticate_stream(
+                let _ = authenticate_stream(
                     &mut send,
                     &mut recv,
                     &auth_tenant_id,
@@ -459,25 +460,39 @@ impl Client {
     }
 }
 
+/// Authenticate a stream and negotiate frame-flag capabilities.
+///
+/// Returns the flag bits the broker supports. Capability negotiation rides on
+/// the auth handshake because it is already the first round trip on every
+/// stream, so it costs no extra latency.
+///
+/// A broker that predates negotiation ignores `client_flags` (serde skips
+/// unknown fields) and answers with a plain `Ok`. That silence is not treated as
+/// "supports everything" — it resolves to [`ORIGINAL_V1_FLAGS`], the three bits
+/// that existed before negotiation, which is the only assumption that is safe
+/// against a broker we cannot interrogate.
 async fn authenticate_stream(
     send: &mut SendStream,
     recv: &mut RecvStream,
     tenant_id: &str,
     token: &str,
     max_frame_bytes: usize,
-) -> Result<()> {
+) -> Result<u16> {
     write_message(
         send,
         Message::Auth {
             tenant_id: tenant_id.to_string(),
             token: token.to_string(),
+            client_flags: Some(felix_wire::KNOWN_FLAGS),
         },
     )
     .await
     .context("send auth")?;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     match read_message_with_limit(recv, &mut scratch, max_frame_bytes).await? {
-        Some(Message::Ok) => Ok(()),
+        Some(Message::AuthOk { server_flags }) => Ok(server_flags),
+        // Legacy broker: no advertisement, so assume only the original bits.
+        Some(Message::Ok) => Ok(felix_wire::ORIGINAL_V1_FLAGS),
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),

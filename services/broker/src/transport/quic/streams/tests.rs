@@ -141,6 +141,9 @@ fn auth_message(fixture: &AuthFixture) -> Message {
     Message::Auth {
         tenant_id: fixture.tenant_id.clone(),
         token: fixture.token.clone(),
+        // Legacy handshake: no capabilities offered, so the broker
+        // answers with a plain `Ok`.
+        client_flags: None,
     }
 }
 
@@ -781,6 +784,9 @@ async fn control_loop_rejects_auth_failed() -> Result<()> {
     let frames = vec![Ok(Some(frame_from_message(Message::Auth {
         tenant_id: "t1".to_string(),
         token: "invalid".to_string(),
+        // Legacy handshake: no capabilities offered, so the broker
+        // answers with a plain `Ok`.
+        client_flags: None,
     })))];
     let (result, messages) = run_control_loop_with_frames(
         broker,

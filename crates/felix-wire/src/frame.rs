@@ -33,9 +33,24 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_PUBLISH_ACKED
     | FLAG_BINARY_PUBLISH_ACK;
 
+/// The flag bits that existed before capability negotiation.
+///
+/// This is what a peer must be assumed to support when it does not advertise a
+/// mask: brokers predating negotiation answer `Auth` with a plain `Ok`, and the
+/// only safe reading of that silence is "the original three bits and nothing
+/// more". Deliberately frozen — new bits must never be added here, or clients
+/// will start assuming support that old brokers do not have.
+pub const ORIGINAL_V1_FLAGS: u16 =
+    FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_EVENT_BATCH | FLAG_BINARY_EVENT_BATCH_SHARED;
+
 /// True if `flags` contains any bit this version does not define.
 pub fn has_unknown_flags(flags: u16) -> bool {
     flags & !KNOWN_FLAGS != 0
+}
+
+/// True if `peer_flags` advertises support for every bit in `required`.
+pub fn supports(peer_flags: u16, required: u16) -> bool {
+    peer_flags & required == required
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

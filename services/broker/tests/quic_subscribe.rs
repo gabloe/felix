@@ -386,6 +386,9 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;

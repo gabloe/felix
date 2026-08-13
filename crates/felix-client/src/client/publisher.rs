@@ -35,6 +35,12 @@ pub(crate) struct PublisherInner {
     admission: Arc<PublishAdmission>,
     stream_cache: Mutex<StreamShardCache>,
     bench_embed_ts: bool,
+    /// Intersection of every worker's advertised flags.
+    ///
+    /// The workers all talk to the same broker, so in practice these agree; the
+    /// intersection is taken anyway so a single lagging stream can never cause
+    /// an encoding to be used on a connection that cannot parse it.
+    server_flags: u16,
 }
 
 impl PublisherInner {
@@ -54,6 +60,10 @@ impl PublisherInner {
         sharding: PublishSharding,
         admission: Arc<PublishAdmission>,
     ) -> Self {
+        let server_flags = workers
+            .iter()
+            .map(|worker| worker.server_flags)
+            .fold(u16::MAX, |acc, flags| acc & flags);
         Self {
             workers,
             sharding,
@@ -61,6 +71,7 @@ impl PublisherInner {
             admission,
             stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
             bench_embed_ts: false,
+            server_flags,
         }
     }
 
@@ -110,6 +121,8 @@ pub(crate) struct PublishWorker {
     pub(crate) tx: mpsc::Sender<PublishRequest>,
     pub(crate) handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
     pub(crate) request_counter: AtomicU64,
+    /// Frame-flag bits the broker advertised for this stream during auth.
+    pub(crate) server_flags: u16,
 }
 
 pub(crate) enum PublishRequest {
@@ -287,8 +300,31 @@ impl Publisher {
         }
         // A single acked publish is a one-item acked batch on the wire; there is no
         // separate binary encoding for single messages.
-        self.publish_batch_binary_acked(tenant_id, namespace, stream, vec![payload], ack)
+        self.publish_batch(tenant_id, namespace, stream, vec![payload], ack)
             .await
+    }
+
+    /// Frame-flag bits the broker advertised during the auth handshake,
+    /// intersected across this publisher's streams.
+    ///
+    /// Resolves to `felix_wire::ORIGINAL_V1_FLAGS` against a broker that predates
+    /// capability negotiation. Exposed so callers can log or assert what was
+    /// actually negotiated rather than inferring it from behaviour.
+    pub fn negotiated_server_flags(&self) -> u16 {
+        self.inner.server_flags
+    }
+
+    /// Whether the broker advertised support for the acked binary publish frame.
+    ///
+    /// False against any broker that predates capability negotiation, because an
+    /// unadvertised mask resolves to `ORIGINAL_V1_FLAGS`. That is the whole point:
+    /// such a broker would match on `FLAG_BINARY_PUBLISH_BATCH`, know nothing of
+    /// the `request_id` prefix, and read it as `tenant_len`.
+    fn supports_binary_ack(&self) -> bool {
+        felix_wire::supports(
+            self.inner.server_flags,
+            felix_wire::FLAG_BINARY_PUBLISH_ACKED,
+        )
     }
 
     /// Publish one payload using the JSON compatibility encoding.
@@ -365,6 +401,14 @@ impl Publisher {
                 .publish_batch_binary(tenant_id, namespace, stream, &payloads)
                 .await;
         }
+        // Fall back to the JSON encoding against a broker that has not advertised
+        // the acked binary frame. Both paths are equivalent in semantics; only the
+        // framing differs, so the fallback costs throughput, not correctness.
+        if !self.supports_binary_ack() {
+            return self
+                .publish_batch_json(tenant_id, namespace, stream, payloads, ack)
+                .await;
+        }
         self.publish_batch_binary_acked(tenant_id, namespace, stream, payloads, ack)
             .await
     }
@@ -372,8 +416,12 @@ impl Publisher {
     /// Publish a batch that asks to be acknowledged, using the binary encoding.
     ///
     /// The frame is written with `FLAG_BINARY_PUBLISH_ACKED` and the broker replies
-    /// with a binary ack frame. Requires a broker that understands that flag — see
-    /// the compatibility note in `docs/protocol.md`.
+    /// with a binary ack frame.
+    ///
+    /// This is the unconditional form: it sends the acked binary frame whether or
+    /// not the broker advertised support. Prefer `publish_batch`, which consults the
+    /// mask negotiated during auth and falls back to JSON when the broker has not
+    /// advertised `0x0008`.
     pub async fn publish_batch_binary_acked(
         &self,
         tenant_id: &str,
@@ -1114,6 +1162,7 @@ mod tests {
                 tx,
                 handle: tokio::sync::Mutex::new(Some(handle)),
                 request_counter: AtomicU64::new(1),
+                server_flags: felix_wire::KNOWN_FLAGS,
             });
         }
         Publisher {
@@ -1154,6 +1203,7 @@ mod tests {
                     tx,
                     handle: tokio::sync::Mutex::new(None),
                     request_counter: AtomicU64::new(1),
+                    server_flags: felix_wire::KNOWN_FLAGS,
                 }]),
                 PublishSharding::RoundRobin,
             )),
@@ -1284,6 +1334,7 @@ mod tests {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
+                    server_flags: felix_wire::KNOWN_FLAGS,
                 }]),
                 PublishSharding::RoundRobin,
                 Arc::new(PublishAdmission::new(
@@ -1386,6 +1437,7 @@ mod tests {
                     tx,
                     handle: tokio::sync::Mutex::new(Some(handle)),
                     request_counter: AtomicU64::new(1),
+                    server_flags: felix_wire::KNOWN_FLAGS,
                 }]),
                 PublishSharding::RoundRobin,
             )),
