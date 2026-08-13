@@ -14,25 +14,20 @@ title: "Demo: Multi-tenant Real-time Notifications"
 - This demo starts an in-process broker and QUIC server on a random local port.
 - You do not need to run the broker separately.
 
-## Architecture (ASCII)
+## Architecture
 
-```
-             +------------------+
-             |  Control Plane   |  (demo auth)
-             +---------+--------+
-                       |
-                 Felix token
-                       v
-+---------+      +-----+------+      +-------------------+
-| Client  | ---> |  Broker    | ---> | Subscribers (2x)  |
-| (t1/t2) |      | (QUIC)     |      | per tenant        |
-+---------+      +-----+------+      +-------------------+
-                       |
-                       v
-                +------+------+
-                | Cache (KV) |
-                | last_alerts |
-                +-------------+
+```mermaid
+flowchart TD
+    CP["Control Plane<br/>(demo auth)"]
+    C["Client<br/>tenants t1 / t2"]
+    B["Broker<br/>QUIC"]
+    S["Subscribers<br/>2 per tenant"]
+    K["Cache (KV)<br/>last_alerts"]
+
+    CP -->|"Felix token"| C
+    C -->|publish| B
+    B -->|events| S
+    B --> K
 ```
 
 ## Run

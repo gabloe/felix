@@ -37,28 +37,25 @@ and this demo runs both so the trade-off is visible instead of theoretical.
   behaviour at thousands of subscribers or across a real network.
 - **Lost events are gone.** Felix is at-most-once today: no replay, no redelivery.
 
-## Architecture (ASCII)
+## Architecture
 
-```
-                    +------------------+
-                    |    Publisher     |  paced at --rate
-                    +---------+--------+
-                              |
-                         QUIC (TLS 1.3)
-                              v
-                    +---------+--------+
-                    |      Broker      |
-                    |  fanout to all   |
-                    +----+----+----+---+
-                         |    |    |
-          +--------------+    |    +--------------+
-          v                   v                   v
-    +-----+-----+       +-----+-----+       +-----+------+
-    |  dash-1   |       |  dash-2   |       |  dash-3    |
-    |  healthy  |       |  healthy  |       |  STALLS    |
-    +-----------+       +-----------+       +------------+
-                                             stops draining
-                                             mid-run
+```mermaid
+flowchart TD
+    P["Publisher<br/>paced at --rate"]
+    B["Broker<br/>fanout to all subscribers"]
+    D1["dash-1<br/>healthy"]
+    D2["dash-2<br/>healthy"]
+    D3["dash-3<br/>stalls mid-run,<br/>stops draining"]
+
+    P -->|"QUIC (TLS 1.3)"| B
+    B --> D1
+    B --> D2
+    B --> D3
+
+    classDef healthy fill:#0f766e,stroke:#2dd4bf,color:#ffffff
+    classDef degraded fill:#b91c1c,stroke:#ef4444,color:#ffffff
+    class D1,D2 healthy
+    class D3 degraded
 ```
 
 ## Run

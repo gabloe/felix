@@ -14,23 +14,19 @@ title: "Demo: Orders/Payments Pipeline"
 - This demo starts an in-process broker and QUIC server on a random local port.
 - You do not need to run the broker separately.
 
-## Architecture (ASCII)
+## Architecture
 
-```
-+-----------+      +---------+      +-----------+
-| Orders    | ---> | Payments| ---> | Shipments |
-| Producer  |      | Worker  |      | Worker    |
-+-----------+      +----+----+      +-----+-----+
-                        |                 |
-                        v                 v
-                   orders/payments   shipments
-                        |                 |
-                        +--------+--------+
-                                 v
-                           +-----+-----+
-                           | Cache KV |
-                           | order_state |
-                           +-----------+
+```mermaid
+flowchart LR
+    O["Orders<br/>Producer"]
+    P["Payments<br/>Worker"]
+    S["Shipments<br/>Worker"]
+    K["Cache (KV)<br/>order_state"]
+
+    O -->|"orders stream"| P
+    P -->|"payments stream"| S
+    P --> K
+    S --> K
 ```
 
 ## Run

@@ -1,0 +1,308 @@
+/*
+ * Felix docs presentation.
+ *
+ * Starlight's defaults are tuned for prose: a 45rem (720px) content column, which
+ * is about 90 monospace characters. That is the right choice for a narrative docs
+ * site and the wrong one here — this content is 1710 code fences, 389 table rows
+ * and 47 diagrams across 40 pages, with code lines reaching 123 characters and
+ * table rows over 340. At 45rem the reference tables and the wider code samples
+ * were being squeezed into a column narrower than the material needs, which is
+ * what made the right-hand table of contents look stranded mid-page.
+ *
+ * Everything below is expressed through Starlight's own custom properties where
+ * one exists, so a Starlight upgrade can only change these in ways it intends.
+ *
+ * Note on the cascade: Starlight ships its defaults inside `@layer starlight.base`.
+ * This file is deliberately unlayered, and unlayered declarations beat layered ones
+ * regardless of source order — so these overrides win without needing `!important`
+ * or inflated selectors. If a future change wraps this file in a layer, the
+ * overrides will silently stop applying.
+ */
+
+:root {
+	/*
+	 * Typography. Starlight's default is the platform UI stack (`-apple-system`
+	 * and friends), which is the safe choice but makes every Starlight site look
+	 * like every other one and renders differently on each OS. Inter and
+	 * JetBrains Mono are self-hosted through @fontsource — see astro.config.mjs,
+	 * which loads their CSS ahead of this file. Both are variable fonts, so the
+	 * whole weight axis costs one file each.
+	 *
+	 * Starlight resolves `--sl-font` through `--__sl-font`, which already falls
+	 * back to the system stack, so a font that fails to load degrades rather
+	 * than breaking.
+	 */
+	--sl-font: 'Inter Variable';
+	--sl-font-mono: 'JetBrains Mono Variable';
+
+	/*
+	 * 17px body. Starlight's 16px is fine for short guides; these pages are read
+	 * for long stretches, and the extra pixel buys a more comfortable measure —
+	 * 46rem holds ~78 characters at 17px versus ~88 at 16px.
+	 *
+	 * Setting the token alone is not enough: Starlight defines `--sl-text-body`
+	 * but only reads it in one place (`Card.astro`, as a clamp ceiling), so prose
+	 * just inherits 16px from the root. The rule further down applies it to
+	 * `.sl-markdown-content` directly. Both are set so Card's ceiling stays in
+	 * step with the body text it sits next to.
+	 */
+	--sl-text-body: 1.0625rem;
+
+	/*
+	 * Accent. Starlight ships blue (hue 224/234), which is both the default and
+	 * the most common choice, so it reads as "unstyled". Teal keeps the cool,
+	 * technical register while being recognisably a decision.
+	 *
+	 * The lightness values are picked for contrast, not taste. In light mode
+	 * `--sl-color-text-accent` resolves to `--sl-color-accent` and
+	 * `--sl-color-bg-accent` pairs it with white button text, so `accent` has to
+	 * clear 4.5:1 against *both* white background and white foreground — cyan at
+	 * Starlight's default 60% lightness does not, which is why it sits at 29%.
+	 *
+	 * Measured in-browser at these values: body links and primary button text
+	 * come out at 5.38:1 in light mode and 12.82:1 in dark. Re-measure if the
+	 * hue or lightness changes; the light-mode figure has little headroom.
+	 */
+	--sl-color-accent-low: hsl(192, 50%, 15%);
+	--sl-color-accent: hsl(192, 90%, 42%);
+	--sl-color-accent-high: hsl(192, 85%, 80%);
+
+	/*
+	 * 60rem ≈ 960px ≈ 115 monospace characters, which clears the 99th-percentile
+	 * code line without letting prose run to an unreadable measure. Prose is
+	 * pulled back to a comfortable width separately below, so widening here buys
+	 * room for code and tables rather than stretching paragraphs.
+	 */
+	--sl-content-width: 60rem;
+
+	/* A slightly roomier sidebar stops the longer nav labels wrapping to two
+	 * lines ("Internals: Backpressure & Core Sharding" is the worst case). */
+	--sl-sidebar-width: 20rem;
+
+	/* Felix-specific tokens, so the rules below have a single place to change. */
+	--felix-prose-measure: 46rem;
+	--felix-rule: color-mix(in srgb, var(--sl-color-gray-5) 60%, transparent);
+	--felix-surface: color-mix(in srgb, var(--sl-color-gray-6) 55%, transparent);
+}
+
+:root[data-theme='light'] {
+	/* Light mode inverts the low/high ends; see the contrast note above for why
+	 * `accent` is much darker here than Starlight's default. */
+	--sl-color-accent-low: hsl(192, 75%, 90%);
+	--sl-color-accent: hsl(192, 95%, 29%);
+	--sl-color-accent-high: hsl(192, 95%, 22%);
+}
+
+/*
+ * Keep paragraphs at a readable measure even though the column is wider.
+ * Line length is what governs reading comfort, so prose stays near 46rem while
+ * code, tables and diagrams are free to use the full column. Headings, lists and
+ * blockquotes travel with the prose so the text block stays visually coherent.
+ *
+ * Excluded on the landing page (`data-has-hero` on <html>), where the layout is built from
+ * full-width card grids and a narrow text column would leave them stranded.
+ */
+:root:not([data-has-hero]) :is(
+	.sl-markdown-content > p,
+	.sl-markdown-content > ul,
+	.sl-markdown-content > ol,
+	.sl-markdown-content > blockquote,
+	.sl-markdown-content > h2,
+	.sl-markdown-content > h3,
+	.sl-markdown-content > h4
+) {
+	max-width: var(--felix-prose-measure);
+}
+
+/* See the `--sl-text-body` note above for why the token has to be applied here
+ * by hand. Code, tables and asides carry their own sizes and are unaffected. */
+.sl-markdown-content {
+	font-size: var(--sl-text-body);
+}
+
+/*
+ * The hero's own padding is `clamp(2.5rem, calc(1rem + 10vmin), 10rem)`, which
+ * is ~121px top and bottom on a 1050px-tall viewport. That is sized for the
+ * splash template, where the hero is the entire page. Here it sits above real
+ * content inside a sidebar layout, and the untouched value left a band of dead
+ * space between the call-to-action buttons and the first paragraph.
+ */
+:root[data-has-hero] .hero {
+	padding-block: clamp(1.5rem, calc(0.5rem + 4vmin), 4rem);
+}
+
+/*
+ * Tables: the single biggest readability win here, because the reference and
+ * configuration pages are mostly tables and several are far wider than any
+ * column could be. Scroll them inside their own box rather than letting the page
+ * scroll sideways, and give rows enough contrast to track across a wide row.
+ */
+.sl-markdown-content table {
+	display: block;
+	width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+	font-size: var(--sl-text-sm);
+	/* Momentum scrolling on trackpads/touch without a visible scrollbar jump. */
+	overscroll-behavior-x: contain;
+}
+
+.sl-markdown-content table :is(th, td) {
+	border: 1px solid var(--felix-rule);
+	padding: 0.5rem 0.75rem;
+	/* Config keys, env vars and type names must not be broken mid-token. */
+	white-space: normal;
+}
+
+.sl-markdown-content table th {
+	background: var(--felix-surface);
+	font-weight: 600;
+	text-align: left;
+}
+
+.sl-markdown-content table tbody tr:nth-child(even) {
+	background: color-mix(in srgb, var(--sl-color-gray-6) 30%, transparent);
+}
+
+/* Inline code inside tables is the dominant content there — keep it compact so
+ * a row of env-var names does not wrap. */
+.sl-markdown-content table code {
+	white-space: nowrap;
+	font-size: 0.9em;
+}
+
+/*
+ * Diagrams. There are 47 mermaid blocks and a number of ASCII architecture
+ * drawings in fenced blocks; both read better centred with room to breathe, and
+ * neither should ever force the page to scroll horizontally.
+ */
+.sl-markdown-content .mermaid,
+.sl-markdown-content pre:has(> code) {
+	max-width: 100%;
+	overflow-x: auto;
+}
+
+.sl-markdown-content .mermaid {
+	display: flex;
+	justify-content: center;
+	margin-block: 1.5rem;
+}
+
+/*
+ * Headings: give sections clearer separation on pages that run long. `how-felix-works`
+ * is over a thousand lines with twenty top-level sections, and without a visible
+ * boundary the sections blur together while scrolling.
+ */
+.sl-markdown-content > h2 {
+	margin-top: 2.75rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--felix-rule);
+}
+
+.sl-markdown-content > h2:first-of-type {
+	border-top: none;
+	padding-top: 0;
+}
+
+/*
+ * The right-hand table of contents is the primary navigation aid on these long
+ * internals pages, so make the current-section marker unmistakable.
+ */
+starlight-toc a[aria-current='true'] {
+	font-weight: 600;
+	border-inline-start-color: var(--sl-color-text-accent);
+}
+
+/*
+ * Sidebar. There are 40 pages across 8 groups; fully expanded that is a wall of
+ * uniform links with no way in. The groups are collapsed by default in
+ * astro.config.mjs, and the styling here does the other half of the job: make
+ * the group headings read as headings rather than as more links, so the closed
+ * state is scannable.
+ */
+.sidebar-content .group-label .large {
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-2);
+}
+
+.sidebar-content ul.top-level > li + li {
+	margin-top: 0.75rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--felix-rule);
+}
+
+.sidebar-content a {
+	font-size: var(--sl-text-sm);
+}
+
+/* The current page should be findable at a glance in a long nav. */
+.sidebar-content a[aria-current='page'] {
+	font-weight: 600;
+}
+
+/*
+ * Splash page. Starlight's hero sizes its image to fill the column, which for a
+ * square logo means it dominates the fold and pushes the tagline and the calls
+ * to action below it. Cap it so the hero reads as title-plus-art.
+ */
+:root[data-has-hero] .hero img {
+	max-height: 18rem;
+	width: auto;
+	margin-inline: auto;
+}
+
+/*
+ * Cards. Starlight's cards are flat by default; a hover response on the ones
+ * that are actually links is the cheapest way to make the landing page feel
+ * navigable rather than printed.
+ */
+.sl-markdown-content .card-grid {
+	margin-block: 1.5rem;
+}
+
+.sl-markdown-content a.card {
+	transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.sl-markdown-content a.card:hover {
+	border-color: var(--sl-color-accent);
+	transform: translateY(-2px);
+	box-shadow: var(--sl-shadow-md);
+}
+
+/* Respect users who have asked the OS for less motion. */
+@media (prefers-reduced-motion: reduce) {
+	.sl-markdown-content a.card,
+	.sl-markdown-content a.card:hover {
+		transition: none;
+		transform: none;
+	}
+}
+
+/*
+ * Print: drop the chrome and let content use the page. Several of these pages get
+ * printed or exported to PDF for review.
+ */
+@media print {
+	/* Must mirror the on-screen selector's shape, not just its subjects: the
+	 * screen rule is scoped by `:root:not([data-has-hero])`, so a bare
+	 * `.sl-markdown-content > p` here would lose on specificity. */
+	:root:not([data-has-hero]) :is(
+		.sl-markdown-content > p,
+		.sl-markdown-content > ul,
+		.sl-markdown-content > ol,
+		.sl-markdown-content > blockquote,
+		.sl-markdown-content > h2,
+		.sl-markdown-content > h3,
+		.sl-markdown-content > h4
+	) {
+		max-width: none;
+	}
+
+	.sl-markdown-content > h2 {
+		border-top: none;
+	}
+}
