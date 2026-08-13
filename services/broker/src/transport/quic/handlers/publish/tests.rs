@@ -1149,6 +1149,7 @@ async fn handle_publish_message_ack_waiter_queue_full() {
     let permit = ack_waiters.clone().acquire_owned().await.expect("permit");
     ack_waiter_tx
         .try_send(AckWaiterMessage::Publish {
+            encoding: AckEncoding::Json,
             request_id: 99,
             payload_len: 1,
             start: crate::transport::quic::telemetry::t_instant_now(),
@@ -1228,6 +1229,7 @@ async fn handle_publish_message_ack_waiter_queue_full_with_permit() {
     let permit = ack_waiters.clone().acquire_owned().await.expect("permit");
     ack_waiter_tx
         .try_send(AckWaiterMessage::Publish {
+            encoding: AckEncoding::Json,
             request_id: 101,
             payload_len: 1,
             start: crate::transport::quic::telemetry::t_instant_now(),
@@ -1756,6 +1758,7 @@ async fn handle_publish_batch_missing_request_id_returns_error() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -1804,6 +1807,7 @@ async fn handle_publish_batch_stream_not_found_sends_error() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -1872,6 +1876,7 @@ async fn handle_publish_batch_enqueue_full_reports_error() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -1939,6 +1944,7 @@ async fn handle_publish_batch_enqueue_ok_sends_ack() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2003,6 +2009,7 @@ async fn handle_publish_batch_message_drop_when_queue_full_and_ack_none() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2062,6 +2069,7 @@ async fn handle_publish_batch_message_enqueue_error_reports_publish_error() {
         &mut key,
         false,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2129,6 +2137,7 @@ async fn handle_publish_batch_message_ack_on_commit_sends_waiter_message() {
         &mut key,
         false,
         true,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2177,6 +2186,7 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
         &mut key,
         true,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2229,6 +2239,7 @@ async fn handle_publish_batch_message_throttled_without_request_id_sends_error()
         &mut key,
         true,
         false,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2292,6 +2303,7 @@ async fn handle_publish_batch_message_ack_waiters_exhausted() {
         &mut key,
         false,
         true,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2355,6 +2367,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
     let permit = ack_waiters.clone().acquire_owned().await.expect("permit");
     ack_waiter_tx
         .try_send(AckWaiterMessage::PublishBatch {
+            encoding: AckEncoding::Json,
             request_id: 99,
             payload_bytes: vec![1],
             response_rx: oneshot::channel().1,
@@ -2369,6 +2382,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
         &mut key,
         false,
         true,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,
@@ -2437,6 +2451,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         &mut key,
         false,
         true,
+        AckEncoding::Json,
         &out_tx,
         &out_depth,
         &throttle_tx,

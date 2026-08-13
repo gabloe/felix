@@ -124,6 +124,11 @@ pub(crate) enum PublishRequest {
         bytes: Bytes,
         item_count: usize,
         sample: bool,
+        /// `AckMode::None` for fire-and-forget frames. Anything else means the
+        /// frame was encoded with `FLAG_BINARY_PUBLISH_ACKED` and the writer must
+        /// block for the broker's ack before reporting the result.
+        ack: AckMode,
+        request_id: Option<u64>,
         _permit: OwnedSemaphorePermit,
         response: oneshot::Sender<Result<()>>,
     },
@@ -261,9 +266,12 @@ impl Publisher {
         Ok(&workers[index])
     }
 
-    /// Publish one payload. Unacked publishes use the binary data-plane encoding by default;
-    /// acked publishes retain the JSON control encoding until binary acknowledgements are
-    /// negotiated by the protocol.
+    /// Publish one payload using the binary data-plane encoding.
+    ///
+    /// Acked and unacked publishes both take the binary path: an unacked publish is
+    /// a plain `FLAG_BINARY_PUBLISH_BATCH` frame, and an acked one adds
+    /// `FLAG_BINARY_PUBLISH_ACKED` and waits for the broker's binary ack. Call
+    /// `publish_json` to force the JSON compatibility encoding instead.
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -277,7 +285,9 @@ impl Publisher {
                 .publish_batch_binary(tenant_id, namespace, stream, &[payload])
                 .await;
         }
-        self.publish_json(tenant_id, namespace, stream, payload, ack)
+        // A single acked publish is a one-item acked batch on the wire; there is no
+        // separate binary encoding for single messages.
+        self.publish_batch_binary_acked(tenant_id, namespace, stream, vec![payload], ack)
             .await
     }
 
@@ -340,7 +350,8 @@ impl Publisher {
         response_rx.await.context("publish response dropped")?
     }
 
-    /// Publish a batch. Unacked batches use binary encoding by default.
+    /// Publish a batch. Both acked and unacked batches use the binary encoding by
+    /// default; call `publish_batch_json` for the JSON compatibility encoding.
     pub async fn publish_batch(
         &self,
         tenant_id: &str,
@@ -354,8 +365,75 @@ impl Publisher {
                 .publish_batch_binary(tenant_id, namespace, stream, &payloads)
                 .await;
         }
-        self.publish_batch_json(tenant_id, namespace, stream, payloads, ack)
+        self.publish_batch_binary_acked(tenant_id, namespace, stream, payloads, ack)
             .await
+    }
+
+    /// Publish a batch that asks to be acknowledged, using the binary encoding.
+    ///
+    /// The frame is written with `FLAG_BINARY_PUBLISH_ACKED` and the broker replies
+    /// with a binary ack frame. Requires a broker that understands that flag — see
+    /// the compatibility note in `docs/protocol.md`.
+    pub async fn publish_batch_binary_acked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary(tenant_id, namespace, stream, &payloads)
+                .await;
+        }
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
+        let request_id = worker.request_counter.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "telemetry")]
+        let sample = crate::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let start = crate::t_now_if(sample);
+        let bytes = felix_wire::binary::encode_acked_publish_batch_bytes(
+            request_id, ack, tenant_id, namespace, stream, &payloads,
+        )?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = start {
+            let encode_ns = start.elapsed().as_nanos() as u64;
+            timings::record_encode_ns(encode_ns);
+            timings::record_binary_encode_ns(encode_ns);
+            t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+        }
+        let permit = self.inner.admission.acquire(bytes.len()).await?;
+        let (response_tx, response_rx) = oneshot::channel();
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::BinaryBytes {
+                bytes,
+                item_count: payloads.len(),
+                sample,
+                ack,
+                request_id: Some(request_id),
+                _permit: permit,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue acked binary batch")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        response_rx
+            .await
+            .context("acked binary batch response dropped")?
     }
 
     /// Publish a batch using the JSON compatibility encoding.
@@ -474,6 +552,8 @@ impl Publisher {
                 bytes,
                 item_count: payloads.len(),
                 sample,
+                ack: AckMode::None,
+                request_id: None,
                 _permit: permit,
                 response: response_tx,
             })
@@ -533,6 +613,8 @@ impl Publisher {
                 bytes,
                 item_count: payloads.len(),
                 sample,
+                ack: AckMode::None,
+                request_id: None,
                 _permit: permit,
                 response: response_tx,
             })
@@ -844,6 +926,8 @@ pub(crate) async fn run_publisher_writer_with_limit(
                 bytes,
                 item_count,
                 sample,
+                ack,
+                request_id,
                 _permit,
                 response,
             } => {
@@ -853,10 +937,26 @@ pub(crate) async fn run_publisher_writer_with_limit(
                 let write_start = crate::t_now_if(sample);
                 #[cfg(feature = "telemetry")]
                 let chunk_start = crate::t_now_if(sample);
-                let result = send
+                let write_result = send
                     .write_all(&bytes)
                     .await
                     .context("write binary batch frame");
+                // For an acked frame the request is not complete until the broker's
+                // ack arrives, so the wait belongs inside the writer task: it owns
+                // the stream, and acks are answered strictly in request order.
+                let result = match write_result {
+                    Ok(()) => {
+                        maybe_wait_for_ack_with_limit(
+                            &mut recv,
+                            ack,
+                            request_id,
+                            &mut ack_scratch,
+                            max_frame_bytes,
+                        )
+                        .await
+                    }
+                    Err(err) => Err(err),
+                };
                 #[cfg(feature = "telemetry")]
                 if let Some(start) = chunk_start {
                     let await_ns = start.elapsed().as_nanos() as u64;
@@ -1385,6 +1485,8 @@ mod tests {
             bytes,
             item_count: payloads.len(),
             sample: false,
+            ack: AckMode::None,
+            request_id: None,
             _permit: test_publish_permit(),
             response: response_tx,
         })
@@ -1615,6 +1717,8 @@ mod tests {
             bytes,
             item_count: payloads.len(),
             sample: false,
+            ack: AckMode::None,
+            request_id: None,
             _permit: test_publish_permit(),
             response: resp_tx1,
         })
@@ -1845,6 +1949,8 @@ mod tests {
             bytes: Bytes::from_static(b"bin"),
             item_count: 1,
             sample: false,
+            ack: AckMode::None,
+            request_id: None,
             _permit: test_publish_permit(),
             response: resp_tx2,
         })

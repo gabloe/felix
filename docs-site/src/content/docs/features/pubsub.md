@@ -35,14 +35,14 @@ graph LR
     B --> S3
     B --> S4
     
-    style B fill:#fff3e0
-    style P1 fill:#e3f2fd
-    style P2 fill:#e3f2fd
-    style P3 fill:#e3f2fd
-    style S1 fill:#c8e6c9
-    style S2 fill:#c8e6c9
-    style S3 fill:#c8e6c9
-    style S4 fill:#c8e6c9
+    style B fill:#fff3e0,stroke:#334155,color:#111827
+    style P1 fill:#e3f2fd,stroke:#334155,color:#111827
+    style P2 fill:#e3f2fd,stroke:#334155,color:#111827
+    style P3 fill:#e3f2fd,stroke:#334155,color:#111827
+    style S1 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S2 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S3 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S4 fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 ## Core Features
@@ -562,12 +562,12 @@ graph TB
     B --> S3
     B --> SN
     
-    style P fill:#e3f2fd
-    style B fill:#fff3e0
-    style S1 fill:#c8e6c9
-    style S2 fill:#c8e6c9
-    style S3 fill:#c8e6c9
-    style SN fill:#c8e6c9
+    style P fill:#e3f2fd,stroke:#334155,color:#111827
+    style B fill:#fff3e0,stroke:#334155,color:#111827
+    style S1 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S2 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S3 fill:#c8e6c9,stroke:#334155,color:#111827
+    style SN fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 Felix handles fanout efficiently at the broker, so one publish reaches all subscribers.

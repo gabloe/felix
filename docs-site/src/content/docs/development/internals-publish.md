@@ -47,13 +47,22 @@ pub async fn publish(
    per-connection in `stream_cache: Mutex<StreamShardCache>` so repeat
    publishes to the same stream skip re-hashing.
 
-2. **Encoding.** If `ack == AckMode::None`, the message is binary-encoded by
-   default (`felix_wire::binary::encode_publish_batch` under the hood) —
-   this is the fast path. If you want JSON instead (debugging, a client that
-   hasn't implemented the binary decoder), call `publish_json`/
-   `publish_batch_json` explicitly. Acked publishes (`PerMessage`/`PerBatch`)
-   still use the JSON control encoding until binary ack framing exists — see
+2. **Encoding.** Publishes are binary-encoded by default, acked or not. With
+   `ack == AckMode::None` that is `felix_wire::binary::encode_publish_batch`
+   (flag `0x0001`). With `PerMessage`/`PerBatch` it is
+   `encode_acked_publish_batch_bytes` (flags `0x0001 | 0x0008`), which prefixes
+   the same body with a `request_id` and the ack mode; the broker replies with a
+   binary ack frame (`0x0010`) rather than a JSON `PublishOk`/`PublishError`. If
+   you want JSON instead (debugging, a client that hasn't implemented the binary
+   decoder), call `publish_json`/`publish_batch_json` explicitly — see
    [Wire Protocol](/felix/architecture/wire-protocol/#binary-publish-batch-encoding).
+
+   Both encodings converge on the same handler: the binary path decodes the frame
+   and then calls `handle_publish_batch_message` with `AckEncoding::Binary`, so
+   admission, authorization, overload shedding and commit-ack semantics are shared
+   and only the reply framing differs. The encoding is carried on the ack-waiter
+   message because a commit ack is emitted from a different task, long after the
+   request frame is gone.
 
 3. **Admission.** Before the message is handed to the worker's channel, the
    caller awaits `PublishAdmission::acquire(estimated_bytes)` — a

@@ -321,9 +321,9 @@ flowchart LR
     B1 <-->|"Explicit config only"| BridgeAgent
     BridgeAgent <-->|"Explicit config only"| B2
     
-    style Region1 fill:#e1f5ff
-    style Region2 fill:#fff4e1
-    style Bridge fill:#ffe1e1
+    style Region1 fill:#e1f5ff,stroke:#334155,color:#111827
+    style Region2 fill:#fff4e1,stroke:#334155,color:#111827
+    style Bridge fill:#ffe1e1,stroke:#334155,color:#111827
 ```
 
 **Target bridge characteristics (not yet built):**

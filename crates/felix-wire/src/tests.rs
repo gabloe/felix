@@ -4,11 +4,12 @@
 use crate::binary;
 use crate::error::Error;
 use crate::frame::{
-    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_BATCH, Frame,
-    FrameHeader, MAGIC, VERSION,
+    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, Frame, FrameHeader, MAGIC, VERSION,
+    has_unknown_flags,
 };
 use crate::message::{AckMode, Message};
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 #[test]
 fn round_trip() {
@@ -151,6 +152,177 @@ fn binary_publish_batch_rejects_incomplete_payload() {
     let frame = Frame::new(FLAG_BINARY_PUBLISH_BATCH, Bytes::from_static(b"\x00")).expect("frame");
     let err = binary::decode_publish_batch(&frame).expect_err("incomplete");
     assert!(matches!(err, Error::Incomplete));
+}
+
+#[test]
+fn acked_publish_batch_round_trip() {
+    let payloads = vec![b"one".to_vec(), b"two".to_vec()];
+    for ack in [AckMode::PerMessage, AckMode::PerBatch] {
+        let bytes =
+            binary::encode_acked_publish_batch_bytes(42, ack, "t1", "default", "orders", &payloads)
+                .expect("encode");
+        let frame = Frame::decode(bytes).expect("frame");
+        // Both bits are set: the acked frame is a publish batch that also owes an ack.
+        assert_eq!(
+            frame.header.flags,
+            FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED
+        );
+        let decoded = binary::decode_acked_publish_batch(&frame).expect("decode");
+        assert_eq!(decoded.request_id, 42);
+        assert_eq!(decoded.ack, ack);
+        assert_eq!(decoded.batch.tenant_id, "t1");
+        assert_eq!(decoded.batch.namespace, "default");
+        assert_eq!(decoded.batch.stream, "orders");
+        assert_eq!(decoded.batch.payloads, payloads);
+    }
+}
+
+// The prefix must be readable on its own, because that is what lets the broker
+// answer a corrupt body with an error the client can still correlate.
+#[test]
+fn acked_publish_prefix_readable_without_valid_body() {
+    let mut buf = BytesMut::new();
+    buf.put_u64(7);
+    buf.put_u8(2); // PerBatch
+    buf.extend_from_slice(b"\xff\xff garbage body");
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        buf.freeze(),
+    )
+    .expect("frame");
+    let (request_id, ack) = binary::peek_acked_publish_prefix(&frame).expect("peek");
+    assert_eq!(request_id, 7);
+    assert_eq!(ack, AckMode::PerBatch);
+    // The body is still garbage, so the full decode must fail.
+    assert!(binary::decode_acked_publish_batch(&frame).is_err());
+}
+
+#[test]
+fn acked_publish_batch_rejects_truncated_prefix() {
+    // Eight bytes: a full request_id but no ack-mode byte.
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        Bytes::from_static(b"\x00\x00\x00\x00\x00\x00\x00\x00"),
+    )
+    .expect("frame");
+    assert!(matches!(
+        binary::decode_acked_publish_batch(&frame).expect_err("truncated"),
+        Error::Incomplete
+    ));
+}
+
+#[test]
+fn acked_publish_batch_rejects_invalid_ack_mode() {
+    let mut buf = BytesMut::new();
+    buf.put_u64(1);
+    buf.put_u8(0); // AckMode::None is not representable in this encoding
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        buf.freeze(),
+    )
+    .expect("frame");
+    assert!(binary::decode_acked_publish_batch(&frame).is_err());
+}
+
+#[test]
+fn acked_publish_batch_rejects_none_ack_mode_on_encode() {
+    // AckMode::None must go through `encode_publish_batch` instead, so there is
+    // exactly one wire encoding per mode.
+    assert!(
+        binary::encode_acked_publish_batch_bytes(
+            1,
+            AckMode::None,
+            "t1",
+            "default",
+            "orders",
+            &[b"x".to_vec()],
+        )
+        .is_err()
+    );
+}
+
+// The body parser is shared with the unacked path, so the payload-count bound
+// must still apply once the prefix has been stripped.
+#[test]
+fn acked_publish_batch_rejects_oversized_payload_count() {
+    let mut buf = BytesMut::new();
+    buf.put_u64(1);
+    buf.put_u8(1);
+    buf.put_u16(2);
+    buf.extend_from_slice(b"t1");
+    buf.put_u16(2);
+    buf.extend_from_slice(b"ns");
+    buf.put_u16(2);
+    buf.extend_from_slice(b"st");
+    buf.put_u32(u32::MAX); // count, with no payload bytes following
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        buf.freeze(),
+    )
+    .expect("frame");
+    assert!(matches!(
+        binary::decode_acked_publish_batch(&frame).expect_err("oversized count"),
+        Error::Incomplete
+    ));
+}
+
+#[test]
+fn publish_ack_round_trip_ok_and_error() {
+    let bytes = binary::encode_publish_ack_bytes(9, None).expect("encode ok");
+    let frame = Frame::decode(bytes).expect("frame");
+    assert_eq!(frame.header.flags, FLAG_BINARY_PUBLISH_ACK);
+    let decoded = binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(decoded.request_id, 9);
+    assert_eq!(decoded.error, None);
+
+    let bytes = binary::encode_publish_ack_bytes(10, Some("stream full")).expect("encode err");
+    let frame = Frame::decode(bytes).expect("frame");
+    let decoded = binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(decoded.request_id, 10);
+    assert_eq!(decoded.error.as_deref(), Some("stream full"));
+}
+
+#[test]
+fn publish_ack_rejects_truncated_and_invalid_status() {
+    let frame =
+        Frame::new(FLAG_BINARY_PUBLISH_ACK, Bytes::from_static(b"\x00\x00")).expect("frame");
+    assert!(matches!(
+        binary::decode_publish_ack(&frame).expect_err("truncated"),
+        Error::Incomplete
+    ));
+
+    let mut buf = BytesMut::new();
+    buf.put_u8(7); // neither ok (0) nor error (1)
+    buf.put_u64(1);
+    buf.put_u16(0);
+    let frame = Frame::new(FLAG_BINARY_PUBLISH_ACK, buf.freeze()).expect("frame");
+    assert!(binary::decode_publish_ack(&frame).is_err());
+}
+
+// A declared message length longer than the frame must not be trusted.
+#[test]
+fn publish_ack_rejects_oversized_message_len() {
+    let mut buf = BytesMut::new();
+    buf.put_u8(1);
+    buf.put_u64(1);
+    buf.put_u16(u16::MAX); // no message bytes follow
+    let frame = Frame::new(FLAG_BINARY_PUBLISH_ACK, buf.freeze()).expect("frame");
+    assert!(matches!(
+        binary::decode_publish_ack(&frame).expect_err("oversized message len"),
+        Error::Incomplete
+    ));
+}
+
+#[test]
+fn unknown_flags_are_detected() {
+    assert!(!has_unknown_flags(FLAG_BINARY_PUBLISH_BATCH));
+    assert!(!has_unknown_flags(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED
+    ));
+    assert!(!has_unknown_flags(0));
+    // The first undefined bit must be rejected rather than masked off.
+    assert!(has_unknown_flags(0x0020));
+    assert!(has_unknown_flags(FLAG_BINARY_PUBLISH_BATCH | 0x8000));
 }
 
 #[test]

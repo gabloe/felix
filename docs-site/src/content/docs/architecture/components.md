@@ -23,10 +23,10 @@ graph TB
     Broker -->|stores| Storage
     Broker -->|syncs| CONTROLPLANE
     
-    style Client fill:#e1f5fe
-    style Broker fill:#fff3e0
-    style Storage fill:#f3e5f5
-    style CONTROLPLANE fill:#e8f5e9
+    style Client fill:#e1f5fe,stroke:#334155,color:#111827
+    style Broker fill:#fff3e0,stroke:#334155,color:#111827
+    style Storage fill:#f3e5f5,stroke:#334155,color:#111827
+    style CONTROLPLANE fill:#e8f5e9,stroke:#334155,color:#111827
 ```
 
 ## felix-wire: Protocol Layer
@@ -45,20 +45,48 @@ The `felix-wire` crate defines the language-neutral wire protocol that all Felix
 
 Every Felix message is wrapped in a fixed 12-byte header:
 
-```
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-┌───────────────────────────────┬───────────────┬───────────────┐
-│            magic              │    version    │     flags     │
-├───────────────────────────────┴───────────────┴───────────────┤
-│                           length                              │
-└───────────────────────────────────────────────────────────────┘
-```
+<svg viewBox="0 0 660 196" role="img" aria-labelledby="ch-title ch-desc" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="ch-title">Felix v1 frame header layout</title>
+ <desc id="ch-desc">Twelve bytes in three 32-bit rows: bytes 0 to 3 are magic, bytes 4 and 5 are version, bytes 6 and 7 are flags, bytes 8 to 11 are length.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g opacity="0.65" text-anchor="middle">
+   <text x="52" y="16">0</text>
+   <text x="200" y="16">8</text>
+   <text x="348" y="16">16</text>
+   <text x="496" y="16">24</text>
+   <text x="644" y="16">31</text>
+  </g>
+  <g stroke="currentColor" opacity="0.35"><path d="M52 22v6M200 22v6M348 22v6M496 22v6M644 22v6" /></g>
+  <g opacity="0.65" text-anchor="end" font-size="12">
+   <text x="42" y="63">0</text>
+   <text x="42" y="115">4</text>
+   <text x="42" y="167">8</text>
+  </g>
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="52" y="34" width="592" height="44" rx="3" />
+   <rect x="52" y="86" width="296" height="44" rx="3" />
+   <rect x="348" y="86" width="296" height="44" rx="3" />
+   <rect x="52" y="138" width="592" height="44" rx="3" />
+  </g>
+  <g text-anchor="middle">
+   <text x="348" y="52">magic</text>
+   <text x="348" y="70" opacity="0.7" font-size="12">u32 &#183; 0x464C5831 &#8220;FLX1&#8221;</text>
+   <text x="200" y="104">version</text>
+   <text x="200" y="122" opacity="0.7" font-size="12">u16 &#183; 1</text>
+   <text x="496" y="104">flags</text>
+   <text x="496" y="122" opacity="0.7" font-size="12">u16 &#183; bit field</text>
+   <text x="348" y="156">length</text>
+   <text x="348" y="174" opacity="0.7" font-size="12">u32 &#183; payload bytes</text>
+  </g>
+ </g>
+</svg>
 
 - **Magic**: `0x464C5831` ("FLX1") for protocol identification
 - **Version**: Protocol version (currently 1)
-- **Flags**: Feature flags for compression, encryption, binary encoding
-- **Length**: Payload size in bytes (up to 4 GB)
+- **Flags**: Selects the payload layout — binary publish batch, binary event batch,
+  acked publish, publish ack. See
+  [Wire Protocol](/felix/architecture/wire-protocol/) for the full table.
+- **Length**: Payload size in bytes (up to 4 GiB)
 
 ### Design Decisions
 
@@ -124,9 +152,9 @@ graph TB
     Connection -->|credits| Stream
     Stream -->|credits| Data
     
-    style Connection fill:#ffebee
-    style Stream fill:#fff3e0
-    style Data fill:#e8f5e9
+    style Connection fill:#ffebee,stroke:#334155,color:#111827
+    style Stream fill:#fff3e0,stroke:#334155,color:#111827
+    style Data fill:#e8f5e9,stroke:#334155,color:#111827
 ```
 
 **Configuration Parameters**:
@@ -169,11 +197,11 @@ graph TB
     Publish --> Fanout
     Fanout --> Subscribe
     
-    style Ingress fill:#e3f2fd
-    style Publish fill:#fff9c4
-    style Subscribe fill:#f3e5f5
-    style Cache fill:#e0f2f1
-    style Fanout fill:#fce4ec
+    style Ingress fill:#e3f2fd,stroke:#334155,color:#111827
+    style Publish fill:#fff9c4,stroke:#334155,color:#111827
+    style Subscribe fill:#f3e5f5,stroke:#334155,color:#111827
+    style Cache fill:#e0f2f1,stroke:#334155,color:#111827
+    style Fanout fill:#fce4ec,stroke:#334155,color:#111827
 ```
 
 ### Stream Routing

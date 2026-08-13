@@ -38,6 +38,23 @@ use super::hooks::{
     write_message_with_hook,
 };
 
+// Longest error text carried in a binary publish ack. Well under the u16 wire
+// limit, and long enough for the broker's own messages ("forbidden",
+// "tenant mismatch", "stream full", decode errors) to survive intact.
+const MAX_ACK_MESSAGE_BYTES: usize = 512;
+
+// Truncate on a char boundary so the result stays valid UTF-8.
+fn truncate_ack_message(message: &str) -> &str {
+    if message.len() <= MAX_ACK_MESSAGE_BYTES {
+        return message;
+    }
+    let mut end = MAX_ACK_MESSAGE_BYTES;
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    &message[..end]
+}
+
 // Drains outgoing responses, updates depth counters, and handles shutdown on error.
 pub(super) async fn run_writer_loop(
     mut send: SendStream,
@@ -97,6 +114,61 @@ pub(super) async fn run_writer_loop(
                             if is_publish_ack {
                                 counters.ack_items_out_ok.fetch_add(1, Ordering::Relaxed);
                             }
+                        }
+                    }
+                    Outgoing::PublishAck { request_id, error } => {
+                        let sample = t_should_sample();
+                        let write_start = t_now_if(sample);
+                        // The ack's message field is u16-length on the wire. Bound it
+                        // here so an unusually long internal error can never make the
+                        // ack unencodable — dropping an ack strands a client that is
+                        // synchronously waiting for it.
+                        let error = error.as_deref().map(truncate_ack_message);
+                        let bytes = match felix_wire::binary::encode_publish_ack_bytes(
+                            request_id, error,
+                        ) {
+                            Ok(bytes) => bytes,
+                            Err(err) => {
+                                let _ = decrement_depth(
+                                    &out_ack_depth_worker,
+                                    &GLOBAL_ACK_DEPTH,
+                                    "felix_broker_out_ack_depth",
+                                );
+                                tracing::info!(error = %err, "encode publish ack failed");
+                                let _ = ack_throttle_tx_writer.send(false);
+                                let _ = cancel_tx_writer.send(true);
+                                break;
+                            }
+                        };
+                        if let Err(err) = send.write_all(&bytes).await {
+                            let _ = decrement_depth(
+                                &out_ack_depth_worker,
+                                &GLOBAL_ACK_DEPTH,
+                                "felix_broker_out_ack_depth",
+                            );
+                            tracing::info!(error = %err, "quic response stream closed");
+                            let _ = ack_throttle_tx_writer.send(false);
+                            let _ = cancel_tx_writer.send(true);
+                            break;
+                        }
+                        let depth_update = decrement_depth(
+                            &out_ack_depth_worker,
+                            &GLOBAL_ACK_DEPTH,
+                            "felix_broker_out_ack_depth",
+                        );
+                        if should_reset_throttle(depth_update) {
+                            let _ = ack_throttle_tx_writer.send(false);
+                        }
+                        if let Some(start) = write_start {
+                            let write_ns = start.elapsed().as_nanos() as u64;
+                            timings::record_quic_write_ns(write_ns);
+                            t_histogram!("felix_broker_quic_write_ns").record(write_ns as f64);
+                        }
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = super::super::telemetry::frame_counters();
+                            counters.ack_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.ack_items_out_ok.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Outgoing::CacheMessage(message) => {

@@ -15,7 +15,6 @@
 //   prevent deadlock/leak (see drop(permit) on all branches).
 // - Cancellation (cancel_rx) is checked both in the outer select loop and inside each waiter future
 //   to ensure we can abort promptly even while waiting on a timeout.
-use felix_wire::Message;
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,6 +89,7 @@ pub(super) async fn run_ack_waiter_loop(
                             match message {
                                 AckWaiterMessage::Publish {
                                     request_id,
+                                    encoding,
                                     payload_len,
                                     start,
                                     response_rx,
@@ -107,18 +107,21 @@ pub(super) async fn run_ack_waiter_loop(
                                     match response {
                                         Ok(response) => Some(AckWaiterResult::Publish {
                                             request_id,
+                                            encoding,
                                             payload_len,
                                             start,
                                             response,
                                         }),
                                         Err(_) => Some(AckWaiterResult::PublishTimeout {
                                             request_id,
+                                            encoding,
                                             start,
                                         }),
                                     }
                                 }
                                 AckWaiterMessage::PublishBatch {
                                     request_id,
+                                    encoding,
                                     payload_bytes,
                                     response_rx,
                                     permit,
@@ -135,11 +138,13 @@ pub(super) async fn run_ack_waiter_loop(
                                     match response {
                                         Ok(response) => Some(AckWaiterResult::PublishBatch {
                                             request_id,
+                                            encoding,
                                             payload_bytes,
                                             response,
                                         }),
                                         Err(_) => Some(AckWaiterResult::PublishBatchTimeout {
                                             request_id,
+                                            encoding,
                                             payload_bytes,
                                         }),
                                     }
@@ -160,6 +165,7 @@ pub(super) async fn run_ack_waiter_loop(
                     match result {
                         AckWaiterResult::Publish {
                             request_id,
+                            encoding,
                             payload_len,
                             start,
                             response,
@@ -188,7 +194,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishOk { request_id }),
+                                            encoding.ok(request_id),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -210,10 +216,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishError {
-                                                request_id,
-                                                message: err.to_string(),
-                                            }),
+                                            encoding.error(request_id, err.to_string()),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -235,10 +238,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishError {
-                                                request_id,
-                                                message: "publish worker dropped response".to_string(),
-                                            }),
+                                            encoding.error(request_id, "publish worker dropped response".to_string()),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -252,7 +252,11 @@ pub(super) async fn run_ack_waiter_loop(
                                 }
                             }
                         }
-                        AckWaiterResult::PublishTimeout { request_id, start } => {
+                        AckWaiterResult::PublishTimeout {
+                            request_id,
+                            encoding,
+                            start,
+                        } => {
                             // Worker did not respond within `ack_wait_timeout`: emit an error so the client can retry/fail fast.
                             t_consume_instant(start);
                             t_counter!(
@@ -276,10 +280,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     &out_ack_depth_waiter,
                                     "felix_broker_out_ack_depth",
                                     &ack_throttle_tx_waiter,
-                                    Outgoing::Message(Message::PublishError {
-                                        request_id,
-                                        message: "publish commit timeout".to_string(),
-                                    }),
+                                    encoding.error(request_id, "publish commit timeout".to_string()),
                                 )
                                 .await,
                                 &ack_timeout_state_waiter,
@@ -293,6 +294,7 @@ pub(super) async fn run_ack_waiter_loop(
                         }
                         AckWaiterResult::PublishBatch {
                             request_id,
+                            encoding,
                             payload_bytes,
                             response,
                         } => {
@@ -314,7 +316,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishOk { request_id }),
+                                            encoding.ok(request_id),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -335,10 +337,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishError {
-                                                request_id,
-                                                message: err.to_string(),
-                                            }),
+                                            encoding.error(request_id, err.to_string()),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -359,10 +358,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            Outgoing::Message(Message::PublishError {
-                                                request_id,
-                                                message: "publish batch worker dropped response".to_string(),
-                                            }),
+                                            encoding.error(request_id, "publish batch worker dropped response".to_string()),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -378,6 +374,7 @@ pub(super) async fn run_ack_waiter_loop(
                         }
                         AckWaiterResult::PublishBatchTimeout {
                             request_id,
+                            encoding,
                             payload_bytes,
                         } => {
                             // Even on timeout we account for attempted bytes to keep telemetry consistent.
@@ -398,10 +395,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     &out_ack_depth_waiter,
                                     "felix_broker_out_ack_depth",
                                     &ack_throttle_tx_waiter,
-                                    Outgoing::Message(Message::PublishError {
-                                        request_id,
-                                        message: "publish commit timeout".to_string(),
-                                    }),
+                                    encoding.error(request_id, "publish commit timeout".to_string()),
                                 )
                                 .await,
                                 &ack_timeout_state_waiter,

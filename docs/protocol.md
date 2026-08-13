@@ -19,19 +19,43 @@ source of truth for all client implementations.
 All messages are sent in a fixed header + payload frame.
 
 ```
-0                   1                   2                   3
-0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-┌───────────────────────────────┬───────────────┬───────────────┐
-│            magic              │    version    │     flags     │
-├───────────────────────────────┴───────────────┴───────────────┤
-│                           length                              │
-└───────────────────────────────────────────────────────────────┘
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++---------------------------------------------------------------+
+|                          magic (u32)                          |
++-------------------------------+-------------------------------+
+|         version (u16)         |          flags (u16)          |
++-------------------------------+-------------------------------+
+|                          length (u32)                         |
++---------------------------------------------------------------+
 ```
+
+Each row above is 32 bits, so the 12-byte header occupies three rows.
+
+| Offset | Size | Field | Type | Value |
+| --- | --- | --- | --- | --- |
+| 0 | 4 | `magic` | u32 | `0x464C5831` (`"FLX1"`) |
+| 4 | 2 | `version` | u16 | `1` |
+| 6 | 2 | `flags` | u16 | Bit field; see below |
+| 8 | 4 | `length` | u32 | Payload length in bytes |
 
 Field definitions:
 - `magic` (u32, big-endian): `0x464C5831` ("FLX1")
 - `version` (u16, big-endian): `1`
-- `flags` (u16, big-endian): reserved for future use, must be `0` for v1
+- `flags` (u16, big-endian): selects the payload layout. `0` means the payload is
+  a JSON-encoded `Message`. Defined bits:
+
+  | Bit | Name | Meaning |
+  | --- | --- | --- |
+  | `0x0001` | `BINARY_PUBLISH_BATCH` | Payload is a binary publish batch |
+  | `0x0002` | `BINARY_EVENT_BATCH` | Payload is a binary event batch (legacy, per-subscriber) |
+  | `0x0004` | `BINARY_EVENT_BATCH_SHARED` | Payload is a shared binary event batch |
+  | `0x0008` | `BINARY_PUBLISH_ACKED` | Modifier on `0x0001`: the batch carries a `request_id` prefix and is owed an ack |
+  | `0x0010` | `BINARY_PUBLISH_ACK` | Payload is a binary publish acknowledgement (broker → client) |
+
+  Because these bits change how the payload is parsed, a receiver MUST reject a
+  frame carrying any bit it does not recognise rather than masking it off — see
+  Future Compatibility.
 - `length` (u32, big-endian): payload length in bytes
 
 Payload:
@@ -167,9 +191,46 @@ repeated count times:
   u8[payload_len] payload
 ```
 
-This is the default encoding for unacknowledged client publishes. Acked publishes
-currently use the JSON control encoding. Clients can explicitly select JSON for
-compatibility.
+This is the default encoding for unacknowledged client publishes. Clients can
+explicitly select JSON for compatibility.
+
+## Binary acked PublishBatch
+When `flags & 0x0008 != 0` (always together with `0x0001`), the publish batch above
+is prefixed with a correlation header:
+
+```
+u64 request_id
+u8  ack_mode        1 = per_message, 2 = per_batch
+... then the Binary PublishBatch body exactly as above
+```
+
+The prefix comes first so a receiver can read `request_id` without parsing the rest
+of the frame; that is what lets the broker answer a malformed body with an error the
+client can still correlate to its pending request.
+
+`ack_mode` has no encoding for "none": an unacknowledged publish uses the plain
+`0x0001` frame with no prefix, so each mode has exactly one representation on the
+wire.
+
+## Binary PublishAck
+When `flags & 0x0010 != 0`, the frame payload is a publish acknowledgement:
+
+```
+u8  status          0 = ok, 1 = error
+u64 request_id
+u16 message_len     0 when status = ok
+u8[message_len] message   UTF-8, error text
+```
+
+This is the response to a `0x0008` publish. It carries exactly the information the
+JSON `publish_ok` / `publish_error` messages do; a client that published with the
+JSON encoding still receives those JSON messages instead.
+
+**Compatibility:** `0x0008` and `0x0010` were added after the initial v1 release. A
+broker predating them matches on `0x0001`, does not know about the prefix, and will
+misparse `request_id` as `tenant_len`. Acked binary publishes therefore require a
+broker that understands `0x0008`. There is no capability negotiation in v1; client
+and broker are expected to ship together.
 
 ## Shared Binary EventBatch
 When `flags & 0x0004 != 0`, the event-stream frame payload is:
@@ -186,7 +247,10 @@ batches carry no per-subscriber identifier and the broker can share one encoded
 frame across subscribers. The legacy `0x0002` format remains decodable.
 
 ## Future Compatibility
-- Non-zero `flags` are reserved for compression/encryption negotiation.
+- Undefined `flags` bits are reserved. Receivers MUST reject frames carrying an
+  unrecognised bit instead of ignoring it: flag bits select the payload layout, so
+  masking an unknown bit off means confidently misparsing the body rather than
+  failing. `0x0008` is the cautionary case — see Binary acked PublishBatch.
 - Future message types must be version-gated.
 
 ## Test Vectors

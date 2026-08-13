@@ -22,7 +22,7 @@
 //!
 //! # How to use
 //! Run with `cargo test -p broker quic_publish`.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use broker::auth::{BrokerAuth, ControlPlaneKeyStore};
@@ -503,6 +503,290 @@ async fn quic_publish_binary_batch_success() -> Result<()> {
             &[b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
         )
         .await?;
+
+    server_task.abort();
+    Ok(())
+}
+
+// Binary acked publish: the frame carries FLAG_BINARY_PUBLISH_ACKED with a
+// request_id prefix, and the broker answers with a binary ack frame rather than
+// a JSON PublishOk. Both ack modes and both ack-on-commit settings are covered,
+// because commit acks are emitted from a different task (the ack waiter) than
+// enqueue acks, and each has to pick the binary encoding independently.
+#[tokio::test]
+#[serial]
+async fn quic_publish_binary_acked_success() -> Result<()> {
+    for ack_on_commit in ["false", "true"] {
+        for ack_mode in [AckMode::PerMessage, AckMode::PerBatch] {
+            unsafe {
+                std::env::set_var("FELIX_ACK_ON_COMMIT", ack_on_commit);
+            }
+            let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+            broker.register_tenant("t1").await?;
+            broker.register_namespace("t1", "default").await?;
+            broker
+                .register_stream("t1", "default", "orders", StreamMetadata::default())
+                .await?;
+
+            let (server_config, cert) = build_server_config()?;
+            let server = Arc::new(QuicServer::bind(
+                "127.0.0.1:0".parse()?,
+                server_config,
+                TransportConfig::default(),
+            )?);
+            let addr = server.local_addr()?;
+            let config = broker::config::BrokerConfig::from_env()?;
+            let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
+            let server_task = tokio::spawn(broker::quic::serve(
+                Arc::clone(&server),
+                Arc::clone(&broker),
+                config,
+                Arc::clone(&auth.auth),
+            ));
+
+            let client =
+                Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
+            let publisher = client.publisher().await?;
+            // `publish_batch` with a non-None ack mode now takes the binary path.
+            publisher
+                .publish_batch(
+                    "t1",
+                    "default",
+                    "orders",
+                    vec![b"a".to_vec(), b"b".to_vec()],
+                    ack_mode,
+                )
+                .await
+                .with_context(|| {
+                    format!("acked binary publish (commit={ack_on_commit}, ack={ack_mode:?})")
+                })?;
+            // A single acked publish is a one-item acked batch on the wire.
+            publisher
+                .publish("t1", "default", "orders", b"c".to_vec(), ack_mode)
+                .await
+                .with_context(|| {
+                    format!("acked binary single (commit={ack_on_commit}, ack={ack_mode:?})")
+                })?;
+
+            server_task.abort();
+        }
+    }
+    Ok(())
+}
+
+// An acked publish to a stream that was never registered must come back as a
+// failed ack, not a hang and not a torn-down stream: the client is synchronously
+// blocked waiting for this frame.
+#[tokio::test]
+#[serial]
+async fn quic_publish_binary_acked_unknown_stream_returns_error() -> Result<()> {
+    unsafe {
+        std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
+    }
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
+    let server_task = tokio::spawn(broker::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config,
+        Arc::clone(&auth.auth),
+    ));
+
+    let client = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
+    let publisher = client.publisher().await?;
+    let err = publisher
+        .publish_batch(
+            "t1",
+            "default",
+            "never-registered",
+            vec![b"a".to_vec()],
+            AckMode::PerBatch,
+        )
+        .await
+        .expect_err("publish to an unregistered stream must fail");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("stream not found"),
+        "expected a stream-not-found ack, got: {message}"
+    );
+
+    server_task.abort();
+    Ok(())
+}
+
+// Flag bits select the payload layout, so an undefined bit must be rejected
+// rather than masked off and the body misparsed. This is what makes the *next*
+// wire extension fail loudly instead of silently producing garbage.
+#[tokio::test]
+#[serial]
+async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
+    unsafe {
+        std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
+    }
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream("t1", "default", "orders", StreamMetadata::default())
+        .await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
+    let server_task = tokio::spawn(broker::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config.clone(),
+        Arc::clone(&auth.auth),
+    ));
+
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert)?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+    let (mut send, mut recv) = connection.open_bi().await?;
+    broker::quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
+    let response =
+        broker::quic::read_message_limited(&mut recv, config.max_frame_bytes, &mut frame_scratch)
+            .await?;
+    assert!(matches!(response, Some(Message::Ok)));
+
+    // 0x0040 is not defined by this protocol version.
+    let header = FrameHeader::new(0x0040, 2);
+    let mut header_bytes = [0u8; FrameHeader::LEN];
+    header.encode_into(&mut header_bytes);
+    send.write_all(&header_bytes).await?;
+    send.write_all(&[0x00, 0x00]).await?;
+
+    let response =
+        broker::quic::read_message_limited(&mut recv, config.max_frame_bytes, &mut frame_scratch)
+            .await?;
+    match response {
+        Some(Message::Error { message }) => {
+            assert!(
+                message.contains("unsupported frame flags"),
+                "unexpected error text: {message}"
+            );
+        }
+        other => anyhow::bail!("expected an unsupported-flags error, got: {other:?}"),
+    }
+
+    server_task.abort();
+    Ok(())
+}
+
+// Wire-level proof that the acked binary path is actually binary in both
+// directions. The round-trip tests above would still pass if the broker quietly
+// answered in JSON, because the client accepts either; this one asserts the
+// response frame's flags directly.
+#[tokio::test]
+#[serial]
+async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
+    unsafe {
+        std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
+    }
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream("t1", "default", "orders", StreamMetadata::default())
+        .await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
+    let server_task = tokio::spawn(broker::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config.clone(),
+        Arc::clone(&auth.auth),
+    ));
+
+    let client = QuicClient::bind(
+        "0.0.0.0:0".parse()?,
+        build_quinn_client_config(cert)?,
+        TransportConfig::default(),
+    )?;
+    let connection = client.connect(addr, "localhost").await?;
+    let (mut send, mut recv) = connection.open_bi().await?;
+    broker::quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+        },
+    )
+    .await?;
+    let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
+    let response =
+        broker::quic::read_message_limited(&mut recv, config.max_frame_bytes, &mut frame_scratch)
+            .await?;
+    assert!(matches!(response, Some(Message::Ok)));
+
+    let bytes = felix_wire::binary::encode_acked_publish_batch_bytes(
+        4242,
+        AckMode::PerBatch,
+        "t1",
+        "default",
+        "orders",
+        &[b"a".to_vec(), b"b".to_vec()],
+    )?;
+    // The request frame must carry both bits.
+    let request = felix_wire::Frame::decode(bytes.clone())?;
+    assert_eq!(
+        request.header.flags,
+        FLAG_BINARY_PUBLISH_BATCH | felix_wire::FLAG_BINARY_PUBLISH_ACKED
+    );
+    send.write_all(&bytes).await?;
+
+    let frame = broker::quic::read_frame_limited_into(
+        &mut recv,
+        config.max_frame_bytes,
+        &mut frame_scratch,
+    )
+    .await?
+    .context("expected an ack frame")?;
+    assert_eq!(
+        frame.header.flags,
+        felix_wire::FLAG_BINARY_PUBLISH_ACK,
+        "broker must answer an acked binary publish with a binary ack frame"
+    );
+    let ack = felix_wire::binary::decode_publish_ack(&frame)?;
+    assert_eq!(ack.request_id, 4242);
+    assert_eq!(ack.error, None);
 
     server_task.abort();
     Ok(())

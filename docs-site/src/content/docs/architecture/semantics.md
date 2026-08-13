@@ -89,9 +89,9 @@ graph LR
     P[Publisher] -->|msg 1, 2, 3| B[Broker]
     B -->|msg 1, 2, 3| S[Subscriber]
     
-    style P fill:#e3f2fd
-    style B fill:#fff9c4
-    style S fill:#c8e6c9
+    style P fill:#e3f2fd,stroke:#334155,color:#111827
+    style B fill:#fff9c4,stroke:#334155,color:#111827
+    style S fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 **Guarantees**:
@@ -113,8 +113,8 @@ graph LR
     
     Note[msg A and B may arrive in any order]
     
-    style P fill:#e3f2fd
-    style Sub fill:#c8e6c9
+    style P fill:#e3f2fd,stroke:#334155,color:#111827
+    style Sub fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 **Example**:
@@ -162,9 +162,9 @@ graph TB
     S2 -->|Still on msg 23, dropping msgs| D2[Slow System]
     S3 -->|Processing msgs 1-100| D3[Analytics]
     
-    style S1 fill:#c8e6c9
-    style S2 fill:#ffccbc
-    style S3 fill:#c8e6c9
+    style S1 fill:#c8e6c9,stroke:#334155,color:#111827
+    style S2 fill:#ffccbc,stroke:#334155,color:#111827
+    style S3 fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 **Isolation mechanism**:
