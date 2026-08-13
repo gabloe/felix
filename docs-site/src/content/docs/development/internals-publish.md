@@ -52,7 +52,9 @@ pub async fn publish(
    (flag `0x0001`). With `PerMessage`/`PerBatch` it is
    `encode_acked_publish_batch_bytes` (flags `0x0001 | 0x0008`), which prefixes
    the same body with a `request_id` and the ack mode; the broker replies with a
-   binary ack frame (`0x0010`) rather than a JSON `PublishOk`/`PublishError`. If
+   binary ack frame (`0x0010`) rather than a JSON `PublishOk`/`PublishError` —
+   but only when the broker advertised `0x0008` during the auth handshake;
+   otherwise the acked publish falls back to `publish_batch_json`. If
    you want JSON instead (debugging, a client that hasn't implemented the binary
    decoder), call `publish_json`/`publish_batch_json` explicitly — see
    [Wire Protocol](/felix/architecture/wire-protocol/#binary-publish-batch-encoding).

@@ -369,12 +369,11 @@ An acknowledged publish additionally sets bit 3 (`flags | 0x0008`), which prefix
 the batch with a `request_id` and an ack mode, and the broker replies with a binary
 ack frame (bit 4) instead of a JSON `publish_ok`/`publish_error`.
 
-:::caution[Version requirement]
-Bits 3 and 4 were added after the initial v1 release, and v1 has no capability
-negotiation. A broker that predates them matches on bit 0, does not know about the
-prefix, and misparses `request_id` as `tenant_len` — so acked binary publishes
-require a matching broker. Client and broker ship from the same workspace and are
-expected to be deployed together.
+:::note[Negotiated, not assumed]
+Bits 3 and 4 were added after the initial v1 release. A client only uses them once
+the broker has advertised them on the auth handshake; against an older broker it
+falls back to the JSON encoding automatically. See
+[Capability negotiation](#capability-negotiation).
 :::
 
 :::tip[Performance Impact]
@@ -503,6 +502,39 @@ The response to an acked binary publish, sent when `flags & 0x0010 != 0`:
 It carries exactly the information the JSON `publish_ok` / `publish_error` messages
 do. A client that published with the JSON encoding still receives those JSON
 messages instead — the reply always matches the encoding of the request.
+
+## Capability negotiation
+
+Flag bits decide how a payload is parsed, so neither side may guess which bits the
+other understands. The supported set is exchanged during the auth handshake — already
+the first round trip on every control stream, so negotiation adds no latency.
+
+The client offers its set, and the broker answers with its own:
+
+```json
+// client -> broker
+{"type":"auth","tenant_id":"t1","token":"...","client_flags":25}
+// broker -> client
+{"type":"auth_ok","server_flags":25}
+```
+
+The client must decide encodings from the *advertised* value, never from its own set.
+
+Both directions degrade cleanly, because decoders ignore unknown fields:
+
+| Client | Broker | Outcome |
+| --- | --- | --- |
+| negotiating | negotiating | `auth_ok`; the client may use any advertised bit |
+| negotiating | legacy | `client_flags` ignored, plain `ok` returned; client assumes `ORIGINAL_V1_FLAGS` and sends acked publishes as JSON |
+| legacy | negotiating | nothing offered, so the broker replies `ok` and never sends a frame the client cannot parse |
+| legacy | legacy | unchanged |
+
+`ORIGINAL_V1_FLAGS` (`0x0001 | 0x0002 | 0x0004`) is what an absent advertisement
+resolves to — the bits that predate negotiation. It is deliberately frozen; adding to
+it would make clients assume support that older brokers lack.
+
+The broker sends `auth_ok` only in reply to an `auth` that offered `client_flags`, so
+a client too old to know the variant can never receive it.
 
 ## Shared Binary EventBatch Encoding
 

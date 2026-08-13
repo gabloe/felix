@@ -354,6 +354,9 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -425,6 +428,9 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -547,6 +553,21 @@ async fn quic_publish_binary_acked_success() -> Result<()> {
             let client =
                 Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
             let publisher = client.publisher().await?;
+            // The other half of the negotiation contract: against a broker that
+            // does advertise, the client must actually take the binary path
+            // rather than defensively staying on JSON.
+            assert_eq!(
+                publisher.negotiated_server_flags(),
+                felix_wire::KNOWN_FLAGS,
+                "broker should advertise its full flag set during auth"
+            );
+            assert!(
+                felix_wire::supports(
+                    publisher.negotiated_server_flags(),
+                    felix_wire::FLAG_BINARY_PUBLISH_ACKED
+                ),
+                "acked binary publishes require the negotiated 0x0008 bit"
+            );
             // `publish_batch` with a non-None ack mode now takes the binary path.
             publisher
                 .publish_batch(
@@ -669,6 +690,9 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;
@@ -747,6 +771,9 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
             token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
         },
     )
     .await?;

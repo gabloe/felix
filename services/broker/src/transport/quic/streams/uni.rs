@@ -132,7 +132,12 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
 
         // Handle the decoded message according to its variant.
         match message {
-            Message::Auth { tenant_id, token } => {
+            Message::Auth {
+                tenant_id,
+                token,
+                // One-directional: there is no reply channel to advertise on.
+                client_flags: _,
+            } => {
                 if auth_ctx.is_some() {
                     tracing::debug!("closing uni stream after duplicate auth");
                     break;

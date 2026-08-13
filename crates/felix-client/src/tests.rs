@@ -22,6 +22,7 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::time::{Duration, timeout};
 use tracing::debug;
 
@@ -257,8 +258,22 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
     )?;
     let addr = server.local_addr()?;
 
+    // This stub deliberately answers `Auth` with a plain `Ok` and never advertises
+    // capabilities, so it stands in for a broker that predates negotiation. The
+    // client must therefore fall back to the JSON encoding for acked publishes;
+    // `binary_acked_seen` proves it did, because the binary branch below is the
+    // only thing that could set it.
+    let binary_acked_seen = Arc::new(AtomicUsize::new(0));
+    let json_acked_seen = Arc::new(AtomicUsize::new(0));
+    let binary_seen_task = Arc::clone(&binary_acked_seen);
+    let json_seen_task = Arc::clone(&json_acked_seen);
+
     let server_task = tokio::spawn(async move {
-        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+        async fn handle_connection(
+            connection: felix_transport::QuicConnection,
+            binary_acked_seen: Arc<AtomicUsize>,
+            json_acked_seen: Arc<AtomicUsize>,
+        ) -> Result<()> {
             let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
             loop {
                 let Ok((mut send, mut recv)) = connection.accept_bi().await else {
@@ -289,6 +304,7 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                         break;
                     };
                     if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0 {
+                        binary_acked_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let batch = felix_wire::binary::decode_acked_publish_batch(&frame)?;
                         send.write_all(&felix_wire::binary::encode_publish_ack_bytes(
                             batch.request_id,
@@ -303,6 +319,13 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                             request_id: Some(id),
                             ..
                         }) => {
+                            write_message(&mut send, Message::PublishOk { request_id: id }).await?;
+                        }
+                        Some(Message::PublishBatch {
+                            request_id: Some(id),
+                            ..
+                        }) => {
+                            json_acked_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             write_message(&mut send, Message::PublishOk { request_id: id }).await?;
                         }
                         Some(Message::Subscribe {
@@ -375,7 +398,11 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
             let Ok(Ok(connection)) = result else {
                 break;
             };
-            tasks.push(tokio::spawn(handle_connection(connection)));
+            tasks.push(tokio::spawn(handle_connection(
+                connection,
+                Arc::clone(&binary_seen_task),
+                Arc::clone(&json_seen_task),
+            )));
         }
         for task in tasks {
             task.await??;
@@ -401,6 +428,21 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
             AckMode::PerMessage,
         )
         .await?;
+
+    // The negotiation contract: against a broker that advertises nothing, an
+    // acked publish must go out as JSON and must not use the 0x0008 frame that
+    // such a broker would misparse.
+    use std::sync::atomic::Ordering as AtomicOrdering;
+    assert_eq!(
+        binary_acked_seen.load(AtomicOrdering::Relaxed),
+        0,
+        "client sent an acked binary frame to a broker that never advertised support for it"
+    );
+    assert_eq!(
+        json_acked_seen.load(AtomicOrdering::Relaxed),
+        1,
+        "expected the acked publish to fall back to the JSON encoding"
+    );
 
     let mut subscription = client.subscribe("t1", "default", "updates").await?;
     let first = subscription.next_event().await?.expect("event");
