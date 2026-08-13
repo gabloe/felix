@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786600625073,
+  "lastUpdate": 1786638294949,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -1650,6 +1650,72 @@ window.BENCHMARK_DATA = {
             "range": "403.16",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1334.00\nmean: 1192.00\nstdev: 403.16\ncv: 33.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b2cff4fe8e5dc9ddbc6b0caea4f53283a28dce7",
+          "message": "fix: make lossless publishing lossless end to end (#171)\n\nThree fixes that all surfaced from one flaky CI run in the state-divergence\ndemo.\n\nIngress backpressure (services/broker)\n\nEnqueuePolicy::Wait charged its wait_timeout budget twice, once for admission\nand once for the queue send, so a publish could block for double the configured\nbound while the knob read as a single one. Both stages now share one deadline.\nSince the enqueue runs inline in the control-stream read loop, this also halves\nthe worst-case head-of-line stall on the connection.\n\nWorse, pub_ingress_wait applied that same bounded wait to *unacked* publishes,\nwhere a timeout can only end in a silent drop because there is no ack channel on\nwhich to report it. That made \"lossless\" mode quietly lossy under sustained\nbackpressure. Unacked publishes now use a new EnqueuePolicy::Backpressure:\nunbounded but cancellable, ending when capacity frees or the connection is torn\ndown. A timer was always the wrong bound for backpressure; liveness is the right\none.\n\nEach fix has a test that fails without it. The deadline test measures 160ms\nagainst the old two-budget behaviour; the backpressure tests assert that a full\nqueue waits rather than sheds, and that teardown still ends the wait.\n\nDemo startup race (demos/state-divergence)\n\nConsumers were spawned and publishing began after a fixed 300ms sleep. On a\nloaded runner a consumer could subscribe late and permanently miss the opening\nchanges, which is what made lossless_mode_converges_every_consumer flaky. It had\nfailed on branches carrying no Rust changes at all. Replaced with an explicit\nall-subscribers-ready barrier, and strengthened the assertion to compare applied\nagainst published so a missing event is caught even when a later write to the\nsame key happens to repair the state.\n\nReproduced in a 2-CPU container under competing load: 5 failures in 16 runs\nbefore, 0 in 32 after.\n\nBuild artifact size\n\ntarget/ had reached 41 GB against a 4.2 GB clean build. Debug builds default to\nfull DWARF, and on macOS split-debuginfo=unpacked keeps it in the object files,\nso 17.6 GB of .o sat next to 4.2 GB of actual binaries. [profile.dev] now uses\nline-tables-only with dependencies at debug=false, which keeps file and line in\npanics and backtraces for workspace code. Measured 6.1 GB -> 4.2 GB on an\nidentical clean build with no change in build time.\n\nThe demo crates declare their own [workspace], so the profile is repeated in\neach; otherwise they rebuild the dependency tree at full debuginfo into the\nshared target dir and undo the saving.\n\nThe remaining bulk was accumulation rather than per-build size: cargo keys\nartifacts by features and flags and never collects the losers, so every distinct\nbuild keeps a parallel set. task clean:stale prunes them with cargo-sweep.",
+          "timestamp": "2026-08-13T09:22:54-07:00",
+          "tree_id": "da99d3c8f60699c87af2c7259ae63b3d1a3a9713",
+          "url": "https://github.com/gabloe/felix/commit/2b2cff4fe8e5dc9ddbc6b0caea4f53283a28dce7"
+        },
+        "date": 1786638292658,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.60\nstdev: 1.52\ncv: 0.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 214,
+            "range": "2.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 214.00\nmean: 215.00\nstdev: 2.65\ncv: 1.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 254,
+            "range": "61.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 254.00\nmean: 281.80\nstdev: 61.40\ncv: 21.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 208,
+            "range": "6.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 210.00\nstdev: 6.32\ncv: 3.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 519,
+            "range": "81.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 519.00\nmean: 549.00\nstdev: 81.75\ncv: 14.89%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1224,
+            "range": "384.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1224.00\nmean: 1191.80\nstdev: 384.26\ncv: 32.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
