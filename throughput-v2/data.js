@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786580715758,
+  "lastUpdate": 1786596699659,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1196,6 +1196,58 @@ window.BENCHMARK_DATA = {
             "range": "42073.81",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 716753.75\nmean: 725044.79\nstdev: 42073.81\ncv: 5.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "465785441d94e7f560db720d4844c014700c45dc",
+          "message": "feat: implement binary publish acknowledgment handling (#167)\n\n* feat: implement binary publish acknowledgment handling\n\n- Added support for binary publish acknowledgment in the QUIC transport layer.\n- Introduced  for publish messages in various test cases.\n- Enhanced the  to handle binary publish acknowledgments.\n- Updated control loop to manage binary publish batch frames and their acknowledgments.\n- Implemented error handling for unsupported frame flags in publish messages.\n- Added tests for binary publish acknowledgment scenarios, including success and error cases.\n- Ensured that the acknowledgment messages are properly truncated to fit within wire limits.\n\n* docs: update README with binary publish acknowledgment vectors",
+          "timestamp": "2026-08-12T21:49:45-07:00",
+          "tree_id": "dfe0b1585bf6a8e0fce935e8f5af3b406f4f348f",
+          "url": "https://github.com/gabloe/felix/commit/465785441d94e7f560db720d4844c014700c45dc"
+        },
+        "date": 1786596698667,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 213922.34,
+            "range": "29403.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 213922.34\nmean: 210133.45\nstdev: 29403.89\ncv: 13.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 213922.34,
+            "range": "29403.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 213922.34\nmean: 210133.45\nstdev: 29403.89\ncv: 13.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60593.09,
+            "range": "8816.37",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60593.09\nmean: 58325.62\nstdev: 8816.37\ncv: 15.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 605930.86,
+            "range": "88163.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 605930.86\nmean: 583256.23\nstdev: 88163.67\ncv: 15.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
