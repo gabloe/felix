@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786600628157,
+  "lastUpdate": 1786638297419,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1300,6 +1300,58 @@ window.BENCHMARK_DATA = {
             "range": "33943.88",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 536878.61\nmean: 535663.96\nstdev: 33943.88\ncv: 6.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b2cff4fe8e5dc9ddbc6b0caea4f53283a28dce7",
+          "message": "fix: make lossless publishing lossless end to end (#171)\n\nThree fixes that all surfaced from one flaky CI run in the state-divergence\ndemo.\n\nIngress backpressure (services/broker)\n\nEnqueuePolicy::Wait charged its wait_timeout budget twice, once for admission\nand once for the queue send, so a publish could block for double the configured\nbound while the knob read as a single one. Both stages now share one deadline.\nSince the enqueue runs inline in the control-stream read loop, this also halves\nthe worst-case head-of-line stall on the connection.\n\nWorse, pub_ingress_wait applied that same bounded wait to *unacked* publishes,\nwhere a timeout can only end in a silent drop because there is no ack channel on\nwhich to report it. That made \"lossless\" mode quietly lossy under sustained\nbackpressure. Unacked publishes now use a new EnqueuePolicy::Backpressure:\nunbounded but cancellable, ending when capacity frees or the connection is torn\ndown. A timer was always the wrong bound for backpressure; liveness is the right\none.\n\nEach fix has a test that fails without it. The deadline test measures 160ms\nagainst the old two-budget behaviour; the backpressure tests assert that a full\nqueue waits rather than sheds, and that teardown still ends the wait.\n\nDemo startup race (demos/state-divergence)\n\nConsumers were spawned and publishing began after a fixed 300ms sleep. On a\nloaded runner a consumer could subscribe late and permanently miss the opening\nchanges, which is what made lossless_mode_converges_every_consumer flaky. It had\nfailed on branches carrying no Rust changes at all. Replaced with an explicit\nall-subscribers-ready barrier, and strengthened the assertion to compare applied\nagainst published so a missing event is caught even when a later write to the\nsame key happens to repair the state.\n\nReproduced in a 2-CPU container under competing load: 5 failures in 16 runs\nbefore, 0 in 32 after.\n\nBuild artifact size\n\ntarget/ had reached 41 GB against a 4.2 GB clean build. Debug builds default to\nfull DWARF, and on macOS split-debuginfo=unpacked keeps it in the object files,\nso 17.6 GB of .o sat next to 4.2 GB of actual binaries. [profile.dev] now uses\nline-tables-only with dependencies at debug=false, which keeps file and line in\npanics and backtraces for workspace code. Measured 6.1 GB -> 4.2 GB on an\nidentical clean build with no change in build time.\n\nThe demo crates declare their own [workspace], so the profile is repeated in\neach; otherwise they rebuild the dependency tree at full debuginfo into the\nshared target dir and undo the saving.\n\nThe remaining bulk was accumulation rather than per-build size: cargo keys\nartifacts by features and flags and never collects the losers, so every distinct\nbuild keeps a parallel set. task clean:stale prunes them with cargo-sweep.",
+          "timestamp": "2026-08-13T09:22:54-07:00",
+          "tree_id": "da99d3c8f60699c87af2c7259ae63b3d1a3a9713",
+          "url": "https://github.com/gabloe/felix/commit/2b2cff4fe8e5dc9ddbc6b0caea4f53283a28dce7"
+        },
+        "date": 1786638296385,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 173022.6,
+            "range": "1701.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 173022.60\nmean: 173214.88\nstdev: 1701.47\ncv: 0.98%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 173022.6,
+            "range": "1701.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 173022.60\nmean: 173214.88\nstdev: 1701.47\ncv: 0.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 51528.86,
+            "range": "1944.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 51528.86\nmean: 51281.46\nstdev: 1944.02\ncv: 3.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 515288.57,
+            "range": "19440.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 515288.57\nmean: 512814.57\nstdev: 19440.17\ncv: 3.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
