@@ -23,4 +23,9 @@ pub enum BrokerError {
         tenant_id: String,
         namespace: String,
     },
+    /// Durable storage refused or failed a write. A publish that hits this is
+    /// never acknowledged: the record is not on disk, so claiming otherwise
+    /// would be the one failure mode durability exists to prevent.
+    #[error("durable storage error: {0}")]
+    Storage(String),
 }

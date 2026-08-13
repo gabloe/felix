@@ -1002,6 +1002,153 @@ export FELIX_FANOUT_BATCH="128"
 export FELIX_DISABLE_TIMINGS="1"
 ```
 
+## Durable Storage Configuration
+
+Durable stream storage is opt-in. With `FELIX_DURABLE_STORAGE_DIR` unset the
+broker is in-memory only, and any stream the control plane marks `durable: true`
+is **rejected at registration** rather than silently downgraded to a guarantee
+the broker cannot keep.
+
+See [Durable Storage](/felix/architecture/durable-storage/) for what each policy
+guarantees and what it costs.
+
+### `FELIX_DURABLE_STORAGE_DIR`
+
+**Description**: Root directory for durable stream segments. Setting it enables
+durable streams; one subdirectory is created per stream shard.
+
+**Type**: Path
+
+**Default**: unset (durable storage disabled)
+
+**Example**:
+```bash
+export FELIX_DURABLE_STORAGE_DIR="/var/lib/felix/streams"
+```
+
+### `FELIX_DURABLE_FSYNC_MODE`
+
+**Description**: When written bytes are pushed to the storage device.
+
+**Type**: One of `none`, `periodic`, `on_commit`
+
+**Default**: `periodic`
+
+| Value | Acknowledged when | Loss window |
+| --- | --- | --- |
+| `none` | bytes reach the page cache | unbounded — survives a process crash, not a power loss |
+| `periodic` | bytes reach the page cache | one flush interval |
+| `on_commit` | bytes reach the device | none |
+
+**Example**:
+```bash
+export FELIX_DURABLE_FSYNC_MODE="on_commit"
+```
+
+**Trade-off**: `on_commit` costs one device flush per commit (~4ms on typical
+NVMe), amortised across concurrent publishers by group commit. `periodic` adds
+no measurable append latency at all.
+
+### `FELIX_DURABLE_FSYNC_INTERVAL_MS`
+
+**Description**: Flush interval for `FELIX_DURABLE_FSYNC_MODE=periodic`. Bounds
+how much acknowledged data a machine crash can lose.
+
+**Type**: Positive integer (milliseconds)
+
+**Default**: `250`
+
+**Example**:
+```bash
+export FELIX_DURABLE_FSYNC_INTERVAL_MS="100"
+```
+
+**Note**: Setting this without setting the mode implies `periodic`. Zero is
+rejected at startup — it is a busy loop, not "always sync"; use `on_commit` for
+per-commit durability.
+
+### `FELIX_DURABLE_SEGMENT_BYTES`
+
+**Description**: Size at which the active segment rolls over to a new file.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `268435456` (256 MiB)
+
+**Example**:
+```bash
+export FELIX_DURABLE_SEGMENT_BYTES="67108864"  # 64 MiB
+```
+
+**Trade-off**: Smaller segments bound recovery time (only the active segment is
+fully scanned at startup) at the cost of more files and more rollovers.
+
+### `FELIX_DURABLE_INDEX_SPACING_BYTES`
+
+**Description**: Bytes of segment data between sparse index entries. A read
+binary-searches the index, then scans forward at most one interval.
+
+**Type**: Positive integer (bytes)
+
+**Default**: `4096`
+
+**Example**:
+```bash
+export FELIX_DURABLE_INDEX_SPACING_BYTES="8192"
+```
+
+**Trade-off**: Smaller spacing means faster seeks and larger index files.
+
+### `FELIX_DURABLE_MAX_RECORDS_PER_READ`
+
+**Description**: Ceiling on records returned by a single range read, on top of
+the caller's byte budget. Payload bytes alone do not bound a response made of
+empty records.
+
+**Type**: Positive integer
+
+**Default**: `10000`
+
+**Example**:
+```bash
+export FELIX_DURABLE_MAX_RECORDS_PER_READ="5000"
+```
+
+### `FELIX_DURABLE_PREALLOCATE`
+
+**Description**: Reserve a segment's blocks when it is created, keeping block
+allocation off the append path.
+
+**Type**: Boolean
+
+**Default**: `true`
+
+**Example**:
+```bash
+export FELIX_DURABLE_PREALLOCATE="false"
+```
+
+**Note**: Disable on filesystems where reservations are expensive or where thin
+provisioning makes them counter-productive.
+
+### `FELIX_DURABLE_VERIFY_ALL_ON_OPEN`
+
+**Description**: Checksum every record of every segment at startup.
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Example**:
+```bash
+export FELIX_DURABLE_VERIFY_ALL_ON_OPEN="true"
+```
+
+**Trade-off**: Off by default because startup would otherwise cost one full pass
+over all data on disk. The active segment is always fully scanned regardless, and
+every read verifies the records it returns — so bit rot in cold data is still
+caught, just when it is read rather than at boot.
+
 ## Validation
 
 Check current configuration:

@@ -36,6 +36,10 @@ path = "../../demos/broker/notifications_demo.rs"
 name = "pubsub-demo-orders"
 path = "../../demos/broker/orders_demo.rs"
 
+[[bin]]
+name = "durable-restart-demo"
+path = "../../demos/broker/durable_restart_demo.rs"
+
 # Soak and resource-leak harness (#154). Not a demo: it exits non-zero on a
 # finding so CI can gate on it.
 [[bin]]
@@ -82,6 +86,8 @@ tracing-opentelemetry = "0.32.1"
 # gated in code.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Used by the durable-restart demo binary to stage a throwaway storage root.
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

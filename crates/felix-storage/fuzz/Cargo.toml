@@ -1,0 +1,46 @@
+# libFuzzer targets for the durable segment format.
+#
+# Excluded from the workspace on purpose: `cargo-fuzz` needs nightly and links
+# libFuzzer, neither of which belongs in the default `cargo build --workspace`.
+# The deterministic subset of what these explore runs in the normal test suite as
+# `crates/felix-storage/tests/format_fuzz.rs`.
+#
+#     cargo install cargo-fuzz
+#     cargo +nightly fuzz run segment_record   -- -max_total_time=300
+#     cargo +nightly fuzz run segment_recovery -- -max_total_time=300
+[package]
+name = "felix-storage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+felix-storage = { path = ".." }
+
+[[bin]]
+name = "segment_record"
+path = "fuzz_targets/segment_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "segment_recovery"
+path = "fuzz_targets/segment_recovery.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sparse_index"
+path = "fuzz_targets/sparse_index.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

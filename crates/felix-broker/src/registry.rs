@@ -35,17 +35,55 @@ impl Broker {
             });
         }
         let key = StreamKey::new(tenant_id, namespace, stream);
+
+        // Open durable storage before touching the registries: a stream that
+        // cannot be persisted must not become publishable, or the first publish
+        // would be acknowledged against a guarantee that does not exist.
+        let durable = self
+            .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, &metadata)
+            .await?;
+
         self.streams.write().await.insert(key.clone(), metadata);
         let mut guard = self.topics.write().await;
         let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
-        guard.entry(key).or_insert_with(|| {
+        let state = guard.entry(key).or_insert_with(|| {
             Arc::new(StreamState::new(
                 handle_id,
                 self.topic_capacity,
                 self.subscriber_queue_policy,
+                durable,
             ))
         });
+        // A durable stream that recovered records keeps counting cursors from
+        // where the log left off, so a subscriber's pre-restart cursor still
+        // means what it meant before.
+        if let Some(log) = &state.durable {
+            let tail = log.tail_offset().await?;
+            state.resume_at(tail);
+        }
         Ok(())
+    }
+
+    /// Open the disk log for a stream, or `None` when it is not durable.
+    async fn open_durable_log(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        metadata: &StreamMetadata,
+    ) -> Result<Option<crate::durable::StreamLog>> {
+        if !metadata.durable {
+            return Ok(None);
+        }
+        let Some(storage) = &self.durable_storage else {
+            return Err(BrokerError::Storage(format!(
+                "stream {tenant_id}/{namespace}/{stream} is marked durable but this broker has no durable storage configured"
+            )));
+        };
+        // The broker keeps one log per stream today. `metadata.shards` is
+        // carried through to the shard key so that when the data path is
+        // sharded, existing single-shard directories keep their identity.
+        Ok(Some(storage.open_stream(tenant_id, namespace, stream, 0)?))
     }
 
     pub async fn register_cache(

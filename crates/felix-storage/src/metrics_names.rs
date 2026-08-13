@@ -1,0 +1,57 @@
+// Metric names for the durable log, in one place.
+//
+// Storage performance is not something you tune by reading code — you tune it by
+// watching where time goes. The set below is chosen so that the three questions
+// that actually come up have an answer on the dashboard:
+//
+// * *Is durability the bottleneck?* Compare `append_duration_seconds` against
+//   `sync_duration_seconds`. If sync dominates, the fsync policy is the cost.
+// * *Is group commit working?* `sync_batch_appends` is the fan-in per device
+//   flush. A value near 1 under concurrent load means appends are serialising
+//   on the device instead of sharing a flush.
+// * *Is the periodic policy honouring its window?* `unsynced_bytes` is the data
+//   at risk right now; `sync_lag_seconds` is how long the oldest unsynced byte
+//   has been waiting.
+//
+// Names follow the `felix_` prefix already used by the broker so they land in
+// the same Prometheus namespace.
+
+/// Records accepted into the log.
+pub const APPEND_RECORDS_TOTAL: &str = "felix_storage_append_records_total";
+/// Encoded bytes written, header included.
+pub const APPEND_BYTES_TOTAL: &str = "felix_storage_append_bytes_total";
+/// Records per append batch. Batch size is the main lever on syscall cost.
+pub const APPEND_BATCH_RECORDS: &str = "felix_storage_append_batch_records";
+/// End-to-end time for an append, including any durability wait.
+pub const APPEND_DURATION_SECONDS: &str = "felix_storage_append_duration_seconds";
+
+/// Device flushes performed.
+pub const SYNC_TOTAL: &str = "felix_storage_sync_total";
+/// Time spent inside a single flush.
+pub const SYNC_DURATION_SECONDS: &str = "felix_storage_sync_duration_seconds";
+/// Appends served by one flush — the group-commit fan-in.
+pub const SYNC_BATCH_APPENDS: &str = "felix_storage_sync_batch_appends";
+/// Flushes that failed. Any non-zero value means acknowledged durability is in
+/// doubt.
+pub const SYNC_FAILURES_TOTAL: &str = "felix_storage_sync_failures_total";
+/// Bytes written but not yet flushed: the data a crash would lose right now.
+pub const UNSYNCED_BYTES: &str = "felix_storage_unsynced_bytes";
+
+/// Segment rollovers.
+pub const SEGMENT_ROLL_TOTAL: &str = "felix_storage_segment_roll_total";
+/// Segments currently on disk for a shard.
+pub const SEGMENT_COUNT: &str = "felix_storage_segment_count";
+
+/// Records returned by range reads.
+pub const READ_RECORDS_TOTAL: &str = "felix_storage_read_records_total";
+/// Payload bytes returned by range reads.
+pub const READ_BYTES_TOTAL: &str = "felix_storage_read_bytes_total";
+/// Time to serve a range read.
+pub const READ_DURATION_SECONDS: &str = "felix_storage_read_duration_seconds";
+
+/// Time spent validating segments at startup.
+pub const RECOVERY_DURATION_SECONDS: &str = "felix_storage_recovery_duration_seconds";
+/// Bytes discarded from a torn tail during recovery.
+pub const RECOVERY_TRUNCATED_BYTES: &str = "felix_storage_recovery_truncated_bytes";
+/// Indexes rebuilt because they were missing or stale.
+pub const RECOVERY_INDEX_REBUILDS_TOTAL: &str = "felix_storage_recovery_index_rebuilds_total";

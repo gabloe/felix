@@ -8,6 +8,7 @@
 // - `keys`: map keys plus their borrowed lookup twins.
 // - `delivery`: shared delivery batches and queue-depth accounting.
 // - `stream_state`: per-stream subscriber registry, snapshot, and replay log.
+// - `durable`: disk-backed logs for streams registered with `durable: true`.
 // - `subscription`: subscriber-facing receive handles.
 // - `broker` / `registry`: the `Broker` aggregate and its two impl blocks.
 //
@@ -21,6 +22,7 @@ mod telemetry;
 mod broker;
 mod config;
 mod delivery;
+pub mod durable;
 mod error;
 mod keys;
 mod registry;
@@ -32,6 +34,7 @@ pub mod timings;
 pub use broker::{Broker, CacheMetadata, StreamHandle, StreamMetadata};
 pub use config::SubQueuePolicy;
 pub use delivery::DeliveryEnvelope;
+pub use durable::{DurableStorage, StreamLog};
 pub use error::{BrokerError, Result};
 pub use keys::{CacheKey, NamespaceKey, StreamKey};
 pub use stream_state::Cursor;

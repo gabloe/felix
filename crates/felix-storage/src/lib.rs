@@ -5,10 +5,15 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
+pub mod disk_log;
 pub mod ephemeral_cache;
 pub mod log;
+pub mod metrics_names;
+pub mod segment;
 pub mod tiered;
+pub use disk_log::{DiskLog, DiskLogProvider};
 pub use ephemeral_cache::EphemeralCache;
+pub use segment::{Corruption, CorruptionKind, CorruptionSite};
 
 #[async_trait()]
 pub trait StorageApi: Debug + Send + Sync {
@@ -42,9 +47,26 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 #[derive(Debug)]
 pub enum StorageError {
     Unsupported(&'static str),
+    /// The log was asked to open with settings that cannot work. Raised at open
+    /// time, never on the append path.
+    InvalidConfig(&'static str),
     InvalidRange,
+    /// The requested offset was discarded by retention or truncation. Distinct
+    /// from an empty range, which is a valid answer for a reader that has caught
+    /// up with the tail.
+    Trimmed {
+        requested: u64,
+        oldest: u64,
+    },
     NotFound,
-    Corruption,
+    /// On-disk bytes did not decode. Carries the specific invariant that was
+    /// violated plus the shard/segment/position it was found at, because
+    /// "corruption detected" is not enough to act on at 3am.
+    Corruption(Corruption),
+    /// A durable append could not be acknowledged. Distinct from `Io` so callers
+    /// can tell "the write never happened" from "the write may have happened but
+    /// we could not confirm it".
+    SyncFailed(String),
     Io(std::io::Error),
 }
 
@@ -52,11 +74,23 @@ impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StorageError::Unsupported(feature) => write!(f, "unsupported: {feature}"),
+            StorageError::InvalidConfig(detail) => write!(f, "invalid configuration: {detail}"),
             StorageError::InvalidRange => write!(f, "invalid range"),
+            StorageError::Trimmed { requested, oldest } => write!(
+                f,
+                "offset {requested} is no longer available; the log starts at {oldest}"
+            ),
             StorageError::NotFound => write!(f, "not found"),
-            StorageError::Corruption => write!(f, "corruption detected"),
+            StorageError::Corruption(detail) => write!(f, "corruption detected: {detail}"),
+            StorageError::SyncFailed(detail) => write!(f, "durability sync failed: {detail}"),
             StorageError::Io(err) => write!(f, "io error: {err}"),
         }
+    }
+}
+
+impl From<Corruption> for StorageError {
+    fn from(err: Corruption) -> Self {
+        StorageError::Corruption(err)
     }
 }
 
@@ -232,8 +266,13 @@ mod tests {
         let err = StorageError::NotFound;
         assert!(err.to_string().contains("not found"));
 
-        let err = StorageError::Corruption;
+        let err =
+            StorageError::Corruption(Corruption::new(CorruptionKind::IndexVersion { found: 9 }));
         assert!(err.to_string().contains("corruption"));
+        assert!(err.to_string().contains("unsupported index version 9"));
+
+        let err = StorageError::SyncFailed("disk full".into());
+        assert!(err.to_string().contains("disk full"));
     }
 
     #[test]

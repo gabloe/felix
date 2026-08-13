@@ -26,7 +26,8 @@ durability, clustering, or advanced observability.
 - [X] Define v1 wire spec in `docs/protocol.md`
 - [X] Add test vectors in `crates/felix-wire/tests/vectors/`
 - [X] Add conformance runner tool (felix-conformance)
-- [ ] Add fuzz tests for frame + message decoding
+- [ ] Add fuzz tests for frame + message decoding (storage decoding is covered:
+      see `crates/felix-storage/fuzz/`)
 - [ ] Add compatibility notes (reserved fields for future encryption/compression)
 
 ## QUIC transport (`felix-transport`)
@@ -83,10 +84,18 @@ durability, clustering, or advanced observability.
 
 ## Data durability and persistence
 - [ ] Add durable backend for control plane
-- [ ] Add durable backend for data plane
-- [ ] Handle crash/recover of data/broker and control plane nodes (read from disk first, then re-sync from new leader?)
-- [ ] Define requirements for tiered storage (hot/cold path, LCU?)
-- [ ] Implement tiered storage primitives (durability funneled down to K8s FS mounts?)
+- [X] Add durable backend for data plane — segmented, checksummed, crash-safe
+      log behind `StreamMetadata::durable`. See
+      [Durable Storage](durable-storage.md).
+- [X] Handle crash/recover of broker data-plane nodes (torn-tail repair on
+      startup; loud failure on interior corruption). Control-plane recovery and
+      re-sync from a new leader remain open.
+- [ ] Define requirements for tiered storage (hot/cold path, LCU?) — tracked as
+      [#172](https://github.com/gabloe/felix/issues/172)
+- [ ] Implement tiered storage primitives. `TieredStore` and friends are declared
+      in `crates/felix-storage/src/tiered.rs` and nothing implements them; see
+      [#172](https://github.com/gabloe/felix/issues/172) for what M1's sealed
+      segments already set up for it.
 
 ### Durable storage sketch
 - Split durable storage into **Index** and **Data** files: Index holds metadata (key + pointer/status), data file holds payload bytes.
@@ -94,10 +103,20 @@ durability, clustering, or advanced observability.
 - The append-only data file with in-memory index mimics a simple log (LSM-style without levels) and gives us a predictable replay order for fanout and replication.
 
 ### Open questions
-1. Do we need checksums/hashes to detect silent data corruption during reads or after reboots?
-2. How should data file segmentation and garbage collection work to honor per-segment size caps?  What is a sane segment cap? 512MB?
+1. ~~Do we need checksums/hashes to detect silent data corruption during reads or after reboots?~~
+   **Answered:** yes. Every record carries a CRC-32 over its header and payload,
+   verified on every read and during recovery. See
+   [the format spec](storage-format.md).
+2. ~~How should data file segmentation and garbage collection work to honor per-segment size caps? What is a sane segment cap? 512MB?~~
+   **Partly answered:** segments roll at `segment_size_bytes`, default 256 MiB —
+   chosen so a full scan of the active segment at startup stays under a second.
+   Garbage collection (retention) is still open.
 3. What is the delete policy? Should we retain the last *N* versions per key for rollbacks, or can we drop them immediately?
-4. What crash recovery guarantees do we need? We can’t mark an entry as committed until the payload bytes are actually persisted.
+4. ~~What crash recovery guarantees do we need? We can’t mark an entry as committed until the payload bytes are actually persisted.~~
+   **Answered:** three policies with explicit windows — `OnCommit` acknowledges
+   only after a device flush, `Periodic` bounds loss by its interval, `None`
+   makes no promise beyond the page cache. See
+   [Durable Storage](durable-storage.md).
 
 ## Performance optimization
 - [ ] Figure out how to handle backpressure

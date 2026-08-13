@@ -14,6 +14,7 @@ use crate::config::{
     DEFAULT_LOG_CAPACITY, DEFAULT_SUB_QUEUE_POLICY, DEFAULT_TOPIC_CAPACITY, SubQueuePolicy,
 };
 use crate::delivery::{DeliveryEnvelope, QueuedDelivery};
+use crate::durable::DurableStorage;
 use crate::error::{BrokerError, Result};
 use crate::keys::{CacheKey, NamespaceKey, StreamKey};
 use crate::stream_state::{Cursor, StreamState};
@@ -76,10 +77,15 @@ pub struct Broker {
     // Subscriber queue backpressure policy.
     pub(crate) subscriber_queue_policy: SubQueuePolicy,
     pub(crate) next_stream_handle: AtomicU64,
+    // Disk-backed storage for streams registered with `durable: true`. `None`
+    // means the broker is in-memory only and durable streams are rejected at
+    // registration rather than silently downgraded.
+    pub(crate) durable_storage: Option<DurableStorage>,
 }
 
 // `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
-// an atomic, a `usize`, or `Box<dyn StorageApi + Send>` — and `StorageApi`
+// an atomic, a `usize`, `Box<dyn StorageApi + Send>`, or a `DurableStorage`
+// (itself an `Arc` over `Send + Sync` state) — and `StorageApi`
 // already requires `Send + Sync`. The compiler's auto-impls cover this, so no
 // `unsafe impl` is needed. This assertion fails the build if a future field
 // breaks the property instead of letting it be papered over again.
@@ -90,6 +96,9 @@ const _: () = {
 
 #[derive(Debug, Clone)]
 pub struct StreamMetadata {
+    /// When true, every publish is written to disk before it is fanned out or
+    /// acknowledged. Requires the broker to have been built with
+    /// [`Broker::with_durable_storage`].
     pub durable: bool,
     pub shards: u32,
 }
@@ -135,7 +144,22 @@ impl Broker {
             log_capacity: DEFAULT_LOG_CAPACITY,
             subscriber_queue_policy: DEFAULT_SUB_QUEUE_POLICY,
             next_stream_handle: AtomicU64::new(1),
+            durable_storage: None,
         }
+    }
+
+    /// Attach disk-backed storage, enabling streams registered as durable.
+    ///
+    /// Without this, registering a durable stream fails rather than quietly
+    /// producing an in-memory stream that claims a guarantee it cannot keep.
+    pub fn with_durable_storage(mut self, storage: DurableStorage) -> Self {
+        self.durable_storage = Some(storage);
+        self
+    }
+
+    /// Durable storage, if this broker has any.
+    pub fn durable_storage(&self) -> Option<&DurableStorage> {
+        self.durable_storage.as_ref()
     }
 
     pub fn with_topic_capacity(mut self, capacity: usize) -> Result<Self> {
@@ -205,10 +229,31 @@ impl Broker {
         // We intentionally avoid a global broadcast channel here:
         // each subscriber has a bounded queue and publish uses try_send so a slow consumer
         // drops locally instead of stalling all publishers.
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+
         let sample = t_should_sample();
         let stream_state = &handle.state;
+
+        // Durable streams persist before anything else observes the batch.
+        //
+        // Fanout and the acknowledgement both happen after this returns Ok, so a
+        // storage failure fails the publish instead of delivering a record that
+        // a crash would erase. Under `FsyncMode::OnCommit` this await includes
+        // the device flush; that latency is the guarantee being bought.
+        if let Some(durable) = &stream_state.durable {
+            let durable_start = t_now_if(sample);
+            durable.append(payloads).await?;
+            if let Some(start) = durable_start {
+                let durable_ns = start.elapsed().as_nanos() as u64;
+                t_histogram!("broker_publish_durable_append_ns").record(durable_ns as f64);
+            }
+        }
+
         let append_start = t_now_if(sample);
-        // Append to the in-memory log first so cursors can replay.
+        // Append to the in-memory log so cursors can replay without touching
+        // disk. For durable streams this mirrors what was just persisted.
         stream_state.append_batch(payloads, self.log_capacity);
 
         if let Some(start) = append_start {
@@ -232,9 +277,6 @@ impl Broker {
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
-        if payloads.is_empty() {
-            return Ok(0);
-        }
         let envelope = DeliveryEnvelope::new(payloads);
         let item_count = envelope.len();
         let enqueue_start = t_now_if(sample);

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 696 382" width="696" height="382" role="img" aria-label="Index header — 24 bytes, big-endian">
+
+  <style>
+    .cell    { stroke: var(--edge); stroke-width: 1.25; }
+    .id      { fill: var(--c-id); }
+    .len     { fill: var(--c-len); }
+    .data    { fill: var(--c-data); }
+    .crc     { fill: var(--c-crc); }
+    .res     { fill: var(--c-res); }
+    .pay     { fill: var(--c-pay); }
+    .label   { fill: var(--ink); font: 500 13px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; text-anchor: middle; }
+    .sub     { fill: var(--ink-dim); font: 400 11px ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace; text-anchor: middle; }
+    .ruler   { fill: var(--ink-dim); font: 400 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+    .offset  { fill: var(--ink-dim); font: 400 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: end; }
+    .gutter  { fill: var(--ink-dim); font: 400 10px ui-sans-serif, system-ui, sans-serif; text-anchor: end; }
+    .title   { fill: var(--ink); font: 600 14px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .note    { fill: var(--ink-dim); font: 400 12px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .tick    { stroke: var(--edge-dim); stroke-width: 1; }
+    .brace   { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+    .braceTx { fill: var(--accent); font: 500 12px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .dash    { stroke-dasharray: 5 4; }
+
+    :root {
+      --ink: #1a2b40; --ink-dim: #5b6b7f;
+      --edge: #4a6fa5; --edge-dim: #aab6c6; --accent: #b0653a;
+      --c-id: #dbe6f7; --c-len: #d6ecf5; --c-data: #e3f0e7;
+      --c-crc: #fbe9d6; --c-res: #eceff3; --c-pay: #f2ecf8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #dfe8f3; --ink-dim: #9aabbf;
+        --edge: #6d94cc; --edge-dim: #46536a; --accent: #d99a6c;
+        --c-id: #24344b; --c-len: #1f3a45; --c-data: #223a2c;
+        --c-crc: #40301c; --c-res: #262c36; --c-pay: #322940;
+      }
+    }
+    :root[data-theme="dark"] {
+      --ink: #dfe8f3; --ink-dim: #9aabbf;
+      --edge: #6d94cc; --edge-dim: #46536a; --accent: #d99a6c;
+      --c-id: #24344b; --c-len: #1f3a45; --c-data: #223a2c;
+      --c-crc: #40301c; --c-res: #262c36; --c-pay: #322940;
+    }
+    :root[data-theme="light"] {
+      --ink: #1a2b40; --ink-dim: #5b6b7f;
+      --edge: #4a6fa5; --edge-dim: #aab6c6; --accent: #b0653a;
+      --c-id: #dbe6f7; --c-len: #d6ecf5; --c-data: #e3f0e7;
+      --c-crc: #fbe9d6; --c-res: #eceff3; --c-pay: #f2ecf8;
+    }
+  </style>
+
+  <text class="title" x="24" y="24">Index header — 24 bytes, big-endian</text>
+  <line class="tick" x1="64" y1="58" x2="672" y2="58"/>
+  <line class="tick" x1="64" y1="52" x2="64" y2="58"/>
+  <text class="ruler" x="140" y="49">byte +0</text>
+  <line class="tick" x1="216" y1="52" x2="216" y2="58"/>
+  <text class="ruler" x="292" y="49">byte +1</text>
+  <line class="tick" x1="368" y1="52" x2="368" y2="58"/>
+  <text class="ruler" x="444" y="49">byte +2</text>
+  <line class="tick" x1="520" y1="52" x2="520" y2="58"/>
+  <text class="ruler" x="596" y="49">byte +3</text>
+  <line class="tick" x1="672" y1="52" x2="672" y2="58"/>
+  <rect class="cell id" x="64" y="62" width="608" height="46" rx="3"/>
+  <text class="label" x="368" y="83">magic</text>
+  <text class="sub" x="368" y="99">0x464C5349  "FLSI"</text>
+  <rect class="cell id" x="64" y="108" width="304" height="46" rx="3"/>
+  <text class="label" x="216" y="129">version</text>
+  <text class="sub" x="216" y="145">u16 = 1</text>
+  <rect class="cell id" x="368" y="108" width="304" height="46" rx="3"/>
+  <text class="label" x="520" y="129">flags</text>
+  <text class="sub" x="520" y="145">u16 = 0</text>
+  <rect class="cell data" x="64" y="154" width="608" height="92" rx="3"/>
+  <text class="label" x="368" y="198">base_offset</text>
+  <text class="sub" x="368" y="214">u64 — must equal the segment's base_offset</text>
+  <rect class="cell res" x="64" y="246" width="608" height="92" rx="3"/>
+  <text class="label" x="368" y="290">reserved</text>
+  <text class="sub" x="368" y="306">u64 = 0</text>
+  <text class="gutter" x="54" y="50">offset</text>
+  <text class="offset" x="54" y="89">0</text>
+  <text class="offset" x="54" y="135">4</text>
+  <text class="offset" x="54" y="181">8</text>
+  <text class="offset" x="54" y="227">12</text>
+  <text class="offset" x="54" y="273">16</text>
+  <text class="offset" x="54" y="319">20</text>
+  <text class="note" x="24" y="368">No checksums: an index is an accelerator, and any index that fails to load is rebuilt from its segment.</text>
+</svg>

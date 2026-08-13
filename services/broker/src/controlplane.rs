@@ -634,7 +634,7 @@ async fn apply_stream_upsert(
     stream: String,
     metadata: StreamMetadata,
 ) -> Result<()> {
-    match broker
+    let outcome = match broker
         .register_stream(
             tenant_id.clone(),
             namespace.clone(),
@@ -643,24 +643,59 @@ async fn apply_stream_upsert(
         )
         .await
     {
-        Ok(_) => Ok(()),
+        // The control plane can send a stream before its parents; create them
+        // and retry rather than dropping the update.
         Err(BrokerError::TenantNotFound(_)) => {
             broker.register_tenant(tenant_id.clone()).await?;
             broker
                 .register_namespace(tenant_id.clone(), namespace.clone())
                 .await?;
             broker
-                .register_stream(tenant_id, namespace, stream, metadata)
-                .await?;
-            Ok(())
+                .register_stream(
+                    tenant_id.clone(),
+                    namespace.clone(),
+                    stream.clone(),
+                    metadata,
+                )
+                .await
         }
         Err(BrokerError::NamespaceNotFound { .. }) => {
             broker
                 .register_namespace(tenant_id.clone(), namespace.clone())
                 .await?;
             broker
-                .register_stream(tenant_id, namespace, stream, metadata)
-                .await?;
+                .register_stream(
+                    tenant_id.clone(),
+                    namespace.clone(),
+                    stream.clone(),
+                    metadata,
+                )
+                .await
+        }
+        other => other,
+    };
+
+    match outcome {
+        Ok(_) => Ok(()),
+        // A durable stream this broker cannot persist — typically because it is
+        // running without `FELIX_DURABLE_STORAGE_DIR` — is skipped loudly rather
+        // than failing the sync. Aborting here would stop the watcher from
+        // applying *every other* stream in the catalog, turning one
+        // misconfigured stream into a broker-wide outage.
+        //
+        // The stream stays unregistered, so publishes to it fail with
+        // `StreamNotFound`. That is the point: no false durability guarantee is
+        // ever offered, and the next sync retries in case an operator fixes the
+        // configuration.
+        Err(BrokerError::Storage(detail)) => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                namespace = %namespace,
+                stream = %stream,
+                error = %detail,
+                "skipping stream: durable storage is unavailable"
+            );
+            metrics::counter!("felix_broker_durable_stream_skipped_total").increment(1);
             Ok(())
         }
         Err(err) => Err(err.into()),
@@ -1222,7 +1257,10 @@ mod tests {
             assert_eq!(state.next_stream_seq, 2);
             assert!(broker.namespace_exists("t1", "ns1").await);
             assert!(broker.cache_exists("t1", "ns1", "c1").await);
-            assert!(broker.stream_exists("t1", "ns1", "orders").await);
+            // `orders` is marked durable and this broker has no durable storage,
+            // so the sync skips it and keeps going rather than registering a
+            // stream it could not persist. Everything else still applied.
+            assert!(!broker.stream_exists("t1", "ns1", "orders").await);
 
             let _ = shutdown_tx.send(());
             let _ = tokio::time::timeout(Duration::from_secs(1), handle)
@@ -1300,7 +1338,7 @@ mod tests {
             "ns1".to_string(),
             "orders".to_string(),
             StreamMetadata {
-                durable: true,
+                durable: false,
                 shards: 2,
             },
         )
@@ -1321,6 +1359,72 @@ mod tests {
         )
         .await?;
         assert!(broker.stream_exists("t2", "ns2", "events").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_stream_upsert_skips_durable_streams_without_storage() -> Result<()> {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+
+        // A durable stream on a broker with no durable storage must not be
+        // registered: a registered stream accepts publishes, and those would be
+        // acknowledged against a guarantee that does not exist.
+        apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await?;
+        assert!(!broker.stream_exists("t1", "ns1", "orders").await);
+
+        // The sync must keep going, so a later non-durable stream still applies.
+        apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "telemetry".to_string(),
+            StreamMetadata {
+                durable: false,
+                shards: 1,
+            },
+        )
+        .await?;
+        assert!(broker.stream_exists("t1", "ns1", "telemetry").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_stream_upsert_registers_durable_streams_when_storage_exists() -> Result<()> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = felix_broker::DurableStorage::open(
+            dir.path(),
+            felix_storage::log::LogConfig {
+                fsync_mode: felix_storage::log::FsyncMode::None,
+                preallocate_segments: false,
+                ..Default::default()
+            },
+        )
+        .expect("storage");
+        let broker =
+            Arc::new(Broker::new(EphemeralCache::new().into()).with_durable_storage(storage));
+
+        apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await?;
+        assert!(broker.stream_exists("t1", "ns1", "orders").await);
         Ok(())
     }
 

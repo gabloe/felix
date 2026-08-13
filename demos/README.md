@@ -12,6 +12,7 @@ Located in `demos/broker/` and built from the `broker` crate:
 - `latency-demo`: Latency and throughput measurement harness.
 - `pubsub-demo-notifications`: Multi-tenant real-time alerts demo.
 - `pubsub-demo-orders`: Orders/payments pipeline demo.
+- `durable-restart-demo`: Publish, crash, restart, recover — the M1 durability guarantee end to end.
 
 ### Run
 
@@ -21,6 +22,7 @@ cargo run --release -p broker --bin cache-demo
 cargo run --release -p broker --bin latency-demo
 cargo run --release -p broker --bin pubsub-demo-notifications
 cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p broker --bin durable-restart-demo
 ```
 
 ### Notes

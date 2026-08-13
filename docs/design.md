@@ -180,14 +180,22 @@ Characteristics:
 
 ### 6.2 Durable Storage
 Durable storage is implemented as:
-- Write‑ahead log (WAL)
-- Segmented append‑only log files
+- Segmented append‑only log files, each record checksummed
 - Sparse indexes for offset lookup
+- Crash recovery that repairs a torn tail and refuses to start on corruption
+  anywhere else
+
+This is a log‑structured store, **not** write‑ahead logging: the log is the
+primary data structure rather than a journal protecting one, so recovery
+validates and truncates instead of replaying into a separate store. See
+[Durable Storage](durable-storage.md).
 
 Durability is configurable per stream:
-- fsync per write
-- batched fsync
-- no fsync (unsafe but fast)
+- `on_commit` — fsync before the acknowledgement, amortised across concurrent
+  publishers by group commit
+- `periodic { interval }` — batched fsync on a timer, bounding loss by the
+  interval
+- `none` — no explicit fsync (survives a process crash, not a power loss)
 
 ### 6.3 Retention
 Retention policies are enforced per stream:
