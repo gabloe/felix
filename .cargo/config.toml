@@ -1,3 +1,15 @@
+[build]
+# Share one target directory across every crate in this repo, including the
+# standalone demos under demos/ that declare their own [workspace]. Without this
+# each of those is a separate workspace with its own target/, so each rebuilds the
+# whole dependency tree — tokio, quinn, rustls, aws-lc and the rest — from scratch.
+# Measured at ~3 GB each across four demo crates. Cargo keys artifacts by package,
+# version, features and flags, so identical dependency builds are reused rather
+# than duplicated once they all land in the same directory.
+#
+# Relative to the directory containing .cargo/, i.e. the repository root.
+target-dir = "target"
+
 [profile.profiling]
 inherits = "release"
 debug = true

@@ -40,13 +40,13 @@ tasks:
         fi
       - |
         if [ -n "${FELIX_TEST_DATABASE_URL:-}" ]; then
-          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/soak/' --lcov --output-path lcov.info
         elif docker version >/dev/null 2>&1; then
-          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@host.docker.internal:55432/postgres" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@host.docker.internal:55432/postgres" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/soak/' --lcov --output-path lcov.info
         else
-          cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)' --lcov --output-path lcov.info
+          cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/soak/' --lcov --output-path lcov.info
         fi
-      - "cargo llvm-cov report --summary-only"
+      - "cargo llvm-cov report --summary-only --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/soak/'"
       - |
         if [ -z "${CI:-}" ]; then
           task pg:down
@@ -84,7 +84,12 @@ tasks:
       - "cargo clean"
       - "rm -rf data/raw/stdout data/raw/latency_demo_runs.jsonl"
   clean-all:
-    cmds: ["rm -rf target"]
+    desc: "Remove all build artifacts, including any stale per-demo target dirs"
+    cmds:
+      - "rm -rf target"
+      # Pre-dating the shared target-dir in .cargo/config.toml, each standalone
+      # demo crate built its own ~3 GB target/. Remove any left behind.
+      - "rm -rf demos/*/target"
   deny:
     cmds:
       - "cargo install cargo-deny --version 0.19.0 --locked"

@@ -8,7 +8,7 @@ The broker attempts to load a YAML file from:
 
 All fields are optional. Omitted values fall back to defaults. Every field also
 has an environment variable override — see
-[Environment Variables](../docs-site/docs/reference/environment-variables.md)
+[Environment Variables](../docs-site/src/content/docs/reference/environment-variables.md)
 for the full `FELIX_*` mapping, including legacy aliases.
 
 Defaults favor bounded latency and visible overload over unbounded buffering:
@@ -131,7 +131,7 @@ subscriber_max_bytes_per_write: 65536
     benchmarking sustainable throughput. Production defaults favor shedding
     (`drop_new`) so overload stays visible and bounded instead of building
     unbounded backlog under a slow subscriber. See
-    [Benchmarks](../docs-site/docs/features/benchmarks.md#saturation-behavior).
+    [Benchmarks](../docs-site/src/content/docs/features/benchmarks.md#saturation-behavior).
 
 ## Multi-Core Scaling
 
@@ -146,7 +146,7 @@ neutral-to-positive for single-stream workloads.
 core_shards: 4 # e.g. physical cores - 2, leaving headroom for QUIC I/O
 ```
 
-See [Benchmarks](../docs-site/docs/features/benchmarks.md) for measured
+See [Benchmarks](../docs-site/src/content/docs/features/benchmarks.md) for measured
 results.
 
 ## Client-Side Parallelism (Important)
@@ -196,7 +196,7 @@ A single connection with a single publish stream will bottleneck regardless of b
 - Lanes often help high fanout + large payload workloads, but gains can plateau; do not assume
   that more than 8 lanes will improve performance.
 - Event delivery uses binary `EventBatch` (or shared `EventBatch` — see
-  [Wire Protocol](../docs-site/docs/architecture/wire-protocol.md)) frames. Unacknowledged
+  [Wire Protocol](../docs-site/src/content/docs/architecture/wire-protocol.md)) frames. Unacknowledged
   client publishes are binary-encoded by default; acked publishes currently use the JSON
   control encoding (`Publisher::publish_json`/`publish_batch_json` select JSON explicitly).
 - Queue depths directly impact memory usage. Large queue depths combined with large batch sizes and

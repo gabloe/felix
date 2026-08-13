@@ -34,7 +34,7 @@ durability, clustering, or advanced observability.
 - [X] QUIC client endpoint wrapper
 - [X] Connection info + stream helpers (bi/uni)
 - [X] Graceful shutdown hooks (drain connections on SIGTERM) — see
-      [Graceful Shutdown](../docs-site/docs/deployment/graceful-shutdown.md).
+      [Graceful Shutdown](../docs-site/src/content/docs/deployment/graceful-shutdown.md).
       Readiness flip, bounded drain, and accept-loop cancellation are done; per-subsystem
       cancellation (publish workers, ack waiters, subscription writers) and process-level
       SIGTERM tests remain open under #139.

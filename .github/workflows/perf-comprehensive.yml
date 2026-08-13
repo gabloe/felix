@@ -5,7 +5,7 @@ name: Comprehensive Performance Sweep
 # and expensive for every PR or every merge -- see perf-pr.yml (fast subset,
 # per-PR, advisory) and perf-publish.yml (fast subset, per-merge, historical
 # data) for those. This is the same pipeline used to regenerate
-# docs-site/docs/features/benchmarks.md locally, just runnable from CI.
+# docs-site/src/content/docs/features/benchmarks.md locally, just runnable from CI.
 #
 # Produces downloadable artifacts (raw JSONL, aggregated CSV, charts,
 # rendered markdown snippet) rather than auto-committing to docs: updating
