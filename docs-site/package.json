@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "check:mermaid": "node ../scripts/check-mermaid.mjs",
+    "build": "npm run check:mermaid && astro build",
     "preview": "astro preview"
   },
   "dependencies": {

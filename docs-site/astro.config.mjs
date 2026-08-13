@@ -79,6 +79,7 @@ export default defineConfig({
             { label: 'Components', slug: 'architecture/components' },
             { label: 'Wire Protocol', slug: 'architecture/wire-protocol' },
             { label: 'Durable Storage', slug: 'architecture/durable-storage' },
+            { label: 'Durable Segment Format', slug: 'architecture/storage-format' },
             { label: 'Semantics', slug: 'architecture/semantics' },
           ],
         },

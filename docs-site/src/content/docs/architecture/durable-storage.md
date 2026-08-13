@@ -39,7 +39,7 @@ sequenceDiagram
         L->>D: fsync (shared with concurrent appends)
         D-->>L: durable
     else None / Periodic
-        Note over L: returns immediately;<br/>a background timer flushes later
+        Note over L: returns immediately —<br/>a background timer flushes later
     end
 
     L-->>B: offsets assigned
@@ -100,8 +100,8 @@ which is what makes index rebuilds and recovery scans cheap.
 Index files are pure accelerators. They carry no checksums, are never trusted on
 their own, and any index that fails to load is rebuilt from its segment.
 
-The full byte layout, versioning rules, and corruption verdicts are in
-[the format specification](https://github.com/gabloe/felix/blob/main/docs/storage-format.md).
+The full byte layout, versioning rules, and corruption verdicts are in the
+[Durable Segment Format specification](/felix/architecture/storage-format/).
 
 ## Recovery
 
