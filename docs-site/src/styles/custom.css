@@ -214,6 +214,28 @@ starlight-toc a[aria-current='true'] {
 }
 
 /*
+ * Site title. The logo's "Felix" is a heavy sign-painter brush script, and the
+ * header title sitting next to it in the plain UI font read as two unrelated
+ * marks. Lobster Two at 700 italic is the closest match available as a
+ * self-hosted webfont: same family of forms as the logo's lettering (connected
+ * brush script, crossbarred swash F) and, unlike Lobster's upright 400, it has
+ * the pronounced slant the logo lettering uses.
+ *
+ * This is deliberately scoped to the title only. It is a brand mark, one word
+ * long; a display script anywhere else on the site would hurt reading.
+ */
+.site-title {
+	font-family: 'Lobster Two', var(--__sl-font), cursive;
+	font-weight: 700;
+	font-style: italic;
+	/* Script faces read smaller than the UI font at the same size because of the
+	 * slant and the smaller x-height, so nudge the size up to keep the title
+	 * visually level with the rest of the header. */
+	font-size: 1.5rem;
+	letter-spacing: 0.01em;
+}
+
+/*
  * Sidebar. There are 40 pages across 8 groups; fully expanded that is a wall of
  * uniform links with no way in. The groups are collapsed by default in
  * astro.config.mjs, and the styling here does the other half of the job: make
