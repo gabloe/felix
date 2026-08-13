@@ -90,6 +90,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             admission_permit: None,
         },
         publish_ctx.overflow_policy(),
+        None,
     )
     .await
     {
@@ -148,6 +149,7 @@ pub(crate) async fn handle_publish_message_uni(
             admission_permit: None,
         },
         publish_ctx.overflow_policy(),
+        None,
     )
     .await;
     match r {
@@ -210,6 +212,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
             admission_permit: None,
         },
         publish_ctx.overflow_policy(),
+        None,
     )
     .await;
     match r {

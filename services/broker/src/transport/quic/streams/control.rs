@@ -202,6 +202,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &frame,
                     auth_ctx.as_ref(),
                     sample,
+                    &cancel_tx,
                 )
                 .await?;
             }

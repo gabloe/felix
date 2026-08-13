@@ -126,6 +126,14 @@ subscriber_max_bytes_per_write: 65536
 ```
 
 !!! note
+    `publish_queue_wait_timeout_ms` bounds *acked* publishes only. With
+    `pub_ingress_wait: true`, un-acked publishes use unbounded, cancellable
+    backpressure instead: there is no ack channel on which a timeout could be
+    reported, so a bounded wait there could only end in a silent drop. Such a
+    publish waits for capacity and is abandoned only if the connection is torn
+    down.
+
+!!! note
     Lossless pacing (`block` queues + `pub_ingress_wait: true`) is a
     deliberate opt-in for pipelines that cannot tolerate drops, or for
     benchmarking sustainable throughput. Production defaults favor shedding

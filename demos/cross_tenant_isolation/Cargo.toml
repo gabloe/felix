@@ -26,3 +26,13 @@ felix-transport = { path = "../../crates/felix-transport" }
 felix-wire = { path = "../../crates/felix-wire" }
 
 [workspace]
+
+# Each demo declares its own [workspace], so the root workspace's [profile.dev]
+# does not reach it — these have to be repeated here or the demos rebuild the
+# whole dependency tree with full debuginfo into the shared target dir, undoing
+# the saving. See the root Cargo.toml for the reasoning.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -5,13 +5,14 @@ use bytes::Bytes;
 use felix_broker::StreamHandle;
 #[cfg(test)]
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 #[cfg(test)]
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "perf_debug")]
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::transport::quic::GLOBAL_INGRESS_DEPTH;
 use crate::transport::quic::handlers::publish::ack::EnqueuePolicy;
@@ -52,21 +53,58 @@ pub(crate) fn publish_worker_index(
     (hasher.finish() as usize) % worker_count
 }
 
+/// Await `fut` unless the connection is cancelled first.
+///
+/// `None` means cancellation won. A dropped sender counts as cancelled: the owner
+/// of the control stream is gone, so there is nobody left to deliver for.
+async fn until_cancelled<F: Future>(
+    fut: F,
+    cancel: &mut Option<watch::Receiver<bool>>,
+) -> Option<F::Output> {
+    let Some(rx) = cancel else {
+        return Some(fut.await);
+    };
+    // Pinned so a watch wake-up that turns out not to be a cancellation can go
+    // back to waiting on the same future instead of restarting it.
+    tokio::pin!(fut);
+    loop {
+        if *rx.borrow() {
+            return None;
+        }
+        tokio::select! {
+            out = &mut fut => return Some(out),
+            changed = rx.changed() => {
+                // A dropped sender means the connection is gone; anything else
+                // loops round to re-read the flag.
+                if changed.is_err() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// Enqueue a publish job into the appropriate worker queue with explicit overload semantics.
 ///
 /// Return value:
 /// - `Ok(true)`  → job enqueued
 /// - `Ok(false)` → job intentionally dropped (policy = Drop)
-/// - `Err(...)`  → failure to enqueue (policy = Fail, closed queue, timeout, etc.)
+/// - `Err(...)`  → failure to enqueue (policy = Fail, closed queue, timeout, cancellation)
+///
+/// `cancel` is the connection's teardown signal. It is what bounds
+/// [`EnqueuePolicy::Backpressure`], which has no timer; `None` means the caller has
+/// no teardown signal to offer (the uni-stream paths), and such a wait ends only
+/// when capacity frees or the worker queue closes.
 ///
 /// Implementation detail:
 /// - We try `try_send` first to keep the common path allocation-free and to make overload observable
-///   (`Full` vs `Closed`). Only `Wait` does an async `send` with a timeout.
+///   (`Full` vs `Closed`).
 /// - Any path that successfully enqueues must increment both local and global depth **exactly once**.
 pub(crate) async fn enqueue_publish(
     publish_ctx: &PublishContext,
     mut job: PublishJob,
     policy: EnqueuePolicy,
+    mut cancel: Option<watch::Receiver<bool>>,
 ) -> Result<bool> {
     let worker_index = match &job.target {
         PublishTarget::Resolved(handle) => handle.id() as usize % publish_ctx.worker_count.max(1),
@@ -91,19 +129,33 @@ pub(crate) async fn enqueue_publish(
     // job and are released together once the job is done (or dropped without ever being
     // enqueued).
     let job_bytes: usize = job.payloads.iter().map(Bytes::len).sum();
+    // One deadline for the whole enqueue, not one per stage. Admission and the
+    // queue send used to get a full `wait_timeout` each, so a publish could block
+    // for twice the configured budget while the knob read as a single bound — and
+    // because this runs inline in the control-stream read loop, that doubled the
+    // head-of-line stall on the connection too.
+    let deadline = tokio::time::Instant::now() + publish_ctx.wait_timeout;
+    let acquire_both = async {
+        let conn_permit = publish_ctx.conn_admission.acquire(job_bytes).await?;
+        let permit = publish_ctx.admission.acquire(job_bytes).await?;
+        Ok::<_, tokio::sync::AcquireError>((conn_permit, permit))
+    };
     let (conn_permit, permit) = match policy {
-        EnqueuePolicy::Wait => {
-            let acquire_both = async {
-                let conn_permit = publish_ctx.conn_admission.acquire(job_bytes).await?;
-                let permit = publish_ctx.admission.acquire(job_bytes).await?;
-                Ok::<_, tokio::sync::AcquireError>((conn_permit, permit))
-            };
-            match tokio::time::timeout(publish_ctx.wait_timeout, acquire_both).await {
-                Ok(Ok(permits)) => permits,
-                Ok(Err(_)) => return Err(anyhow!("publish admission closed")),
-                Err(_) => return Err(anyhow!("publish admission timed out")),
+        EnqueuePolicy::Wait => match tokio::time::timeout_at(deadline, acquire_both).await {
+            Ok(Ok(permits)) => permits,
+            Ok(Err(_)) => return Err(anyhow!("publish admission closed")),
+            Err(_) => return Err(anyhow!("publish admission timed out")),
+        },
+        EnqueuePolicy::Backpressure => match until_cancelled(acquire_both, &mut cancel).await {
+            Some(Ok(permits)) => permits,
+            Some(Err(_)) => return Err(anyhow!("publish admission closed")),
+            None => {
+                t_counter!("felix_broker_ingress_backpressure_cancelled_total").increment(1);
+                return Err(anyhow!(
+                    "publish cancelled while waiting for ingress capacity"
+                ));
             }
-        }
+        },
         EnqueuePolicy::Drop | EnqueuePolicy::Fail => {
             let conn_permit = match publish_ctx.conn_admission.try_acquire(job_bytes) {
                 Ok(permit) => permit,
@@ -120,7 +172,9 @@ pub(crate) async fn enqueue_publish(
                                 "publish ingress per-connection byte budget exhausted"
                             ))
                         }
-                        EnqueuePolicy::Wait => unreachable!("Wait handled above"),
+                        EnqueuePolicy::Wait | EnqueuePolicy::Backpressure => {
+                            unreachable!("waiting policies handled above")
+                        }
                     };
                 }
             };
@@ -137,7 +191,9 @@ pub(crate) async fn enqueue_publish(
                             t_counter!("felix_broker_ingress_rejected_total").increment(1);
                             Err(anyhow!("publish ingress byte budget exhausted"))
                         }
-                        EnqueuePolicy::Wait => unreachable!("Wait handled above"),
+                        EnqueuePolicy::Wait | EnqueuePolicy::Backpressure => {
+                            unreachable!("waiting policies handled above")
+                        }
                     };
                 }
             }
@@ -186,13 +242,27 @@ pub(crate) async fn enqueue_publish(
                     t_counter!("felix_broker_ingress_rejected_total").increment(1);
                     Err(anyhow!("publish queue full"))
                 }
-                EnqueuePolicy::Wait => {
-                    // Acked publishes with ack_on_commit use Wait; otherwise we Fail/Drop.
+                EnqueuePolicy::Wait | EnqueuePolicy::Backpressure => {
+                    // Acked publishes with ack_on_commit use Wait; unacked publishes
+                    // with `pub_ingress_wait` use Backpressure.
                     t_counter!("felix_broker_ingress_waited_total").increment(1);
-                    let send_result =
-                        tokio::time::timeout(publish_ctx.wait_timeout, worker.send(job))
+                    let send_result = match policy {
+                        // Shares the deadline computed above with the admission
+                        // stage, so the two together cannot exceed `wait_timeout`.
+                        EnqueuePolicy::Wait => tokio::time::timeout_at(deadline, worker.send(job))
                             .await
-                            .map_err(|_| anyhow!("publish enqueue timed out"))?;
+                            .map_err(|_| anyhow!("publish enqueue timed out"))?,
+                        _ => match until_cancelled(worker.send(job), &mut cancel).await {
+                            Some(result) => result,
+                            None => {
+                                t_counter!("felix_broker_ingress_backpressure_cancelled_total")
+                                    .increment(1);
+                                return Err(anyhow!(
+                                    "publish cancelled while waiting for ingress queue"
+                                ));
+                            }
+                        },
+                    };
                     send_result.map_err(|_| anyhow!("publish queue closed"))?;
                     // Local depth is per publish context; global depth is used for cross-connection observability.
                     let _local = publish_ctx.depth.fetch_add(1, Ordering::Relaxed) + 1;

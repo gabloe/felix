@@ -17,7 +17,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 
 pub const TENANT: &str = "t1";
 pub const NAMESPACE: &str = "default";
@@ -429,28 +429,41 @@ where
 
     let stop = Arc::new(AtomicBool::new(false));
     let mut tasks = Vec::new();
+    let (ready_tx, mut ready_rx) = mpsc::channel(config.consumers);
 
     for consumer in &consumers {
         let client_cfg = client_config(&harness.cert, &auth, config.mode)?;
         let addr = harness.addr;
         let consumer = Arc::clone(consumer);
         let stop = Arc::clone(&stop);
+        let ready_tx = ready_tx.clone();
         let keys = config.keys;
         tasks.push(tokio::spawn(async move {
             let client = match Client::connect(addr, "localhost", client_cfg).await {
                 Ok(client) => client,
                 Err(err) => {
-                    eprintln!("consumer connect failed: {err}");
+                    let _ = ready_tx
+                        .send(Err(
+                            err.context(format!("{} failed to connect", consumer.name))
+                        ))
+                        .await;
                     return;
                 }
             };
             let mut subscription = match client.subscribe(TENANT, NAMESPACE, STREAM).await {
                 Ok(sub) => sub,
                 Err(err) => {
-                    eprintln!("subscribe failed: {err}");
+                    let _ = ready_tx
+                        .send(Err(
+                            err.context(format!("{} failed to subscribe", consumer.name))
+                        ))
+                        .await;
                     return;
                 }
             };
+            if ready_tx.send(Ok(())).await.is_err() {
+                return;
+            }
             while !stop.load(Ordering::Relaxed) {
                 if consumer.stalled.load(Ordering::Relaxed) {
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -483,7 +496,13 @@ where
         }));
     }
 
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(ready_tx);
+    for _ in 0..consumers.len() {
+        tokio::time::timeout(Duration::from_secs(10), ready_rx.recv())
+            .await
+            .context("timed out waiting for consumers to subscribe")?
+            .context("consumer readiness channel closed")??;
+    }
 
     let publish_stop = Arc::new(AtomicBool::new(false));
     let publisher_task = {

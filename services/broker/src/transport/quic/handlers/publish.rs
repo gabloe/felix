@@ -2,7 +2,7 @@
 //!
 //! This module is the “publish ingestion glue” between QUIC stream handlers and the broker core.
 //! It owns:
-//! - **Ingress enqueue policy** (Drop/Fail/Wait) into the publish worker queues.
+//! - **Ingress enqueue policy** (Drop/Fail/Wait/Backpressure) into the publish worker queues.
 //! - **Worker sharding** (deterministic hashing of tenant/namespace/stream to pick a worker).
 //! - **Ack semantics + backpressure** for control-stream publishes (including commit-ack waiting).
 //! - **Depth tracking** for ingress and outbound-ack queues (local + global gauges).
@@ -19,7 +19,8 @@
 //!   Higher latency; bounded by `ack_waiters` and `ack_waiter_tx` to avoid unbounded in-flight acks.
 //!
 //! Backpressure strategy:
-//! - Ingress queue uses `EnqueuePolicy` (Drop/Fail/Wait) to shed load or apply bounded waiting.
+//! - Ingress queue uses `EnqueuePolicy` (Drop/Fail/Wait/Backpressure) to shed load, wait within
+//!   a single bounded budget, or apply true unbounded-but-cancellable backpressure.
 //! - Outbound ack queue maintains a high-water throttle signal (`ack_throttle_tx`) and records
 //!   enqueue failures/timeouts to decide when to cooperatively cancel the control stream.
 //! - Depth counters are tracked both per-stream and globally to support observability and tuning.
@@ -116,7 +117,8 @@ pub(crate) struct PublishJob {
 /// - `workers`: per-worker `mpsc::Sender<PublishJob>` queues.
 /// - `worker_count`: cached length for fast hashing.
 /// - `depth`: best-effort local depth tracking for this publish queue set.
-/// - `wait_timeout`: bound used by `EnqueuePolicy::Wait`.
+/// - `wait_timeout`: the *total* budget for one `EnqueuePolicy::Wait` enqueue, spanning
+///   admission and the queue send together. Not used by `Backpressure`, which has no timer.
 /// - `admission`: shared in-flight-byte budget across all workers (see [`PublishAdmission`]).
 /// - `conn_admission`: this connection's slice of `admission`. `workers`/`admission`/`depth` are
 ///   intentionally process-wide (see `build_publish_context`'s note on avoiding per-connection
@@ -140,18 +142,26 @@ pub(crate) struct PublishContext {
     /// `handle_connection` — see that type's doc comment for why it's no longer a
     /// process-wide cache.
     pub(crate) lane_manager: Arc<WriterLaneManager>,
-    /// When true, un-acked publishes wait (bounded) for ingress capacity instead
-    /// of being shed. Production keeps this off so fire-and-forget load sheds
-    /// visibly under overload; benchmarks and lossless pipelines turn it on so
-    /// backpressure propagates through QUIC flow control to the publisher.
+    /// When true, un-acked publishes wait for ingress capacity instead of being
+    /// shed. Production keeps this off so fire-and-forget load sheds visibly under
+    /// overload; benchmarks and lossless pipelines turn it on so backpressure
+    /// propagates through QUIC flow control to the publisher.
+    ///
+    /// The wait is [`EnqueuePolicy::Backpressure`]: unbounded but cancellable. It
+    /// deliberately has no timeout, because an unacked publish has no channel on
+    /// which to report one — a bounded wait here could only end in a silent drop,
+    /// which is the opposite of what enabling this is asking for.
     pub(crate) ingress_wait: bool,
 }
 
 impl PublishContext {
     /// Overflow policy for publishes that carry no ack (fire-and-forget).
+    /// Unacked publishes get `Backpressure`, never `Wait`: with no ack there is no
+    /// channel on which to report a timeout, so a bounded wait could only end in a
+    /// silent drop. See [`EnqueuePolicy`].
     pub(crate) fn overflow_policy(&self) -> EnqueuePolicy {
         if self.ingress_wait {
-            EnqueuePolicy::Wait
+            EnqueuePolicy::Backpressure
         } else {
             EnqueuePolicy::Drop
         }

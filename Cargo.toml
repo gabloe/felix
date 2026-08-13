@@ -18,6 +18,26 @@ members = [
   "services/broker",
 ]
 
+[profile.dev]
+# Debug builds dominate disk here: a single clean `cargo test --workspace --no-run`
+# produced 6.1 GB, and the accumulated target directory reached 41 GB because cargo
+# keys artifacts by feature set and never garbage-collects the old ones.
+#
+# On macOS `split-debuginfo` defaults to `unpacked`, so DWARF stays in the per-CGU
+# object files rather than being folded into the binary — 17.6 GB of `.o` files at
+# the peak, against only 4.2 GB of actual executables. `line-tables-only` keeps what
+# panics and backtraces need (file, line, symbol) and drops the rest: variable
+# layouts, types, lexical scopes. Step-debugging locals in a debugger is what this
+# gives up; if you need that, raise it back to `debug = true` for the session.
+debug = "line-tables-only"
+
+# Third-party code is the bulk of those object files and is almost never stepped
+# through. Symbols still appear in backtraces; only line numbers inside
+# dependencies are lost. Workspace crates keep their line tables from the setting
+# above, because those are the frames that matter when a test fails.
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 # The hot path spans crate boundaries — felix-wire encode/decode, felix-broker
 # fanout, and the broker service's QUIC handlers are separate crates — so
