@@ -93,7 +93,7 @@ async fn enqueue_publish_drop_sheds_load_when_byte_budget_exhausted() {
     // 7-byte payload, so the job must be shed even though the item-count queue is empty.
     let mut job = make_job();
     job.payloads = vec![Bytes::from_static(b"payload")];
-    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop)
+    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop, None)
         .await
         .unwrap();
     assert!(!result);
@@ -116,7 +116,7 @@ async fn enqueue_publish_drop_sheds_load_when_conn_byte_budget_exhausted() {
     };
     let mut job = make_job();
     job.payloads = vec![Bytes::from_static(b"payload")];
-    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop)
+    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop, None)
         .await
         .unwrap();
     assert!(!result);
@@ -150,7 +150,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let mut big_job = make_job();
     big_job.payloads = vec![Bytes::from_static(b"01234567")]; // 8 bytes > A's 4-byte share
     assert!(
-        !enqueue_publish(&ctx_a, big_job, EnqueuePolicy::Drop)
+        !enqueue_publish(&ctx_a, big_job, EnqueuePolicy::Drop, None)
             .await
             .unwrap()
     );
@@ -159,7 +159,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let mut small_job = make_job();
     small_job.payloads = vec![Bytes::from_static(b"ok")]; // 2 bytes, fits B's 4-byte share
     assert!(
-        enqueue_publish(&ctx_b, small_job, EnqueuePolicy::Drop)
+        enqueue_publish(&ctx_b, small_job, EnqueuePolicy::Drop, None)
             .await
             .unwrap()
     );
@@ -239,7 +239,7 @@ async fn enqueue_publish_drop_returns_false_when_full() {
     let (ctx, _rx, tx) = make_publish_context(1);
     tx.try_send(make_job()).unwrap();
     let job = make_job();
-    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop)
+    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Drop, None)
         .await
         .unwrap();
     assert!(!result);
@@ -250,7 +250,7 @@ async fn enqueue_publish_fail_returns_error_when_full() {
     let (ctx, _rx, tx) = make_publish_context(1);
     tx.try_send(make_job()).unwrap();
     let job = make_job();
-    let err = enqueue_publish(&ctx, job, EnqueuePolicy::Fail)
+    let err = enqueue_publish(&ctx, job, EnqueuePolicy::Fail, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("publish queue full"));
@@ -265,7 +265,7 @@ async fn enqueue_publish_wait_enqueues_when_receiver_ready() {
         let _ = rx.recv().await;
     });
     let job = make_job();
-    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Wait)
+    let result = enqueue_publish(&ctx, job, EnqueuePolicy::Wait, None)
         .await
         .unwrap();
     assert!(result);
@@ -287,7 +287,7 @@ async fn enqueue_publish_wait_times_out_when_queue_full() {
         lane_manager: test_lane_manager(),
         ingress_wait: false,
     };
-    let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Wait)
+    let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Wait, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("publish enqueue timed out"));
@@ -308,7 +308,7 @@ async fn enqueue_publish_returns_error_when_queue_closed() {
         lane_manager: test_lane_manager(),
         ingress_wait: false,
     };
-    let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Fail)
+    let err = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Fail, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("publish queue closed"));
@@ -516,6 +516,7 @@ async fn handle_binary_publish_batch_control_requires_auth() {
         &frame,
         None,
         false,
+        &watch::channel(false).0,
     )
     .await
     .expect_err("auth required");
@@ -538,6 +539,7 @@ async fn handle_binary_publish_batch_control_tenant_mismatch() {
         &frame,
         Some(&auth_ctx),
         false,
+        &watch::channel(false).0,
     )
     .await
     .expect_err("tenant mismatch");
@@ -560,6 +562,7 @@ async fn handle_binary_publish_batch_control_forbidden() {
         &frame,
         Some(&auth_ctx),
         false,
+        &watch::channel(false).0,
     )
     .await
     .expect_err("forbidden");
@@ -582,6 +585,7 @@ async fn handle_binary_publish_batch_control_missing_stream_is_ok() {
         &frame,
         Some(&auth_ctx),
         false,
+        &watch::channel(false).0,
     )
     .await;
     assert!(result.is_ok());
@@ -620,6 +624,7 @@ async fn handle_binary_publish_batch_control_enqueue_dropped_is_ok() {
         &frame,
         Some(&auth_ctx),
         false,
+        &watch::channel(false).0,
     )
     .await;
     assert!(result.is_ok());
@@ -656,6 +661,7 @@ async fn handle_binary_publish_batch_control_enqueue_error_is_ok() {
         &frame,
         Some(&auth_ctx),
         false,
+        &watch::channel(false).0,
     )
     .await;
     assert!(result.is_ok());
@@ -2481,4 +2487,119 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         }
         _ => panic!("unexpected outgoing"),
     }
+}
+
+// --- ingress waiting semantics -------------------------------------------
+//
+// Three properties, one per defect that used to be here:
+//   1. `Wait` spends one `wait_timeout` across both stages, not one each.
+//   2. `Backpressure` never sheds — it waits for capacity however long that takes.
+//   3. `Backpressure` still ends promptly when the connection is torn down.
+
+/// Admission and the queue send each used to get a full `wait_timeout`, so the
+/// worst case was twice the configured budget. Here admission is held for most of
+/// the budget and the queue is left full, so the send has to wait too; the whole
+/// call must still finish within one budget.
+#[tokio::test(start_paused = true)]
+async fn wait_policy_spends_one_budget_across_both_stages() {
+    let payload = b"payload".len();
+    let (mut ctx, _rx, _tx) = make_publish_context(1);
+    ctx.wait_timeout = Duration::from_millis(100);
+    // Room for the primed job plus one held permit, so a third job must wait for
+    // admission *and then* find the queue still full.
+    ctx.admission = Arc::new(PublishAdmission::new(payload * 2));
+    ctx.conn_admission = Arc::new(PublishAdmission::new(payload * 2));
+
+    // Fill the only queue slot. This job keeps its admission permit while queued.
+    enqueue_publish(&ctx, make_job(), EnqueuePolicy::Drop, None)
+        .await
+        .expect("prime the queue");
+
+    // Hold the remaining admission and release it partway through the budget.
+    let held = ctx
+        .admission
+        .clone()
+        .acquire(payload)
+        .await
+        .expect("hold admission");
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        drop(held);
+    });
+
+    let start = tokio::time::Instant::now();
+    let result = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Wait, None).await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        result.is_err(),
+        "the queue never drains, so this must time out rather than enqueue"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(60),
+        "admission should have blocked until the held permit was released, took {elapsed:?}"
+    );
+    // Before the fix each stage got its own budget, so this was ~160ms.
+    assert!(
+        elapsed <= Duration::from_millis(100),
+        "Wait must not exceed one wait_timeout across both stages, took {elapsed:?}"
+    );
+}
+
+/// The whole point of `Backpressure`: overload becomes slowness, never loss. A
+/// timer here would have turned this into a silent drop, with no ack channel to
+/// report it on.
+#[tokio::test(start_paused = true)]
+async fn backpressure_waits_for_capacity_instead_of_shedding() {
+    let (ctx, mut rx, _tx) = make_publish_context(1);
+    // Fill the single queue slot so the next enqueue has to wait.
+    enqueue_publish(&ctx, make_job(), EnqueuePolicy::Drop, None)
+        .await
+        .expect("prime the queue");
+
+    // Drain long after any plausible timeout would have fired.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let _ = rx.recv().await;
+        // Hold the receiver open so the channel does not close under the waiter.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        drop(rx);
+    });
+
+    let accepted = enqueue_publish(&ctx, make_job(), EnqueuePolicy::Backpressure, None)
+        .await
+        .expect("backpressure must not fail on a full queue");
+    assert!(
+        accepted,
+        "backpressure must enqueue once capacity frees, never report a drop"
+    );
+}
+
+/// Unbounded does not mean unstoppable: teardown is what ends the wait, which is
+/// why the policy needs the connection's cancel signal rather than a clock.
+#[tokio::test(start_paused = true)]
+async fn backpressure_gives_up_when_the_connection_is_cancelled() {
+    let (ctx, _rx, _tx) = make_publish_context(1);
+    enqueue_publish(&ctx, make_job(), EnqueuePolicy::Drop, None)
+        .await
+        .expect("prime the queue");
+
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = cancel_tx.send(true);
+    });
+
+    let err = enqueue_publish(
+        &ctx,
+        make_job(),
+        EnqueuePolicy::Backpressure,
+        Some(cancel_rx),
+    )
+    .await
+    .expect_err("cancellation must surface as an error, not a silent drop");
+    assert!(
+        err.to_string().contains("cancelled"),
+        "unexpected error: {err}"
+    );
 }

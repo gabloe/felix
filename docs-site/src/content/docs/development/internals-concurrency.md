@@ -24,7 +24,7 @@ In publish → delivery order:
 | 1 | Client `PublishAdmission` | in-flight publish **bytes**, shared across all client workers | — (always waits) | `publish_inflight_bytes` = 4 MiB |
 | 2 | Client worker mpsc channel | queued publish **items** per stream-worker | — (backpressure via channel) | `publish_queue_depth` = 64 |
 | 3 | Broker `PublishAdmission` | in-flight publish **bytes**, process-wide | — (always waits, within `EnqueuePolicy::Wait`'s timeout) | `pub_inflight_bytes` = 64 MiB |
-| 4 | Broker worker mpsc channel | queued publish **items**, process-wide (or per-shard) | `EnqueuePolicy`: `Drop` / `Fail` / `Wait` | `pub_queue_depth` = 64, `Drop` unless `pub_ingress_wait` |
+| 4 | Broker worker mpsc channel | queued publish **items**, process-wide (or per-shard) | `EnqueuePolicy`: `Drop` / `Fail` / `Wait` / `Backpressure` | `pub_queue_depth` = 64, `Drop` unless `pub_ingress_wait` (then `Backpressure`) |
 | 5 | Broker-core subscriber channel | queued `DeliveryEnvelope`s per subscriber | `subscriber_queue_policy`: `Block` / `DropNew` / `DropOld` | `subscriber_queue_capacity` = 512, `drop_new` |
 | 6 | Writer lane channel | queued `LaneCommand`s per lane | `subscriber_lane_queue_policy`: same three | `subscriber_lane_queue_depth` = 64, `drop_new` |
 

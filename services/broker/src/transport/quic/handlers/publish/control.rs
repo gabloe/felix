@@ -25,6 +25,7 @@ use crate::transport::quic::handlers::publish::{
 };
 use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_binary_publish_batch_control(
     broker: &Broker,
     stream_cache: &mut StreamHandleCache,
@@ -33,6 +34,9 @@ pub(crate) async fn handle_binary_publish_batch_control(
     frame: &Frame,
     auth_ctx: Option<&AuthContext>,
     sample: bool,
+    // Bounds the unacked backpressure wait: without a timer, teardown is what
+    // ends it.
+    cancel_tx: &watch::Sender<bool>,
 ) -> Result<()> {
     let decode_start = t_now_if(sample);
     let batch = match felix_wire::binary::decode_publish_batch(frame)
@@ -113,6 +117,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
             admission_permit: None,
         },
         publish_ctx.overflow_policy(),
+        Some(cancel_tx.subscribe()),
     )
     .await;
     match r {
@@ -440,6 +445,7 @@ pub(crate) async fn handle_publish_message(
         } else {
             EnqueuePolicy::Fail
         },
+        Some(cancel_tx.subscribe()),
     )
     .await;
     if let Some(start) = enqueue_start {
@@ -802,6 +808,7 @@ pub(crate) async fn handle_publish_batch_message(
         } else {
             EnqueuePolicy::Fail
         },
+        Some(cancel_tx.subscribe()),
     )
     .await;
     if let Some(start) = fanout_start {

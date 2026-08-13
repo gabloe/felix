@@ -83,12 +83,24 @@ impl AckEncoding {
 ///
 /// - `Drop`: shed load silently (best for fire-and-forget / non-acked traffic).
 /// - `Fail`: reject immediately with an error (best for acked traffic when you prefer fast failure).
-/// - `Wait`: apply bounded backpressure by waiting up to `publish_ctx.wait_timeout`.
-///   Used for commit-ack publishes so the client is less likely to be stranded by overload.
+/// - `Wait`: bounded backpressure, capped by a single `publish_ctx.wait_timeout`
+///   deadline spanning *both* admission and the queue send. Only for publishes
+///   that carry an ack, because a timeout here surfaces to the client as a
+///   `PublishError` it can retry.
+/// - `Backpressure`: unbounded but cancellable. Never sheds and never times out;
+///   it ends only when capacity frees up or the connection is torn down.
+///
+/// The split between the last two is the point. `Wait` and `Backpressure` used to
+/// be one policy, and applying a wall-clock timeout to an *unacked* publish turned
+/// overload back into silent loss — the exact outcome the wait existed to prevent,
+/// with no way to tell the client. A timer is the wrong bound for backpressure:
+/// the right one is liveness, so `Backpressure` waits on capacity and gives up only
+/// when the connection does.
 pub(crate) enum EnqueuePolicy {
     Drop,
     Fail,
     Wait,
+    Backpressure,
 }
 
 /// Result reported by the ack-waiter task for commit-ack publishes.

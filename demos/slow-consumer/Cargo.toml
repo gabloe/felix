@@ -32,3 +32,13 @@ felix-wire = { path = "../../crates/felix-wire" }
 # its UI dependencies never reach `cargo build --workspace` or the broker binary.
 # Same pattern as demos/rbac-live and demos/cross_tenant_isolation.
 [workspace]
+
+# Each demo declares its own [workspace], so the root workspace's [profile.dev]
+# does not reach it — these have to be repeated here or the demos rebuild the
+# whole dependency tree with full debuginfo into the shared target dir, undoing
+# the saving. See the root Cargo.toml for the reasoning.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

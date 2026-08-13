@@ -264,5 +264,14 @@ mod tests {
              consumers: {:?}",
             run.consumers
         );
+        assert!(
+            run.consumers
+                .iter()
+                .all(|consumer| consumer.applied == run.published),
+            "blocking at every checkpoint should deliver every published change; \
+             published={}, consumers: {:?}",
+            run.published,
+            run.consumers
+        );
     }
 }

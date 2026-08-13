@@ -90,6 +90,23 @@ tasks:
       # Pre-dating the shared target-dir in .cargo/config.toml, each standalone
       # demo crate built its own ~3 GB target/. Remove any left behind.
       - "rm -rf demos/*/target"
+  clean:stale:
+    desc: "Prune build artifacts cargo will never collect, keeping the current build"
+    # Cargo keys artifacts by package + features + flags and never garbage-collects
+    # the losers, so every distinct build multiplies the directory: default vs
+    # --all-features vs --features in-process, the four standalone demo crates that
+    # resolve features independently, plus release. Measured at 41 GB against a
+    # 4.2 GB single clean build — roughly sevenfold duplication, none of it reachable.
+    #
+    # Unlike `clean-all` this keeps what you are currently working with, so the next
+    # build is incremental rather than from scratch.
+    cmds:
+      - "cargo install cargo-sweep --version 0.8.0 --locked"
+      # Artifacts built by toolchains rustup no longer has are dead weight.
+      - "cargo sweep --installed"
+      # Then anything untouched for a week: old feature combinations, abandoned
+      # branches' dependency graphs, superseded incremental caches.
+      - "cargo sweep --time 7"
   deny:
     cmds:
       - "cargo install cargo-deny --version 0.19.0 --locked"
