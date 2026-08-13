@@ -78,6 +78,7 @@ export default defineConfig({
             { label: 'System Design', slug: 'architecture/system-design' },
             { label: 'Components', slug: 'architecture/components' },
             { label: 'Wire Protocol', slug: 'architecture/wire-protocol' },
+            { label: 'Durable Storage', slug: 'architecture/durable-storage' },
             { label: 'Semantics', slug: 'architecture/semantics' },
           ],
         },
