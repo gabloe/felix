@@ -5,11 +5,13 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
+pub mod disk_log;
 pub mod ephemeral_cache;
 pub mod log;
 pub mod metrics_names;
 pub mod segment;
 pub mod tiered;
+pub use disk_log::{DiskLog, DiskLogProvider};
 pub use ephemeral_cache::EphemeralCache;
 pub use segment::{Corruption, CorruptionKind, CorruptionSite};
 
