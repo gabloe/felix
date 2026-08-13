@@ -35,3 +35,4 @@ docs-site/node_modules/
 docs-site/.astro/
 .cache/
 data/soak/
+/crates/felix-storage/fuzz/target
