@@ -38,26 +38,27 @@ divergence today and should be inverted then.
 - Publishing **stops** when the stall ends, then consumers are given time to drain
   before anything is measured. What is still wrong afterwards is permanently wrong.
 
-## Architecture (ASCII)
+## Architecture
 
-```
-   +-------------------+
-   |    Publisher      |  owns the authoritative keyspace
-   |  authority[key]   |  emits (key, version, value)
-   +---------+---------+
-             |
-        QUIC change stream
-             |
-   +---------+---------+---------+
-   v                   v         v
-+--+---------+  +------+-----+  +----+--------+
-| consumer-1 |  | consumer-2 |  | consumer-3  |
-| local copy |  | local copy |  | local copy  |
-+------------+  +------------+  +-------------+
-                                 stalls, then
-                                 resumes
+```mermaid
+flowchart TD
+    P["Publisher<br/>owns the authoritative keyspace<br/>emits (key, version, value)"]
+    C1["consumer-1<br/>local copy"]
+    C2["consumer-2<br/>local copy"]
+    C3["consumer-3<br/>local copy<br/>stalls, then resumes"]
+    D["Diff every local copy<br/>against authority[]"]
 
-   at the end: diff every local copy against authority[]
+    P -->|"QUIC change stream"| C1
+    P -->|"QUIC change stream"| C2
+    P -->|"QUIC change stream"| C3
+    C1 --> D
+    C2 --> D
+    C3 --> D
+
+    classDef healthy fill:#0f766e,stroke:#2dd4bf,color:#ffffff
+    classDef degraded fill:#b91c1c,stroke:#ef4444,color:#ffffff
+    class C1,C2 healthy
+    class C3 degraded
 ```
 
 ## Run

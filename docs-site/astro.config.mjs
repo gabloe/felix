@@ -8,6 +8,19 @@ export default defineConfig({
   integrations: [
     mermaid({ autoTheme: true, enableLog: false }),
     starlight({
+      // Fonts are self-hosted via @fontsource so the site has no runtime
+      // dependency on Google Fonts, and so first paint is not gated on a
+      // third-party connection. Inter for UI/prose, JetBrains Mono for the
+      // 1710 code fences. Order matters: these must land before custom.css,
+      // which is what actually points `--sl-font`/`--sl-font-mono` at them.
+      //
+      // Layout is tuned for code- and table-heavy technical docs; see the
+      // custom.css header for why Starlight's defaults do not fit this content.
+      customCss: [
+        '@fontsource-variable/inter',
+        '@fontsource-variable/jetbrains-mono',
+        './src/styles/custom.css',
+      ],
       title: 'Felix',
       description: 'Low-latency QUIC-based pub/sub and distributed cache system',
       logo: {
@@ -39,6 +52,7 @@ export default defineConfig({
         },
         {
           label: 'Demos',
+          collapsed: true,
           items: [
             { label: 'Overview', slug: 'demos/overview' },
             { label: 'Slow-consumer Isolation', slug: 'demos/slow-consumer-isolation' },
@@ -49,6 +63,7 @@ export default defineConfig({
         },
         {
           label: 'Architecture',
+          collapsed: true,
           items: [
             { label: 'System Design', slug: 'architecture/system-design' },
             { label: 'Components', slug: 'architecture/components' },
@@ -58,6 +73,7 @@ export default defineConfig({
         },
         {
           label: 'API Documentation',
+          collapsed: true,
           items: [
             { label: 'Broker API', slug: 'api/broker-api' },
             { label: 'Control Plane API', slug: 'api/control-plane-api' },
@@ -66,6 +82,7 @@ export default defineConfig({
         },
         {
           label: 'Features',
+          collapsed: true,
           items: [
             { label: 'QUIC Transport', slug: 'features/quic-transport' },
             { label: 'Pub/Sub Streaming', slug: 'features/pubsub' },
@@ -79,6 +96,7 @@ export default defineConfig({
         },
         {
           label: 'Deployment',
+          collapsed: true,
           items: [
             { label: 'Local Development', slug: 'deployment/local' },
             { label: 'Docker Compose', slug: 'deployment/docker-compose' },
@@ -88,6 +106,7 @@ export default defineConfig({
         },
         {
           label: 'Reference',
+          collapsed: true,
           items: [
             { label: 'Configuration', slug: 'reference/configuration' },
             { label: 'Environment Variables', slug: 'reference/environment-variables' },
@@ -97,6 +116,7 @@ export default defineConfig({
         },
         {
           label: 'Development',
+          collapsed: true,
           items: [
             { label: 'Contributing', slug: 'development/contributing' },
             { label: 'Building & Testing', slug: 'development/building' },
