@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::Result;
+use crate::{Result, StorageError};
 
 pub type Offset = u64;
 pub type SegmentId = u64;
@@ -38,11 +38,28 @@ pub enum FsyncMode {
     OnCommit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogConfig {
     pub segment_size_bytes: u64,
     pub index_spacing_bytes: u64,
     pub fsync_mode: FsyncMode,
+    /// Ceiling on records returned by a single `read_range`, on top of the
+    /// caller's byte budget. Payload bytes alone do not bound a response made of
+    /// empty records, and an unbounded response is a memory hazard on a path
+    /// that will later serve follower catch-up.
+    pub max_records_per_read: usize,
+    /// Reserve a segment's blocks when it is created. Keeps allocation off the
+    /// append path; disable on filesystems where reservations are expensive or
+    /// where thin provisioning makes them counter-productive.
+    pub preallocate_segments: bool,
+    /// Checksum every record of every segment at open time.
+    ///
+    /// Off by default: startup would otherwise cost one full pass over all data
+    /// on disk. The active segment is always fully scanned regardless, and every
+    /// read verifies the records it returns, so bit rot in cold data is still
+    /// caught — just when it is read rather than at boot. Turn this on where a
+    /// slow, loud startup is preferable to a late surprise.
+    pub verify_all_on_open: bool,
 }
 
 impl Default for LogConfig {
@@ -53,6 +70,58 @@ impl Default for LogConfig {
             fsync_mode: FsyncMode::Periodic {
                 interval: Duration::from_millis(250),
             },
+            max_records_per_read: 10_000,
+            preallocate_segments: true,
+            verify_all_on_open: false,
+        }
+    }
+}
+
+impl LogConfig {
+    /// Reject configurations that cannot produce a working log.
+    ///
+    /// Called once when a log is opened rather than on the append path, so a
+    /// misconfiguration fails at startup instead of at the first publish.
+    pub fn validate(&self) -> Result<()> {
+        // A segment must have room for its header plus at least one record, or
+        // rollover would loop without ever making progress.
+        let minimum = crate::segment::SEGMENT_HEADER_LEN + crate::segment::RECORD_HEADER_LEN;
+        if self.segment_size_bytes < minimum {
+            return Err(StorageError::InvalidConfig(
+                "segment_size_bytes is too small to hold a single record",
+            ));
+        }
+        if self.index_spacing_bytes == 0 {
+            return Err(StorageError::InvalidConfig(
+                "index_spacing_bytes must be greater than zero",
+            ));
+        }
+        if self.max_records_per_read == 0 {
+            return Err(StorageError::InvalidConfig(
+                "max_records_per_read must be greater than zero",
+            ));
+        }
+        if let FsyncMode::Periodic { interval } = self.fsync_mode
+            && interval.is_zero()
+        {
+            // A zero interval is not "sync always" — it is a busy loop. Callers
+            // who want per-commit durability must say `OnCommit`.
+            return Err(StorageError::InvalidConfig(
+                "periodic fsync interval must be greater than zero",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Longest window during which an acknowledged record may not be durable.
+    ///
+    /// `None` means unbounded: with `FsyncMode::None` the log makes no promise
+    /// beyond what the operating system decides to do.
+    pub fn durability_window(&self) -> Option<Duration> {
+        match self.fsync_mode {
+            FsyncMode::None => None,
+            FsyncMode::Periodic { interval } => Some(interval),
+            FsyncMode::OnCommit => Some(Duration::ZERO),
         }
     }
 }

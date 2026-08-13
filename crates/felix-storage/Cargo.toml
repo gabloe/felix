@@ -14,7 +14,18 @@ categories = ["network-programming", "caching"]
 [dependencies]
 bytes = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 async-trait = "0.1.89"
+crc32fast = "1.5"
+metrics = "0.24"
+parking_lot = "0.12"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

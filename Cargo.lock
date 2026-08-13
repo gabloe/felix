@@ -892,6 +892,7 @@ dependencies = [
  "parking_lot",
  "serial_test",
  "slab",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -982,7 +983,13 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "crc32fast",
+ "libc",
+ "metrics",
+ "parking_lot",
+ "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
