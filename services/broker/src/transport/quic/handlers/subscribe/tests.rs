@@ -675,6 +675,9 @@ async fn lane_fanout_preserves_order_for_multiple_subscribers() -> Result<()> {
             }
             Outgoing::Message(other) => panic!("unexpected ack message: {other:?}"),
             Outgoing::CacheMessage(other) => panic!("unexpected cache ack: {other:?}"),
+            Outgoing::PublishAck { request_id, .. } => {
+                panic!("unexpected publish ack: {request_id}")
+            }
         }
     }
     subscribed.sort_unstable();

@@ -35,9 +35,9 @@ graph LR
     CM --> HM
     CM --> TTL
     
-    style CM fill:#fff3e0
-    style HM fill:#e3f2fd
-    style TTL fill:#f3e5f5
+    style CM fill:#fff3e0,stroke:#334155,color:#111827
+    style HM fill:#e3f2fd,stroke:#334155,color:#111827
+    style TTL fill:#f3e5f5,stroke:#334155,color:#111827
 ```
 
 ## Core Features

@@ -16,8 +16,8 @@ use crate::auth::AuthContext;
 use crate::timings;
 use crate::transport::quic::errors::AckEnqueueError;
 use crate::transport::quic::handlers::publish::ack::{
-    AckTimeoutState, AckWaiterMessage, EnqueuePolicy, Outgoing, handle_ack_enqueue_result,
-    send_outgoing_best_effort, send_outgoing_critical,
+    AckEncoding, AckTimeoutState, AckWaiterMessage, EnqueuePolicy, Outgoing,
+    handle_ack_enqueue_result, send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
 use crate::transport::quic::handlers::publish::{
@@ -134,6 +134,135 @@ pub(crate) async fn handle_binary_publish_batch_control(
         t_histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
     }
     Ok(())
+}
+
+/// Handle a binary publish batch that asked to be acknowledged.
+///
+/// This is the binary counterpart of the JSON acked publish path. It decodes the
+/// frame and then delegates to [`handle_publish_batch_message`] with
+/// [`AckEncoding::Binary`], so both encodings share one set of admission,
+/// authorization, overload and commit-ack semantics — the encoding only decides
+/// how the reply is framed.
+///
+/// Failures here reply with an error ack rather than tearing down the stream.
+/// Frames are length-prefixed, so a malformed *body* does not desynchronise the
+/// framing, and the client is synchronously blocked waiting for this ack: killing
+/// the stream would turn a bad request into a stalled connection.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_acked_binary_publish_batch_control(
+    broker: &Broker,
+    stream_cache: &mut StreamHandleCache,
+    stream_cache_key: &mut String,
+    publish_ctx: &PublishContext,
+    frame: &Frame,
+    auth_ctx: Option<&AuthContext>,
+    throttled: bool,
+    ack_on_commit: bool,
+    sample: bool,
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<AtomicUsize>,
+    ack_throttle_tx: &watch::Sender<bool>,
+    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &watch::Sender<bool>,
+    ack_waiters: &Arc<Semaphore>,
+    ack_waiter_tx: &mpsc::Sender<AckWaiterMessage>,
+) -> Result<()> {
+    // Read the correlation prefix before the body, so even an undecodable batch
+    // can be answered with an ack the client is able to match to its request.
+    let (request_id, ack) = match felix_wire::binary::peek_acked_publish_prefix(frame) {
+        Ok(prefix) => prefix,
+        Err(err) => {
+            // Without a request_id there is nothing to correlate, so this is a
+            // protocol violation rather than a per-request failure.
+            log_decode_error("acked_binary_publish_prefix", &anyhow!(err), frame);
+            return Err(anyhow!("malformed acked publish prefix"));
+        }
+    };
+    let reply_error = |message: String| async move {
+        handle_ack_enqueue_result(
+            send_outgoing_critical(
+                out_ack_tx,
+                out_ack_depth,
+                "felix_broker_out_ack_depth",
+                ack_throttle_tx,
+                AckEncoding::Binary.error(request_id, message),
+            )
+            .await,
+            ack_timeout_state,
+            ack_throttle_tx,
+            cancel_tx,
+        )
+        .await
+    };
+
+    let decode_start = t_now_if(sample);
+    let batch = match felix_wire::binary::decode_acked_publish_batch(frame) {
+        Ok(batch) => batch,
+        Err(err) => {
+            #[cfg(feature = "telemetry")]
+            {
+                let counters = crate::transport::quic::telemetry::frame_counters();
+                counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_frames_in_err.fetch_add(1, Ordering::Relaxed);
+                counters.pub_batches_in_err.fetch_add(1, Ordering::Relaxed);
+            }
+            log_decode_error("acked_binary_publish_batch", &anyhow!(err), frame);
+            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            reply_error("malformed publish batch".to_string()).await?;
+            return Ok(());
+        }
+    };
+    if let Some(start) = decode_start {
+        let decode_ns = start.elapsed().as_nanos() as u64;
+        timings::record_decode_ns(decode_ns);
+        t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
+    }
+
+    let batch = batch.batch;
+    let Some(auth_ctx) = auth_ctx else {
+        reply_error("auth required".to_string()).await?;
+        return Ok(());
+    };
+    if auth_ctx.tenant_id != batch.tenant_id {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        reply_error("tenant mismatch".to_string()).await?;
+        return Ok(());
+    }
+    let resource = stream_resource(
+        &TenantId::new(batch.tenant_id.as_str()),
+        &Namespace::new(batch.namespace.as_str()),
+        &StreamName::new(batch.stream.as_str()),
+    );
+    if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
+        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        reply_error("forbidden".to_string()).await?;
+        return Ok(());
+    }
+
+    handle_publish_batch_message(
+        broker,
+        publish_ctx,
+        stream_cache,
+        stream_cache_key,
+        throttled,
+        ack_on_commit,
+        AckEncoding::Binary,
+        out_ack_tx,
+        out_ack_depth,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        ack_waiters,
+        ack_waiter_tx,
+        batch.tenant_id,
+        batch.namespace,
+        batch.stream,
+        batch.payloads,
+        Some(request_id),
+        Some(ack),
+        sample,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -440,6 +569,9 @@ pub(crate) async fn handle_publish_message(
     };
     let msg = AckWaiterMessage::Publish {
         request_id,
+        // There is no binary encoding for single publishes; the binary fast path
+        // is batch-only, so this waiter always replies in JSON.
+        encoding: AckEncoding::Json,
         payload_len: payload_len_for_metrics,
         start,
         response_rx,
@@ -498,6 +630,7 @@ pub(crate) async fn handle_publish_batch_message(
     stream_cache_key: &mut String,
     throttled: bool,
     ack_on_commit: bool,
+    encoding: AckEncoding,
     out_ack_tx: &mpsc::Sender<Outgoing>,
     out_ack_depth: &Arc<AtomicUsize>,
     ack_throttle_tx: &watch::Sender<bool>,
@@ -537,10 +670,7 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: "server overloaded".to_string(),
-                    }),
+                    encoding.error(request_id, "server overloaded".to_string()),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -632,12 +762,9 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: format!(
+                    encoding.error(request_id, format!(
                             "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
-                        ),
-                    }),
+                        )),
                 )
                 .await,
                 ack_timeout_state,
@@ -698,10 +825,7 @@ pub(crate) async fn handle_publish_batch_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: "ingress overloaded".to_string(),
-                        }),
+                        encoding.error(request_id, "ingress overloaded".to_string()),
                     )
                     .await,
                     ack_timeout_state,
@@ -722,10 +846,7 @@ pub(crate) async fn handle_publish_batch_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: err.to_string(),
-                        }),
+                        encoding.error(request_id, err.to_string()),
                     )
                     .await,
                     ack_timeout_state,
@@ -752,7 +873,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishOk { request_id }),
+                encoding.ok(request_id),
             )
             .await,
             ack_timeout_state,
@@ -782,10 +903,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                encoding.error(request_id, "server overloaded".to_string()),
             )
             .await;
             t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
@@ -794,6 +912,7 @@ pub(crate) async fn handle_publish_batch_message(
     };
     let msg = AckWaiterMessage::PublishBatch {
         request_id,
+        encoding,
         payload_bytes: payload_bytes_for_metrics,
         response_rx,
         permit,
@@ -811,10 +930,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                encoding.error(request_id, "server overloaded".to_string()),
             )
             .await;
             return Ok(());
@@ -830,10 +946,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                encoding.error(request_id, "server overloaded".to_string()),
             )
             .await;
             return Ok(());

@@ -1,0 +1,10 @@
+{
+  "name": "binary_publish_ack_ok",
+  "kind": "binary_publish_ack",
+  "flags": 16,
+  "status": "ok",
+  "request_id": 7,
+  "message": null,
+  "payload_hex": "0000000000000000070000",
+  "frame_hex": "464c5831000100100000000b0000000000000000070000"
+}

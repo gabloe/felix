@@ -35,19 +35,50 @@ Every Felix message is transmitted as a **frame** consisting of a fixed-size hea
 
 ### Frame Header (12 bytes)
 
-```
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-┌───────────────────────────────┬───────────────┬───────────────┐
-│            magic              │    version    │     flags     │
-│         (4 bytes)             │   (2 bytes)   │   (2 bytes)   │
-├───────────────────────────────┴───────────────┴───────────────┤
-│                           length                              │
-│                         (4 bytes)                             │
-└───────────────────────────────────────────────────────────────┘
+<svg viewBox="0 0 660 196" role="img" aria-labelledby="fh-title fh-desc" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="fh-title">Felix v1 frame header layout</title>
+ <desc id="fh-desc">Twelve bytes in three 32-bit rows: bytes 0 to 3 are magic, bytes 4 and 5 are version, bytes 6 and 7 are flags, bytes 8 to 11 are length.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g opacity="0.65" text-anchor="middle">
+   <text x="52" y="16">0</text>
+   <text x="200" y="16">8</text>
+   <text x="348" y="16">16</text>
+   <text x="496" y="16">24</text>
+   <text x="644" y="16">31</text>
+  </g>
+  <g stroke="currentColor" opacity="0.35"><path d="M52 22v6M200 22v6M348 22v6M496 22v6M644 22v6" /></g>
+  <g opacity="0.65" text-anchor="end" font-size="12">
+   <text x="42" y="63">0</text>
+   <text x="42" y="115">4</text>
+   <text x="42" y="167">8</text>
+  </g>
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="52" y="34" width="592" height="44" rx="3" />
+   <rect x="52" y="86" width="296" height="44" rx="3" />
+   <rect x="348" y="86" width="296" height="44" rx="3" />
+   <rect x="52" y="138" width="592" height="44" rx="3" />
+  </g>
+  <g text-anchor="middle">
+   <text x="348" y="52">magic</text>
+   <text x="348" y="70" opacity="0.7" font-size="12">u32 &#183; 0x464C5831 &#8220;FLX1&#8221;</text>
+   <text x="200" y="104">version</text>
+   <text x="200" y="122" opacity="0.7" font-size="12">u16 &#183; 1</text>
+   <text x="496" y="104">flags</text>
+   <text x="496" y="122" opacity="0.7" font-size="12">u16 &#183; bit field</text>
+   <text x="348" y="156">length</text>
+   <text x="348" y="174" opacity="0.7" font-size="12">u32 &#183; payload bytes</text>
+  </g>
+ </g>
+</svg>
 
-All multi-byte integers are big-endian (network byte order)
-```
+All multi-byte integers are big-endian (network byte order).
+
+| Offset | Size | Field | Type | Value |
+| --- | --- | --- | --- | --- |
+| 0 | 4 | `magic` | u32 | `0x464C5831` (`"FLX1"`) |
+| 4 | 2 | `version` | u16 | `1` |
+| 6 | 2 | `flags` | u16 | Bit field; see below |
+| 8 | 4 | `length` | u32 | Payload length in bytes |
 
 #### Field Definitions
 
@@ -70,9 +101,17 @@ Bit field for optional features:
 | Bit | Mask   | Meaning |
 |-----|--------|---------|
 | 0   | 0x0001 | Binary publish batch encoding |
-| 1-15| -      | Reserved (must be 0 in v1) |
+| 1   | 0x0002 | Binary event batch (legacy, per-subscriber) |
+| 2   | 0x0004 | Shared binary event batch |
+| 3   | 0x0008 | Acked binary publish batch (modifier on bit 0) |
+| 4   | 0x0010 | Binary publish acknowledgement (broker → client) |
+| 5-15| -      | Reserved (must be 0) |
 
-Receivers must ignore unknown flag bits to allow forward compatibility.
+Receivers must **reject** a frame carrying a flag bit they do not recognise, rather
+than ignoring the bit. These bits select how the payload is parsed, so ignoring an
+unknown one means misparsing the body instead of failing cleanly. Bit 3 is the
+cautionary example: it prefixes the publish-batch body with a `request_id`, so a
+receiver that masked it off would read that prefix as a `tenant_len`.
 
 **length (u32, big-endian)**
 
@@ -320,45 +359,68 @@ For high-throughput publish workloads, Felix supports binary encodings that redu
 
 ### When to Use Binary Mode
 
-Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). **Unacknowledged
-publishes (`AckMode::None`) use binary encoding by default** — the Rust client's
-`Publisher::publish`/`publish_batch` methods select it automatically; call
-`publish_json`/`publish_batch_json` explicitly to opt into JSON instead (e.g.
-for debugging or a non-Rust client that hasn't implemented the binary decoder
-yet). Acknowledged publishes still use the JSON control encoding until binary
-ack framing is added.
+Binary mode is enabled by setting flag bit 0 (`flags | 0x0001`). **All client
+publishes use binary encoding by default**, acknowledged or not — the Rust client's
+`Publisher::publish`/`publish_batch` methods select it automatically. Call
+`publish_json`/`publish_batch_json` explicitly to opt into JSON instead (e.g. for
+debugging or a non-Rust client that hasn't implemented the binary decoder yet).
+
+An acknowledged publish additionally sets bit 3 (`flags | 0x0008`), which prefixes
+the batch with a `request_id` and an ack mode, and the broker replies with a binary
+ack frame (bit 4) instead of a JSON `publish_ok`/`publish_error`.
+
+:::caution[Version requirement]
+Bits 3 and 4 were added after the initial v1 release, and v1 has no capability
+negotiation. A broker that predates them matches on bit 0, does not know about the
+prefix, and misparses `request_id` as `tenant_len` — so acked binary publishes
+require a matching broker. Client and broker ship from the same workspace and are
+expected to be deployed together.
+:::
 
 :::tip[Performance Impact]
 Binary batches can achieve 30-40% higher throughput, especially with large payloads and high fanout.
 :::
 ### Binary Format Specification
 
-```
- 0               2               4
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 ...
-┌───────────────┬───────────────┬─────────────────────────────┐
-│  tenant_len   │  tenant_id    │ ...                         │
-│   (u16 BE)    │  (bytes)      │                             │
-├───────────────┼───────────────┼─────────────────────────────┤
-│ namespace_len │  namespace    │ ...                         │
-│   (u16 BE)    │  (bytes)      │                             │
-├───────────────┼───────────────┼─────────────────────────────┤
-│  stream_len   │  stream       │ ...                         │
-│   (u16 BE)    │  (bytes)      │                             │
-├───────────────┴───────────────┴─────────────────────────────┤
-│                     count (u32 BE)                          │
-├─────────────────────────────────────────────────────────────┤
-│  payload_1_len (u32 BE)                                     │
-├─────────────────────────────────────────────────────────────┤
-│  payload_1 (bytes)                                          │
-│  ...                                                        │
-├─────────────────────────────────────────────────────────────┤
-│  payload_2_len (u32 BE)                                     │
-├─────────────────────────────────────────────────────────────┤
-│  payload_2 (bytes)                                          │
-│  ...                                                        │
-└─────────────────────────────────────────────────────────────┘
-```
+<svg viewBox="0 0 660 274" role="img" aria-labelledby="bpb-t bpb-d" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="bpb-t">Binary publish batch payload layout</title>
+ <desc id="bpb-d">Sequential fields: tenant_len and tenant_id, namespace_len and namespace, stream_len and stream, a u32 count, then that many payload_len and payload pairs.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="8" y="8" width="200" height="38" rx="3" />
+   <rect x="208" y="8" width="444" height="38" rx="3" />
+   <rect x="8" y="52" width="200" height="38" rx="3" />
+   <rect x="208" y="52" width="444" height="38" rx="3" />
+   <rect x="8" y="96" width="200" height="38" rx="3" />
+   <rect x="208" y="96" width="444" height="38" rx="3" />
+   <rect x="8" y="140" width="644" height="38" rx="3" />
+   <rect x="20" y="214" width="188" height="38" rx="3" />
+   <rect x="216" y="214" width="428" height="38" rx="3" />
+   <rect x="8" y="188" width="644" height="76" rx="4" stroke-dasharray="5 4" opacity="0.55" />
+  </g>
+  <g text-anchor="middle">
+   <text x="108" y="24">tenant_len</text>
+   <text x="108" y="39" opacity="0.7" font-size="11.5">u16 BE</text>
+   <text x="430" y="24">tenant_id</text>
+   <text x="430" y="39" opacity="0.7" font-size="11.5">tenant_len bytes, UTF-8</text>
+   <text x="108" y="68">namespace_len</text>
+   <text x="108" y="83" opacity="0.7" font-size="11.5">u16 BE</text>
+   <text x="430" y="68">namespace</text>
+   <text x="430" y="83" opacity="0.7" font-size="11.5">namespace_len bytes, UTF-8</text>
+   <text x="108" y="112">stream_len</text>
+   <text x="108" y="127" opacity="0.7" font-size="11.5">u16 BE</text>
+   <text x="430" y="112">stream</text>
+   <text x="430" y="127" opacity="0.7" font-size="11.5">stream_len bytes, UTF-8</text>
+   <text x="330" y="156">count</text>
+   <text x="330" y="171" opacity="0.7" font-size="11.5">u32 BE &#183; number of payloads</text>
+   <text x="114" y="230">payload_len</text>
+   <text x="114" y="245" opacity="0.7" font-size="11.5">u32 BE</text>
+   <text x="430" y="230">payload</text>
+   <text x="430" y="245" opacity="0.7" font-size="11.5">payload_len bytes, opaque</text>
+   <text x="330" y="206" opacity="0.7" font-size="11.5">repeated count times</text>
+  </g>
+ </g>
+</svg>
 
 **Encoding steps**:
 
@@ -378,22 +440,97 @@ Binary batches can achieve 30-40% higher throughput, especially with large paylo
 - count limited to 2^32 - 1 payloads per batch
 - Each payload limited to 2^32 - 1 bytes
 
+## Acked Binary PublishBatch
+
+When `flags & 0x0008 != 0` (always set together with `0x0001`), the publish batch
+above is prefixed with a correlation header:
+
+<svg viewBox="0 0 660 98" role="img" aria-labelledby="apb-t apb-d" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="apb-t">Acked binary publish batch prefix</title>
+ <desc id="apb-d">A u64 request_id and a u8 ack mode, followed by the ordinary binary publish batch body.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="8" y="8" width="320" height="38" rx="3" />
+   <rect x="336" y="8" width="316" height="38" rx="3" />
+   <rect x="8" y="52" width="644" height="38" rx="3" />
+  </g>
+  <g text-anchor="middle">
+   <text x="168" y="24">request_id</text>
+   <text x="168" y="39" opacity="0.7" font-size="11.5">u64 BE &#183; correlation id</text>
+   <text x="494" y="24">ack_mode</text>
+   <text x="494" y="39" opacity="0.7" font-size="11.5">u8 &#183; 1 = per_message, 2 = per_batch</text>
+   <text x="330" y="68">Binary PublishBatch body</text>
+   <text x="330" y="83" opacity="0.7" font-size="11.5">exactly as specified above</text>
+  </g>
+ </g>
+</svg>
+
+The prefix comes first so a receiver can read `request_id` without parsing the rest
+of the frame. That is what lets the broker answer a malformed body with an error the
+client can still match to its pending request, instead of leaving it blocked until
+timeout.
+
+`ack_mode` has no encoding for "none": an unacknowledged publish uses the plain
+`0x0001` frame with no prefix, so every mode has exactly one wire representation.
+
+## Binary PublishAck
+
+The response to an acked binary publish, sent when `flags & 0x0010 != 0`:
+
+<svg viewBox="0 0 660 98" role="img" aria-labelledby="pak-t pak-d" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="pak-t">Binary publish ack layout</title>
+ <desc id="pak-d">A u8 status, a u64 request_id, a u16 message length, then that many bytes of UTF-8 error text.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="8" y="8" width="200" height="38" rx="3" />
+   <rect x="216" y="8" width="252" height="38" rx="3" />
+   <rect x="476" y="8" width="176" height="38" rx="3" />
+   <rect x="8" y="52" width="644" height="38" rx="3" />
+  </g>
+  <g text-anchor="middle">
+   <text x="108" y="24">status</text>
+   <text x="108" y="39" opacity="0.7" font-size="11.5">u8 &#183; 0 = ok, 1 = error</text>
+   <text x="342" y="24">request_id</text>
+   <text x="342" y="39" opacity="0.7" font-size="11.5">u64 BE</text>
+   <text x="564" y="24">message_len</text>
+   <text x="564" y="39" opacity="0.7" font-size="11.5">u16 BE</text>
+   <text x="330" y="68">message</text>
+   <text x="330" y="83" opacity="0.7" font-size="11.5">message_len bytes, UTF-8 &#183; empty when ok</text>
+  </g>
+ </g>
+</svg>
+
+It carries exactly the information the JSON `publish_ok` / `publish_error` messages
+do. A client that published with the JSON encoding still receives those JSON
+messages instead — the reply always matches the encoding of the request.
+
 ## Shared Binary EventBatch Encoding
 
 Subscriber event delivery is always binary in practice. When `flags & 0x0004
 != 0`, the event-stream frame carries a **shared** batch: it omits the
 per-subscriber `subscription_id` entirely.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     count (u32 BE)                          │
-├─────────────────────────────────────────────────────────────┤
-│  payload_1_len (u32 BE)                                     │
-├─────────────────────────────────────────────────────────────┤
-│  payload_1 (bytes)                                          │
-│  ...                                                        │
-└─────────────────────────────────────────────────────────────┘
-```
+<svg viewBox="0 0 660 144" role="img" aria-labelledby="seb-t seb-d" style="max-width:100%;height:auto;color:var(--sl-color-text)">
+ <title id="seb-t">Shared binary event batch payload layout</title>
+ <desc id="seb-d">A u32 count followed by that many payload_len and payload pairs. No subscription id is present.</desc>
+ <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="currentColor">
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+   <rect x="8" y="8" width="644" height="38" rx="3" />
+   <rect x="20" y="84" width="188" height="38" rx="3" />
+   <rect x="216" y="84" width="428" height="38" rx="3" />
+   <rect x="8" y="58" width="644" height="76" rx="4" stroke-dasharray="5 4" opacity="0.55" />
+  </g>
+  <g text-anchor="middle">
+   <text x="330" y="24">count</text>
+   <text x="330" y="39" opacity="0.7" font-size="11.5">u32 BE &#183; number of payloads</text>
+   <text x="114" y="100">payload_len</text>
+   <text x="114" y="115" opacity="0.7" font-size="11.5">u32 BE</text>
+   <text x="430" y="100">payload</text>
+   <text x="430" y="115" opacity="0.7" font-size="11.5">payload_len bytes, opaque</text>
+   <text x="330" y="76" opacity="0.7" font-size="11.5">repeated count times</text>
+  </g>
+ </g>
+</svg>
 
 **Why no subscription id in the frame**: the subscription is already bound to
 its uni-directional event stream by the `EventStreamHello` frame sent when

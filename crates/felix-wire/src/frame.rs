@@ -9,6 +9,34 @@ pub const VERSION: u16 = 1;
 pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
 pub const FLAG_BINARY_EVENT_BATCH: u16 = 0x0002;
 pub const FLAG_BINARY_EVENT_BATCH_SHARED: u16 = 0x0004;
+/// Modifier on `FLAG_BINARY_PUBLISH_BATCH`: the payload is prefixed with a
+/// `request_id` and an ack mode, and the broker owes the client an ack frame.
+/// Never meaningful on its own — see [`crate::binary::decode_acked_publish_batch`].
+pub const FLAG_BINARY_PUBLISH_ACKED: u16 = 0x0008;
+/// Broker → client acknowledgement of an acked publish, replacing the JSON
+/// `PublishOk`/`PublishError` messages on the binary path.
+pub const FLAG_BINARY_PUBLISH_ACK: u16 = 0x0010;
+
+/// Every flag bit this version understands.
+///
+/// Frames carrying bits outside this mask are rejected rather than parsed with
+/// the unknown bits ignored. That distinction matters: flag bits here change how
+/// the *payload* is laid out, so silently ignoring one means confidently
+/// misparsing the body. `FLAG_BINARY_PUBLISH_ACKED` is exactly that case — an
+/// older broker that masked it off would read the new `request_id` prefix as a
+/// `tenant_len` and produce garbage instead of an error. Rejecting unknown bits
+/// cannot help those older brokers, but it means the next extension fails loudly
+/// on this version instead of repeating the same trap.
+pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
+    | FLAG_BINARY_EVENT_BATCH
+    | FLAG_BINARY_EVENT_BATCH_SHARED
+    | FLAG_BINARY_PUBLISH_ACKED
+    | FLAG_BINARY_PUBLISH_ACK;
+
+/// True if `flags` contains any bit this version does not define.
+pub fn has_unknown_flags(flags: u16) -> bool {
+    flags & !KNOWN_FLAGS != 0
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameHeader {

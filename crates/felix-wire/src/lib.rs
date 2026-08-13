@@ -26,8 +26,9 @@ pub mod text;
 
 pub use error::{Error, Result};
 pub use frame::{
-    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_BATCH, Frame,
-    FrameHeader, MAGIC, VERSION,
+    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, Frame, FrameHeader, KNOWN_FLAGS, MAGIC,
+    VERSION, has_unknown_flags,
 };
 pub use message::{AckMode, Message};
 

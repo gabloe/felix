@@ -32,6 +32,6 @@ pub(crate) static DECODE_ERROR_LOGS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "telemetry")]
 pub(crate) const DECODE_ERROR_LOG_LIMIT: usize = 20;
 
-pub use codec::{read_message_limited, write_message};
+pub use codec::{read_frame_limited_into, read_message_limited, write_message};
 pub use conn::{serve, serve_with_shutdown};
 pub use telemetry::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};

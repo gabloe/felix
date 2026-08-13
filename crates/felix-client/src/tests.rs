@@ -281,7 +281,23 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                     }
                 }
                 loop {
-                    let next = read_message(&mut recv, &mut frame_scratch).await?;
+                    // Read at frame level: acked publishes now default to the binary
+                    // encoding, which is not a JSON `Message` at all, so this stub has
+                    // to branch on the flags exactly as the real broker does.
+                    let Some(frame) = read_frame_into(&mut recv, &mut frame_scratch, false).await?
+                    else {
+                        break;
+                    };
+                    if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0 {
+                        let batch = felix_wire::binary::decode_acked_publish_batch(&frame)?;
+                        send.write_all(&felix_wire::binary::encode_publish_ack_bytes(
+                            batch.request_id,
+                            None,
+                        )?)
+                        .await?;
+                        continue;
+                    }
+                    let next = Some(Message::decode(frame)?);
                     match next {
                         Some(Message::Publish {
                             request_id: Some(id),

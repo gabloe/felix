@@ -170,10 +170,10 @@ graph TB
     CONTROLPLANE1 -->|metadata sync| Brokers
     Clients -->|Admin API| CONTROLPLANE1
     
-    style CONTROLPLANE1 fill:#ffeb3b
-    style CONTROLPLANE2 fill:#e3f2fd
-    style CONTROLPLANE3 fill:#e3f2fd
-    style Brokers fill:#c8e6c9
+    style CONTROLPLANE1 fill:#ffeb3b,stroke:#334155,color:#111827
+    style CONTROLPLANE2 fill:#e3f2fd,stroke:#334155,color:#111827
+    style CONTROLPLANE3 fill:#e3f2fd,stroke:#334155,color:#111827
+    style Brokers fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 ### Design Goals

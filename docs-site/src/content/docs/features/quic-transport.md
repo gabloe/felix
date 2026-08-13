@@ -54,12 +54,12 @@ graph LR
         Loss2[Packet Loss] -->|blocks only| Q2
     end
     
-    style S1 fill:#ffccbc
-    style S2 fill:#ffccbc
-    style S3 fill:#ffccbc
-    style Q1 fill:#c8e6c9
-    style Q2 fill:#ffccbc
-    style Q3 fill:#c8e6c9
+    style S1 fill:#ffccbc,stroke:#334155,color:#111827
+    style S2 fill:#ffccbc,stroke:#334155,color:#111827
+    style S3 fill:#ffccbc,stroke:#334155,color:#111827
+    style Q1 fill:#c8e6c9,stroke:#334155,color:#111827
+    style Q2 fill:#ffccbc,stroke:#334155,color:#111827
+    style Q3 fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
 **Felix benefit**: Slow subscribers on one stream don't impact other subscribers' event delivery.

@@ -22,9 +22,61 @@ use crate::transport::quic::{
 /// - `Message`: normal control responses (PublishOk/Error, SubscribeOk, etc.).
 /// - `CacheMessage`: cache fast-path replies that may be encoded differently or routed
 ///   separately from general control responses (depending on the writer implementation).
+/// - `PublishAck`: binary acknowledgement for a publish that arrived on the binary
+///   acked path. Kept as a distinct variant rather than reusing `Message` because
+///   the reply encoding has to match the request encoding — a client that sent a
+///   `FLAG_BINARY_PUBLISH_ACKED` frame is reading a binary ack frame, not JSON.
 pub(crate) enum Outgoing {
     Message(Message),
     CacheMessage(Message),
+    PublishAck {
+        request_id: u64,
+        /// `None` acknowledges success; `Some` reports failure.
+        error: Option<String>,
+    },
+}
+
+/// Which encoding a pending ack must be answered in.
+///
+/// The reply has to match the request. A client that sent a JSON `PublishBatch`
+/// is blocked reading a JSON `PublishOk`; a client that sent a binary
+/// `FLAG_BINARY_PUBLISH_ACKED` frame is blocked reading a binary ack frame.
+/// Answering in the wrong one strands the client on a frame it cannot parse,
+/// which is why this is carried all the way to the emit site rather than decided
+/// there — the commit-ack path emits from the ack-waiter task, long after the
+/// request frame itself is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AckEncoding {
+    Json,
+    Binary,
+}
+
+impl AckEncoding {
+    /// Build a success ack in this encoding.
+    pub(crate) fn ok(self, request_id: u64) -> Outgoing {
+        match self {
+            AckEncoding::Json => Outgoing::Message(Message::PublishOk { request_id }),
+            AckEncoding::Binary => Outgoing::PublishAck {
+                request_id,
+                error: None,
+            },
+        }
+    }
+
+    /// Build a failure ack in this encoding.
+    pub(crate) fn error(self, request_id: u64, message: impl Into<String>) -> Outgoing {
+        let message = message.into();
+        match self {
+            AckEncoding::Json => Outgoing::Message(Message::PublishError {
+                request_id,
+                message,
+            }),
+            AckEncoding::Binary => Outgoing::PublishAck {
+                request_id,
+                error: Some(message),
+            },
+        }
+    }
 }
 
 /// Admission policy when the ingress publish queue is full.
@@ -46,21 +98,25 @@ pub(crate) enum EnqueuePolicy {
 pub(crate) enum AckWaiterResult {
     Publish {
         request_id: u64,
+        encoding: AckEncoding,
         payload_len: u64,
         start: crate::transport::quic::telemetry::TelemetryInstant,
         response: Result<Result<()>, oneshot::error::RecvError>,
     },
     PublishTimeout {
         request_id: u64,
+        encoding: AckEncoding,
         start: crate::transport::quic::telemetry::TelemetryInstant,
     },
     PublishBatch {
         request_id: u64,
+        encoding: AckEncoding,
         payload_bytes: Vec<usize>,
         response: Result<Result<()>, oneshot::error::RecvError>,
     },
     PublishBatchTimeout {
         request_id: u64,
+        encoding: AckEncoding,
         payload_bytes: Vec<usize>,
     },
 }
@@ -72,6 +128,7 @@ pub(crate) enum AckWaiterResult {
 pub(crate) enum AckWaiterMessage {
     Publish {
         request_id: u64,
+        encoding: AckEncoding,
         payload_len: u64,
         start: crate::transport::quic::telemetry::TelemetryInstant,
         response_rx: oneshot::Receiver<Result<()>>,
@@ -79,6 +136,7 @@ pub(crate) enum AckWaiterMessage {
     },
     PublishBatch {
         request_id: u64,
+        encoding: AckEncoding,
         payload_bytes: Vec<usize>,
         response_rx: oneshot::Receiver<Result<()>>,
         permit: tokio::sync::OwnedSemaphorePermit,

@@ -42,7 +42,7 @@ graph TB
     A -->|Encrypt| E
     E -->|Protected| P
     
-    style E fill:#ffeb3b
+    style E fill:#ffeb3b,stroke:#334155,color:#111827
 ```
 
 ### TLS Configuration
@@ -408,9 +408,9 @@ graph LR
     MK -->|Encrypts| DEK
     DEK -->|Encrypts| Data
     
-    style MK fill:#ffeb3b
-    style DEK fill:#fff3e0
-    style Data fill:#e3f2fd
+    style MK fill:#ffeb3b,stroke:#334155,color:#111827
+    style DEK fill:#fff3e0,stroke:#334155,color:#111827
+    style Data fill:#e3f2fd,stroke:#334155,color:#111827
 ```
 
 **Benefits**:

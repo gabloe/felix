@@ -5,9 +5,10 @@
 
 use crate::error::{Error, Result};
 use crate::frame::{
-    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_BATCH, Frame,
-    FrameHeader,
+    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, Frame, FrameHeader,
 };
+use crate::message::AckMode;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::de::Error as SerdeError;
 
@@ -253,6 +254,180 @@ pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
         stream,
         payloads,
     })
+}
+
+// --- Acked publish batch -------------------------------------------------
+//
+// The unacked binary publish frame has no room for a request id, which is why
+// acked publishes were stuck on the JSON control encoding. An acked frame sets
+// FLAG_BINARY_PUBLISH_ACKED alongside FLAG_BINARY_PUBLISH_BATCH and prefixes the
+// ordinary publish-batch body with:
+//
+//   u64 request_id
+//   u8  ack_mode      (1 = PerMessage, 2 = PerBatch)
+//
+// The prefix goes first so a decoder can read the correlation id without parsing
+// the rest of the frame — that is what lets the broker answer with an error
+// carrying the right request_id even when the body turns out to be malformed.
+//
+// AckMode::None is deliberately not representable here: an unacked publish uses
+// the plain FLAG_BINARY_PUBLISH_BATCH encoding with no prefix at all, so there is
+// exactly one encoding per mode rather than two ways to say "no ack".
+const ACK_MODE_PER_MESSAGE: u8 = 1;
+const ACK_MODE_PER_BATCH: u8 = 2;
+// u64 request_id + u8 ack_mode.
+const ACKED_PREFIX_LEN: usize = 9;
+
+fn ack_mode_to_wire(ack: AckMode) -> Result<u8> {
+    match ack {
+        AckMode::PerMessage => Ok(ACK_MODE_PER_MESSAGE),
+        AckMode::PerBatch => Ok(ACK_MODE_PER_BATCH),
+        // Callers must route AckMode::None to `encode_publish_batch`.
+        AckMode::None => Err(Error::Deserialize(SerdeError::custom(
+            "AckMode::None has no acked binary encoding",
+        ))),
+    }
+}
+
+fn ack_mode_from_wire(byte: u8) -> Result<AckMode> {
+    match byte {
+        ACK_MODE_PER_MESSAGE => Ok(AckMode::PerMessage),
+        ACK_MODE_PER_BATCH => Ok(AckMode::PerBatch),
+        _ => Err(Error::Deserialize(SerdeError::custom("invalid ack mode"))),
+    }
+}
+
+/// A binary publish batch that asked to be acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AckedPublishBatch {
+    pub request_id: u64,
+    pub ack: AckMode,
+    pub batch: PublishBatch,
+}
+
+/// Encode an acked publish batch into a full framed buffer (header included).
+pub fn encode_acked_publish_batch_bytes(
+    request_id: u64,
+    ack: AckMode,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Bytes> {
+    let ack_byte = ack_mode_to_wire(ack)?;
+    // Reuse the unacked body encoder rather than duplicating its bounds checks,
+    // then splice the prefix in front and restate the header with both flags.
+    let body = encode_publish_batch(tenant_id, namespace, stream, payloads)?.payload;
+    let payload_len = ACKED_PREFIX_LEN
+        .checked_add(body.len())
+        .ok_or(Error::FrameTooLarge)?;
+    if payload_len > u32::MAX as usize {
+        return Err(Error::FrameTooLarge);
+    }
+    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+    FrameHeader::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        payload_len as u32,
+    )
+    .encode(&mut buf);
+    buf.put_u64(request_id);
+    buf.put_u8(ack_byte);
+    buf.extend_from_slice(&body);
+    Ok(buf.freeze())
+}
+
+/// Read only the correlation prefix, without decoding the batch body.
+///
+/// The broker needs this to answer a malformed acked publish with a
+/// `PublishError` the client can actually match to its pending request. Without
+/// it a body-level decode failure would leave the client blocked until timeout.
+pub fn peek_acked_publish_prefix(frame: &Frame) -> Result<(u64, AckMode)> {
+    let mut buf = frame.payload.clone();
+    if buf.remaining() < ACKED_PREFIX_LEN {
+        return Err(Error::Incomplete);
+    }
+    let request_id = buf.get_u64();
+    let ack = ack_mode_from_wire(buf.get_u8())?;
+    Ok((request_id, ack))
+}
+
+/// Decode an acked binary publish batch frame.
+pub fn decode_acked_publish_batch(frame: &Frame) -> Result<AckedPublishBatch> {
+    let (request_id, ack) = peek_acked_publish_prefix(frame)?;
+    // Re-frame the remainder as a plain publish batch so both encodings share one
+    // body parser, and with it one set of bounds checks.
+    let body = Frame {
+        header: FrameHeader::new(
+            FLAG_BINARY_PUBLISH_BATCH,
+            (frame.payload.len() - ACKED_PREFIX_LEN) as u32,
+        ),
+        payload: frame.payload.slice(ACKED_PREFIX_LEN..),
+    };
+    Ok(AckedPublishBatch {
+        request_id,
+        ack,
+        batch: decode_publish_batch(&body)?,
+    })
+}
+
+// --- Publish ack response ------------------------------------------------
+//
+//   u8  status        (0 = ok, 1 = error)
+//   u64 request_id
+//   u16 message_len   (0 when status = ok)
+//   u8[message_len] message
+const ACK_STATUS_OK: u8 = 0;
+const ACK_STATUS_ERROR: u8 = 1;
+
+/// Broker → client acknowledgement for an acked binary publish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishAck {
+    pub request_id: u64,
+    /// `None` on success, `Some(message)` when the publish failed.
+    pub error: Option<String>,
+}
+
+/// Encode a publish ack into a full framed buffer (header included).
+pub fn encode_publish_ack_bytes(request_id: u64, error: Option<&str>) -> Result<Bytes> {
+    let message = error.unwrap_or("");
+    let message_bytes = message.as_bytes();
+    let message_len = u16::try_from(message_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+    let payload_len = 1 + 8 + 2 + message_bytes.len();
+    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+    FrameHeader::new(FLAG_BINARY_PUBLISH_ACK, payload_len as u32).encode(&mut buf);
+    buf.put_u8(if error.is_some() {
+        ACK_STATUS_ERROR
+    } else {
+        ACK_STATUS_OK
+    });
+    buf.put_u64(request_id);
+    buf.put_u16(message_len);
+    buf.extend_from_slice(message_bytes);
+    Ok(buf.freeze())
+}
+
+/// Decode a publish ack frame.
+pub fn decode_publish_ack(frame: &Frame) -> Result<PublishAck> {
+    let mut buf = frame.payload.clone();
+    if buf.remaining() < 11 {
+        return Err(Error::Incomplete);
+    }
+    let status = buf.get_u8();
+    let request_id = buf.get_u64();
+    let message_len = buf.get_u16() as usize;
+    if buf.remaining() < message_len {
+        return Err(Error::Incomplete);
+    }
+    let message_bytes = buf.copy_to_bytes(message_len);
+    let error = match status {
+        ACK_STATUS_OK => None,
+        ACK_STATUS_ERROR => Some(
+            String::from_utf8(message_bytes.to_vec())
+                .map_err(|_| Error::Deserialize(SerdeError::custom("invalid ack message")))?,
+        ),
+        _ => return Err(Error::Deserialize(SerdeError::custom("invalid ack status"))),
+    };
+    Ok(PublishAck { request_id, error })
 }
 
 // Parsed representation of a binary event batch frame.

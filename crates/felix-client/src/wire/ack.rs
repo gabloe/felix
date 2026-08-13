@@ -32,7 +32,24 @@ pub(crate) async fn read_ack_message_with_timing(
     }
     #[cfg(feature = "telemetry")]
     let decode_start = crate::t_now_if(sample);
-    let message = Message::decode(frame).context("decode message")?;
+    // A binary ack carries exactly the information `PublishOk`/`PublishError` do,
+    // so normalise it into those variants here. Everything downstream — the
+    // request_id correlation, the error mapping, the counters — then has a single
+    // path regardless of which encoding the publish went out in.
+    let message = if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACK != 0 {
+        let ack = felix_wire::binary::decode_publish_ack(&frame).context("decode publish ack")?;
+        match ack.error {
+            None => Message::PublishOk {
+                request_id: ack.request_id,
+            },
+            Some(message) => Message::PublishError {
+                request_id: ack.request_id,
+                message,
+            },
+        }
+    } else {
+        Message::decode(frame).context("decode message")?
+    };
     #[cfg(feature = "telemetry")]
     if let Some(start) = decode_start {
         let decode_ns = start.elapsed().as_nanos() as u64;

@@ -49,10 +49,12 @@ pub(crate) use ack::{
 };
 pub(crate) use admission::{PublishAdmission, SubscriptionLimiter};
 
+pub(crate) use ack::AckEncoding;
 use ack::EnqueuePolicy;
 use admission::AdmissionPermit;
 pub(crate) use control::{
-    handle_binary_publish_batch_control, handle_publish_batch_message, handle_publish_message,
+    handle_acked_binary_publish_batch_control, handle_binary_publish_batch_control,
+    handle_publish_batch_message, handle_publish_message,
 };
 pub(crate) use ingress::{PublishTarget, decrement_depth, reset_local_depth_only};
 pub(crate) use uni::{

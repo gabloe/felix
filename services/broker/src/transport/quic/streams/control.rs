@@ -50,9 +50,10 @@ use crate::config::BrokerConfig;
 use crate::timings;
 use crate::transport::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::transport::quic::handlers::publish::{
-    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
-    handle_ack_enqueue_result, handle_binary_publish_batch_control, handle_publish_batch_message,
-    handle_publish_message, send_outgoing_best_effort, send_outgoing_critical,
+    AckEncoding, AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
+    handle_ack_enqueue_result, handle_acked_binary_publish_batch_control,
+    handle_binary_publish_batch_control, handle_publish_batch_message, handle_publish_message,
+    send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::transport::quic::handlers::subscribe::handle_subscribe_message;
 use crate::transport::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
@@ -136,8 +137,30 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             }
         };
         let read_ns = read_start.map(|start| start.elapsed().as_nanos() as u64);
+        // Flag bits select the payload layout, so an unrecognised bit means we do
+        // not know how to parse the body. Reject rather than mask it off and
+        // misparse — see `felix_wire::KNOWN_FLAGS`.
+        //
+        // This is a per-frame error, not a stream-fatal one: the frame reader has
+        // already consumed exactly `header.length` bytes, so the stream is sitting
+        // on the next frame boundary and stays parseable. Answering and continuing
+        // means the peer actually receives the diagnostic — tearing the stream down
+        // here would race the writer task and usually deliver EOF instead.
+        if felix_wire::has_unknown_flags(frame.header.flags) {
+            send_control_error(
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "unsupported frame flags",
+            )
+            .await?;
+            continue;
+        }
         // Fast-path: binary publish batch frames avoid JSON decode/allocations.
         if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
+            let acked = frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0;
             if auth_ctx.is_none() {
                 send_control_error(
                     &out_ack_tx,
@@ -150,16 +173,38 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 .await?;
                 return Ok(false);
             }
-            handle_binary_publish_batch_control(
-                &broker,
-                &mut stream_cache,
-                &mut stream_cache_key,
-                &publish_ctx,
-                &frame,
-                auth_ctx.as_ref(),
-                sample,
-            )
-            .await?;
+            if acked {
+                handle_acked_binary_publish_batch_control(
+                    &broker,
+                    &mut stream_cache,
+                    &mut stream_cache_key,
+                    &publish_ctx,
+                    &frame,
+                    auth_ctx.as_ref(),
+                    throttled,
+                    config.ack_on_commit,
+                    sample,
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    &ack_waiters,
+                    &ack_waiter_tx,
+                )
+                .await?;
+            } else {
+                handle_binary_publish_batch_control(
+                    &broker,
+                    &mut stream_cache,
+                    &mut stream_cache_key,
+                    &publish_ctx,
+                    &frame,
+                    auth_ctx.as_ref(),
+                    sample,
+                )
+                .await?;
+            }
             continue;
         }
         // Slow-path: decode JSON control message. Decode errors are considered fatal protocol
@@ -305,6 +350,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &mut stream_cache_key,
                     throttled,
                     config.ack_on_commit,
+                    AckEncoding::Json,
                     &out_ack_tx,
                     &out_ack_depth,
                     &ack_throttle_tx,
