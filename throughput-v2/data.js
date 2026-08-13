@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786578212367,
+  "lastUpdate": 1786580715758,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1144,6 +1144,58 @@ window.BENCHMARK_DATA = {
             "range": "24079.64",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 543262.79\nmean: 543425.07\nstdev: 24079.64\ncv: 4.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84be3d1e2515e704ec12c26d7be118435744b015",
+          "message": "Migrate from mkdocs to Astro Starlight (#165)\n\n* Migrate from mkdocs to Astro\n\n* Migrate from mkdocs to Astro",
+          "timestamp": "2026-08-12T17:23:36-07:00",
+          "tree_id": "209a2d806d6e29c2d5fd8a9a07acfeb18e200116",
+          "url": "https://github.com/gabloe/felix/commit/84be3d1e2515e704ec12c26d7be118435744b015"
+        },
+        "date": 1786580714740,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 221640.69,
+            "range": "21640.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 221640.69\nmean: 227922.43\nstdev: 21640.94\ncv: 9.49%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 221640.69,
+            "range": "21640.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 221640.69\nmean: 227922.43\nstdev: 21640.94\ncv: 9.49%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 71675.38,
+            "range": "4207.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 71675.38\nmean: 72504.48\nstdev: 4207.38\ncv: 5.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 716753.75,
+            "range": "42073.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 716753.75\nmean: 725044.79\nstdev: 42073.81\ncv: 5.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
