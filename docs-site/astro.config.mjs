@@ -19,12 +19,22 @@ export default defineConfig({
       customCss: [
         '@fontsource-variable/inter',
         '@fontsource-variable/jetbrains-mono',
+        // Only the one weight/style the site title uses, so this costs a single
+        // small file rather than the whole family.
+        '@fontsource/lobster-two/700-italic.css',
         './src/styles/custom.css',
       ],
       title: 'Felix',
       description: 'Low-latency QUIC-based pub/sub and distributed cache system',
+      // The header renders the logo at ~32px. The full logo — ringed badge, whole
+      // cat, and the "Felix" script inside it — carries far too much detail to
+      // survive that, and the script is redundant anyway because the site title
+      // renders as text right beside it. `logo-mark.png` is a derived mark: the
+      // cat's head alone, in the same circular badge, so it stays recognisably
+      // the Felix logo while actually reading at header size. The full logo is
+      // still used for the landing-page hero, where it has room.
       logo: {
-        src: './src/assets/logo.png',
+        src: './src/assets/logo-mark.png',
         alt: 'Felix',
       },
       favicon: '/logo.png',
