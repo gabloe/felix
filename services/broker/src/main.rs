@@ -34,8 +34,8 @@ mod observability;
 mod test_support;
 
 use anyhow::{Context, Result};
-use broker::{auth::BrokerAuth, config, quic};
-use felix_broker::Broker;
+use broker::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
+use felix_broker::{Broker, DurableStorage};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -96,13 +96,34 @@ where
     // Configuration is resolved from environment variables (and optionally a YAML file).
     // Keep this early so the remainder of startup is entirely driven by `config`.
 
-    // Start an in-process broker.
-    // For the MVP we use an in-memory cache backend; production will typically select a
-    // durable/clustered backend via configuration.
+    // Start an in-process broker. The cache backend is in-memory; stream
+    // durability is separate and opt-in via `FELIX_DURABLE_STORAGE_DIR`.
     let broker = Broker::new(EphemeralCache::new().into())
         .with_topic_capacity(config.subscriber_queue_capacity.max(1))
         .context("configure subscriber queue depth")?
         .with_subscriber_queue_policy(config.subscriber_queue_policy);
+
+    // Durable storage is opened before the listener binds: recovering segments
+    // can take time and can fail, and both are better surfaced as a startup
+    // error than as a failed publish once traffic is arriving.
+    let durable_storage = match DurableStorageConfig::from_env()? {
+        Some(durable) => {
+            tracing::info!(config = %durable.summary(), "opening durable stream storage");
+            let storage = DurableStorage::open(&durable.root, durable.log.clone())
+                .with_context(|| format!("open durable storage at {}", durable.root.display()))?;
+            Some(storage)
+        }
+        None => {
+            tracing::info!(
+                "durable stream storage disabled (set FELIX_DURABLE_STORAGE_DIR to enable)"
+            );
+            None
+        }
+    };
+    let broker = match durable_storage.clone() {
+        Some(storage) => broker.with_durable_storage(storage),
+        None => broker,
+    };
     tracing::info!("broker started");
     let controlplane_url = config
         .controlplane_url
@@ -238,6 +259,20 @@ where
         {
             task.abort();
         }
+    }
+
+    // Step 3b: flush durable logs while the drain deadline still applies.
+    // Publishes have stopped by now, so this is the last chance to push
+    // page-cache bytes to the device — under `Periodic` it is the difference
+    // between losing up to one interval of writes and losing nothing.
+    if let Some(storage) = &durable_storage {
+        budget
+            .drain("durable_storage_flush", async {
+                if let Err(err) = storage.shutdown().await {
+                    tracing::error!(error = %err, "failed to flush durable storage on shutdown");
+                }
+            })
+            .await;
     }
 
     // Step 4: metrics last, so `/ready` keeps reporting "draining" and `/metrics`
