@@ -154,14 +154,22 @@ When backpressure triggers:
 - Data lost on broker restart
 - Suitable for real-time data, metrics, logs
 
-**Durable streams** (planned):
-- WAL + segmented log on persistent storage
-- Survive restarts
-- Replay capability
-- Higher latency (disk writes)
+**Durable streams** (`durable: true`):
+- Segmented, checksummed append-only log on persistent storage
+- Survive restarts, including an abrupt kill
+- Replay from disk by offset
+- Higher latency when `fsync_mode` is `on_commit` (one device flush per commit,
+  amortised across concurrent publishers by group commit); effectively free
+  under `periodic`
 - Suitable for business events, audit logs
 
-Currently, Felix MVP supports **ephemeral only**. Durability is planned.
+Both are available today. Durable storage is opt-in per stream and requires the
+broker to be started with `FELIX_DURABLE_STORAGE_DIR`; without it, a stream
+marked durable is rejected rather than silently downgraded.
+
+Retention and tiered storage are **not** implemented yet: nothing deletes
+segments on age or size. See
+[Durable Storage](/felix/architecture/durable-storage/).
 
 ### How does clustering work?
 

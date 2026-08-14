@@ -35,7 +35,9 @@ Messages can be lost when:
 - Subscriber falls behind buffer capacity
 - Network partition between broker and subscriber
 - Subscriber disconnects without draining buffer
-- Broker restarts (no durability in MVP)
+- Broker restarts — for **ephemeral** streams. A stream registered with
+  `durable: true` persists each record before acknowledging it, and replays it
+  after a restart; see [Durable Storage](/felix/architecture/durable-storage/).
 :::
 **Example at-most-once workload**:
 

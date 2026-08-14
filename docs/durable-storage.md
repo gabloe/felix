@@ -116,6 +116,22 @@ sequenceDiagram
     B-->>C: ack
 ```
 
+### One order, not three
+
+Offsets are assigned under the segment lock, but the fsync wait happens after it
+is released — so two concurrent publishes can resume from a shared group-commit
+flush in either order. Left alone, the log on disk could read `A, B` while a
+cursor replay and a live subscriber both saw `B, A`.
+
+A per-stream commit sequencer closes that gap. After its durable append, each
+publisher waits until every lower offset has been applied, then appends to the
+replay ring and fans out before releasing the next in line. Disk order is the
+single source of truth for cursor order and delivery order alike.
+
+This deliberately does not serialise the durable append: offsets are still
+assigned concurrently and flushes are still shared, so group commit keeps its
+fan-in. Only the cheap post-flush half is ordered.
+
 The append happens **before** fanout and **before** the acknowledgement. The
 alternative is unrecoverable: a record delivered to subscribers and acknowledged
 to the publisher but lost in a crash is a silent hole in a log that consumers
@@ -260,9 +276,18 @@ flowchart TD
 
 Four properties:
 
-1. **A torn tail is repaired.** A crash mid-append leaves a partial record at the
-   end of the newest segment. It was never acknowledged under any policy, so it
-   is truncated away.
+1. **A provably incomplete tail is repaired.** A crash mid-append leaves a
+   partial record at the end of the newest segment — one cut short by end of
+   file, or claiming a length that could not fit. Nothing could have
+   acknowledged a record that was never finished, so it is truncated away.
+
+   A *complete* trailing record that fails its checksum is a different case and
+   is **not** repaired by default. A torn write and bit rot on an already
+   acknowledged record produce identical bytes, and under `OnCommit` that record
+   may have been fsynced and acknowledged before rotting. Recovery refuses to
+   guess: it fails to start, naming the segment and position.
+   `repair_checksum_tail` opts in to truncating it, which is defensible under
+   `FsyncMode::None` and is not under `OnCommit`.
 2. **Committed data is never silently discarded.** Corruption anywhere else is a
    startup error naming the shard, segment and byte position. Refusing to start
    is better than losing acknowledged records quietly.
@@ -295,6 +320,11 @@ in-memory only, and a stream the control plane marks `durable: true` is **reject
 at registration** rather than silently downgraded to a guarantee the broker
 cannot keep.
 
+Durability is immutable while a stream is registered. Remove and recreate a
+stream to change it between ephemeral and durable; this explicitly invalidates
+old handles and prevents durable offsets from diverging from existing in-memory
+cursors.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FELIX_DURABLE_STORAGE_DIR` | unset | Root directory; setting it enables durable streams |
@@ -305,6 +335,7 @@ cannot keep.
 | `FELIX_DURABLE_MAX_RECORDS_PER_READ` | `10000` | Record cap on one range read |
 | `FELIX_DURABLE_PREALLOCATE` | `true` | Reserve segment blocks at creation |
 | `FELIX_DURABLE_VERIFY_ALL_ON_OPEN` | `false` | Checksum every segment at startup |
+| `FELIX_DURABLE_REPAIR_CHECKSUM_TAIL` | `false` | Truncate a complete trailing record that fails its checksum (see below) |
 
 Invalid combinations fail at startup, not at the first publish.
 

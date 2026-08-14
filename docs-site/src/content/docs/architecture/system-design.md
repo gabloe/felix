@@ -240,7 +240,11 @@ sequenceDiagram
 
 ## Storage Architecture
 
-### Ephemeral (Current MVP)
+Storage is selected per stream. A stream registered with `durable: false` — the
+default — behaves exactly as it always has; `durable: true` writes every publish
+to disk before it is fanned out or acknowledged.
+
+### Ephemeral (default)
 
 - **In-memory only:** No disk writes on hot path
 - **Bounded buffers:** Ring buffers with fixed capacity
@@ -254,18 +258,26 @@ sequenceDiagram
 - Temporary caching
 - Non-critical event streams
 
-### Durable (Planned)
+### Durable (`durable: true`)
 
-- **Write-Ahead Log (WAL):** Append-only log segments
-- **Segmented storage:** Rotate segments based on time/size
-- **Retention policies:** Time-based and size-based limits
-- **Snapshots:** Periodic state snapshots for faster recovery
+- **Segmented append-only log:** versioned, checksummed segments per stream
+  shard, with sparse offset indexes. Not write-ahead logging — the log *is* the
+  data, not a journal protecting another structure.
+- **Configurable fsync:** `none`, `periodic { interval }`, or `on_commit`, which
+  acknowledges only after the record is on the device
+- **Crash recovery:** a provably incomplete tail is repaired; anything else
+  fails startup loudly rather than discarding acknowledged records
+- **Historical replay:** paged reads from disk by offset
+
+Not yet implemented: **retention policies**, **snapshots/compaction**, and
+**tiered storage**. Nothing currently deletes segments on age or size.
+
+See [Durable Storage](/felix/architecture/durable-storage/).
 
 **Use cases:**
 
 - Production event streaming
 - Critical message delivery
-- Long-term event retention
 - Replay and audit trails
 
 ## Consistency Model
@@ -273,8 +285,11 @@ sequenceDiagram
 ### Single-Node (MVP)
 
 - **Delivery:** At-most-once (best-effort)
-- **Ordering:** Per-stream ordering preserved per subscriber
-- **Durability:** None (ephemeral only)
+- **Ordering:** Per-stream ordering preserved per subscriber. For a durable
+  stream, the order on disk is authoritative and cursor replay and live
+  delivery both follow it.
+- **Durability:** Per stream. Ephemeral by default; `durable: true` persists
+  every publish before acknowledging it.
 
 ### Multi-Node (Planned)
 

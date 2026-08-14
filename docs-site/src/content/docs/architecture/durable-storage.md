@@ -20,6 +20,11 @@ in-memory only, and a stream the control plane marks durable is *rejected at
 registration* rather than silently downgraded to a guarantee the broker cannot
 keep.
 
+Durability is immutable while a stream is registered. Remove and recreate a
+stream to change it between ephemeral and durable; this explicitly invalidates
+old handles and prevents durable offsets from diverging from existing in-memory
+cursors.
+
 ## Ordering: append, then fanout, then ack
 
 ```mermaid
@@ -202,6 +207,7 @@ optimisation are in
 | `FELIX_DURABLE_MAX_RECORDS_PER_READ` | `10000` | Record cap on one range read |
 | `FELIX_DURABLE_PREALLOCATE` | `true` | Reserve segment blocks at creation |
 | `FELIX_DURABLE_VERIFY_ALL_ON_OPEN` | `false` | Checksum every segment at startup |
+| `FELIX_DURABLE_REPAIR_CHECKSUM_TAIL` | `false` | Truncate a complete trailing record that fails its checksum (see below) |
 
 Invalid combinations fail at startup, not at the first publish.
 
