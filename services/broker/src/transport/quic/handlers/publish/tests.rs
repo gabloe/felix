@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch};
 // These publish-path tests don't exercise subscription delivery; this just gives
 // `PublishContext::lane_manager` a real (if unused) instance to satisfy the type.
 fn test_lane_manager() -> Arc<WriterLaneManager> {
-    WriterLaneManager::new(&crate::config::BrokerConfig::from_env().expect("test config"))
+    WriterLaneManager::new(&crate::config::BrokerConfig::default())
 }
 
 fn reset_global_ack_depth() {

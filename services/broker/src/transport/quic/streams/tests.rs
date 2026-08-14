@@ -184,7 +184,7 @@ async fn cache_put_get_round_trip() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -289,7 +289,7 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -394,8 +394,10 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let mut config = BrokerConfig::from_env()?;
-    config.ack_on_commit = true;
+    let config = BrokerConfig {
+        ack_on_commit: true,
+        ..BrokerConfig::default()
+    };
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -462,7 +464,7 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let server_task = tokio::spawn(crate::transport::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
@@ -553,7 +555,7 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         admission: Arc::new(PublishAdmission::unlimited()),
         conn_admission: Arc::new(PublishAdmission::unlimited()),
         subscriptions: Arc::new(SubscriptionLimiter::new()),
-        lane_manager: WriterLaneManager::new(&BrokerConfig::from_env().expect("test config")),
+        lane_manager: WriterLaneManager::new(&BrokerConfig::default()),
         ingress_wait: false,
     }
 }
@@ -727,7 +729,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -762,7 +764,7 @@ async fn control_loop_rejects_second_auth() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -792,7 +794,7 @@ async fn control_loop_rejects_auth_failed() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -819,7 +821,7 @@ async fn control_loop_rejects_binary_publish_batch_without_auth() -> Result<()> 
         Arc::clone(&broker),
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -854,7 +856,7 @@ async fn control_loop_rejects_publish_batch_forbidden() -> Result<()> {
         Arc::clone(&broker),
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -881,7 +883,7 @@ async fn control_loop_publish_without_auth_sends_error() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -911,7 +913,7 @@ async fn control_loop_publish_forbidden_without_request_id_sends_error() -> Resu
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -941,7 +943,7 @@ async fn control_loop_publish_tenant_mismatch_sends_error() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -969,7 +971,7 @@ async fn control_loop_subscribe_forbidden_sends_error() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -997,7 +999,7 @@ async fn control_loop_subscribe_returns_true() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(result);
@@ -1021,7 +1023,7 @@ async fn control_loop_subscribe_tenant_mismatch_sends_error() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -1052,7 +1054,7 @@ async fn control_loop_cache_put_forbidden_sends_error() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -1116,7 +1118,7 @@ async fn control_loop_cache_put_best_effort_closed_reports_error() -> Result<()>
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -1160,7 +1162,7 @@ async fn control_loop_cache_put_missing_scope_with_request_id_continues() -> Res
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(result);
@@ -1185,7 +1187,7 @@ async fn control_loop_rejects_subscribe_without_auth() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -1217,7 +1219,7 @@ async fn control_loop_cache_get_missing_scope_with_request_id_continues() -> Res
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(result);
@@ -1257,7 +1259,7 @@ async fn control_loop_cache_put_records_timing_and_ack() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(result);
@@ -1283,7 +1285,7 @@ async fn control_loop_cache_get_rejects_missing_auth() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -1314,7 +1316,7 @@ async fn control_loop_cache_put_rejects_tenant_mismatch() -> Result<()> {
         broker,
         Arc::clone(&auth.auth),
         frames,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
     )
     .await?;
     assert!(!result);
@@ -1376,7 +1378,7 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
             &mut source,
             Arc::clone(&broker),
             connection,
-            BrokerConfig::from_env()?,
+            BrokerConfig::default(),
             Arc::clone(&auth.auth),
             publish_ctx,
             HashMap::new(),
@@ -1446,7 +1448,7 @@ async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -1510,7 +1512,7 @@ async fn control_loop_handles_cancel_toggle_and_continues() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -1592,7 +1594,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -1623,7 +1625,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         connection_clone,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::clone(&broker)).await,
         HashMap::new(),
@@ -1686,7 +1688,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         UniLoopArgs {
-            config: BrokerConfig::from_env()?,
+            config: BrokerConfig::default(),
             auth: Arc::clone(&auth.auth),
             publish_ctx,
             stream_cache: HashMap::new(),
@@ -1704,7 +1706,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         UniLoopArgs {
-            config: BrokerConfig::from_env()?,
+            config: BrokerConfig::default(),
             auth: Arc::clone(&auth.auth),
             publish_ctx: build_publish_context(Arc::clone(&broker)).await,
             stream_cache: HashMap::new(),
@@ -1723,7 +1725,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
             &mut source,
             Arc::clone(&broker),
             UniLoopArgs {
-                config: BrokerConfig::from_env()?,
+                config: BrokerConfig::default(),
                 auth: Arc::clone(&auth.auth),
                 publish_ctx: build_publish_context(Arc::clone(&broker)).await,
                 stream_cache: HashMap::new(),
@@ -2033,7 +2035,7 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
     let server_task = tokio::spawn(async move {
         let connection = server.accept().await?;
         let (send, recv) = connection.accept_bi().await?;
-        let config = BrokerConfig::from_env()?;
+        let config = BrokerConfig::default();
         let publish_ctx =
             build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await;
         handle_stream(
@@ -2078,7 +2080,7 @@ async fn control_stream_rejects_unexpected_message() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -2127,7 +2129,7 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -2195,7 +2197,7 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let max_frame_bytes = config.max_frame_bytes;
     let mut frame_scratch = BytesMut::with_capacity(max_frame_bytes.min(64 * 1024));
     let server_task = tokio::spawn(crate::transport::quic::serve(
@@ -2264,7 +2266,7 @@ async fn uni_stream_rejects_non_publish() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::from_env()?;
+    let config = BrokerConfig::default();
     let server_task = tokio::spawn(crate::transport::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
@@ -2835,7 +2837,7 @@ async fn control_loop_pre_canceled_exits() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -2901,7 +2903,7 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -2969,7 +2971,7 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -3038,7 +3040,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -3119,7 +3121,7 @@ async fn control_loop_cache_get_records_lookup_timing() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -3210,7 +3212,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         publish_ctx,
         HashMap::new(),
@@ -3279,7 +3281,7 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -3350,7 +3352,7 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -3414,7 +3416,7 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
         &mut source,
         broker,
         connection,
-        BrokerConfig::from_env()?,
+        BrokerConfig::default(),
         Arc::clone(&auth.auth),
         build_publish_context(Arc::new(Broker::new(EphemeralCache::new().into()))).await,
         HashMap::new(),
@@ -3457,7 +3459,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         admission: Arc::new(PublishAdmission::unlimited()),
         conn_admission: Arc::new(PublishAdmission::unlimited()),
         subscriptions: Arc::new(SubscriptionLimiter::new()),
-        lane_manager: WriterLaneManager::new(&BrokerConfig::from_env()?),
+        lane_manager: WriterLaneManager::new(&BrokerConfig::default()),
         ingress_wait: false,
     };
     let mut scratch = BytesMut::with_capacity(64 * 1024);
@@ -3471,7 +3473,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         UniLoopArgs {
-            config: BrokerConfig::from_env()?,
+            config: BrokerConfig::default(),
             auth: Arc::clone(&auth.auth),
             publish_ctx: publish_ctx.clone(),
             stream_cache: HashMap::new(),
@@ -3496,7 +3498,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         UniLoopArgs {
-            config: BrokerConfig::from_env()?,
+            config: BrokerConfig::default(),
             auth: Arc::clone(&auth.auth),
             publish_ctx: publish_ctx.clone(),
             stream_cache: HashMap::new(),
@@ -3521,7 +3523,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         &mut source,
         Arc::clone(&broker),
         UniLoopArgs {
-            config: BrokerConfig::from_env()?,
+            config: BrokerConfig::default(),
             auth: Arc::clone(&auth.auth),
             publish_ctx,
             stream_cache: HashMap::new(),
@@ -3557,7 +3559,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
         let recv = connection.accept_uni().await?;
         handle_uni_stream(
             broker,
-            BrokerConfig::from_env()?,
+            BrokerConfig::default(),
             auth_for_server,
             publish_ctx,
             recv,
@@ -3632,13 +3634,15 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             admission: Arc::new(PublishAdmission::unlimited()),
             conn_admission: Arc::new(PublishAdmission::unlimited()),
             subscriptions: Arc::new(SubscriptionLimiter::new()),
-            lane_manager: WriterLaneManager::new(&BrokerConfig::from_env()?),
+            lane_manager: WriterLaneManager::new(&BrokerConfig::default()),
             ingress_wait: false,
         };
-        let mut config = BrokerConfig::from_env()?;
-        config.ack_on_commit = true;
-        config.ack_wait_timeout_ms = 1000;
-        config.control_stream_drain_timeout_ms = 1;
+        let config = BrokerConfig {
+            ack_on_commit: true,
+            ack_wait_timeout_ms: 1000,
+            control_stream_drain_timeout_ms: 1,
+            ..BrokerConfig::default()
+        };
         handle_stream(
             broker,
             connection,

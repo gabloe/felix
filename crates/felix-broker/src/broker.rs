@@ -242,14 +242,31 @@ impl Broker {
         // storage failure fails the publish instead of delivering a record that
         // a crash would erase. Under `FsyncMode::OnCommit` this await includes
         // the device flush; that latency is the guarantee being bought.
-        if let Some(durable) = &stream_state.durable {
-            let durable_start = t_now_if(sample);
-            durable.append(payloads).await?;
-            if let Some(start) = durable_start {
-                let durable_ns = start.elapsed().as_nanos() as u64;
-                t_histogram!("broker_publish_durable_append_ns").record(durable_ns as f64);
+        //
+        // The commit turn taken afterwards is what keeps the three orders in
+        // agreement. Offsets are assigned concurrently and flushes are shared —
+        // group commit is untouched — but the half that everything else
+        // observes runs strictly in disk order. It is held across the fanout
+        // below, not just the replay-ring append, because a subscriber's
+        // delivery order is as much a part of the stream's order as its
+        // cursors are.
+        let _commit_turn = match &stream_state.durable {
+            None => None,
+            Some(durable) => {
+                let durable_start = t_now_if(sample);
+                let appended = durable.append(payloads).await?;
+                if let Some(start) = durable_start {
+                    let durable_ns = start.elapsed().as_nanos() as u64;
+                    t_histogram!("broker_publish_durable_append_ns").record(durable_ns as f64);
+                }
+                Some(
+                    stream_state
+                        .commit_sequencer
+                        .turn(appended.first_offset, appended.last_offset + 1)
+                        .await,
+                )
             }
-        }
+        };
 
         let append_start = t_now_if(sample);
         // Append to the in-memory log so cursors can replay without touching
@@ -446,6 +463,46 @@ impl Broker {
                 pending: VecDeque::new(),
             },
         ))
+    }
+
+    /// Read persisted records for a durable stream, starting at `from_offset`.
+    ///
+    /// This is the historical replay path, and it is deliberately separate from
+    /// [`Broker::subscribe_with_cursor`]. Cursor replay serves the recent tail
+    /// out of memory and hands back a live subscription in the same call, so it
+    /// cannot also stream an arbitrarily long history without either buffering
+    /// it all or leaving a hole between the history and the live edge.
+    ///
+    /// This call pages instead: it returns at most `max_bytes` of payload (and
+    /// no more than the storage layer's per-read record cap), and the caller
+    /// advances by the last returned offset. An empty result means the reader
+    /// has caught up with the tail.
+    ///
+    /// For a durable stream a cursor's sequence number is the same value as a
+    /// record's offset, so a `Cursor` obtained from [`Broker::cursor_tail`] can
+    /// be used here directly via [`Cursor::next_seq`].
+    ///
+    /// Returns [`BrokerError::StreamNotDurable`] for an in-memory stream, whose
+    /// history exists only in the bounded replay ring.
+    pub async fn read_durable(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        from_offset: u64,
+        max_bytes: usize,
+    ) -> Result<Vec<felix_storage::log::LogRecord>> {
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
+            .await?;
+        let Some(log) = &handle.state.durable else {
+            return Err(BrokerError::StreamNotDurable {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
+        };
+        log.read_from(from_offset, max_bytes).await
     }
 
     pub fn cache(&self) -> &(dyn StorageApi + Send) {

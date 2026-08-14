@@ -11,6 +11,14 @@ use crate::error::{BrokerError, Result};
 use crate::keys::{CacheKey, CacheKeyRef, NamespaceKey, NamespaceKeyRef, StreamKey, StreamKeyRef};
 use crate::stream_state::StreamState;
 
+/// Byte ceiling on the replay ring refill at startup.
+///
+/// The record count is already capped by the ring's capacity; this bounds the
+/// payload bytes a single pathological stream can pull in while a broker is
+/// starting, so one stream of very large records cannot stall registration of
+/// every other stream behind it.
+const HYDRATE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 impl Broker {
     pub async fn register_stream(
         &self,
@@ -36,6 +44,17 @@ impl Broker {
         }
         let key = StreamKey::new(tenant_id, namespace, stream);
 
+        // Cursor sequence numbers and durable offsets share one identity. An
+        // existing ephemeral stream may already have cursor history that was
+        // never written to disk, so toggling durability in place would make
+        // those two sequences disagree. Require an explicit remove/recreate,
+        // which also invalidates old handles and subscriptions.
+        if let Some(existing) = self.streams.read().await.get(&key)
+            && existing.durable != metadata.durable
+        {
+            return Err(Self::durability_change_error(&key, existing, &metadata));
+        }
+
         // Open durable storage before touching the registries: a stream that
         // cannot be persisted must not become publishable, or the first publish
         // would be acknowledged against a guarantee that does not exist.
@@ -43,23 +62,42 @@ impl Broker {
             .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, &metadata)
             .await?;
 
-        self.streams.write().await.insert(key.clone(), metadata);
-        let mut guard = self.topics.write().await;
+        // Keep the documented registry lock order. Recheck after acquiring the
+        // write lock so concurrent first registrations cannot race a durability
+        // transition past the fast-path check above.
+        let mut streams = self.streams.write().await;
+        if let Some(existing) = streams.get(&key)
+            && existing.durable != metadata.durable
+        {
+            return Err(Self::durability_change_error(&key, existing, &metadata));
+        }
+        let mut topics = self.topics.write().await;
         let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
-        let state = guard.entry(key).or_insert_with(|| {
-            Arc::new(StreamState::new(
-                handle_id,
-                self.topic_capacity,
-                self.subscriber_queue_policy,
-                durable,
-            ))
-        });
+        let state = topics
+            .entry(key.clone())
+            .or_insert_with(|| {
+                Arc::new(StreamState::new(
+                    handle_id,
+                    self.topic_capacity,
+                    self.subscriber_queue_policy,
+                    durable,
+                ))
+            })
+            .clone();
+        streams.insert(key, metadata);
+        drop(topics);
+        drop(streams);
+
         // A durable stream that recovered records keeps counting cursors from
-        // where the log left off, so a subscriber's pre-restart cursor still
-        // means what it meant before.
+        // where the log left off, and refills its replay ring from disk so a
+        // subscriber's pre-restart cursor still resolves to the same records.
+        // Reading only the ring's worth of tail keeps this bounded: startup
+        // cost does not grow with the size of the log.
         if let Some(log) = &state.durable {
             let tail = log.tail_offset().await?;
-            state.resume_at(tail);
+            let from = tail.saturating_sub(self.log_capacity as u64);
+            let recent = log.read_from(from, HYDRATE_MAX_BYTES).await?;
+            state.hydrate(recent, tail, self.log_capacity);
         }
         Ok(())
     }
@@ -76,9 +114,11 @@ impl Broker {
             return Ok(None);
         }
         let Some(storage) = &self.durable_storage else {
-            return Err(BrokerError::Storage(format!(
-                "stream {tenant_id}/{namespace}/{stream} is marked durable but this broker has no durable storage configured"
-            )));
+            return Err(BrokerError::DurableStorageNotConfigured {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+            });
         };
         // The broker keeps one log per stream today. `metadata.shards` is
         // carried through to the shard key so that when the data path is
@@ -110,6 +150,20 @@ impl Broker {
         let key = CacheKey::new(tenant_id, namespace, cache);
         self.caches.write().await.insert(key, metadata);
         Ok(())
+    }
+
+    fn durability_change_error(
+        key: &StreamKey,
+        current: &StreamMetadata,
+        requested: &StreamMetadata,
+    ) -> BrokerError {
+        BrokerError::DurabilityChangeRequiresRecreate {
+            tenant_id: key.tenant_id.clone(),
+            namespace: key.namespace.clone(),
+            stream: key.stream.clone(),
+            current: current.durable,
+            requested: requested.durable,
+        }
     }
 
     pub async fn remove_cache(

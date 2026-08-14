@@ -1,0 +1,264 @@
+// One authoritative order per durable stream.
+//
+// A durable publish has two halves separated by an `await`:
+//
+//   1. the durable append, which assigns disk offsets under the segment lock
+//      and then waits for the fsync its policy requires, and
+//   2. everything the rest of the broker observes — the in-memory replay ring
+//      and the fanout to subscribers.
+//
+// Without coordination those halves can disagree. Two concurrent publishes A
+// and B take disk offsets in that order, both wait on the same group-commit
+// flush, and then resume in whatever order the scheduler picks. B can reach the
+// replay ring first, so the log on disk reads A, B while a cursor replay and a
+// live subscriber both see B, A. Under `FsyncMode::OnCommit` that window is a
+// whole device flush wide — milliseconds — so it is not a theoretical race.
+//
+// The sequencer closes it. Each publisher waits until every lower offset has
+// been applied, then applies its own and releases the next in line. Disk order
+// becomes the single source of truth for cursor order and delivery order alike.
+//
+// What this deliberately does *not* do is serialise the durable append itself.
+// Offsets are still assigned concurrently and flushes are still shared, so
+// group commit keeps its fan-in; only the cheap post-flush half is ordered.
+
+use std::fmt;
+
+use parking_lot::Mutex;
+use tokio::sync::Notify;
+
+use felix_storage::log::Offset;
+
+/// Orders the post-durability half of publishes by their disk offset.
+pub(crate) struct CommitSequencer {
+    state: Mutex<SequenceState>,
+    ready: Notify,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SequenceState {
+    /// Offset whose turn it is. Publishers wait until this reaches their first
+    /// offset.
+    next: Offset,
+    /// Bumped by every reset. A turn acquired before a reset carries
+    /// pre-reset offsets, so releasing it must not move the sequence: the
+    /// reset is authoritative about where the log now ends.
+    generation: u64,
+}
+
+impl fmt::Debug for CommitSequencer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = *self.state.lock();
+        f.debug_struct("CommitSequencer")
+            .field("next", &state.next)
+            .field("generation", &state.generation)
+            .finish()
+    }
+}
+
+impl CommitSequencer {
+    pub(crate) fn new(next: Offset) -> Self {
+        Self {
+            state: Mutex::new(SequenceState {
+                next,
+                generation: 0,
+            }),
+            ready: Notify::new(),
+        }
+    }
+
+    /// Restart the sequence at `next`, used when a stream adopts a recovered
+    /// log and its offsets resume from the durable tail.
+    pub(crate) fn reset(&self, next: Offset) {
+        {
+            let mut state = self.state.lock();
+            state.next = next;
+            state.generation += 1;
+        }
+        // Wake everyone: a waiter parked on an offset the reset just discarded
+        // would otherwise never be released.
+        self.ready.notify_waiters();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_offset(&self) -> Offset {
+        self.state.lock().next
+    }
+
+    /// Wait until `first_offset` is next, then hold the turn until the returned
+    /// guard is dropped.
+    ///
+    /// The guard releases the turn on drop, so an error or an early return in
+    /// the caller cannot strand the stream: every publisher behind this one
+    /// would otherwise wait forever.
+    pub(crate) async fn turn(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
+        loop {
+            // Register interest *before* testing, or a release landing between
+            // the test and the await would be missed and this publisher would
+            // sleep until the next unrelated publish woke it.
+            let notified = self.ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let generation = {
+                let state = *self.state.lock();
+                if state.next >= first_offset {
+                    Some(state.generation)
+                } else {
+                    None
+                }
+            };
+            if let Some(generation) = generation {
+                return CommitTurn {
+                    sequencer: self,
+                    next_offset,
+                    generation,
+                };
+            }
+            notified.await;
+        }
+    }
+}
+
+/// Holds a stream's commit turn. Releasing it lets the next offset proceed.
+pub(crate) struct CommitTurn<'a> {
+    sequencer: &'a CommitSequencer,
+    next_offset: Offset,
+    /// Generation this turn was acquired in.
+    generation: u64,
+}
+
+impl Drop for CommitTurn<'_> {
+    fn drop(&mut self) {
+        {
+            let mut state = self.sequencer.state.lock();
+            // A reset while this turn was held means the log was rewritten
+            // underneath it. Its offsets describe a sequence that no longer
+            // exists, so advancing on them would step the stream past records
+            // that are gone.
+            if state.generation == self.generation && self.next_offset > state.next {
+                state.next = self.next_offset;
+            }
+        }
+        self.sequencer.ready.notify_waiters();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn the_first_offset_proceeds_immediately() {
+        let sequencer = CommitSequencer::new(0);
+        let turn = sequencer.turn(0, 1).await;
+        drop(turn);
+        assert_eq!(sequencer.next_offset(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_later_offset_waits_for_its_predecessor() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+
+        // Offset 5 cannot proceed while the sequence is still at 0.
+        let waiter = {
+            let sequencer = Arc::clone(&sequencer);
+            tokio::spawn(async move {
+                let turn = sequencer.turn(5, 6).await;
+                drop(turn);
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished(), "offset 5 ran out of turn");
+
+        // Releasing the intervening range lets it through.
+        drop(sequencer.turn(0, 5).await);
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter should be released")
+            .expect("join");
+        assert_eq!(sequencer.next_offset(), 6);
+    }
+
+    #[tokio::test]
+    async fn turns_are_granted_in_offset_order_regardless_of_arrival_order() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+        let observed = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+        // Spawn the highest offset first so arrival order is the reverse of
+        // offset order — exactly the interleaving the fsync wait can produce.
+        let mut tasks = Vec::new();
+        for offset in (0..8u64).rev() {
+            let sequencer = Arc::clone(&sequencer);
+            let observed = Arc::clone(&observed);
+            tasks.push(tokio::spawn(async move {
+                let turn = sequencer.turn(offset, offset + 1).await;
+                observed.lock().push(offset);
+                drop(turn);
+            }));
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        for task in tasks {
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .expect("no deadlock")
+                .expect("join");
+        }
+
+        assert_eq!(*observed.lock(), (0..8).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn a_dropped_turn_never_strands_the_stream() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+
+        // A publisher that takes its turn and then fails still releases it.
+        let result: std::result::Result<(), ()> = async {
+            let _turn = sequencer.turn(0, 1).await;
+            Err(())
+        }
+        .await;
+        assert!(result.is_err());
+
+        // The next publisher is not blocked by the failure.
+        tokio::time::timeout(Duration::from_secs(5), sequencer.turn(1, 2))
+            .await
+            .expect("must not stall");
+    }
+
+    #[tokio::test]
+    async fn a_reset_releases_waiters_stuck_behind_a_vanished_offset() {
+        let sequencer = Arc::new(CommitSequencer::new(10));
+
+        // After a truncation the tail moves backwards; a publisher waiting on
+        // an offset that no longer exists must be released rather than hang.
+        let waiter = {
+            let sequencer = Arc::clone(&sequencer);
+            tokio::spawn(async move { drop(sequencer.turn(20, 21).await) })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+
+        sequencer.reset(20);
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("reset should release the waiter")
+            .expect("join");
+    }
+
+    #[tokio::test]
+    async fn a_stale_release_cannot_undo_a_reset() {
+        let sequencer = CommitSequencer::new(100);
+        let turn = sequencer.turn(100, 101).await;
+        // A truncation rewinds the log while the turn is held.
+        sequencer.reset(5);
+        drop(turn);
+        assert_eq!(
+            sequencer.next_offset(),
+            5,
+            "stale release moved the sequence"
+        );
+    }
+}
