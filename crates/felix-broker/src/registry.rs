@@ -3,6 +3,7 @@
 // These maps mirror control-plane state and gate every data-path operation. Lock
 // order is tenants -> namespaces -> streams -> topics; keep it that way.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -55,50 +56,124 @@ impl Broker {
             return Err(Self::durability_change_error(&key, existing, &metadata));
         }
 
-        // Open durable storage before touching the registries: a stream that
-        // cannot be persisted must not become publishable, or the first publish
-        // would be acknowledged against a guarantee that does not exist.
-        let durable = self
-            .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, &metadata)
-            .await?;
+        // Everything fallible happens before the stream is registered.
+        //
+        // Opening the log and refilling the replay ring both read from disk and
+        // both can fail. Registering first and hydrating after left a window
+        // where a durable stream was already publishable with an empty ring: a
+        // hydration failure meant the stream existed, accepted writes, and
+        // answered `CursorTooOld` for every pre-restart cursor, with nothing
+        // upstream aware that it was never initialised.
+        //
+        // The loop exists because the state has to be built without holding the
+        // registry locks — hydration awaits — so another registration can win
+        // the race in between. The retry then takes the fast path.
+        loop {
+            // Already live: nothing to build, just refresh the metadata.
+            if self.topics.read().await.contains_key(&key) {
+                let mut streams = self.streams.write().await;
+                if let Some(existing) = streams.get(&key)
+                    && existing.durable != metadata.durable
+                {
+                    return Err(Self::durability_change_error(&key, existing, &metadata));
+                }
+                streams.insert(key, metadata);
+                return Ok(());
+            }
 
-        // Keep the documented registry lock order. Recheck after acquiring the
-        // write lock so concurrent first registrations cannot race a durability
-        // transition past the fast-path check above.
-        let mut streams = self.streams.write().await;
-        if let Some(existing) = streams.get(&key)
-            && existing.durable != metadata.durable
-        {
-            return Err(Self::durability_change_error(&key, existing, &metadata));
-        }
-        let mut topics = self.topics.write().await;
-        let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
-        let state = topics
-            .entry(key.clone())
-            .or_insert_with(|| {
-                Arc::new(StreamState::new(
-                    handle_id,
-                    self.topic_capacity,
-                    self.subscriber_queue_policy,
-                    durable,
-                ))
-            })
-            .clone();
-        streams.insert(key, metadata);
-        drop(topics);
-        drop(streams);
+            let durable = self
+                .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, &metadata)
+                .await?;
+            let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
+            let state = Arc::new(StreamState::new(
+                handle_id,
+                self.topic_capacity,
+                self.subscriber_queue_policy,
+                durable,
+            ));
+            self.hydrate_durable_stream(&state).await?;
 
-        // A durable stream that recovered records keeps counting cursors from
-        // where the log left off, and refills its replay ring from disk so a
-        // subscriber's pre-restart cursor still resolves to the same records.
-        // Reading only the ring's worth of tail keeps this bounded: startup
-        // cost does not grow with the size of the log.
-        if let Some(log) = &state.durable {
-            let tail = log.tail_offset().await?;
-            let from = tail.saturating_sub(self.log_capacity as u64);
-            let recent = log.read_from(from, HYDRATE_MAX_BYTES).await?;
-            state.hydrate(recent, tail, self.log_capacity);
+            // Keep the documented registry lock order: streams before topics.
+            let mut streams = self.streams.write().await;
+            if let Some(existing) = streams.get(&key)
+                && existing.durable != metadata.durable
+            {
+                return Err(Self::durability_change_error(&key, existing, &metadata));
+            }
+            let mut topics = self.topics.write().await;
+            if topics.contains_key(&key) {
+                // Lost the race while hydrating; the winner's state is the live
+                // one, so discard this one and take the fast path.
+                drop(topics);
+                drop(streams);
+                continue;
+            }
+            topics.insert(key.clone(), state);
+            streams.insert(key.clone(), metadata);
+            return Ok(());
         }
+    }
+
+    /// Refill a durable stream's replay ring from disk before it is published.
+    ///
+    /// A durable stream that recovered records keeps counting cursors from
+    /// where the log left off, so a subscriber's pre-restart cursor still
+    /// resolves to the same records.
+    ///
+    /// The ring must end at the tail. A single read is bounded by the storage
+    /// layer's per-read record and byte caps, so asking for the ring's worth of
+    /// history can come back short — and keeping that *earliest* prefix while
+    /// still advancing `next_seq` to the real tail leaves a hole. A cursor
+    /// pointing into the hole is then above the ring's oldest entry, so it is
+    /// accepted rather than rejected, and replay answers with silence: the
+    /// subscriber reads "you are caught up" while records are missing. Losing
+    /// history loudly is fine; losing it quietly is not.
+    ///
+    /// So this pages forward to the tail and keeps the newest `log_capacity`
+    /// records, dropping older ones as it goes. Memory stays bounded by the
+    /// ring, and whatever the ring ends up holding is contiguous with
+    /// `next_seq`. If the budget cannot cover even part of the window the ring
+    /// is left empty, and every pre-restart cursor gets `CursorTooOld` — the
+    /// honest answer.
+    async fn hydrate_durable_stream(&self, state: &Arc<StreamState>) -> Result<()> {
+        let Some(log) = &state.durable else {
+            return Ok(());
+        };
+        let tail = log.tail_offset().await?;
+        let capacity = self.log_capacity;
+        let mut cursor = tail.saturating_sub(capacity as u64);
+        let mut window: VecDeque<felix_storage::log::LogRecord> = VecDeque::new();
+        let mut bytes = 0usize;
+
+        while cursor < tail {
+            let page = log.read_from(cursor, HYDRATE_MAX_BYTES).await?;
+            let Some(last) = page.last() else {
+                // The tail moved out from under the read, or the range was
+                // trimmed. Stop with what is in hand rather than spinning.
+                break;
+            };
+            cursor = last.offset + 1;
+            for record in page {
+                bytes += record.payload.len();
+                window.push_back(record);
+                // Keep the *newest* end of the window under both bounds.
+                while window.len() > capacity || (bytes > HYDRATE_MAX_BYTES && window.len() > 1) {
+                    if let Some(dropped) = window.pop_front() {
+                        bytes -= dropped.payload.len();
+                    }
+                }
+            }
+        }
+
+        // Only hand over a window that actually reaches the tail. Anything else
+        // would reintroduce the hole this method exists to avoid.
+        let reaches_tail = window.back().is_some_and(|last| last.offset + 1 == tail);
+        let contiguous = if reaches_tail {
+            window.into_iter().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        state.hydrate(contiguous, tail, capacity);
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-# Felix Durable Segment Format (v1)
+# Felix Durable Segment Format (v2)
 
 This document defines the on-disk representation of a durable Felix stream. It is
 the source of truth for anyone reading, writing, repairing, or replicating
@@ -83,7 +83,7 @@ file:
 | Offset | Size | Field | Value |
 | --- | --- | --- | --- |
 | 0 | 4 | `magic` | `0x464C5347` (`"FLSG"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `2` |
 | 6 | 2 | `flags` | `0`; any other value is rejected |
 | 8 | 8 | `base_offset` | logical offset of this segment's first record |
 | 16 | 8 | `created_at_micros` | wall clock at creation, informational |
@@ -104,11 +104,19 @@ segment, so damage here is never a torn write — it is always an error.
 | 0 | 4 | `payload_len` | ≤ `MAX_PAYLOAD_BYTES` (64 MiB) |
 | 4 | 8 | `offset` | logical offset; ascends by exactly 1 within a segment |
 | 12 | 8 | `timestamp_micros` | publish time |
-| 20 | 4 | `checksum` | CRC-32 over bytes `0..20` **followed by** the payload |
-| 24 | n | `payload` | opaque bytes |
+| 20 | 4 | `header_crc` | CRC-32 over bytes `0..20` |
+| 24 | 4 | `checksum` | CRC-32 over bytes `0..24` **followed by** the payload |
+| 28 | n | `payload` | opaque bytes |
 
-`payload_len` comes first and is covered by the checksum, so a reader can step to
-the next record with `position + 24 + payload_len` without touching payload
+`header_crc` is what makes recovery decidable. It is verified *before* any other
+field is used, so `payload_len` is only ever acted on once it is known to be
+intact. Without it, a bit flip in the length field produced exactly the same
+symptom as an unfinished write — a record claiming more bytes than the file
+holds — and recovery had to guess. Guessing wrong meant silently truncating a
+record that had been fsynced and acknowledged.
+
+`payload_len` comes first and is covered by both checksums, so a reader can step
+to the next record with `position + 28 + payload_len` without touching payload
 bytes. That property is what makes the index rebuild and the recovery scan cost
 proportional to record *count* rather than to bytes decoded.
 
@@ -131,7 +139,7 @@ its segment. Consequently they carry no checksums.
 | Offset | Size | Field | Value |
 | --- | --- | --- | --- |
 | 0 | 4 | `magic` | `0x464C5349` (`"FLSI"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `2` |
 | 6 | 2 | `flags` | `0` |
 | 8 | 8 | `base_offset` | must equal the segment's `base_offset` |
 | 16 | 8 | `reserved` | `0` |
@@ -163,6 +171,7 @@ the file is read up to the last whole entry.
 | Non-zero `flags` | Reject: `SegmentFlags`. Unknown bits may change the layout behind them, so they are not masked off |
 | Bad header CRC | Reject: `SegmentHeaderChecksum` |
 | Short read | `Truncated { needed, available }` — the one shape recovery may repair |
+| Bad record header CRC | `RecordHeaderChecksum` — the length cannot be trusted |
 | Bad record CRC | `RecordChecksum` |
 | `payload_len` over the limit | `RecordTooLarge`, raised *before* any allocation |
 | Offset gap within a segment | `OffsetOutOfOrder` |
@@ -175,14 +184,25 @@ position, because "corruption detected" is not enough to act on at 3am.
 Recovery truncates **only** damage confined to the end of the newest segment,
 because only there can a record have been mid-write when the process died:
 
-- A `Truncated` failure is always repairable.
-- A `RecordChecksum` or `OffsetOutOfOrder` failure is repairable only when the
-  record's claimed extent reaches end of file — that is, when nothing follows it.
-  If committed bytes exist beyond the damage, dropping it would open a gap, so it
-  is an error instead.
-- A `RecordTooLarge` failure is repairable only when the record it claims could
-  not fit in the file, which is the signature of a half-written header.
+- A `Truncated` failure is always repairable. The header verified, so
+  `payload_len` is the length the writer intended, and a file ending short of it
+  is *provably* an unfinished write — nothing can have acknowledged a record that
+  was never finished. This is the ordinary crash case and needs no operator
+  involvement.
+- A `RecordHeaderChecksum` failure is **not** repairable by default. The header
+  cannot be trusted, so this may equally be an unfinished write or a complete,
+  acknowledged record whose header rotted. `repair_checksum_tail` opts in.
+- A `RecordChecksum` or `OffsetOutOfOrder` failure is likewise opt-in: the header
+  verified, so the record is complete on disk and the damage is rot rather than a
+  torn write.
+- A `RecordTooLarge` failure is opt-in for the same reason — the writer rejects
+  oversized records, so a verified header carrying an impossible length is damage
+  the checksums did not catch.
 - Segment-header damage is never repairable.
+
+The dividing line is whether the length is trustworthy. When it is, recovery can
+prove the write was unfinished; when it is not, recovery refuses to choose
+between "unfinished" and "rotted" and fails loudly instead.
 
 The full rules live in `is_repairable_tail` in
 [`segment/reader.rs`](../crates/felix-storage/src/segment/reader.rs).
@@ -195,19 +215,33 @@ migration path.
 
 ```text
 SegmentHeader::new(base_offset = 1, created_at_micros = 2):
-  46 4C 53 47  00 01  00 00
+  46 4C 53 47  00 02  00 00
   00 00 00 00 00 00 00 01
   00 00 00 00 00 00 00 02
-  D9 5F 63 18
+  7A 09 E5 B1
   00 00 00 00
 
 encode_record(offset = 7, timestamp = 9, payload = "hi"):
   00 00 00 02
   00 00 00 00 00 00 00 07
   00 00 00 00 00 00 00 09
-  63 3D A1 4E
+  C6 54 DE 27
+  24 02 15 2C
   68 69
 ```
+
+## Version history
+
+| Version | Change |
+| --- | --- |
+| 1 | Initial format. Unreleased. |
+| 2 | Added `header_crc` to the record header (24 → 28 bytes), making a corrupted length field detectable without reading the payload. |
+
+A v1 segment is rejected on open with `CorruptionKind::SegmentVersion`, naming
+the version found. v1 was only ever written by unreleased builds, so the
+migration path is to discard the data directory rather than carry a second
+decoder — and rejecting is the safe failure, because a v1 record read as v2
+would misparse every field after the length.
 
 ## Versioning policy
 

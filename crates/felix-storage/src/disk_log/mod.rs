@@ -46,6 +46,13 @@ use crate::log::{
 use crate::segment::{ReadBudget, io::sync_data};
 use crate::{Result, StorageError, metrics_names};
 
+/// Bound on rollover retries in a single append.
+///
+/// Each retry means another publisher won the race to fill the segment; a
+/// handful is generous, and failing loudly beats spinning under a pathological
+/// interleaving.
+const MAX_ROLL_ATTEMPTS: usize = 8;
+
 use segments::SegmentSet;
 use sync::{Durability, PeriodicSyncer};
 
@@ -224,6 +231,33 @@ impl DiskLog {
         self.inner.segments.read().descriptors()
     }
 
+    /// Assign offsets and write `records`, without waiting for durability.
+    ///
+    /// Split out of [`AppendOnlyLog::append`] so a caller can learn the offsets
+    /// the moment they are consumed, rather than only once the batch is
+    /// durable. Anything that has to stay consistent with the log's offset
+    /// order — the broker's commit sequencer, for one — has to claim its place
+    /// at *assignment* time: after this returns, the records exist on disk and
+    /// hold their offsets whether or not the durability wait that follows
+    /// succeeds, fails, or is cancelled.
+    ///
+    /// The returned [`PendingAppend`] must be passed to [`DiskLog::commit`] for
+    /// the configured fsync policy to be honoured. Dropping it does not undo
+    /// the write.
+    pub async fn append_pending(&self, records: &[AppendRecord]) -> Result<PendingAppend> {
+        let records = records.to_vec();
+        let inner = Arc::clone(&self.inner);
+        Self::write_batch(inner, records).await
+    }
+
+    /// Wait until a [`PendingAppend`] satisfies the configured fsync policy.
+    pub async fn commit(&self, pending: &PendingAppend) -> Result<()> {
+        if self.inner.durability.acknowledges_before_sync() {
+            return Ok(());
+        }
+        self.inner.ensure_durable(pending.durable_target).await
+    }
+
     /// Force a flush regardless of the configured policy.
     pub async fn sync(&self) -> Result<()> {
         self.inner
@@ -247,34 +281,57 @@ impl DiskLog {
     }
 }
 
-impl AppendOnlyLog for DiskLog {
-    fn append(&self, records: &[AppendRecord]) -> BoxFuture<'_, Result<AppendResult>> {
-        // `records` is borrowed for the duration of the future, but the
-        // durability wait may outlive the borrow's usefulness — so the write
-        // happens first and only offsets cross the await.
-        let records = records.to_vec();
-        let inner = Arc::clone(&self.inner);
-        Box::pin(async move {
-            if records.is_empty() {
-                return Err(StorageError::InvalidRange);
-            }
-            let started = std::time::Instant::now();
+/// A batch that has been written and given offsets, but not yet flushed.
+#[derive(Debug, Clone)]
+pub struct PendingAppend {
+    pub result: AppendResult,
+    /// Exclusive offset bound this batch needs durable.
+    durable_target: Offset,
+}
 
-            // Rolling a segment seals one file, creates another, and fsyncs
-            // both plus the directory entry. That is real blocking work, so it
-            // happens on a blocking thread rather than inline on a reactor
-            // worker — otherwise every `segment_size_bytes` of throughput would
-            // stall a worker for the length of two flushes and show up as a
-            // periodic tail-latency spike.
-            //
-            // Checked under a read lock and re-checked under the write lock:
-            // another publisher may have rolled in between, and rolling twice
-            // would leave an empty segment behind.
+impl PendingAppend {
+    pub fn first_offset(&self) -> Offset {
+        self.result.first_offset
+    }
+
+    pub fn last_offset(&self) -> Offset {
+        self.result.last_offset
+    }
+}
+
+impl DiskLog {
+    /// Roll if needed, then assign offsets and write the batch.
+    async fn write_batch(
+        inner: Arc<LogInner>,
+        records: Vec<AppendRecord>,
+    ) -> Result<PendingAppend> {
+        if records.is_empty() {
+            return Err(StorageError::InvalidRange);
+        }
+
+        // Rolling a segment seals one file, creates another, and fsyncs both
+        // plus the directory entry. That is real blocking work, so it must not
+        // run on a reactor worker.
+        //
+        // Detect-and-retry rather than detect-then-append: a concurrent append
+        // can fill the segment between the check and the write lock, and if
+        // this path then let `SegmentSet::append` roll inline, the flushes
+        // would land on a Tokio worker after all — exactly what moving the roll
+        // off-thread was meant to prevent. So the write lock is released and
+        // the roll retried on a blocking thread instead.
+        //
+        // `would_roll` is false for an empty active segment, so an oversized
+        // record terminates the loop rather than spinning: it gets a segment to
+        // itself, which is the documented policy.
+        for attempt in 0..MAX_ROLL_ATTEMPTS {
             if inner.segments.read().would_roll(&records) {
                 let roller = Arc::clone(&inner);
                 let batch = records.clone();
                 tokio::task::spawn_blocking(move || {
                     let mut segments = roller.segments.write();
+                    // Re-checked under the write lock: another publisher may
+                    // have rolled already, and rolling twice leaves an empty
+                    // segment behind.
                     if segments.would_roll(&batch) {
                         segments.roll()?;
                     }
@@ -284,25 +341,50 @@ impl AppendOnlyLog for DiskLog {
                 .map_err(|err| StorageError::Io(std::io::Error::other(err)))??;
             }
 
-            let (first_offset, last_offset, target) = {
-                let mut segments = inner.segments.write();
-                let (first, last) = segments.append(&records)?;
-                (first, last, segments.tail_offset())
-            };
+            let mut segments = inner.segments.write();
+            if segments.would_roll(&records) {
+                // Filled again in the gap. Drop the lock and roll off-thread.
+                drop(segments);
+                debug_assert!(attempt + 1 < MAX_ROLL_ATTEMPTS, "rollover retry starved");
+                continue;
+            }
+            let (first_offset, last_offset) = segments.append(&records)?;
+            let durable_target = segments.tail_offset();
+            return Ok(PendingAppend {
+                result: AppendResult {
+                    first_offset,
+                    last_offset,
+                },
+                durable_target,
+            });
+        }
+
+        Err(StorageError::Unsupported(
+            "append could not secure segment capacity; rollover kept losing the race",
+        ))
+    }
+}
+
+impl AppendOnlyLog for DiskLog {
+    fn append(&self, records: &[AppendRecord]) -> BoxFuture<'_, Result<AppendResult>> {
+        // `records` is borrowed for the duration of the future, so the write
+        // happens first and only offsets cross the await.
+        let records = records.to_vec();
+        let inner = Arc::clone(&self.inner);
+        Box::pin(async move {
+            let started = std::time::Instant::now();
+            let pending = Self::write_batch(Arc::clone(&inner), records).await?;
 
             // `OnCommit` is the only policy that makes the caller wait. The
             // others acknowledge once the bytes are in the page cache and rely
             // on the periodic flush (or the operating system) from there.
             if !inner.durability.acknowledges_before_sync() {
-                inner.ensure_durable(target).await?;
+                inner.ensure_durable(pending.durable_target).await?;
             }
 
             metrics::histogram!(metrics_names::APPEND_DURATION_SECONDS)
                 .record(started.elapsed().as_secs_f64());
-            Ok(AppendResult {
-                first_offset,
-                last_offset,
-            })
+            Ok(pending.result)
         })
     }
 

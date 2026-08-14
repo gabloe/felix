@@ -23,12 +23,18 @@ pub const SEGMENT_MAGIC: u32 = 0x464C_5347;
 /// `"FLSI"` — **F**e**L**ix **S**egment **I**ndex. Identifies a sparse index file.
 pub const INDEX_MAGIC: u32 = 0x464C_5349;
 /// Version of both the segment and index layouts described here.
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// v2 added a record header checksum. v1 segments are rejected on open with
+/// `CorruptionKind::SegmentVersion`, naming the version found — the format was
+/// only ever written by unreleased builds, so the migration path is to discard
+/// the data directory rather than to carry a second decoder. Failing loudly is
+/// the point: a v1 record read as v2 would misparse every field.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// Bytes occupied by a segment file header.
 pub const SEGMENT_HEADER_LEN: u64 = 32;
 /// Bytes occupied by a record header, excluding its payload.
-pub const RECORD_HEADER_LEN: u64 = 24;
+pub const RECORD_HEADER_LEN: u64 = 28;
 /// Bytes occupied by an index file header.
 pub const INDEX_HEADER_LEN: u64 = 24;
 /// Bytes occupied by a single sparse index entry.
@@ -88,6 +94,18 @@ pub enum CorruptionKind {
         expected: u32,
         found: u32,
     },
+    /// The record header did not verify against its own checksum, so
+    /// `payload_len` cannot be trusted.
+    ///
+    /// This is what makes a torn write distinguishable from bit rot. A header
+    /// that verifies means the length is real, so a payload short of it was
+    /// provably never finished; a header that does not verify could be a
+    /// complete, acknowledged record whose length field rotted, and recovery
+    /// must not guess.
+    RecordHeaderChecksum {
+        expected: u32,
+        found: u32,
+    },
     RecordTooLarge {
         payload_len: u32,
         limit: u32,
@@ -126,6 +144,10 @@ impl fmt::Display for CorruptionKind {
             CorruptionKind::RecordChecksum { expected, found } => write!(
                 f,
                 "record checksum mismatch (expected {expected:#010x}, found {found:#010x})"
+            ),
+            CorruptionKind::RecordHeaderChecksum { expected, found } => write!(
+                f,
+                "record header checksum mismatch (expected {expected:#010x}, found {found:#010x})"
             ),
             CorruptionKind::RecordTooLarge { payload_len, limit } => {
                 write!(f, "record payload {payload_len} exceeds limit {limit}")
@@ -331,6 +353,10 @@ pub struct RecordHeader {
     pub payload_len: u32,
     pub offset: Offset,
     pub timestamp_micros: u64,
+    /// CRC-32 over bytes `0..20`. Validated before `payload_len` is used for
+    /// anything, which is what lets recovery tell an unfinished write from a
+    /// rotted length field.
+    pub header_crc: u32,
     pub checksum: u32,
 }
 
@@ -344,6 +370,18 @@ impl RecordHeader {
         if (buf.len() as u64) < RECORD_HEADER_LEN {
             return Err(truncated(RECORD_HEADER_LEN, buf.len() as u64));
         }
+        // The header checksum is verified first, before any field is used.
+        // Everything downstream — the payload length, the offset, how far to
+        // step to the next record — is only meaningful once the header is known
+        // to be intact.
+        let header_crc = read_u32(buf, 20);
+        let found = crc32(&[&buf[0..20]]);
+        if header_crc != found {
+            return Err(Corruption::new(CorruptionKind::RecordHeaderChecksum {
+                expected: header_crc,
+                found,
+            }));
+        }
         let payload_len = read_u32(buf, 0);
         if payload_len > MAX_PAYLOAD_BYTES {
             return Err(Corruption::new(CorruptionKind::RecordTooLarge {
@@ -355,7 +393,8 @@ impl RecordHeader {
             payload_len,
             offset: read_u64(buf, 4),
             timestamp_micros: read_u64(buf, 12),
-            checksum: read_u32(buf, 20),
+            header_crc,
+            checksum: read_u32(buf, 24),
         })
     }
 }
@@ -375,7 +414,11 @@ pub fn encode_record(
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(&offset.to_be_bytes());
     out.extend_from_slice(&timestamp_micros.to_be_bytes());
-    let checksum = crc32(&[&out[start..start + 20], payload]);
+    // Header checksum first, so a reader can trust `payload_len` without having
+    // read the payload it describes.
+    let header_crc = crc32(&[&out[start..start + 20]]);
+    out.extend_from_slice(&header_crc.to_be_bytes());
+    let checksum = crc32(&[&out[start..start + 24], payload]);
     out.extend_from_slice(&checksum.to_be_bytes());
     out.extend_from_slice(payload);
     (out.len() - start) as u64
@@ -400,7 +443,7 @@ pub fn decode_record(buf: &[u8]) -> DecodeResult<(DecodedRecord, u64)> {
         return Err(truncated(total, buf.len() as u64));
     }
     let payload = &buf[RECORD_HEADER_LEN as usize..total as usize];
-    let found = crc32(&[&buf[0..20], payload]);
+    let found = crc32(&[&buf[0..24], payload]);
     if found != header.checksum {
         return Err(Corruption::new(CorruptionKind::RecordChecksum {
             expected: header.checksum,
@@ -521,11 +564,11 @@ mod tests {
             bytes,
             [
                 0x46, 0x4C, 0x53, 0x47, // magic "FLSG"
-                0x00, 0x01, // version
+                0x00, 0x02, // version
                 0x00, 0x00, // flags
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // base_offset
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, // created_at_micros
-                0xD9, 0x5F, 0x63, 0x18, // header crc32
+                0x7A, 0x09, 0xE5, 0xB1, // header crc32
                 0x00, 0x00, 0x00, 0x00, // reserved
             ]
         );
@@ -541,7 +584,8 @@ mod tests {
                 0x00, 0x00, 0x00, 0x02, // payload_len
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, // offset
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, // timestamp
-                0x63, 0x3D, 0xA1, 0x4E, // checksum
+                0xC6, 0x54, 0xDE, 0x27, // header crc32 (bytes 0..20)
+                0x24, 0x02, 0x15, 0x2C, // checksum (bytes 0..24 + payload)
                 b'h', b'i',
             ]
         );
@@ -604,26 +648,66 @@ mod tests {
     }
 
     #[test]
-    fn header_corruption_fails_the_checksum() {
+    fn header_corruption_fails_the_header_checksum() {
         let mut buf = Vec::new();
         encode_record(&mut buf, 0, 0, b"payload");
-        // Flip a bit in the timestamp, which the checksum also covers.
+        // Flip a bit in the timestamp. The header checksum covers it, so this
+        // is caught without reading the payload at all.
         buf[12] ^= 0x01;
         let err = decode_record(&buf).expect_err("corrupt header");
-        assert!(matches!(err.kind, CorruptionKind::RecordChecksum { .. }));
+        assert!(matches!(
+            err.kind,
+            CorruptionKind::RecordHeaderChecksum { .. }
+        ));
+    }
+
+    #[test]
+    fn a_corrupt_length_is_caught_by_the_header_checksum() {
+        let mut buf = Vec::new();
+        encode_record(&mut buf, 4, 5, b"payload");
+        // Damage only the length field. Before the header checksum this was
+        // indistinguishable from an unfinished write: the claimed extent ran
+        // past the data, so recovery truncated an acknowledged record. Now the
+        // header itself reports the damage.
+        buf[0..4].copy_from_slice(&9_999u32.to_be_bytes());
+        let err = decode_record(&buf).expect_err("corrupt length");
+        assert!(
+            matches!(err.kind, CorruptionKind::RecordHeaderChecksum { .. }),
+            "expected a header checksum failure, got {err}"
+        );
     }
 
     #[test]
     fn oversized_length_is_rejected_before_allocating() {
+        // A header whose length is impossible but whose checksum is valid: the
+        // shape that would reach an allocation if the bound were not checked.
         let mut buf = vec![0u8; RECORD_HEADER_LEN as usize];
         buf[0..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        let header_crc = crc32(&[&buf[0..20]]);
+        buf[20..24].copy_from_slice(&header_crc.to_be_bytes());
+
         let err = decode_record(&buf).expect_err("oversized");
+        assert!(
+            matches!(
+                err.kind,
+                CorruptionKind::RecordTooLarge {
+                    payload_len: u32::MAX,
+                    limit: MAX_PAYLOAD_BYTES,
+                }
+            ),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn a_garbage_header_is_rejected_before_its_length_is_believed() {
+        // Random bytes almost never carry a valid header checksum, so the
+        // length they happen to encode is never acted on.
+        let buf = vec![0u8; RECORD_HEADER_LEN as usize];
+        let err = decode_record(&buf).expect_err("garbage");
         assert!(matches!(
             err.kind,
-            CorruptionKind::RecordTooLarge {
-                payload_len: u32::MAX,
-                limit: MAX_PAYLOAD_BYTES,
-            }
+            CorruptionKind::RecordHeaderChecksum { .. }
         ));
     }
 

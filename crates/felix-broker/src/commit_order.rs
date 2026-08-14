@@ -85,47 +85,61 @@ impl CommitSequencer {
         self.state.lock().next
     }
 
-    /// Wait until `first_offset` is next, then hold the turn until the returned
-    /// guard is dropped.
+    /// Claim the offset range `[first_offset, next_offset)` in the commit order.
     ///
-    /// The guard releases the turn on drop, so an error or an early return in
-    /// the caller cannot strand the stream: every publisher behind this one
-    /// would otherwise wait forever.
-    pub(crate) async fn turn(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
-        loop {
-            // Register interest *before* testing, or a release landing between
-            // the test and the await would be missed and this publisher would
-            // sleep until the next unrelated publish woke it.
-            let notified = self.ready.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-
-            let generation = {
-                let state = *self.state.lock();
-                if state.next >= first_offset {
-                    Some(state.generation)
-                } else {
-                    None
-                }
-            };
-            if let Some(generation) = generation {
-                return CommitTurn {
-                    sequencer: self,
-                    next_offset,
-                    generation,
-                };
-            }
-            notified.await;
+    /// Returns immediately and does **not** wait for a turn — call
+    /// [`CommitTurn::wait`] for that. The split matters: the guard must be
+    /// created the moment offsets are consumed, because from then on the range
+    /// exists on disk and every later offset is queued behind it. If the caller
+    /// then fails, or its future is cancelled part-way through the durability
+    /// wait, the guard's `Drop` still releases the range and the stream keeps
+    /// moving. Claiming the range only *after* a successful append is what
+    /// stranded the stream: an abandoned range never released, and every
+    /// subsequent publish waited on a turn that could not arrive.
+    pub(crate) fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
+        CommitTurn {
+            sequencer: self,
+            first_offset,
+            next_offset,
+            generation: self.state.lock().generation,
         }
     }
 }
 
-/// Holds a stream's commit turn. Releasing it lets the next offset proceed.
+/// A claim on one offset range. Releasing it lets the next range proceed.
 pub(crate) struct CommitTurn<'a> {
     sequencer: &'a CommitSequencer,
+    first_offset: Offset,
     next_offset: Offset,
-    /// Generation this turn was acquired in.
+    /// Generation this range was claimed in.
     generation: u64,
+}
+
+impl CommitTurn<'_> {
+    /// Wait until every lower offset has been released.
+    ///
+    /// Cancellation-safe: dropping the guard mid-wait releases this range too,
+    /// so a cancelled publisher cannot block the ones behind it.
+    pub(crate) async fn wait(&self) {
+        loop {
+            // Register interest *before* testing, or a release landing between
+            // the test and the await would be missed and this publisher would
+            // sleep until the next unrelated publish woke it.
+            let notified = self.sequencer.ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            {
+                let state = *self.sequencer.state.lock();
+                // A reset means the log was rewritten underneath this range, so
+                // there is nothing left to wait for.
+                if state.next >= self.first_offset || state.generation != self.generation {
+                    return;
+                }
+            }
+            notified.await;
+        }
+    }
 }
 
 impl Drop for CommitTurn<'_> {
@@ -153,7 +167,8 @@ mod tests {
     #[tokio::test]
     async fn the_first_offset_proceeds_immediately() {
         let sequencer = CommitSequencer::new(0);
-        let turn = sequencer.turn(0, 1).await;
+        let turn = sequencer.reserve(0, 1);
+        turn.wait().await;
         drop(turn);
         assert_eq!(sequencer.next_offset(), 1);
     }
@@ -166,7 +181,8 @@ mod tests {
         let waiter = {
             let sequencer = Arc::clone(&sequencer);
             tokio::spawn(async move {
-                let turn = sequencer.turn(5, 6).await;
+                let turn = sequencer.reserve(5, 6);
+                turn.wait().await;
                 drop(turn);
             })
         };
@@ -174,7 +190,10 @@ mod tests {
         assert!(!waiter.is_finished(), "offset 5 ran out of turn");
 
         // Releasing the intervening range lets it through.
-        drop(sequencer.turn(0, 5).await);
+        {
+            let turn = sequencer.reserve(0, 5);
+            turn.wait().await;
+        }
         tokio::time::timeout(Duration::from_secs(5), waiter)
             .await
             .expect("waiter should be released")
@@ -194,7 +213,8 @@ mod tests {
             let sequencer = Arc::clone(&sequencer);
             let observed = Arc::clone(&observed);
             tasks.push(tokio::spawn(async move {
-                let turn = sequencer.turn(offset, offset + 1).await;
+                let turn = sequencer.reserve(offset, offset + 1);
+                turn.wait().await;
                 observed.lock().push(offset);
                 drop(turn);
             }));
@@ -216,16 +236,64 @@ mod tests {
 
         // A publisher that takes its turn and then fails still releases it.
         let result: std::result::Result<(), ()> = async {
-            let _turn = sequencer.turn(0, 1).await;
+            let turn = sequencer.reserve(0, 1);
+            turn.wait().await;
             Err(())
         }
         .await;
         assert!(result.is_err());
 
         // The next publisher is not blocked by the failure.
-        tokio::time::timeout(Duration::from_secs(5), sequencer.turn(1, 2))
+        let next = sequencer.reserve(1, 2);
+        tokio::time::timeout(Duration::from_secs(5), next.wait())
             .await
             .expect("must not stall");
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_range_releases_the_ranges_behind_it() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+
+        // A publisher claims offsets 0..3 and is then cancelled before it ever
+        // gets its turn — the shape of a client disconnecting during the fsync
+        // wait, after its records are already on disk holding those offsets.
+        {
+            let _abandoned = sequencer.reserve(0, 3);
+        }
+
+        // The next range must still be reachable. Before the claim moved to
+        // assignment time, an abandoned range released nothing and every later
+        // publish on the stream waited forever.
+        let next = sequencer.reserve(3, 4);
+        tokio::time::timeout(Duration::from_secs(5), next.wait())
+            .await
+            .expect("an abandoned range stranded the stream");
+        assert_eq!(sequencer.next_offset(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_range_cancelled_mid_wait_releases_too() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+        let blocker = sequencer.reserve(0, 5);
+
+        // Waits for a turn that has not arrived, then is cancelled.
+        let waiter = {
+            let sequencer = Arc::clone(&sequencer);
+            tokio::spawn(async move {
+                let turn = sequencer.reserve(5, 9);
+                turn.wait().await;
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        waiter.abort();
+        let _ = waiter.await;
+        drop(blocker);
+
+        // The cancelled range released on drop, so the one behind it proceeds.
+        let after = sequencer.reserve(9, 10);
+        tokio::time::timeout(Duration::from_secs(5), after.wait())
+            .await
+            .expect("a cancelled waiter stranded the stream");
     }
 
     #[tokio::test]
@@ -236,7 +304,10 @@ mod tests {
         // an offset that no longer exists must be released rather than hang.
         let waiter = {
             let sequencer = Arc::clone(&sequencer);
-            tokio::spawn(async move { drop(sequencer.turn(20, 21).await) })
+            tokio::spawn(async move {
+                let turn = sequencer.reserve(20, 21);
+                turn.wait().await;
+            })
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(!waiter.is_finished());
@@ -251,7 +322,8 @@ mod tests {
     #[tokio::test]
     async fn a_stale_release_cannot_undo_a_reset() {
         let sequencer = CommitSequencer::new(100);
-        let turn = sequencer.turn(100, 101).await;
+        let turn = sequencer.reserve(100, 101);
+        turn.wait().await;
         // A truncation rewinds the log while the turn is held.
         sequencer.reset(5);
         drop(turn);

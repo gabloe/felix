@@ -37,6 +37,11 @@ pub const SYNC_FAILURES_TOTAL: &str = "felix_storage_sync_failures_total";
 /// Bytes written but not yet flushed: the data a crash would lose right now.
 pub const UNSYNCED_BYTES: &str = "felix_storage_unsynced_bytes";
 
+/// Sparse index writes that failed. Non-fatal: the index is rebuilt on the next
+/// open. A persistently non-zero value means every restart is paying for a
+/// full rebuild scan.
+pub const INDEX_WRITE_FAILURES_TOTAL: &str = "felix_storage_index_write_failures_total";
+
 /// Segment rollovers.
 pub const SEGMENT_ROLL_TOTAL: &str = "felix_storage_segment_roll_total";
 /// Segments currently on disk for a shard.

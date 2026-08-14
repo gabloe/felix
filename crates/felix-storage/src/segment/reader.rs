@@ -128,26 +128,37 @@ fn is_repairable_tail(
     repair_checksum_tail: bool,
 ) -> bool {
     match kind {
-        // The record does not fit in the file at all: a write that stopped
-        // part-way is the only way to produce this, and nothing can have
-        // acknowledged a record that was never finished.
-        CorruptionKind::Truncated { .. } => true,
-        // The record decodes to a full extent but its contents do not verify.
+        // The header verified, so `payload_len` is the length the writer
+        // actually intended — and the file ends before it. Nothing but an
+        // unfinished write produces that, and nothing can have acknowledged a
+        // record that was never finished. Provably repairable.
         //
-        // This is *not* provably an incomplete write. A torn write and bit rot
-        // on an already-acknowledged record produce the same bytes, and under
-        // `OnCommit` the record may have been fsynced and acknowledged before
-        // rotting. Truncating on a guess would silently delete data the caller
-        // was told was safe, so it happens only when an operator has opted in.
+        // Before v2 this was only *probably* true: a rotted length field on a
+        // complete, acknowledged record produced the same error, and truncating
+        // deleted data the caller had been told was safe. The header checksum
+        // is what turned the guess into a decision.
+        CorruptionKind::Truncated { .. } => true,
+        // The header itself did not verify, so nothing it says can be trusted —
+        // including its length. This may be an unfinished write, or a complete
+        // record whose header rotted after being acknowledged. The two are
+        // indistinguishable from the bytes, so recovery refuses to choose
+        // unless an operator has said which risk they prefer.
+        CorruptionKind::RecordHeaderChecksum { .. } => {
+            repair_checksum_tail && position.saturating_add(RECORD_HEADER_LEN) >= file_len
+        }
+        // The header verified but the payload did not. The record is complete
+        // on disk, so this is rot rather than a torn write, and under
+        // `OnCommit` it may already have been acknowledged.
         CorruptionKind::RecordChecksum { .. } | CorruptionKind::OffsetOutOfOrder { .. } => {
             repair_checksum_tail
                 && claimed_len.is_some_and(|len| position.saturating_add(len) >= file_len)
         }
-        // A garbage length field describing a record that could not possibly
-        // fit in the file: the signature of a half-written header, so provably
-        // incomplete and always repairable.
+        // A verified header carrying an impossible length. The writer rejects
+        // oversized records, so this is damage the checksum did not catch;
+        // treat it as ambiguous rather than assume a torn write.
         CorruptionKind::RecordTooLarge { payload_len, .. } => {
-            position.saturating_add(RECORD_HEADER_LEN + u64::from(*payload_len)) > file_len
+            repair_checksum_tail
+                && position.saturating_add(RECORD_HEADER_LEN + u64::from(*payload_len)) > file_len
         }
         _ => false,
     }
@@ -703,7 +714,32 @@ mod tests {
     }
 
     #[test]
-    fn a_garbage_length_at_the_tail_is_repairable() {
+    fn a_garbage_header_at_the_tail_is_not_repaired_by_default() {
+        let dir = tempdir().expect("dir");
+        let path = dir.path().join("a.log");
+        let mut bytes = write_segment(&path, 0, 1);
+        // Debris that happens to encode a huge length. Its header checksum does
+        // not verify, so the length means nothing — and a record whose header
+        // cannot be trusted might equally be a complete, acknowledged record
+        // that rotted. Recovery refuses to decide.
+        bytes.extend_from_slice(&u32::MAX.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; (RECORD_HEADER_LEN - 4) as usize]);
+        std::fs::write(&path, &bytes).expect("write");
+
+        // Explicitly the default policy, not the permissive test helper.
+        let err = scan_segment(&path, 0, "t/ns/s/0", 4096, ScanStart::Full, false)
+            .expect_err("ambiguous tail must not be truncated silently");
+        let StorageError::Corruption(detail) = err else {
+            panic!("expected corruption");
+        };
+        assert!(matches!(
+            detail.kind,
+            CorruptionKind::RecordHeaderChecksum { .. }
+        ));
+    }
+
+    #[test]
+    fn an_operator_can_opt_in_to_repairing_an_ambiguous_tail() {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         let mut bytes = write_segment(&path, 0, 1);
@@ -711,11 +747,32 @@ mod tests {
         bytes.extend_from_slice(&[0u8; (RECORD_HEADER_LEN - 4) as usize]);
         std::fs::write(&path, &bytes).expect("write");
 
-        let outcome = scan(&path).expect("scan should repair");
+        let outcome =
+            scan_segment(&path, 0, "t/ns/s/0", 4096, ScanStart::Full, true).expect("opt-in repair");
         assert_eq!(outcome.record_count, 1);
         assert!(matches!(
             outcome.torn_tail.expect("tail").cause,
-            CorruptionKind::RecordTooLarge { .. }
+            CorruptionKind::RecordHeaderChecksum { .. }
+        ));
+    }
+
+    #[test]
+    fn a_payload_cut_short_by_a_crash_is_still_repaired_automatically() {
+        let dir = tempdir().expect("dir");
+        let path = dir.path().join("a.log");
+        let full = write_segment(&path, 0, 3);
+        // Cut inside the last record's payload: the header is intact and
+        // verifies, so its length is trustworthy and the shortfall is provably
+        // an unfinished write. This is the ordinary crash case and must not
+        // require operator intervention.
+        std::fs::write(&path, &full[..full.len() - 3]).expect("write");
+
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 4096, ScanStart::Full, false)
+            .expect("a torn payload is provably incomplete");
+        assert_eq!(outcome.record_count, 2);
+        assert!(matches!(
+            outcome.torn_tail.expect("tail").cause,
+            CorruptionKind::Truncated { .. }
         ));
     }
 

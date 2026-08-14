@@ -698,3 +698,164 @@ async fn historical_replay_is_rejected_for_a_non_durable_stream() {
         .expect_err("no persisted history");
     assert!(matches!(err, BrokerError::StreamNotDurable { .. }), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_publish_does_not_strand_the_stream() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+
+    broker
+        .publish("t1", "default", "orders", payload("first"))
+        .await
+        .expect("publish");
+
+    // Cancel a publish mid-flight. Offsets are assigned synchronously under the
+    // segment lock and the fsync wait happens after, so a timeout landing in
+    // that window drops the future *after* its offsets were consumed.
+    for _ in 0..10 {
+        let _ = tokio::time::timeout(
+            Duration::from_micros(200),
+            broker.publish("t1", "default", "orders", payload("cancelled")),
+        )
+        .await;
+    }
+
+    // The stream must still accept publishes. If a consumed offset range can be
+    // abandoned without releasing its place in the commit order, every later
+    // publish waits for a turn that never comes.
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        broker.publish("t1", "default", "orders", payload("after")),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "stream deadlocked: a cancelled publish stranded the commit order"
+    );
+    result.expect("timeout").expect("publish");
+}
+
+#[tokio::test]
+async fn a_failed_hydration_leaves_no_registered_stream() {
+    let dir = tempdir().expect("dir");
+    let storage = DurableStorage::open(dir.path(), log_config(FsyncMode::None)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage);
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+
+    // Block the shard directory with a file so opening the log fails. The
+    // registration must fail *whole*: a stream that could not be initialised
+    // must not be left publishable, accepting writes it cannot persist or
+    // replay.
+    let shard_dir = felix_storage::disk_log::layout::shard_dir(
+        dir.path(),
+        &felix_storage::log::ShardKey {
+            tenant: "t1".into(),
+            namespace: "default".into(),
+            stream: "orders".into(),
+            shard: 0,
+        },
+    );
+    std::fs::write(&shard_dir, b"not a directory").expect("block the shard dir");
+
+    let err = broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("registration should fail");
+    assert!(matches!(err, BrokerError::Storage(_)), "{err}");
+
+    // Neither registry may hold it, and publishing must report the stream as
+    // absent rather than silently succeeding into memory.
+    assert!(!broker.stream_exists("t1", "default", "orders").await);
+    let publish = broker
+        .publish("t1", "default", "orders", payload("x"))
+        .await
+        .expect_err("must not be publishable");
+    assert!(
+        matches!(publish, BrokerError::StreamNotFound { .. }),
+        "{publish}"
+    );
+}
+
+#[tokio::test]
+async fn hydration_never_leaves_a_gap_between_the_ring_and_the_tail() {
+    let dir = tempdir().expect("dir");
+    // A per-read record cap below the ring's capacity, so the window hydration
+    // wants cannot be satisfied by one read. The same shape occurs in
+    // production whenever the ring's worth of tail exceeds the byte budget.
+    let config = LogConfig {
+        max_records_per_read: 100,
+        ..log_config(FsyncMode::None)
+    };
+
+    async fn boot(dir: &TempDir, config: LogConfig) -> (Broker, DurableStorage) {
+        let storage = DurableStorage::open(dir.path(), config).expect("storage");
+        let broker = Broker::new(EphemeralCache::new().into())
+            .with_durable_storage(storage.clone())
+            .with_log_capacity(500)
+            .expect("capacity");
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        register(&broker, "orders", true).await;
+        (broker, storage)
+    }
+
+    // A client reads up to offset 550, saves its cursor, then 50 more arrive.
+    let saved_cursor;
+    {
+        let (broker, storage) = boot(&dir, config.clone()).await;
+        for i in 0..550 {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("v{i:04}")))
+                .await
+                .expect("publish");
+        }
+        saved_cursor = broker
+            .cursor_tail("t1", "default", "orders")
+            .await
+            .expect("cursor");
+        assert_eq!(saved_cursor.next_seq(), 550);
+        for i in 550..600 {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("v{i:04}")))
+                .await
+                .expect("publish");
+        }
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    // Restart. Hydration wants offsets 100..600 but one read returns only 100
+    // records. If it keeps that earliest prefix and still advances next_seq to
+    // 600, the ring holds 100..200 with a hole up to the tail — and a cursor at
+    // 550 is accepted (550 >= 100) and answered with silence.
+    let (broker, _storage) = boot(&dir, config).await;
+    let (backlog, _sub) = broker
+        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .await
+        .expect("replay from a saved cursor");
+
+    assert_eq!(
+        backlog.len(),
+        50,
+        "cursor at 550 replayed {} records instead of 50 — an empty or short \
+         backlog here reads as \"you are caught up\" while records are missing",
+        backlog.len()
+    );
+    assert_eq!(backlog[0], payload("v0550"));
+    assert_eq!(backlog[49], payload("v0599"));
+}

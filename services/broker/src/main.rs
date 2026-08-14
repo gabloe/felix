@@ -80,7 +80,18 @@ where
     // endpoint has to outlive the drain — that is how an operator watches the drain
     // happen. `connections` tracks per-connection tasks so the drain can wait for
     // in-flight work instead of aborting it.
-    let readiness = Readiness::ready();
+    // Durable brokers start *not* ready. Their streams do not exist until the
+    // control plane has been applied and each durable log recovered, and an
+    // instance that reports ready before then invites an orchestrator to route
+    // traffic at streams that are, from any client's point of view, missing.
+    // An in-memory broker has nothing to recover and keeps the old behaviour.
+    let durable_storage_configured = DurableStorageConfig::from_env()?.is_some();
+    let gate_readiness_on_sync = durable_storage_configured && config.controlplane_url.is_some();
+    let readiness = if gate_readiness_on_sync {
+        Readiness::starting()
+    } else {
+        Readiness::ready()
+    };
     let accept_shutdown = CancellationToken::new();
     let sync_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
@@ -184,10 +195,12 @@ where
 
     // Optional: start a periodic control-plane sync to keep tenant/namespace/stream metadata
     // refreshed. When disabled, the broker relies solely on local registrations.
+    let (seeded_tx, seeded_rx) = tokio::sync::oneshot::channel();
     let controlplane_task = if let Some(base_url) = config.controlplane_url.clone() {
         let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
         let sync_shutdown = sync_shutdown.clone();
+        let seeded_tx = gate_readiness_on_sync.then_some(seeded_tx);
         Some(tokio::spawn(async move {
             // `start_sync` polls forever, so cancellation is what ends it. Dropping
             // it mid-iteration is safe: the sync is a read-only metadata refresh
@@ -197,10 +210,11 @@ where
                 _ = sync_shutdown.cancelled() => {
                     tracing::info!("control plane sync stopped");
                 }
-                result = controlplane::start_sync(
+                result = controlplane::start_sync_with_signal(
                     broker,
                     base_url,
                     Duration::from_millis(interval_ms),
+                    seeded_tx,
                 ) => {
                     if let Err(err) = result {
                         tracing::warn!(error = %err, "control plane sync exited");
@@ -215,6 +229,21 @@ where
 
     // Block until the shutdown signal resolves so the process stays alive.
     shutdown.await;
+
+    // Flip to ready once the catalog has been applied and every durable stream
+    // it named has been recovered. Deliberately a task rather than an await:
+    // the listener is already accepting and `/ready` already reports false, so
+    // holding startup here would only delay the point at which an operator can
+    // see the broker's state.
+    if gate_readiness_on_sync {
+        let readiness = readiness.clone();
+        tokio::spawn(async move {
+            if seeded_rx.await.is_ok() {
+                readiness.mark_ready();
+                tracing::info!("initial control-plane sync applied; reporting ready");
+            }
+        });
+    }
 
     // Step 1: stop advertising readiness. Load balancers and the Kubernetes
     // endpoints controller drop this instance from rotation while it can still

@@ -69,6 +69,9 @@ pub struct SegmentWriter {
     /// Set when a failed append could not be rolled back. The segment's real
     /// length is then unknown, so further appends are refused.
     poisoned: bool,
+    /// Set when an index write has failed. Purely informational: the index is
+    /// rebuilt from the segment on the next open, so the log stays correct.
+    index_degraded: bool,
 }
 
 impl SegmentWriter {
@@ -114,6 +117,7 @@ impl SegmentWriter {
             staging: Vec::new(),
             sync_handle,
             poisoned: false,
+            index_degraded: false,
         })
     }
 
@@ -161,6 +165,7 @@ impl SegmentWriter {
             staging: Vec::new(),
             sync_handle,
             poisoned: false,
+            index_degraded: false,
         })
     }
 
@@ -287,8 +292,32 @@ impl SegmentWriter {
         self.size_bytes = position;
         self.next_offset = offset;
         self.record_count += records.len() as u64;
+        // The index is an accelerator, not a record of truth: a missing or
+        // stale one is rebuilt from the segment on open, and every read
+        // re-validates the records it lands on. So an index write that fails
+        // must not fail the append.
+        //
+        // Returning `Err` here would be actively harmful. The data write has
+        // already succeeded and the offsets are already spent, so the error
+        // would look retryable to a caller who cannot retry: retrying appends
+        // the batch a second time under new offsets, and not retrying leaves a
+        // publish reported as failed that is in fact durably stored.
         for (offset, position, written) in boundaries {
-            self.index.observe_record(offset, position, written)?;
+            if let Err(err) = self.index.observe_record(offset, position, written) {
+                if !self.index_degraded {
+                    self.index_degraded = true;
+                    tracing::warn!(
+                        segment = self.id,
+                        offset,
+                        error = %err,
+                        "sparse index write failed; the index will be rebuilt on next open"
+                    );
+                    metrics::counter!(metrics_names::INDEX_WRITE_FAILURES_TOTAL).increment(1);
+                }
+                // Stop feeding a writer that is already failing; the remaining
+                // boundaries would only repeat the same error.
+                break;
+            }
         }
 
         metrics::counter!(metrics_names::APPEND_RECORDS_TOTAL).increment(records.len() as u64);
