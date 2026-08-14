@@ -7,6 +7,7 @@
 // - `error` / `config`: shared error type, capacity defaults, queue policy.
 // - `keys`: map keys plus their borrowed lookup twins.
 // - `delivery`: shared delivery batches and queue-depth accounting.
+// - `commit_order`: one authoritative publish order per durable stream.
 // - `stream_state`: per-stream subscriber registry, snapshot, and replay log.
 // - `durable`: disk-backed logs for streams registered with `durable: true`.
 // - `subscription`: subscriber-facing receive handles.
@@ -20,6 +21,7 @@
 mod telemetry;
 
 mod broker;
+mod commit_order;
 mod config;
 mod delivery;
 pub mod durable;

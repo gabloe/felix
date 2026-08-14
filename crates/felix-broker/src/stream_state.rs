@@ -10,10 +10,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
+use crate::commit_order::CommitSequencer;
 use crate::config::SubQueuePolicy;
 use crate::delivery::QueuedDelivery;
 use crate::durable::StreamLog;
 use crate::subscription::SubscriptionReceiver;
+use felix_storage::log::LogRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
@@ -53,6 +55,10 @@ pub(crate) struct StreamState {
     // fanout read from, and dropping it for durable streams would put a file
     // read on the fanout path.
     pub(crate) durable: Option<StreamLog>,
+    // Orders the post-durability half of a publish by disk offset, so cursor
+    // replay and subscriber delivery agree with what is on disk. Only durable
+    // streams use it; an ephemeral stream has no disk offsets to order by.
+    pub(crate) commit_sequencer: CommitSequencer,
 }
 
 #[derive(Debug, Default)]
@@ -94,6 +100,7 @@ impl StreamState {
             subscriber_queue_policy,
             queued_items: Arc::new(AtomicUsize::new(0)),
             durable,
+            commit_sequencer: CommitSequencer::new(0),
         }
     }
 
@@ -102,11 +109,46 @@ impl StreamState {
     /// A durable stream that recovered records from disk must not restart its
     /// cursor numbering at zero, or a subscriber resuming from a pre-restart
     /// cursor would silently receive the wrong records.
-    pub(crate) fn resume_at(&self, next_seq: u64) {
+    /// Refill the replay ring from a recovered durable log.
+    ///
+    /// Without this, a restart leaves the ring empty while `next_seq` jumps to
+    /// the durable tail, so every cursor a client held from before the restart
+    /// looks older than the oldest entry and `subscribe_with_cursor` answers
+    /// `CursorTooOld` — even though the records are sitting on disk. Hydrating
+    /// restores the same replay window the stream had before it stopped.
+    ///
+    /// `records` is already bounded by the caller to the ring's capacity; the
+    /// ring is a fixed-size cache of the tail, not a second copy of the log.
+    ///
+    /// For durable streams a record's cursor sequence *is* its disk offset:
+    /// both start at zero and advance by one per record, and this is what keeps
+    /// them in step across a restart. The entries are therefore seeded with
+    /// their on-disk offsets rather than renumbered.
+    pub(crate) fn hydrate(&self, records: Vec<LogRecord>, next_seq: u64, capacity: usize) {
         let mut state = self.log_state.lock();
-        if state.log.is_empty() {
-            state.next_seq = next_seq;
+        // Only ever seeds a fresh stream. A re-registration of a live stream
+        // must not disturb a ring that is already serving cursors.
+        if !state.log.is_empty() {
+            return;
         }
+        for record in records {
+            if record.offset >= next_seq {
+                continue;
+            }
+            state.log.push_back(LogEntry {
+                seq: record.offset,
+                payload: record.payload,
+            });
+        }
+        let overflow = state.log.len().saturating_sub(capacity);
+        if overflow > 0 {
+            state.log.drain(..overflow);
+        }
+        state.next_seq = next_seq;
+        // The commit order is keyed on disk offsets, so it has to restart from
+        // the recovered tail too, or the first publish after a restart would
+        // wait for an offset that has already been written.
+        self.commit_sequencer.reset(next_seq);
     }
 
     pub(crate) fn deactivate(&self) {

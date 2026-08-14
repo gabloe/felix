@@ -94,6 +94,51 @@ pub struct BrokerConfig {
     pub sub_stream_mode: SubStreamMode,
 }
 
+impl Default for BrokerConfig {
+    fn default() -> Self {
+        Self {
+            quic_bind: SocketAddr::from(([0, 0, 0, 0], 5000)),
+            metrics_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            controlplane_url: None,
+            controlplane_sync_interval_ms: 2000,
+            ack_on_commit: false,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            publish_queue_wait_timeout_ms: DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS,
+            ack_wait_timeout_ms: DEFAULT_ACK_WAIT_TIMEOUT_MS,
+            disable_timings: DEFAULT_DISABLE_TIMINGS,
+            control_stream_drain_timeout_ms: DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS,
+            shutdown_drain_timeout_ms: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
+            cache_conn_recv_window: DEFAULT_CACHE_CONN_RECV_WINDOW,
+            cache_stream_recv_window: DEFAULT_CACHE_STREAM_RECV_WINDOW,
+            cache_send_window: DEFAULT_CACHE_SEND_WINDOW,
+            event_batch_max_events: 64,
+            event_batch_max_bytes: 64 * 1024,
+            event_batch_max_delay_us: DEFAULT_EVENT_BATCH_MAX_DELAY_US,
+            fanout_batch_size: 64,
+            pub_workers_per_conn: DEFAULT_PUB_WORKERS_PER_CONN,
+            pub_queue_depth: DEFAULT_PUB_QUEUE_DEPTH,
+            pub_inflight_bytes: DEFAULT_PUB_INFLIGHT_BYTES,
+            pub_conn_inflight_bytes: DEFAULT_PUB_CONN_INFLIGHT_BYTES,
+            pub_ingress_wait: false,
+            core_shards: 0,
+            subscriber_queue_capacity: DEFAULT_SUBSCRIBER_QUEUE_CAPACITY,
+            max_subscriptions_per_conn: DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN,
+            subscriber_queue_policy: DEFAULT_SUBSCRIBER_QUEUE_POLICY,
+            subscriber_writer_lanes: DEFAULT_SUBSCRIBER_WRITER_LANES,
+            subscriber_lane_queue_depth: DEFAULT_SUBSCRIBER_LANE_QUEUE_DEPTH,
+            subscriber_lane_queue_policy: DEFAULT_SUBSCRIBER_LANE_QUEUE_POLICY,
+            max_subscriber_writer_lanes: DEFAULT_MAX_SUBSCRIBER_WRITER_LANES,
+            subscriber_lane_shard: DEFAULT_SUBSCRIBER_LANE_SHARD,
+            subscriber_single_writer_per_conn: false,
+            subscriber_flush_max_items: DEFAULT_SUBSCRIBER_FLUSH_MAX_ITEMS,
+            subscriber_flush_max_delay_us: DEFAULT_SUBSCRIBER_FLUSH_MAX_DELAY_US,
+            subscriber_max_bytes_per_write: DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE,
+            sub_streams_per_conn: DEFAULT_SUB_STREAMS_PER_CONN,
+            sub_stream_mode: DEFAULT_SUB_STREAM_MODE,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubscriberLaneShard {

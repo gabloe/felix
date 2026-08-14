@@ -105,18 +105,32 @@ impl SegmentSet {
             .collect()
     }
 
+    /// Whether appending `records` would first require a rollover.
+    ///
+    /// Exposed so the async layer can perform the roll — which seals a segment,
+    /// creates another, and fsyncs both plus the directory — on a blocking
+    /// thread instead of inline on a reactor worker.
+    pub fn would_roll(&self, records: &[AppendRecord]) -> bool {
+        self.active.projected_size(records) > self.config.segment_size_bytes
+            && self.active.record_count() > 0
+    }
+
     /// Append a batch, rolling to a new segment first if it would not fit.
     ///
     /// A batch is never split across segments: offsets stay contiguous either
     /// way, but keeping a batch whole means one `write` call and one index
     /// update per append regardless of where the boundary falls.
     pub fn append(&mut self, records: &[AppendRecord]) -> Result<(Offset, Offset)> {
-        let projected = self.active.projected_size(records);
         // An empty active segment must accept the batch even when it is
         // oversized — otherwise a record larger than `segment_size_bytes` could
         // never be written at all. Such a record gets a segment to itself and
         // the next append rolls again.
-        if projected > self.config.segment_size_bytes && self.active.record_count() > 0 {
+        //
+        // Normally `DiskLog::append` has already rolled off-thread by this
+        // point; this is the fallback for a roll that became necessary in the
+        // window since that check, and for callers that drive `SegmentSet`
+        // directly.
+        if self.would_roll(records) {
             self.roll()?;
         }
         self.active.append(records)
@@ -254,6 +268,7 @@ impl SegmentSet {
             &self.label,
             self.config.index_spacing_bytes,
             ScanStart::Full,
+            self.config.repair_checksum_tail,
         )?;
         self.active = SegmentWriter::reopen(
             &self.dir,

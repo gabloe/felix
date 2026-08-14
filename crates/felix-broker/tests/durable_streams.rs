@@ -250,6 +250,99 @@ async fn durable_and_non_durable_streams_coexist() {
 }
 
 #[tokio::test]
+async fn upgrading_a_live_stream_to_durable_requires_recreation() {
+    let dir = tempdir().expect("dir");
+    let (broker, storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", false).await;
+
+    broker
+        .publish("t1", "default", "orders", payload("before"))
+        .await
+        .expect("publish");
+    let err = broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("live durability change");
+    assert!(matches!(
+        err,
+        BrokerError::DurabilityChangeRequiresRecreate {
+            current: false,
+            requested: true,
+            ..
+        }
+    ));
+
+    broker
+        .publish("t1", "default", "orders", payload("after"))
+        .await
+        .expect("stream remains ephemeral");
+    assert_eq!(
+        std::fs::read_dir(storage.root())
+            .expect("read root")
+            .filter_map(|entry| entry.ok())
+            .count(),
+        0,
+        "a rejected upgrade must not create durable state"
+    );
+}
+
+#[tokio::test]
+async fn downgrading_a_live_durable_stream_requires_recreation() {
+    let dir = tempdir().expect("dir");
+    let (broker, storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+    broker
+        .publish("t1", "default", "orders", payload("before"))
+        .await
+        .expect("publish");
+
+    let err = broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: false,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("live durability change");
+    assert!(matches!(
+        err,
+        BrokerError::DurabilityChangeRequiresRecreate {
+            current: true,
+            requested: false,
+            ..
+        }
+    ));
+
+    broker
+        .publish("t1", "default", "orders", payload("after"))
+        .await
+        .expect("stream remains durable");
+    let log = storage
+        .open_stream("t1", "default", "orders", 0)
+        .expect("log");
+    let records = log.read_from(0, usize::MAX).await.expect("read");
+    assert_eq!(
+        records
+            .into_iter()
+            .map(|record| record.payload)
+            .collect::<Vec<_>>(),
+        vec![payload("before"), payload("after")]
+    );
+}
+
+#[tokio::test]
 async fn registering_a_durable_stream_without_storage_is_rejected() {
     let broker = Broker::new(EphemeralCache::new().into());
     broker.register_tenant("t1").await.expect("tenant");
@@ -270,7 +363,13 @@ async fn registering_a_durable_stream_without_storage_is_rejected() {
         )
         .await
         .expect_err("no storage configured");
-    assert!(matches!(err, BrokerError::Storage(_)));
+    // A distinct variant from `Storage`, so the control-plane watcher can skip
+    // a stream this broker will never be able to host while still failing hard
+    // on a real storage failure.
+    assert!(
+        matches!(err, BrokerError::DurableStorageNotConfigured { .. }),
+        "{err}"
+    );
 
     // The stream must not exist: a half-registered durable stream would accept
     // publishes it cannot persist.
@@ -380,4 +479,222 @@ async fn a_batch_publish_lands_as_one_contiguous_run() {
         assert_eq!(record.offset, index as u64);
         assert_eq!(record.payload, batch[index]);
     }
+}
+
+/// End-to-end check that the three orders agree.
+///
+/// This is a smoke test, not a regression test: it passes with the commit
+/// sequencer removed, because the reordering window needs a scheduler
+/// interleaving that 32 publishers on a 4-worker runtime do not reliably
+/// produce. The deterministic proof that turns are granted in offset order
+/// regardless of arrival order lives in `commit_order`'s unit tests, which fail
+/// immediately if the primitive stops ordering. What this test does buy is
+/// coverage of the wiring - that the sequencer is actually on the publish path
+/// and that holding a turn across fanout does not deadlock or drop records.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disk_order_cursor_order_and_delivery_order_agree_under_concurrency() {
+    let dir = tempdir().expect("dir");
+    let (broker, storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+
+    let cursor = broker
+        .cursor_tail("t1", "default", "orders")
+        .await
+        .expect("cursor");
+    let mut sub = broker
+        .subscribe("t1", "default", "orders")
+        .await
+        .expect("subscribe");
+
+    const PUBLISHERS: u32 = 32;
+    let mut tasks = Vec::new();
+    for i in 0..PUBLISHERS {
+        let broker = Arc::clone(&broker);
+        tasks.push(tokio::spawn(async move {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("v{i:03}")))
+                .await
+                .expect("publish");
+        }));
+    }
+    for task in tasks {
+        task.await.expect("join");
+    }
+
+    // 1. The order on disk.
+    let log = storage
+        .open_stream("t1", "default", "orders", 0)
+        .expect("log");
+    let on_disk: Vec<String> = log
+        .read_from(0, usize::MAX)
+        .await
+        .expect("read")
+        .into_iter()
+        .map(|r| String::from_utf8(r.payload.to_vec()).expect("utf8"))
+        .collect();
+    assert_eq!(on_disk.len(), PUBLISHERS as usize);
+
+    // 2. The order a subscriber received them in.
+    let mut delivered = Vec::new();
+    while delivered.len() < PUBLISHERS as usize {
+        let msg = tokio::time::timeout(Duration::from_secs(10), sub.recv())
+            .await
+            .expect("delivery timeout")
+            .expect("message");
+        delivered.push(String::from_utf8(msg.to_vec()).expect("utf8"));
+    }
+
+    // 3. The order cursor replay returns them in.
+    let (replayed, _) = broker
+        .subscribe_with_cursor("t1", "default", "orders", cursor)
+        .await
+        .expect("replay");
+    let replayed: Vec<String> = replayed
+        .into_iter()
+        .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
+        .collect();
+
+    // All three must be the same sequence.
+    assert_eq!(
+        delivered, on_disk,
+        "delivery order disagrees with disk order"
+    );
+    assert_eq!(replayed, on_disk, "cursor replay disagrees with disk order");
+
+    storage.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn a_pre_restart_cursor_still_replays_after_a_restart() {
+    let dir = tempdir().expect("dir");
+    let saved_cursor;
+    {
+        let (broker, storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+        register(&broker, "orders", true).await;
+
+        // A client subscribes, reads a few records, and remembers where it got
+        // to — the ordinary resume pattern.
+        saved_cursor = broker
+            .cursor_tail("t1", "default", "orders")
+            .await
+            .expect("cursor");
+        for i in 0..20 {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("v{i:02}")))
+                .await
+                .expect("publish");
+        }
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    // The broker restarts. Before the replay ring was hydrated from disk this
+    // returned CursorTooOld: the ring was empty, so its "oldest" was the
+    // recovered tail and every saved cursor looked ancient.
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+
+    let (backlog, mut sub) = broker
+        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .await
+        .expect("replay after restart");
+    let replayed: Vec<String> = backlog
+        .into_iter()
+        .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
+        .collect();
+    assert_eq!(replayed.len(), 20, "pre-restart history was not replayed");
+    assert_eq!(replayed[0], "v00");
+    assert_eq!(replayed[19], "v19");
+
+    // And the subscription is live from the point the backlog ended, with no
+    // gap and no duplicate across the seam.
+    broker
+        .publish("t1", "default", "orders", payload("after"))
+        .await
+        .expect("publish");
+    let next = tokio::time::timeout(Duration::from_secs(5), sub.recv())
+        .await
+        .expect("timeout")
+        .expect("message");
+    assert_eq!(next, payload("after"));
+}
+
+#[tokio::test]
+async fn hydration_is_bounded_by_the_replay_ring_capacity() {
+    let dir = tempdir().expect("dir");
+    {
+        let (broker, storage) = broker_with_storage(&dir, FsyncMode::None).await;
+        register(&broker, "orders", true).await;
+        for i in 0..300 {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("v{i:04}")))
+                .await
+                .expect("publish");
+        }
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    // A small ring: hydration must fill it with the *tail* of the log and stop,
+    // not pull the whole history into memory.
+    let storage = DurableStorage::open(dir.path(), log_config(FsyncMode::None)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into())
+        .with_durable_storage(storage)
+        .with_topic_capacity(16)
+        .expect("capacity")
+        .with_log_capacity(16)
+        .expect("log capacity");
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    register(&broker, "orders", true).await;
+
+    // Cursors inside the ring window resolve from memory...
+    let (backlog, _sub) = broker
+        .subscribe_with_cursor("t1", "default", "orders", {
+            let tail = broker
+                .cursor_tail("t1", "default", "orders")
+                .await
+                .expect("cursor");
+            assert_eq!(tail.next_seq(), 300, "cursor did not resume at the tail");
+            tail
+        })
+        .await
+        .expect("subscribe at tail");
+    assert!(backlog.is_empty(), "a tail cursor should have no backlog");
+
+    // ...and everything older is reachable through the paged replay API rather
+    // than by growing the ring.
+    let mut seen = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let page = broker
+            .read_durable("t1", "default", "orders", offset, 4096)
+            .await
+            .expect("read_durable");
+        if page.is_empty() {
+            break;
+        }
+        offset = page.last().expect("last").offset + 1;
+        seen.extend(
+            page.into_iter()
+                .map(|r| String::from_utf8(r.payload.to_vec()).expect("utf8")),
+        );
+    }
+    assert_eq!(seen.len(), 300, "paged replay did not cover the whole log");
+    assert_eq!(seen[0], "v0000");
+    assert_eq!(seen[299], "v0299");
+}
+
+#[tokio::test]
+async fn historical_replay_is_rejected_for_a_non_durable_stream() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::None).await;
+    register(&broker, "ephemeral", false).await;
+
+    let err = broker
+        .read_durable("t1", "default", "ephemeral", 0, 4096)
+        .await
+        .expect_err("no persisted history");
+    assert!(matches!(err, BrokerError::StreamNotDurable { .. }), "{err}");
 }

@@ -66,6 +66,9 @@ pub struct SegmentWriter {
     /// A duplicate descriptor used only for flushing, so a sync never has to
     /// hold the lock that guards `file`.
     sync_handle: Arc<File>,
+    /// Set when a failed append could not be rolled back. The segment's real
+    /// length is then unknown, so further appends are refused.
+    poisoned: bool,
 }
 
 impl SegmentWriter {
@@ -110,6 +113,7 @@ impl SegmentWriter {
             record_count: 0,
             staging: Vec::new(),
             sync_handle,
+            poisoned: false,
         })
     }
 
@@ -156,6 +160,7 @@ impl SegmentWriter {
             record_count,
             staging: Vec::new(),
             sync_handle,
+            poisoned: false,
         })
     }
 
@@ -227,6 +232,12 @@ impl SegmentWriter {
     pub fn append(&mut self, records: &[AppendRecord]) -> Result<(Offset, Offset)> {
         debug_assert!(!records.is_empty());
 
+        if self.poisoned {
+            return Err(StorageError::Unsupported(
+                "segment writer is poisoned after a failed append could not be rolled back",
+            ));
+        }
+
         for record in records {
             if record.payload.len() > MAX_PAYLOAD_BYTES as usize {
                 return Err(StorageError::Unsupported(
@@ -255,7 +266,23 @@ impl SegmentWriter {
         }
 
         // One syscall for the whole batch.
-        self.file.write_all(&self.staging)?;
+        //
+        // A failure here can still have written some of the buffer: `write_all`
+        // loops over partial writes, so an error means "some prefix landed",
+        // not "nothing happened". Left alone, those bytes sit past the last
+        // record this writer knows about, the file cursor points past them, and
+        // the next append lands after the debris - turning a failed write into
+        // interior corruption that recovery must refuse to start on, or into a
+        // duplicate if the caller retries.
+        //
+        // So a failed append rewinds the file to the last good byte. If the
+        // rewind itself fails there is no way to restore the invariant, and the
+        // writer refuses further appends rather than building on a file whose
+        // shape it no longer knows.
+        if let Err(err) = self.file.write_all(&self.staging) {
+            self.rewind_after_failed_write()?;
+            return Err(StorageError::Io(err));
+        }
 
         self.size_bytes = position;
         self.next_offset = offset;
@@ -290,6 +317,29 @@ impl SegmentWriter {
         metrics::histogram!(metrics_names::SYNC_DURATION_SECONDS)
             .record(started.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    /// Restore the file to the last byte this writer accounts for.
+    ///
+    /// Called only after a failed append, so that a partial write leaves no
+    /// trace and the segment stays exactly as it was before the attempt.
+    fn rewind_after_failed_write(&mut self) -> Result<()> {
+        let valid = self.size_bytes;
+        let restore = self
+            .file
+            .set_len(valid)
+            .and_then(|()| self.file.seek(SeekFrom::Start(valid)).map(|_| ()));
+        match restore {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // The segment's on-disk shape no longer matches this writer's
+                // idea of it, and nothing here can reconcile them.
+                self.poisoned = true;
+                Err(StorageError::Io(std::io::Error::other(format!(
+                    "append failed and the segment could not be rewound to {valid}: {err}"
+                ))))
+            }
+        }
     }
 
     /// Record that everything up to `bytes` is now durable.
@@ -344,6 +394,7 @@ mod tests {
             "t/ns/s/0",
             4096,
             ScanStart::Full,
+            true,
         )
         .expect("scan")
     }
@@ -571,6 +622,71 @@ mod tests {
     }
 
     #[test]
+    fn a_partially_written_batch_is_rewound_and_leaves_no_debris() {
+        use std::io::{Seek as _, SeekFrom as _SeekFrom, Write as _};
+
+        let dir = tempdir().expect("dir");
+        let mut writer = new_writer(&dir, 0);
+        writer.append(&[record("first")]).expect("append");
+        let good_len = writer.size_bytes();
+
+        // Stand in for a `write_all` that failed part-way: bytes on disk past
+        // the last byte the writer accounts for. This is what the OS can leave
+        // behind on ENOSPC or EIO mid-batch.
+        {
+            let path = dir.path().join(segment_file_name(0));
+            let mut handle = OpenOptions::new().write(true).open(&path).expect("open");
+            handle.seek(_SeekFrom::End(0)).expect("seek");
+            handle.write_all(&[0xAB; 11]).expect("write debris");
+            handle.sync_all().expect("sync");
+        }
+        assert_eq!(
+            std::fs::metadata(dir.path().join(segment_file_name(0)))
+                .expect("meta")
+                .len(),
+            good_len + 11
+        );
+
+        writer.rewind_after_failed_write().expect("rewind");
+
+        // The debris is gone and the file matches the writer's own accounting.
+        assert_eq!(
+            std::fs::metadata(dir.path().join(segment_file_name(0)))
+                .expect("meta")
+                .len(),
+            good_len
+        );
+
+        // And the segment keeps working: the next append lands contiguously
+        // rather than after a hole, so a scan stays clean.
+        writer
+            .append(&[record("second")])
+            .expect("append after rewind");
+        writer.sync().expect("sync");
+        let outcome = scan(&dir);
+        assert_eq!(outcome.record_count, 2);
+        assert!(
+            outcome.torn_tail.is_none(),
+            "rewound segment should scan clean, got {:?}",
+            outcome.torn_tail
+        );
+    }
+
+    #[test]
+    fn a_poisoned_writer_refuses_further_appends() {
+        let dir = tempdir().expect("dir");
+        let mut writer = new_writer(&dir, 0);
+        writer.append(&[record("a")]).expect("append");
+        // A rewind that cannot be performed leaves the segment's real length
+        // unknown; building on it would compound the damage.
+        writer.poisoned = true;
+        assert!(matches!(
+            writer.append(&[record("b")]).expect_err("poisoned"),
+            StorageError::Unsupported(_)
+        ));
+    }
+
+    #[test]
     fn seal_trims_preallocated_space() {
         let dir = tempdir().expect("dir");
         // Reserve far more than the records need.
@@ -614,6 +730,7 @@ mod tests {
             "t/ns/s/0",
             64,
             ScanStart::Full,
+            true,
         )
         .expect("scan")
         .index;

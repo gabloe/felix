@@ -189,7 +189,7 @@ fn truncating_a_segment_anywhere_never_panics_and_never_invents_records() {
     let mut previous_count = None;
     for cut in (SEGMENT_HEADER_LEN as usize)..full.len() {
         std::fs::write(&path, &full[..cut]).expect("write");
-        let outcome = scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full)
+        let outcome = scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full, true)
             .unwrap_or_else(|err| panic!("cut at {cut}: {err}"));
 
         // Truncation can only ever remove records, never add them, and the
@@ -223,7 +223,7 @@ fn corrupting_committed_bytes_is_reported_rather_than_dropped() {
         bytes[position] ^= 1u8 << rng.below(8);
         std::fs::write(&path, &bytes).expect("write");
 
-        match scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full) {
+        match scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full, true) {
             // Loud failure is the correct outcome for interior damage.
             Err(StorageError::Corruption(detail)) => {
                 assert!(detail.site.position.is_some());
@@ -264,7 +264,7 @@ fn arbitrary_files_are_rejected_without_panicking() {
         let bytes = rng.bytes_below(256);
         std::fs::write(&path, &bytes).expect("write");
         // Garbage must be an error, never a panic and never a plausible log.
-        match scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full) {
+        match scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full, true) {
             Ok(outcome) => assert_eq!(outcome.record_count, 0),
             Err(StorageError::Corruption(_)) | Err(StorageError::Io(_)) => {}
             Err(other) => panic!("unexpected error kind: {other}"),

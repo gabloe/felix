@@ -425,10 +425,12 @@ mod tests {
             .register_stream("t1", "default", "demo", Default::default())
             .await?;
 
-        let mut config = BrokerConfig::from_env()?;
-        config.pub_workers_per_conn = 0;
-        config.pub_queue_depth = 0;
-        config.publish_queue_wait_timeout_ms = 17;
+        let config = BrokerConfig {
+            pub_workers_per_conn: 0,
+            pub_queue_depth: 0,
+            publish_queue_wait_timeout_ms: 17,
+            ..BrokerConfig::default()
+        };
         let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
         assert_eq!(publish_ctx.worker_count, 1);
         assert_eq!(publish_ctx.workers.len(), 1);
@@ -457,7 +459,7 @@ mod tests {
         let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
-        let config = BrokerConfig::from_env()?;
+        let config = BrokerConfig::default();
         let publish_ctx = build_publish_context(broker, &config);
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -488,7 +490,7 @@ mod tests {
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
 
-        let config = BrokerConfig::from_env()?;
+        let config = BrokerConfig::default();
         let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
         let auth = Arc::new(BrokerAuth::new("http://127.0.0.1".to_string()));
 

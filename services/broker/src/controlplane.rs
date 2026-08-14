@@ -677,26 +677,40 @@ async fn apply_stream_upsert(
 
     match outcome {
         Ok(_) => Ok(()),
-        // A durable stream this broker cannot persist — typically because it is
-        // running without `FELIX_DURABLE_STORAGE_DIR` — is skipped loudly rather
-        // than failing the sync. Aborting here would stop the watcher from
-        // applying *every other* stream in the catalog, turning one
+        // A broker with no durable storage configured cannot host this stream,
+        // and never will until it is restarted with different configuration.
+        // Skipping it loudly beats failing the sync, which would stop the
+        // watcher applying *every other* stream in the catalog and turn one
         // misconfigured stream into a broker-wide outage.
         //
         // The stream stays unregistered, so publishes to it fail with
-        // `StreamNotFound`. That is the point: no false durability guarantee is
-        // ever offered, and the next sync retries in case an operator fixes the
-        // configuration.
-        Err(BrokerError::Storage(detail)) => {
+        // `StreamNotFound`: no false durability guarantee is ever offered.
+        Err(BrokerError::DurableStorageNotConfigured { .. }) => {
             tracing::error!(
                 tenant_id = %tenant_id,
                 namespace = %namespace,
                 stream = %stream,
-                error = %detail,
-                "skipping stream: durable storage is unavailable"
+                "skipping stream: this broker has no durable storage configured"
             );
             metrics::counter!("felix_broker_durable_stream_skipped_total").increment(1);
             Ok(())
+        }
+        // A storage *failure* is the opposite case and must not be skipped.
+        // Corruption or an I/O error means the log is in an unknown state;
+        // swallowing it here would advance the control-plane cursor, leave the
+        // stream permanently absent, and keep the broker reporting ready while
+        // a durable stream silently does not exist. Fail the sync so the error
+        // is visible and the cursor does not move past it.
+        Err(err @ BrokerError::Storage(_)) => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                namespace = %namespace,
+                stream = %stream,
+                error = %err,
+                "durable storage failed while registering a stream"
+            );
+            metrics::counter!("felix_broker_durable_stream_failed_total").increment(1);
+            Err(err.into())
         }
         Err(err) => Err(err.into()),
     }
@@ -1425,6 +1439,111 @@ mod tests {
         )
         .await?;
         assert!(broker.stream_exists("t1", "ns1", "orders").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_stream_upsert_propagates_storage_failures() -> Result<()> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = felix_broker::DurableStorage::open(
+            dir.path(),
+            felix_storage::log::LogConfig {
+                fsync_mode: felix_storage::log::FsyncMode::None,
+                preallocate_segments: false,
+                ..Default::default()
+            },
+        )
+        .expect("storage");
+        let broker =
+            Arc::new(Broker::new(EphemeralCache::new().into()).with_durable_storage(storage));
+
+        // Corrupt the shard directory so opening the log fails. A file where
+        // the segment directory belongs is the simplest way to make recovery
+        // return an I/O error rather than a clean empty log.
+        let shard_dir = felix_storage::disk_log::layout::shard_dir(
+            dir.path(),
+            &felix_storage::log::ShardKey {
+                tenant: "t1".into(),
+                namespace: "ns1".into(),
+                stream: "orders".into(),
+                shard: 0,
+            },
+        );
+        std::fs::write(&shard_dir, b"not a directory").expect("block the shard dir");
+
+        let err = apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("storage failure must not be skipped");
+
+        // The sync fails rather than advancing its cursor past a durable stream
+        // it could not create. Skipping here would leave the broker ready with
+        // the stream permanently missing.
+        assert!(err.to_string().contains("durable storage error"), "{err}");
+        assert!(!broker.stream_exists("t1", "ns1", "orders").await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_stream_upsert_rejects_live_durability_changes() -> Result<()> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = felix_broker::DurableStorage::open(
+            dir.path(),
+            felix_storage::log::LogConfig {
+                fsync_mode: felix_storage::log::FsyncMode::None,
+                preallocate_segments: false,
+                ..Default::default()
+            },
+        )
+        .expect("storage");
+        let broker =
+            Arc::new(Broker::new(EphemeralCache::new().into()).with_durable_storage(storage));
+
+        apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: false,
+                shards: 1,
+            },
+        )
+        .await?;
+        let err = apply_stream_upsert(
+            &broker,
+            "t1".to_string(),
+            "ns1".to_string(),
+            "orders".to_string(),
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("live durability change");
+
+        assert!(
+            err.to_string().contains("requires removal and recreation"),
+            "{err}"
+        );
+        assert!(broker.stream_exists("t1", "ns1", "orders").await);
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .expect("read storage root")
+                .filter_map(|entry| entry.ok())
+                .count(),
+            0,
+            "a rejected control-plane update must not create durable state"
+        );
         Ok(())
     }
 

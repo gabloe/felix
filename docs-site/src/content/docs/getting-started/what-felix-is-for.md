@@ -162,11 +162,19 @@ for behavior at thousands of subscribers or across a network.
 - **At-most-once.** No redelivery, no publisher-visible confirmation that a
   subscriber received anything.
 - **Per-stream ordering** preserved for a given subscriber. No ordering across streams.
-- **Tail-only subscriptions.** A subscriber receives events published after it
-  subscribes. There is no offset, cursor, or replay parameter on `Subscribe`.
+- **Tail-only subscriptions over the wire.** A subscriber receives events
+  published after it subscribes; `Subscribe` still carries no offset or replay
+  parameter. Cursor replay and paged historical reads exist on the in-process
+  broker API for durable streams, but are not yet exposed through the wire
+  protocol.
 - **Slow subscribers drop** under the default policy, and lag is surfaced to the
   subscriber. Publishers never block on subscriber speed.
-- **In-memory only.** Nothing survives broker restart.
+- **Ephemeral by default.** Nothing survives a broker restart unless the stream
+  was registered with `durable: true`, which persists each record before
+  acknowledging it and replays it afterwards. Durable storage is opt-in per
+  stream and off unless the broker is started with `FELIX_DURABLE_STORAGE_DIR`.
+  Retention and tiering are not implemented, so a durable stream grows without
+  bound today.
 
 ---
 

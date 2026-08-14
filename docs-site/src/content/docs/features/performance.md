@@ -589,8 +589,13 @@ QUIC benefits from:
 
 ### Disk
 
-- **MVP**: Not used (ephemeral only)
-- **Future (durable mode)**: NVMe SSD for WAL and segments
+- **Ephemeral streams**: not used at all — no disk I/O on the hot path
+- **Durable streams**: NVMe SSD strongly recommended. Under `fsync_mode =
+  on_commit` each commit costs one device flush (~4ms on a typical NVMe), which
+  group commit amortises across concurrent publishers; under `periodic` the
+  flush is off the append path entirely. Measured figures and a regression
+  budget are in
+  [storage-performance.md](https://github.com/gabloe/felix/blob/main/docs/storage-performance.md).
 
 ## Best Practices Summary
 

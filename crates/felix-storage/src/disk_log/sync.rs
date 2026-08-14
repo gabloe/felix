@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{Mutex, Notify, watch};
+use tokio::sync::{Mutex, MutexGuard, Notify, watch};
 
 use crate::Result;
 use crate::log::{FsyncMode, Offset};
@@ -84,6 +84,32 @@ impl Durability {
                 false
             }
         });
+    }
+
+    /// Prevent flush progress from racing an operation that rewrites the log.
+    pub async fn lock_flushes(&self) -> MutexGuard<'_, ()> {
+        self.flush_lock.lock().await
+    }
+
+    /// Lower the durable bound after truncation.
+    ///
+    /// The caller must hold [`Self::lock_flushes`] and the segment write lock,
+    /// so no flush can publish stale progress and no append can observe the
+    /// truncated tail before this reset.
+    pub fn reset_after_truncate(&self, durable_upto: Offset) {
+        self.durable_tx.send_replace(durable_upto);
+    }
+
+    /// Run an unconditional flush under the same lock used by group commit.
+    pub async fn force_flush<F, Fut>(&self, flush: F) -> Result<Offset>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Offset>>,
+    {
+        let _guard = self.flush_lock.lock().await;
+        let durable_upto = flush().await?;
+        self.note_durable(durable_upto);
+        Ok(durable_upto)
     }
 
     /// Whether an append must wait for a flush before it may be acknowledged.
@@ -371,6 +397,14 @@ mod tests {
         assert_eq!(durability.durable_upto(), 9);
         durability.note_durable(2);
         assert_eq!(durability.durable_upto(), 9);
+    }
+
+    #[tokio::test]
+    async fn truncation_can_lower_the_durable_bound_exclusively() {
+        let durability = Durability::new(FsyncMode::OnCommit, 9);
+        let _guard = durability.lock_flushes().await;
+        durability.reset_after_truncate(3);
+        assert_eq!(durability.durable_upto(), 3);
     }
 
     #[tokio::test(start_paused = true)]
