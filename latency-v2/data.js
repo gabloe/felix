@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786732867836,
+  "lastUpdate": 1786739923194,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -1980,6 +1980,72 @@ window.BENCHMARK_DATA = {
             "range": "220.93",
             "unit": "us",
             "extra": "trials: 5\nmedian: 927.00\nmean: 857.40\nstdev: 220.93\ncv: 25.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c015399178d49ba61307f5eeb5c3dc7415736cfa",
+          "message": "fix: close three ordering and readiness holes from the fifth review (#179)\n\nAll three verified in the code before being changed; two had regression tests\nwritten that fail on the previous commit.\n\n**Cancelled ranges let later publishes overtake an unfinished one.**\n`CommitTurn::drop` advanced `state.next` straight to its own end offset. A\nrange cancelled while waiting therefore handed its successors permission to\nproceed even though the range *ahead* of them was still in flight — so a\nlater publish could reach the replay ring first and the disk order would\ndisagree with the cursor order. Exactly the defect the sequencer exists to\nprevent, reintroduced by the cancellation fix.\n\nResolving a range is now distinct from being next. Out-of-order resolutions\nare parked in a `BTreeMap` keyed by first offset, and the sequence advances\nonly through a contiguous prefix of resolved ranges: a gap stops the walk,\nand the gap is precisely the range still in flight. The map holds at most one\nentry per publish in flight.\n\n**Readiness was armed after the shutdown await.**\nThe task watching for the seed signal was spawned below `shutdown.await`, so\nit only began listening once the broker was already draining: a durable\nbroker never reported ready while serving, and a late seed could flip it back\nto ready mid-drain. My error — I placed that block by anchoring on a comment\nwithout checking what preceded it.\n\nArmed before the await now, and racing an explicit drain token. `Readiness`\nis a single flag and cannot tell \"never ready yet\" from \"already drained\" —\nboth read false — so the token is what makes a mid-drain seed distinguishable\nand refusable.\n\n**A failed cold start could still report ready.**\n`sync_once` returns Ok when snapshot fetches fail: they are logged and\nretried, which is right for a background refresh, but means \"the iteration\ncompleted\" says nothing about whether any tenant, namespace, cache or stream\nwas restored. The seed signal now requires `SyncState::is_seeded()` — every\ncold-start cursor non-zero, which is this module's own definition of seeded\nand what makes the snapshot blocks re-fetch.\n\nNot changed, deliberately: QUIC acceptance still starts before the first\nsync. Readiness is the signal orchestrators route on, and refusing\nconnections outright would take the broker down for non-durable streams too\nwhenever the control plane is slow. A client that connects early and asks for\na stream that has not been applied yet gets `StreamNotFound`, which is a\nrecoverable answer rather than a durability violation. Worth revisiting if\nthe preference is to fail closed.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-14T13:36:52-07:00",
+          "tree_id": "26a3613a71df8130ffc63f20109f4b0e589ba2e8",
+          "url": "https://github.com/gabloe/felix/commit/c015399178d49ba61307f5eeb5c3dc7415736cfa"
+        },
+        "date": 1786739920335,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 84,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 84.00\nmean: 84.40\nstdev: 1.67\ncv: 1.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 116,
+            "range": "5.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 116.00\nmean: 117.00\nstdev: 5.24\ncv: 4.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 151,
+            "range": "15.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 151.00\nmean: 147.20\nstdev: 15.75\ncv: 10.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 116,
+            "range": "5.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 116.00\nmean: 118.40\nstdev: 5.32\ncv: 4.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 301,
+            "range": "491.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 301.00\nmean: 513.60\nstdev: 491.83\ncv: 95.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 523,
+            "range": "3323.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 523.00\nmean: 2049.20\nstdev: 3323.95\ncv: 162.21%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
