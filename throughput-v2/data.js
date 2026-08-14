@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786732869707,
+  "lastUpdate": 1786739925906,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1560,6 +1560,58 @@ window.BENCHMARK_DATA = {
             "range": "7648.62",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 566056.26\nmean: 562553.52\nstdev: 7648.62\ncv: 1.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c015399178d49ba61307f5eeb5c3dc7415736cfa",
+          "message": "fix: close three ordering and readiness holes from the fifth review (#179)\n\nAll three verified in the code before being changed; two had regression tests\nwritten that fail on the previous commit.\n\n**Cancelled ranges let later publishes overtake an unfinished one.**\n`CommitTurn::drop` advanced `state.next` straight to its own end offset. A\nrange cancelled while waiting therefore handed its successors permission to\nproceed even though the range *ahead* of them was still in flight — so a\nlater publish could reach the replay ring first and the disk order would\ndisagree with the cursor order. Exactly the defect the sequencer exists to\nprevent, reintroduced by the cancellation fix.\n\nResolving a range is now distinct from being next. Out-of-order resolutions\nare parked in a `BTreeMap` keyed by first offset, and the sequence advances\nonly through a contiguous prefix of resolved ranges: a gap stops the walk,\nand the gap is precisely the range still in flight. The map holds at most one\nentry per publish in flight.\n\n**Readiness was armed after the shutdown await.**\nThe task watching for the seed signal was spawned below `shutdown.await`, so\nit only began listening once the broker was already draining: a durable\nbroker never reported ready while serving, and a late seed could flip it back\nto ready mid-drain. My error — I placed that block by anchoring on a comment\nwithout checking what preceded it.\n\nArmed before the await now, and racing an explicit drain token. `Readiness`\nis a single flag and cannot tell \"never ready yet\" from \"already drained\" —\nboth read false — so the token is what makes a mid-drain seed distinguishable\nand refusable.\n\n**A failed cold start could still report ready.**\n`sync_once` returns Ok when snapshot fetches fail: they are logged and\nretried, which is right for a background refresh, but means \"the iteration\ncompleted\" says nothing about whether any tenant, namespace, cache or stream\nwas restored. The seed signal now requires `SyncState::is_seeded()` — every\ncold-start cursor non-zero, which is this module's own definition of seeded\nand what makes the snapshot blocks re-fetch.\n\nNot changed, deliberately: QUIC acceptance still starts before the first\nsync. Readiness is the signal orchestrators route on, and refusing\nconnections outright would take the broker down for non-durable streams too\nwhenever the control plane is slow. A client that connects early and asks for\na stream that has not been applied yet gets `StreamNotFound`, which is a\nrecoverable answer rather than a durability violation. Worth revisiting if\nthe preference is to fail closed.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-14T13:36:52-07:00",
+          "tree_id": "26a3613a71df8130ffc63f20109f4b0e589ba2e8",
+          "url": "https://github.com/gabloe/felix/commit/c015399178d49ba61307f5eeb5c3dc7415736cfa"
+        },
+        "date": 1786739924872,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 213967.38,
+            "range": "12145.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 213967.38\nmean: 207517.60\nstdev: 12145.19\ncv: 5.85%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 213967.38,
+            "range": "12145.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 213967.38\nmean: 207517.60\nstdev: 12145.19\ncv: 5.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 64147.94,
+            "range": "3594.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 64147.94\nmean: 61819.61\nstdev: 3594.17\ncv: 5.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 641479.44,
+            "range": "35941.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 641479.44\nmean: 618196.07\nstdev: 35941.73\ncv: 5.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
