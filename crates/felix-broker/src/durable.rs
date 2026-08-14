@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use felix_storage::DiskLogProvider;
-use felix_storage::disk_log::DiskLog;
+use felix_storage::disk_log::{DiskLog, PendingAppend};
 use felix_storage::log::{
     AppendOnlyLog, AppendRecord, AppendResult, LogConfig, LogRecord, Offset, ReadRange, ShardKey,
 };
@@ -95,6 +95,40 @@ pub struct StreamLog {
 }
 
 impl StreamLog {
+    /// Write a publish batch and return its offsets *before* waiting for
+    /// durability.
+    ///
+    /// The caller must pair this with [`StreamLog::commit`]. The split exists
+    /// so the broker can claim the batch's place in the stream's commit order
+    /// the instant its offsets are consumed: from that point the records are on
+    /// disk holding those offsets, and every later publish queues behind them
+    /// whether this one goes on to succeed, fail, or be cancelled.
+    pub async fn begin_append(&self, payloads: &[Bytes]) -> Result<PendingAppend> {
+        if payloads.is_empty() {
+            return Err(BrokerError::Storage(
+                "cannot append an empty publish batch".to_string(),
+            ));
+        }
+        let timestamp_micros = now_micros();
+        let records: Vec<AppendRecord> = payloads
+            .iter()
+            .map(|payload| AppendRecord {
+                payload: payload.clone(),
+                timestamp_micros,
+            })
+            .collect();
+        self.log
+            .append_pending(&records)
+            .await
+            .map_err(storage_error)
+    }
+
+    /// Wait until a batch from [`StreamLog::begin_append`] satisfies the
+    /// configured fsync policy.
+    pub async fn commit(&self, pending: &PendingAppend) -> Result<()> {
+        self.log.commit(pending).await.map_err(storage_error)
+    }
+
     /// Persist a publish batch, returning the offsets it was assigned.
     ///
     /// Returns only once the configured durability policy is satisfied: under

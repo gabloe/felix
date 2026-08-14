@@ -254,17 +254,29 @@ impl Broker {
             None => None,
             Some(durable) => {
                 let durable_start = t_now_if(sample);
-                let appended = durable.append(payloads).await?;
+
+                // Offsets are consumed here. The commit order has to be claimed
+                // against them immediately, before the durability wait, because
+                // from this point the records exist on disk and everything
+                // behind them queues on this range. Claiming it only after a
+                // *successful* wait stranded the stream: a failed or cancelled
+                // publish abandoned its range, and every later publish waited
+                // on a turn that could never arrive.
+                let pending = durable.begin_append(payloads).await?;
+                let turn = stream_state
+                    .commit_sequencer
+                    .reserve(pending.first_offset(), pending.last_offset() + 1);
+
+                // From here every exit path — `?`, a panic, or this future being
+                // dropped mid-await — releases the range through `turn`.
+                durable.commit(&pending).await?;
+                turn.wait().await;
+
                 if let Some(start) = durable_start {
                     let durable_ns = start.elapsed().as_nanos() as u64;
                     t_histogram!("broker_publish_durable_append_ns").record(durable_ns as f64);
                 }
-                Some(
-                    stream_state
-                        .commit_sequencer
-                        .turn(appended.first_offset, appended.last_offset + 1)
-                        .await,
-                )
+                Some(turn)
             }
         };
 

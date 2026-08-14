@@ -698,3 +698,40 @@ async fn historical_replay_is_rejected_for_a_non_durable_stream() {
         .expect_err("no persisted history");
     assert!(matches!(err, BrokerError::StreamNotDurable { .. }), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_publish_does_not_strand_the_stream() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+
+    broker
+        .publish("t1", "default", "orders", payload("first"))
+        .await
+        .expect("publish");
+
+    // Cancel a publish mid-flight. Offsets are assigned synchronously under the
+    // segment lock and the fsync wait happens after, so a timeout landing in
+    // that window drops the future *after* its offsets were consumed.
+    for _ in 0..10 {
+        let _ = tokio::time::timeout(
+            Duration::from_micros(200),
+            broker.publish("t1", "default", "orders", payload("cancelled")),
+        )
+        .await;
+    }
+
+    // The stream must still accept publishes. If a consumed offset range can be
+    // abandoned without releasing its place in the commit order, every later
+    // publish waits for a turn that never comes.
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        broker.publish("t1", "default", "orders", payload("after")),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "stream deadlocked: a cancelled publish stranded the commit order"
+    );
+    result.expect("timeout").expect("publish");
+}
