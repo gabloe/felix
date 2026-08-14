@@ -282,12 +282,25 @@ struct Cache {
 ///
 /// Fires `seeded` after the first full sync.
 ///
+/// Most callers want [`start_sync`], which is this with no signal.
+///
 /// A broker with durable storage uses that signal to hold readiness until its
 /// streams exist. Until the first sync lands the catalog has not been applied
 /// and no durable stream has been recovered — reporting ready before then
 /// invites an orchestrator to route traffic at an instance whose durable
 /// streams are, as far as any client can tell, missing. Pass `None` to start
 /// syncing without gating anything on it.
+/// Polls the control plane forever, applying changes as they arrive.
+///
+/// Kept as the plain entry point because it is part of this crate's public API
+/// and has consumers outside the workspace — `demos/rbac-live` is a standalone
+/// crate, so `cargo clippy --workspace` cannot see that it is used and reports
+/// this as dead code in the binary target. It is not.
+#[allow(dead_code)]
+pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
+    start_sync_with_signal(broker, base_url, interval, None).await
+}
+
 pub async fn start_sync_with_signal(
     broker: Arc<Broker>,
     base_url: String,
