@@ -3,6 +3,7 @@
 // These maps mirror control-plane state and gate every data-path operation. Lock
 // order is tenants -> namespaces -> streams -> topics; keep it that way.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -117,16 +118,62 @@ impl Broker {
     ///
     /// A durable stream that recovered records keeps counting cursors from
     /// where the log left off, so a subscriber's pre-restart cursor still
-    /// resolves to the same records. Reading only the ring's worth of tail
-    /// keeps this bounded: startup cost does not grow with the size of the log.
+    /// resolves to the same records.
+    ///
+    /// The ring must end at the tail. A single read is bounded by the storage
+    /// layer's per-read record and byte caps, so asking for the ring's worth of
+    /// history can come back short — and keeping that *earliest* prefix while
+    /// still advancing `next_seq` to the real tail leaves a hole. A cursor
+    /// pointing into the hole is then above the ring's oldest entry, so it is
+    /// accepted rather than rejected, and replay answers with silence: the
+    /// subscriber reads "you are caught up" while records are missing. Losing
+    /// history loudly is fine; losing it quietly is not.
+    ///
+    /// So this pages forward to the tail and keeps the newest `log_capacity`
+    /// records, dropping older ones as it goes. Memory stays bounded by the
+    /// ring, and whatever the ring ends up holding is contiguous with
+    /// `next_seq`. If the budget cannot cover even part of the window the ring
+    /// is left empty, and every pre-restart cursor gets `CursorTooOld` — the
+    /// honest answer.
     async fn hydrate_durable_stream(&self, state: &Arc<StreamState>) -> Result<()> {
         let Some(log) = &state.durable else {
             return Ok(());
         };
         let tail = log.tail_offset().await?;
-        let from = tail.saturating_sub(self.log_capacity as u64);
-        let recent = log.read_from(from, HYDRATE_MAX_BYTES).await?;
-        state.hydrate(recent, tail, self.log_capacity);
+        let capacity = self.log_capacity;
+        let mut cursor = tail.saturating_sub(capacity as u64);
+        let mut window: VecDeque<felix_storage::log::LogRecord> = VecDeque::new();
+        let mut bytes = 0usize;
+
+        while cursor < tail {
+            let page = log.read_from(cursor, HYDRATE_MAX_BYTES).await?;
+            let Some(last) = page.last() else {
+                // The tail moved out from under the read, or the range was
+                // trimmed. Stop with what is in hand rather than spinning.
+                break;
+            };
+            cursor = last.offset + 1;
+            for record in page {
+                bytes += record.payload.len();
+                window.push_back(record);
+                // Keep the *newest* end of the window under both bounds.
+                while window.len() > capacity || (bytes > HYDRATE_MAX_BYTES && window.len() > 1) {
+                    if let Some(dropped) = window.pop_front() {
+                        bytes -= dropped.payload.len();
+                    }
+                }
+            }
+        }
+
+        // Only hand over a window that actually reaches the tail. Anything else
+        // would reintroduce the hole this method exists to avoid.
+        let reaches_tail = window.back().is_some_and(|last| last.offset + 1 == tail);
+        let contiguous = if reaches_tail {
+            window.into_iter().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        state.hydrate(contiguous, tail, capacity);
         Ok(())
     }
 
