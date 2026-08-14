@@ -46,6 +46,13 @@ use crate::log::{
 use crate::segment::{ReadBudget, io::sync_data};
 use crate::{Result, StorageError, metrics_names};
 
+/// Bound on rollover retries in a single append.
+///
+/// Each retry means another publisher won the race to fill the segment; a
+/// handful is generous, and failing loudly beats spinning under a pathological
+/// interleaving.
+const MAX_ROLL_ATTEMPTS: usize = 8;
+
 use segments::SegmentSet;
 use sync::{Durability, PeriodicSyncer};
 
@@ -303,36 +310,58 @@ impl DiskLog {
         }
 
         // Rolling a segment seals one file, creates another, and fsyncs both
-        // plus the directory entry. That is real blocking work, so it happens
-        // on a blocking thread rather than inline on a reactor worker.
+        // plus the directory entry. That is real blocking work, so it must not
+        // run on a reactor worker.
         //
-        // Checked under a read lock and re-checked under the write lock:
-        // another publisher may have rolled in between, and rolling twice would
-        // leave an empty segment behind.
-        if inner.segments.read().would_roll(&records) {
-            let roller = Arc::clone(&inner);
-            let batch = records.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut segments = roller.segments.write();
-                if segments.would_roll(&batch) {
-                    segments.roll()?;
-                }
-                Ok::<(), StorageError>(())
-            })
-            .await
-            .map_err(|err| StorageError::Io(std::io::Error::other(err)))??;
+        // Detect-and-retry rather than detect-then-append: a concurrent append
+        // can fill the segment between the check and the write lock, and if
+        // this path then let `SegmentSet::append` roll inline, the flushes
+        // would land on a Tokio worker after all — exactly what moving the roll
+        // off-thread was meant to prevent. So the write lock is released and
+        // the roll retried on a blocking thread instead.
+        //
+        // `would_roll` is false for an empty active segment, so an oversized
+        // record terminates the loop rather than spinning: it gets a segment to
+        // itself, which is the documented policy.
+        for attempt in 0..MAX_ROLL_ATTEMPTS {
+            if inner.segments.read().would_roll(&records) {
+                let roller = Arc::clone(&inner);
+                let batch = records.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut segments = roller.segments.write();
+                    // Re-checked under the write lock: another publisher may
+                    // have rolled already, and rolling twice leaves an empty
+                    // segment behind.
+                    if segments.would_roll(&batch) {
+                        segments.roll()?;
+                    }
+                    Ok::<(), StorageError>(())
+                })
+                .await
+                .map_err(|err| StorageError::Io(std::io::Error::other(err)))??;
+            }
+
+            let mut segments = inner.segments.write();
+            if segments.would_roll(&records) {
+                // Filled again in the gap. Drop the lock and roll off-thread.
+                drop(segments);
+                debug_assert!(attempt + 1 < MAX_ROLL_ATTEMPTS, "rollover retry starved");
+                continue;
+            }
+            let (first_offset, last_offset) = segments.append(&records)?;
+            let durable_target = segments.tail_offset();
+            return Ok(PendingAppend {
+                result: AppendResult {
+                    first_offset,
+                    last_offset,
+                },
+                durable_target,
+            });
         }
 
-        let mut segments = inner.segments.write();
-        let (first_offset, last_offset) = segments.append(&records)?;
-        let durable_target = segments.tail_offset();
-        Ok(PendingAppend {
-            result: AppendResult {
-                first_offset,
-                last_offset,
-            },
-            durable_target,
-        })
+        Err(StorageError::Unsupported(
+            "append could not secure segment capacity; rollover kept losing the race",
+        ))
     }
 }
 

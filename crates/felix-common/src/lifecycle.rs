@@ -45,6 +45,27 @@ impl Readiness {
         }
     }
 
+    /// Create a flag that reports *not* ready until [`Readiness::mark_ready`].
+    ///
+    /// For work that must finish before traffic arrives. Reporting ready first
+    /// and initialising afterwards is worse than a slow start: an orchestrator
+    /// routes to the instance immediately, and requests land on state that does
+    /// not exist yet.
+    pub fn starting() -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Flip to ready once startup work has finished.
+    ///
+    /// Returns the previous state. Deliberately not the inverse of
+    /// [`Readiness::begin_draining`]: a draining instance must never be brought
+    /// back, so callers only use this during startup.
+    pub fn mark_ready(&self) -> bool {
+        self.ready.swap(true, Ordering::Release)
+    }
+
     /// Whether `/ready` should report success.
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)

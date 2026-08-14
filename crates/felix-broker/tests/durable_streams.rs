@@ -735,3 +735,56 @@ async fn a_cancelled_publish_does_not_strand_the_stream() {
     );
     result.expect("timeout").expect("publish");
 }
+
+#[tokio::test]
+async fn a_failed_hydration_leaves_no_registered_stream() {
+    let dir = tempdir().expect("dir");
+    let storage = DurableStorage::open(dir.path(), log_config(FsyncMode::None)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage);
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+
+    // Block the shard directory with a file so opening the log fails. The
+    // registration must fail *whole*: a stream that could not be initialised
+    // must not be left publishable, accepting writes it cannot persist or
+    // replay.
+    let shard_dir = felix_storage::disk_log::layout::shard_dir(
+        dir.path(),
+        &felix_storage::log::ShardKey {
+            tenant: "t1".into(),
+            namespace: "default".into(),
+            stream: "orders".into(),
+            shard: 0,
+        },
+    );
+    std::fs::write(&shard_dir, b"not a directory").expect("block the shard dir");
+
+    let err = broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await
+        .expect_err("registration should fail");
+    assert!(matches!(err, BrokerError::Storage(_)), "{err}");
+
+    // Neither registry may hold it, and publishing must report the stream as
+    // absent rather than silently succeeding into memory.
+    assert!(!broker.stream_exists("t1", "default", "orders").await);
+    let publish = broker
+        .publish("t1", "default", "orders", payload("x"))
+        .await
+        .expect_err("must not be publishable");
+    assert!(
+        matches!(publish, BrokerError::StreamNotFound { .. }),
+        "{publish}"
+    );
+}
