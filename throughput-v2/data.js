@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786660153875,
+  "lastUpdate": 1786680712782,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1456,6 +1456,58 @@ window.BENCHMARK_DATA = {
             "range": "75040.85",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 526408.13\nmean: 483499.15\nstdev: 75040.85\ncv: 15.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a7ca60f82e1883616fd52bbd12ff36720d7a2a65",
+          "message": "M1: fix durability, ordering and recovery defects from review (#176)\n\n* fix(storage): close three durability defects found in review\n\nTruncation could invalidate OnCommit (fixed by @gabloe). `truncate` rewrote\nthe log and reused offsets without lowering the durability watermark, so a\nreplacement record could be acknowledged against a flush that covered the\nrecords it replaced. The reset now happens under the same lock group commit\nuses, so no in-flight flush can publish stale progress across it.\n\nAppends are now failure-atomic. `write_all` loops over partial writes, so an\nerror means \"some prefix landed\", not \"nothing happened\". Those bytes sat\npast the last record the writer accounted for, the file cursor pointed past\nthem, and the next append landed after the debris - turning a failed write\ninto interior corruption that recovery must refuse to start on, or into a\nduplicate if the caller retried. A failed append now rewinds the file to the\nlast good byte, and if the rewind itself fails the writer is poisoned rather\nthan building on a file whose shape it no longer knows.\n\nRecovery no longer guesses about a damaged tail. A *complete* trailing record\nthat fails its checksum was being treated as a repairable torn write. It is\nnot provably one: a torn write and bit rot on an already-acknowledged record\nproduce identical bytes, and under OnCommit that record may have been fsynced\nand acknowledged before rotting. Truncating on a guess silently deletes data\nthe caller was told was safe. Only provably incomplete writes - a record cut\nshort by end of file, or claiming a length that cannot fit - are repaired\nnow. `repair_checksum_tail` opts back in, which is defensible under\n`FsyncMode::None` and is not under `OnCommit`. The SIGKILL crash tests still\npass under the strict default, which is the evidence that real crashes\ntruncate rather than corrupt.\n\nRollover no longer blocks a reactor worker. Sealing a segment and creating\nits successor fsyncs two files and a directory entry, and that was running\ninline on the append path - contradicting this module's own claim that\nblocking flushes always use `spawn_blocking`, and putting a periodic\ntail-latency spike every `segment_size_bytes` of throughput. Appends that\nwould roll now do it on a blocking thread first, re-checked under the write\nlock so two publishers racing the same roll cannot leave an empty segment\nbehind.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): one publish order, honest storage errors, durable replay\n\nDurable streams now have a single authoritative order. Offsets are assigned\nunder the segment lock, but the fsync wait happens after it is released, so\ntwo concurrent publishes could resume from a shared group-commit flush in\neither order: the log on disk read A, B while a cursor replay and a live\nsubscriber both saw B, A. Under OnCommit that window is a whole device flush\nwide. A per-stream commit sequencer closes it - each publisher waits until\nevery lower offset has been applied, then appends to the replay ring and fans\nout before releasing the next. The turn is held across fanout, not just the\nring append, because a subscriber's delivery order is as much part of a\nstream's order as its cursors are. The durable append itself is deliberately\nnot serialised, so group commit keeps its fan-in.\n\nDurability changes on a live stream are rejected (fixed by @gabloe). Cursor\nsequences and durable offsets share one identity, and an existing ephemeral\nstream may already have cursor history that was never written to disk, so\ntoggling durability in place would make the two disagree. Removal and\nrecreation is now required, which also invalidates stale handles.\n\nStorage failures are no longer swallowed. `DurableStorageNotConfigured` is\nnow distinct from `Storage`, because the two want opposite handling: the\nfirst is a static misconfiguration that will not resolve on retry and affects\nonly the stream naming it, so the control-plane watcher skips it and keeps\napplying the rest of the catalog. A storage *failure* means corruption or an\nI/O error, and skipping that would advance the watcher's cursor past a\ndurable stream that then stays permanently absent while the broker keeps\nreporting ready. That case now fails the sync.\n\nDurable history survives a restart in the subscription path, not just on\ndisk. Recovery resumed the sequence number but left the replay ring empty, so\n`oldest` became the recovered tail and every cursor a client held from before\nthe restart got `CursorTooOld` - even though the records were sitting on\ndisk. The ring is now refilled from disk at registration, bounded by its own\ncapacity so startup cost does not grow with the log.\n\n`Broker::read_durable` covers history older than the ring. It is deliberately\nseparate from `subscribe_with_cursor`: that call returns a backlog *and* a\nlive subscription together, so it cannot also stream an unbounded history\nwithout either buffering all of it or leaving a hole at the seam. This one\npages by offset and lets the caller advance.\n\nNote what this does not do: none of it is reachable over the wire yet.\n`Subscribe` still carries no offset parameter, so a network client cannot\nresume. Durability is real at the storage layer and is not yet a complete\ndurable-streaming product.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: stop describing Felix as ephemeral-only\n\nFive pages still told readers that nothing survives a broker restart, which\nstopped being true when durable streams landed. A reader deciding whether\nFelix fits their use case would have concluded it does not.\n\n  architecture/system-design.md   \"No persistence: Data lost on restart\",\n                                  \"Durability: None (ephemeral only)\", and a\n                                  \"Durable (Planned)\" section\n  reference/faq.md                \"Felix MVP supports ephemeral only\"\n  architecture/semantics.md       \"Broker restarts (no durability in MVP)\"\n  getting-started/what-felix-is-for.md  \"In-memory only. Nothing survives\n                                  broker restart.\"\n  features/performance.md         \"Disk - MVP: Not used (ephemeral only)\"\n\nEach now says durability is opt-in per stream and requires\n`FELIX_DURABLE_STORAGE_DIR`, and - just as importantly - each says what is\nstill missing rather than implying the feature is finished. Retention,\nsnapshots and tiering are not implemented, so a durable stream grows without\nbound today.\n\n`what-felix-is-for.md` keeps its honest limitation and sharpens it: cursor\nreplay and paged historical reads exist on the in-process broker API, but\n`Subscribe` still carries no offset parameter, so a network client cannot\nresume. The page's job is to stop someone adopting Felix for the wrong thing,\nand \"durable\" without a resumable wire protocol is exactly the kind of half-\ntruth that would.\n\nAlso drops the last \"Write-Ahead Log (WAL)\" description of the durable path,\nmatching the earlier correction: the log is the data, not a journal\nprotecting another structure.\n\nDocuments `repair_checksum_tail`, and the ordering guarantee the commit\nsequencer provides.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* test(broker): serialise the tests that share the timing collector\n\n`coverage` failed on this PR with `take_samples_clears_collected_data`\nasserting `0 == 1`. The cause is a pre-existing race in files this branch\ndoes not touch, exposed rather than introduced by the change: reproduced at\n3/30 runs here and 1/20 on an unmodified `main`.\n\nEvery test in `timings::tests` drives the process-global collector. With the\n`telemetry` feature enabled these are the real functions rather than the\nno-op stubs, and `enable_collection` resets `sample_every` and *clears every\nsample vector*. The `#[serial]` tests over in `timings_telemetry.rs` record\nsamples and then read them back, so an unserialised `enable_collection`\nlanding in that gap wipes them and the count comes back zero.\n\n`serial_test` only serialises a test against other `#[serial]` tests, so\nmarking one side of a race is no protection. The three tests that touch the\nreal collector now opt in too. The other two are\n`#[cfg(not(feature = \"telemetry\"))]` and do not exist in the configuration\nwhere the collector is real.\n\nThis is why only `coverage` failed while `test` passed: the plain test job\nruns without `--all-features`, so `telemetry` is off and these functions are\ninert stubs. Coverage runs `--all-features`, and llvm-cov instrumentation is\nslow enough to widen the window considerably.\n\n40 stress runs under `--all-features` pass after the change, against 3\nfailures in 30 before it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-13T21:09:56-07:00",
+          "tree_id": "b52bdcdb7f628c3cc82c89885e6f16551187f8c7",
+          "url": "https://github.com/gabloe/felix/commit/a7ca60f82e1883616fd52bbd12ff36720d7a2a65"
+        },
+        "date": 1786680711463,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 179243.95,
+            "range": "7176.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 179243.95\nmean: 182295.40\nstdev: 7176.04\ncv: 3.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 179243.95,
+            "range": "7176.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 179243.95\nmean: 182295.40\nstdev: 7176.04\ncv: 3.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55292.53,
+            "range": "2241.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55292.53\nmean: 54328.00\nstdev: 2241.33\ncv: 4.13%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 552925.31,
+            "range": "22413.37",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 552925.31\nmean: 543279.96\nstdev: 22413.37\ncv: 4.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1020-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
