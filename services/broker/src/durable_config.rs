@@ -46,6 +46,8 @@ impl DurableStorageConfig {
                 .unwrap_or(LogConfig::default().preallocate_segments),
             verify_all_on_open: parse_bool_env("FELIX_DURABLE_VERIFY_ALL_ON_OPEN")?
                 .unwrap_or(LogConfig::default().verify_all_on_open),
+            repair_checksum_tail: parse_bool_env("FELIX_DURABLE_REPAIR_CHECKSUM_TAIL")?
+                .unwrap_or(LogConfig::default().repair_checksum_tail),
         };
         // Fail at startup rather than at the first durable publish.
         log.validate()
@@ -146,6 +148,7 @@ mod tests {
         "FELIX_DURABLE_MAX_RECORDS_PER_READ",
         "FELIX_DURABLE_PREALLOCATE",
         "FELIX_DURABLE_VERIFY_ALL_ON_OPEN",
+        "FELIX_DURABLE_REPAIR_CHECKSUM_TAIL",
     ];
 
     fn with_env<T>(pairs: &[(&str, &str)], body: impl FnOnce() -> T) -> T {

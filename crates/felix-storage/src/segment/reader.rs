@@ -125,19 +125,27 @@ fn is_repairable_tail(
     position: u64,
     claimed_len: Option<u64>,
     file_len: u64,
+    repair_checksum_tail: bool,
 ) -> bool {
     match kind {
         // The record does not fit in the file at all: a write that stopped
-        // part-way is the only way to produce this.
+        // part-way is the only way to produce this, and nothing can have
+        // acknowledged a record that was never finished.
         CorruptionKind::Truncated { .. } => true,
         // The record decodes to a full extent but its contents do not verify.
-        // Safe to drop only when nothing follows it — if bytes exist past this
-        // record, they were written after it and dropping it would open a gap.
+        //
+        // This is *not* provably an incomplete write. A torn write and bit rot
+        // on an already-acknowledged record produce the same bytes, and under
+        // `OnCommit` the record may have been fsynced and acknowledged before
+        // rotting. Truncating on a guess would silently delete data the caller
+        // was told was safe, so it happens only when an operator has opted in.
         CorruptionKind::RecordChecksum { .. } | CorruptionKind::OffsetOutOfOrder { .. } => {
-            claimed_len.is_some_and(|len| position.saturating_add(len) >= file_len)
+            repair_checksum_tail
+                && claimed_len.is_some_and(|len| position.saturating_add(len) >= file_len)
         }
-        // A garbage length field. Only a tail if the record it claims could not
-        // possibly fit, which is the signature of a half-written header.
+        // A garbage length field describing a record that could not possibly
+        // fit in the file: the signature of a half-written header, so provably
+        // incomplete and always repairable.
         CorruptionKind::RecordTooLarge { payload_len, .. } => {
             position.saturating_add(RECORD_HEADER_LEN + u64::from(*payload_len)) > file_len
         }
@@ -155,6 +163,7 @@ struct ScanState {
     bytes_since_entry: u64,
     spacing: u64,
     rebuild_index: bool,
+    repair_checksum_tail: bool,
 }
 
 impl ScanState {
@@ -189,7 +198,13 @@ impl ScanState {
         shard_label: &str,
         segment_id: SegmentId,
     ) -> Result<ScanOutcome> {
-        if is_repairable_tail(&err.kind, self.position, claimed_len, file_len) {
+        if is_repairable_tail(
+            &err.kind,
+            self.position,
+            claimed_len,
+            file_len,
+            self.repair_checksum_tail,
+        ) {
             return Ok(self.torn(file_len, err.kind));
         }
         let position = self.position;
@@ -249,12 +264,16 @@ pub enum ScanStart {
 ///
 /// `record_count` counts the records this scan validated, which for a
 /// [`ScanStart::Resume`] scan is only those after the resume point.
+///
+/// `repair_checksum_tail` mirrors [`crate::log::LogConfig::repair_checksum_tail`]:
+/// when false, only a provably incomplete trailing record is truncated.
 pub fn scan_segment(
     path: &Path,
     segment_id: SegmentId,
     shard_label: &str,
     index_spacing_bytes: u64,
     start: ScanStart,
+    repair_checksum_tail: bool,
 ) -> Result<ScanOutcome> {
     let file = File::open(path)?;
     let file_len = file.metadata()?.len();
@@ -295,6 +314,7 @@ pub fn scan_segment(
             u64::MAX
         },
         rebuild_index,
+        repair_checksum_tail,
     };
 
     while state.position < file_len {
@@ -523,7 +543,7 @@ mod tests {
     }
 
     fn scan(path: &Path) -> Result<ScanOutcome> {
-        scan_segment(path, 0, "t/ns/s/0", 4096, ScanStart::Full)
+        scan_segment(path, 0, "t/ns/s/0", 4096, ScanStart::Full, true)
     }
 
     fn read_all(path: &Path, outcome: &ScanOutcome, start: Offset) -> Vec<LogRecord> {
@@ -705,7 +725,7 @@ mod tests {
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 20);
 
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
         assert!(outcome.index.len() > 1);
         for entry in outcome.index.entries() {
             assert!(entry.position >= SEGMENT_HEADER_LEN);
@@ -740,7 +760,7 @@ mod tests {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 10);
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
 
         let out = read_all(&path, &outcome, 4);
         let offsets: Vec<Offset> = out.iter().map(|r| r.offset).collect();
@@ -753,7 +773,7 @@ mod tests {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 10);
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
         let reader = SegmentReader::open(&path, 0, 0).expect("open");
 
         let mut budget = ReadBudget::new(1, usize::MAX);
@@ -790,7 +810,7 @@ mod tests {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 10);
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
         let reader = SegmentReader::open(&path, 0, 0).expect("open");
 
         let mut budget = ReadBudget::new(usize::MAX, 3);
@@ -828,7 +848,7 @@ mod tests {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 10);
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
         let reader = SegmentReader::open(&path, 0, 0).expect("open");
 
         // Pretend only the first three records were committed.
@@ -858,7 +878,7 @@ mod tests {
         let dir = tempdir().expect("dir");
         let path = dir.path().join("a.log");
         write_segment(&path, 0, 4);
-        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full).expect("scan");
+        let outcome = scan_segment(&path, 0, "t/ns/s/0", 64, ScanStart::Full, true).expect("scan");
         assert!(read_all(&path, &outcome, 99).is_empty());
     }
 
@@ -881,6 +901,7 @@ mod tests {
 
     #[test]
     fn repairable_tail_rules() {
+        // Provably incomplete: repaired regardless of policy.
         assert!(is_repairable_tail(
             &CorruptionKind::Truncated {
                 needed: 10,
@@ -888,8 +909,11 @@ mod tests {
             },
             100,
             None,
-            102
+            102,
+            false
         ));
+        // A complete-but-unverifiable tail: repaired only when opted in,
+        // because it is indistinguishable from rot on acknowledged data.
         assert!(is_repairable_tail(
             &CorruptionKind::RecordChecksum {
                 expected: 1,
@@ -897,7 +921,8 @@ mod tests {
             },
             100,
             Some(50),
-            150
+            150,
+            true
         ));
         assert!(!is_repairable_tail(
             &CorruptionKind::RecordChecksum {
@@ -906,13 +931,26 @@ mod tests {
             },
             100,
             Some(50),
-            300
+            150,
+            false
+        ));
+        // Committed records follow it, so it is interior damage either way.
+        assert!(!is_repairable_tail(
+            &CorruptionKind::RecordChecksum {
+                expected: 1,
+                found: 2
+            },
+            100,
+            Some(50),
+            300,
+            true
         ));
         assert!(!is_repairable_tail(
             &CorruptionKind::SegmentMagic { found: 0 },
             0,
             None,
-            100
+            100,
+            true
         ));
     }
 }

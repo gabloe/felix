@@ -18,6 +18,10 @@
 //   append path performs it inline. Handing it to `spawn_blocking` would add
 //   more scheduling latency than the syscall itself costs, and this project
 //   cares about p999.
+// * A *rollover* is the exception on that path: sealing a segment and creating
+//   its successor fsync two files and a directory. Appends that trigger one
+//   roll on a blocking thread first, so the flush cost never lands on a
+//   reactor worker.
 // * An `fsync` genuinely blocks, for milliseconds on real hardware. It always
 //   runs on `spawn_blocking` so it cannot stall a reactor thread — and because
 //   flushes are grouped, one blocking task serves many appends.
@@ -182,11 +186,7 @@ impl DiskLog {
                         // The log is gone; report the highest offset so the
                         // task simply stops doing work.
                         None => Ok(Offset::MAX),
-                        Some(inner) => {
-                            let durable = inner.clone().flush().await?;
-                            inner.durability.note_durable(durable);
-                            Ok(durable)
-                        }
+                        Some(inner) => inner.durability.force_flush(|| inner.clone().flush()).await,
                     }
                 }
             })?;
@@ -226,8 +226,10 @@ impl DiskLog {
 
     /// Force a flush regardless of the configured policy.
     pub async fn sync(&self) -> Result<()> {
-        let durable = Arc::clone(&self.inner).flush().await?;
-        self.inner.durability.note_durable(durable);
+        self.inner
+            .durability
+            .force_flush(|| Arc::clone(&self.inner).flush())
+            .await?;
         Ok(())
     }
 
@@ -257,6 +259,30 @@ impl AppendOnlyLog for DiskLog {
                 return Err(StorageError::InvalidRange);
             }
             let started = std::time::Instant::now();
+
+            // Rolling a segment seals one file, creates another, and fsyncs
+            // both plus the directory entry. That is real blocking work, so it
+            // happens on a blocking thread rather than inline on a reactor
+            // worker — otherwise every `segment_size_bytes` of throughput would
+            // stall a worker for the length of two flushes and show up as a
+            // periodic tail-latency spike.
+            //
+            // Checked under a read lock and re-checked under the write lock:
+            // another publisher may have rolled in between, and rolling twice
+            // would leave an empty segment behind.
+            if inner.segments.read().would_roll(&records) {
+                let roller = Arc::clone(&inner);
+                let batch = records.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut segments = roller.segments.write();
+                    if segments.would_roll(&batch) {
+                        segments.roll()?;
+                    }
+                    Ok::<(), StorageError>(())
+                })
+                .await
+                .map_err(|err| StorageError::Io(std::io::Error::other(err)))??;
+            }
 
             let (first_offset, last_offset, target) = {
                 let mut segments = inner.segments.write();
@@ -319,14 +345,15 @@ impl AppendOnlyLog for DiskLog {
     fn truncate(&self, offset: Offset) -> BoxFuture<'_, Result<()>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
+            let _flush_guard = inner.durability.lock_flushes().await;
+            let operation = Arc::clone(&inner);
             tokio::task::spawn_blocking(move || {
-                let mut segments = inner.segments.write();
+                let mut segments = operation.segments.write();
                 segments.truncate(offset)?;
-                // Truncation removes offsets that may already have been reported
-                // durable; the bound must not claim records that no longer
-                // exist. `Durability` is monotonic, so re-open is the only way
-                // to lower it — instead, flush so the shorter file is durable.
-                segments.active_mut().sync()
+                segments.active_mut().sync()?;
+                let tail = segments.tail_offset();
+                operation.durability.reset_after_truncate(tail);
+                Ok(())
             })
             .await
             .map_err(|err| StorageError::Io(std::io::Error::other(err)))?

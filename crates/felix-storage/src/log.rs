@@ -52,6 +52,20 @@ pub struct LogConfig {
     /// append path; disable on filesystems where reservations are expensive or
     /// where thin provisioning makes them counter-productive.
     pub preallocate_segments: bool,
+    /// Truncate a *complete* trailing record whose checksum does not verify.
+    ///
+    /// Off by default, and the default is the conservative one. A torn write
+    /// and bit rot on an acknowledged record produce identical bytes: a
+    /// full-length record that fails its checksum. Recovery cannot tell them
+    /// apart, so it refuses to guess and fails to start, naming the segment and
+    /// position. Provably *incomplete* writes - a record cut short by end of
+    /// file - are still repaired automatically, because nothing could have
+    /// acknowledged them.
+    ///
+    /// Turn this on only where losing the last record is preferable to a broker
+    /// that will not start, which is a defensible trade under `FsyncMode::None`
+    /// and is not one under `OnCommit`.
+    pub repair_checksum_tail: bool,
     /// Checksum every record of every segment at open time.
     ///
     /// Off by default: startup would otherwise cost one full pass over all data
@@ -72,6 +86,7 @@ impl Default for LogConfig {
             },
             max_records_per_read: 10_000,
             preallocate_segments: true,
+            repair_checksum_tail: false,
             verify_all_on_open: false,
         }
     }

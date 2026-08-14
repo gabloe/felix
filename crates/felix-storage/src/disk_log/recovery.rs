@@ -174,6 +174,7 @@ fn recover_existing(
         label,
         config.index_spacing_bytes,
         ScanStart::Full,
+        config.repair_checksum_tail,
     )?;
     if let Some(expected) = expected_base
         && expected != outcome.header.base_offset
@@ -259,6 +260,9 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
                     position: last.position,
                     next_offset: last.offset,
                 },
+                // A sealed segment was synced and trimmed when it was sealed,
+                // so nothing in it can be an unfinished write.
+                false,
             )?;
             (index, outcome)
         }
@@ -272,6 +276,7 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
                 label,
                 config.index_spacing_bytes,
                 ScanStart::Full,
+                false,
             )?;
             outcome.index.persist(&dir.join(index_file_name(id)))?;
             (outcome.index.clone(), outcome)

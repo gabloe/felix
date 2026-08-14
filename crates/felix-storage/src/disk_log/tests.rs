@@ -373,6 +373,28 @@ async fn truncate_drops_the_suffix_and_survives_reopen() {
 }
 
 #[tokio::test]
+async fn on_commit_reflushes_offsets_reused_after_truncation() {
+    let dir = tempdir().expect("dir");
+    let log = open(&dir, FsyncMode::OnCommit);
+
+    log.append(&records(&["zero", "one", "two"]))
+        .await
+        .expect("initial append");
+    assert_eq!(log.durable_offset(), 3);
+
+    log.truncate(1).await.expect("truncate");
+    assert_eq!(log.durable_offset(), 1);
+
+    let replacement = log
+        .append(&records(&["replacement"]))
+        .await
+        .expect("replacement append");
+    assert_eq!(replacement.first_offset, 1);
+    assert_eq!(log.durable_offset(), 2);
+    assert_eq!(log.unsynced_bytes(), 0);
+}
+
+#[tokio::test]
 async fn sealing_reports_a_descriptor_and_checksum() {
     let dir = tempdir().expect("dir");
     let log = open(&dir, FsyncMode::None);
@@ -473,6 +495,71 @@ async fn provider_logs_reopen_with_their_data() {
         DiskLogProvider::new(root.path(), config(FsyncMode::OnCommit)).expect("provider");
     let log = provider.open(&shard).await.expect("open");
     assert_eq!(read_all(&log, 0).await, vec!["persisted"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_appends_across_a_rollover_stay_contiguous() {
+    let dir = tempdir().expect("dir");
+    // Segments small enough that this run crosses many boundaries, so the
+    // off-thread pre-roll and the in-lock fallback both get exercised, and
+    // concurrent publishers race the roll itself.
+    let log = std::sync::Arc::new(
+        DiskLog::open(
+            dir.path(),
+            "t/ns/s/0",
+            LogConfig {
+                segment_size_bytes: crate::segment::SEGMENT_HEADER_LEN + 200,
+                ..config(FsyncMode::None)
+            },
+        )
+        .expect("open"),
+    );
+
+    let mut tasks = Vec::new();
+    for i in 0..64u32 {
+        let log = std::sync::Arc::clone(&log);
+        tasks.push(tokio::spawn(async move {
+            log.append(&records(&[&format!("value-{i:03}")]))
+                .await
+                .expect("append")
+        }));
+    }
+    let mut assigned: Vec<Offset> = Vec::new();
+    for task in tasks {
+        assigned.push(task.await.expect("join").first_offset);
+    }
+    log.sync().await.expect("sync");
+
+    // Every append got a distinct offset and the log holds exactly them, with
+    // no gap or duplicate introduced by a rollover racing an append.
+    assigned.sort_unstable();
+    assert_eq!(assigned, (0..64).collect::<Vec<_>>());
+    assert!(log.segments().len() > 2, "expected several rollovers");
+
+    let stored = read_all(&log, 0).await;
+    assert_eq!(stored.len(), 64);
+    let mut unique = stored.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        64,
+        "duplicate or lost records across a rollover"
+    );
+
+    // And it reopens cleanly, which is where a segment left empty or
+    // double-rolled would surface.
+    log.shutdown().await.expect("shutdown");
+    let reopened = DiskLog::open(
+        dir.path(),
+        "t/ns/s/0",
+        LogConfig {
+            segment_size_bytes: crate::segment::SEGMENT_HEADER_LEN + 200,
+            ..config(FsyncMode::None)
+        },
+    )
+    .expect("reopen");
+    assert_eq!(reopened.tail_offset().await.expect("tail"), 64);
 }
 
 #[tokio::test]
