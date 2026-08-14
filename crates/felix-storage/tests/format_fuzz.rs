@@ -32,6 +32,13 @@ use felix_storage::segment::{ScanStart, scan_segment};
 use felix_storage::{StorageError, segment};
 use tempfile::tempdir;
 
+/// CRC-32 (IEEE), matching what the format uses for its header checksum.
+fn crc32_of(bytes: &[u8]) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(bytes);
+    hasher.finalize()
+}
+
 /// xorshift64*. Deterministic and dependency-free, so a failing seed printed in
 /// an assertion reproduces the exact byte sequence that broke.
 struct Rng(u64);
@@ -118,6 +125,12 @@ fn a_corrupt_length_field_is_rejected_before_allocation() {
         let mut bytes = vec![0u8; RECORD_HEADER_LEN as usize];
         let claimed = (MAX_PAYLOAD_BYTES as u64 + 1 + rng.next_u64() % u32::MAX as u64) as u32;
         bytes[0..4].copy_from_slice(&claimed.to_be_bytes());
+        // Give the header a valid checksum, or the length is rejected as
+        // untrustworthy before its magnitude is ever considered — which is
+        // itself correct, but not what this test is probing.
+        let header_crc = crc32_of(&bytes[0..20]);
+        bytes[20..24].copy_from_slice(&header_crc.to_be_bytes());
+
         let err = decode_record(&bytes).expect_err("oversized length");
         assert!(
             matches!(
