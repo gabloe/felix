@@ -93,6 +93,9 @@ where
         Readiness::ready()
     };
     let accept_shutdown = CancellationToken::new();
+    // Cancelled the moment shutdown begins, so startup work in flight can tell
+    // "not ready yet" from "no longer ready".
+    let draining = CancellationToken::new();
     let sync_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
     let connections = TaskTracker::new();
@@ -227,28 +230,51 @@ where
         None
     };
 
-    // Block until the shutdown signal resolves so the process stays alive.
-    shutdown.await;
-
     // Flip to ready once the catalog has been applied and every durable stream
-    // it named has been recovered. Deliberately a task rather than an await:
-    // the listener is already accepting and `/ready` already reports false, so
-    // holding startup here would only delay the point at which an operator can
-    // see the broker's state.
+    // it named has been recovered.
+    //
+    // This has to be armed *before* the shutdown await, not after it: a task
+    // spawned below that point would only start listening for the seed signal
+    // once the broker was already draining, so it would never report ready
+    // while serving — and could flip back to ready in the middle of a drain.
+    //
+    // A task rather than an inline await: `/ready` already reports false, so
+    // blocking startup here would only delay the point at which an operator
+    // can observe that state.
+    //
+    // The task holds a `Readiness` clone and ends when the signal resolves or
+    // its sender is dropped, so nothing keeps it alive past shutdown.
     if gate_readiness_on_sync {
         let readiness = readiness.clone();
+        let draining = draining.clone();
         tokio::spawn(async move {
-            if seeded_rx.await.is_ok() {
-                readiness.mark_ready();
-                tracing::info!("initial control-plane sync applied; reporting ready");
+            // `Readiness` is a single flag, so it cannot distinguish "never
+            // ready yet" from "already drained" — both read false. The drain
+            // token is what makes the difference observable, so a seed that
+            // lands mid-drain cannot flip the broker back to ready.
+            tokio::select! {
+                biased;
+                _ = draining.cancelled() => {
+                    tracing::warn!("shutdown began before the initial sync; staying unready");
+                }
+                seeded = seeded_rx => {
+                    if seeded.is_ok() {
+                        readiness.mark_ready();
+                        tracing::info!("initial control-plane sync applied; reporting ready");
+                    }
+                }
             }
         });
     }
+
+    // Block until the shutdown signal resolves so the process stays alive.
+    shutdown.await;
 
     // Step 1: stop advertising readiness. Load balancers and the Kubernetes
     // endpoints controller drop this instance from rotation while it can still
     // serve, so new traffic is steered elsewhere rather than hitting a closing
     // listener. This must happen before anything stops working.
+    draining.cancel();
     readiness.begin_draining();
     tracing::info!("readiness set to draining");
 

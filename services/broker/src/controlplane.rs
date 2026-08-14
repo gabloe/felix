@@ -53,6 +53,23 @@ struct SyncState {
 }
 
 impl SyncState {
+    /// Whether every cold-start snapshot has been fetched and applied.
+    ///
+    /// A cursor of 0 is this module's existing definition of "not yet seeded" —
+    /// it is what makes the snapshot blocks re-fetch — so the same test decides
+    /// whether the catalog is actually present. It matters because `sync_once`
+    /// returns `Ok` even when every snapshot fetch failed: the failures are
+    /// logged and retried, which is right for a background refresh, but means
+    /// "the iteration completed" says nothing about whether any tenant,
+    /// namespace, cache or stream was restored. Readiness needs the stronger
+    /// statement.
+    fn is_seeded(&self) -> bool {
+        self.next_tenant_seq != 0
+            && self.next_namespace_seq != 0
+            && self.next_cache_seq != 0
+            && self.next_stream_seq != 0
+    }
+
     fn new() -> Self {
         Self {
             next_tenant_seq: 0,
@@ -314,7 +331,13 @@ pub async fn start_sync_with_signal(
         match sync_once(&broker, &client, &base_url, state).await {
             Ok(next_state) => {
                 state = next_state;
-                if let Some(signal) = seeded.take() {
+                // Only signal once the catalog is genuinely in place. An
+                // iteration can succeed having applied nothing at all, and
+                // reporting ready off the back of that would advertise a broker
+                // whose streams — durable ones included — do not exist.
+                if state.is_seeded()
+                    && let Some(signal) = seeded.take()
+                {
                     let _ = signal.send(());
                 }
             }
@@ -1471,6 +1494,66 @@ mod tests {
         )
         .await?;
         assert!(broker.stream_exists("t1", "ns1", "orders").await);
+        Ok(())
+    }
+
+    #[test]
+    fn a_partially_seeded_state_is_not_seeded() {
+        // Every cursor must be non-zero. A snapshot that failed leaves its
+        // cursor at 0 and `sync_once` still returns Ok, so this is the only
+        // thing standing between a failed cold start and a ready broker.
+        let mut state = SyncState::new();
+        assert!(!state.is_seeded(), "a fresh state is not seeded");
+
+        state.next_tenant_seq = 2;
+        state.next_namespace_seq = 2;
+        state.next_cache_seq = 2;
+        assert!(!state.is_seeded(), "streams never arrived");
+
+        state.next_stream_seq = 2;
+        assert!(state.is_seeded());
+    }
+
+    #[tokio::test]
+    async fn a_failed_snapshot_never_reports_the_catalog_as_seeded() -> Result<()> {
+        // A control plane that answers every snapshot with 500. `sync_once`
+        // logs and returns Ok, so without the seeded check the broker would
+        // report ready having restored nothing.
+        let router = Router::new()
+            .route(
+                "/v1/tenants/snapshot",
+                axum::routing::get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                "/v1/namespaces/snapshot",
+                axum::routing::get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                "/v1/caches/snapshot",
+                axum::routing::get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                "/v1/streams/snapshot",
+                axum::routing::get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+            );
+        let (addr, shutdown_tx, handle) = serve_router(router).await?;
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let client = build_test_client()?;
+
+        let state = sync_once(
+            &broker,
+            &client,
+            &format!("http://{addr}"),
+            SyncState::new(),
+        )
+        .await?;
+        assert!(
+            !state.is_seeded(),
+            "a sync where every snapshot failed must not count as seeded"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
         Ok(())
     }
 

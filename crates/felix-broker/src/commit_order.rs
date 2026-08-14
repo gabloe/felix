@@ -22,6 +22,7 @@
 // Offsets are still assigned concurrently and flushes are still shared, so
 // group commit keeps its fan-in; only the cheap post-flush half is ordered.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use parking_lot::Mutex;
@@ -35,22 +36,48 @@ pub(crate) struct CommitSequencer {
     ready: Notify,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct SequenceState {
     /// Offset whose turn it is. Publishers wait until this reaches their first
     /// offset.
     next: Offset,
+    /// Ranges that have resolved out of order, keyed by their first offset.
+    ///
+    /// A range resolves when its guard drops — whether it applied cleanly or
+    /// was abandoned. Resolving is *not* the same as being next: a range behind
+    /// an unfinished predecessor has to wait its turn to be counted, or a
+    /// cancelled range would hand its successors permission to overtake the
+    /// range still in flight ahead of them, and the replay ring would receive
+    /// offsets out of order. Entries live here only until the prefix catches
+    /// up, so this holds at most one entry per publish in flight.
+    resolved: BTreeMap<Offset, Offset>,
     /// Bumped by every reset. A turn acquired before a reset carries
     /// pre-reset offsets, so releasing it must not move the sequence: the
     /// reset is authoritative about where the log now ends.
     generation: u64,
 }
 
+impl SequenceState {
+    /// Record a resolved range and advance through whatever contiguous prefix
+    /// that completes.
+    fn resolve(&mut self, first_offset: Offset, next_offset: Offset) {
+        if next_offset > self.next {
+            self.resolved.insert(first_offset, next_offset);
+        }
+        // Walk forward only while the next range in line has resolved. A gap
+        // stops the walk, which is exactly the range still in flight.
+        while let Some(end) = self.resolved.remove(&self.next) {
+            self.next = self.next.max(end);
+        }
+    }
+}
+
 impl fmt::Debug for CommitSequencer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = *self.state.lock();
+        let state = self.state.lock();
         f.debug_struct("CommitSequencer")
             .field("next", &state.next)
+            .field("pending_resolutions", &state.resolved.len())
             .field("generation", &state.generation)
             .finish()
     }
@@ -61,6 +88,7 @@ impl CommitSequencer {
         Self {
             state: Mutex::new(SequenceState {
                 next,
+                resolved: BTreeMap::new(),
                 generation: 0,
             }),
             ready: Notify::new(),
@@ -73,6 +101,8 @@ impl CommitSequencer {
         {
             let mut state = self.state.lock();
             state.next = next;
+            // Pending resolutions describe a sequence that no longer exists.
+            state.resolved.clear();
             state.generation += 1;
         }
         // Wake everyone: a waiter parked on an offset the reset just discarded
@@ -130,7 +160,7 @@ impl CommitTurn<'_> {
             notified.as_mut().enable();
 
             {
-                let state = *self.sequencer.state.lock();
+                let state = self.sequencer.state.lock();
                 // A reset means the log was rewritten underneath this range, so
                 // there is nothing left to wait for.
                 if state.next >= self.first_offset || state.generation != self.generation {
@@ -146,12 +176,12 @@ impl Drop for CommitTurn<'_> {
     fn drop(&mut self) {
         {
             let mut state = self.sequencer.state.lock();
-            // A reset while this turn was held means the log was rewritten
+            // A reset while this range was held means the log was rewritten
             // underneath it. Its offsets describe a sequence that no longer
-            // exists, so advancing on them would step the stream past records
+            // exists, so resolving on them would step the stream past records
             // that are gone.
-            if state.generation == self.generation && self.next_offset > state.next {
-                state.next = self.next_offset;
+            if state.generation == self.generation {
+                state.resolve(self.first_offset, self.next_offset);
             }
         }
         self.sequencer.ready.notify_waiters();
@@ -294,6 +324,36 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), after.wait())
             .await
             .expect("a cancelled waiter stranded the stream");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_range_does_not_let_later_ranges_overtake_an_unfinished_one() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+
+        // A is in flight and has not applied yet.
+        let a = sequencer.reserve(0, 3);
+        // B reserves behind it, then is cancelled while waiting.
+        {
+            let _b = sequencer.reserve(3, 6);
+        }
+
+        // C must still wait: A has not applied, so nothing at or after offset 3
+        // may reach the replay ring yet. If the cancelled B advanced the
+        // sequence straight to 6, C would overtake A and the disk order would
+        // disagree with the cursor order.
+        let c = sequencer.reserve(6, 9);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), c.wait())
+                .await
+                .is_err(),
+            "offset 6 overtook an unfinished range at offset 0"
+        );
+
+        // Once A applies, the contiguous prefix resolves and C proceeds.
+        drop(a);
+        tokio::time::timeout(Duration::from_secs(5), c.wait())
+            .await
+            .expect("C should be released once A completes");
     }
 
     #[tokio::test]
