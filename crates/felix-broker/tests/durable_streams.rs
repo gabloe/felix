@@ -859,3 +859,68 @@ async fn hydration_never_leaves_a_gap_between_the_ring_and_the_tail() {
     assert_eq!(backlog[0], payload("v0550"));
     assert_eq!(backlog[49], payload("v0599"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_publish_does_not_shift_cursor_identity() {
+    let dir = tempdir().expect("dir");
+    let saved_cursor;
+    let before_restart;
+    {
+        let (broker, storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+        register(&broker, "orders", true).await;
+
+        // Cancel publishes mid-fsync so their disk offsets are consumed without
+        // ever reaching the replay ring.
+        for _ in 0..12 {
+            let _ = tokio::time::timeout(
+                Duration::from_micros(200),
+                broker.publish("t1", "default", "orders", payload("cancelled")),
+            )
+            .await;
+        }
+
+        // A client takes its cursor after that, then reads five records.
+        saved_cursor = broker
+            .cursor_tail("t1", "default", "orders")
+            .await
+            .expect("cursor");
+        for i in 0..5 {
+            broker
+                .publish("t1", "default", "orders", payload(&format!("kept-{i}")))
+                .await
+                .expect("publish");
+        }
+
+        let (backlog, _) = broker
+            .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+            .await
+            .expect("replay");
+        before_restart = backlog
+            .into_iter()
+            .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
+            .collect::<Vec<_>>();
+        assert_eq!(before_restart.len(), 5, "the five kept records must replay");
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    // The same cursor after a restart, where hydration rebuilds sequences from
+    // disk offsets. If the in-memory sequence had been assigned from its own
+    // counter, a consumed-but-unapplied offset would have shifted every later
+    // record's cursor by one, and this cursor would name different records
+    // either side of the restart.
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+    let (backlog, _) = broker
+        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .await
+        .expect("replay after restart");
+    let after_restart: Vec<String> = backlog
+        .into_iter()
+        .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
+        .collect();
+
+    assert_eq!(
+        before_restart, after_restart,
+        "the same cursor named different records before and after a restart"
+    );
+}

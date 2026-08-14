@@ -50,24 +50,45 @@ struct SyncState {
     next_cache_seq: u64,
     /// Next sequence cursor for the streams change feed.
     next_stream_seq: u64,
+    /// Which cold-start snapshots have actually been fetched and applied.
+    ///
+    /// Deliberately separate from the cursors. A cursor cannot answer "was this
+    /// resource seeded?" for two independent reasons: a *successful* snapshot of
+    /// an empty catalog legitimately returns `next_seq == 0`, which reads as
+    /// "never seeded" and would leave such a deployment unready forever; and a
+    /// *failed* snapshot leaves the cursor at 0, after which the change feed in
+    /// the same iteration polls from zero and can advance the cursor straight
+    /// to the global tail — making a resource look seeded when nothing was
+    /// applied. Only an explicit flag set where the snapshot is applied says
+    /// what actually happened.
+    seeded: SeededSnapshots,
+}
+
+/// Per-resource record of a completed cold-start snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SeededSnapshots {
+    tenants: bool,
+    namespaces: bool,
+    caches: bool,
+    streams: bool,
+}
+
+impl SeededSnapshots {
+    fn all(&self) -> bool {
+        self.tenants && self.namespaces && self.caches && self.streams
+    }
 }
 
 impl SyncState {
     /// Whether every cold-start snapshot has been fetched and applied.
     ///
-    /// A cursor of 0 is this module's existing definition of "not yet seeded" —
-    /// it is what makes the snapshot blocks re-fetch — so the same test decides
-    /// whether the catalog is actually present. It matters because `sync_once`
-    /// returns `Ok` even when every snapshot fetch failed: the failures are
-    /// logged and retried, which is right for a background refresh, but means
-    /// "the iteration completed" says nothing about whether any tenant,
-    /// namespace, cache or stream was restored. Readiness needs the stronger
-    /// statement.
+    /// `sync_once` returns `Ok` even when every snapshot fetch failed — the
+    /// failures are logged and retried, which is right for a background
+    /// refresh, but means "the iteration completed" says nothing about whether
+    /// any tenant, namespace, cache or stream was restored. Readiness needs the
+    /// stronger statement.
     fn is_seeded(&self) -> bool {
-        self.next_tenant_seq != 0
-            && self.next_namespace_seq != 0
-            && self.next_cache_seq != 0
-            && self.next_stream_seq != 0
+        self.seeded.all()
     }
 
     fn new() -> Self {
@@ -76,6 +97,7 @@ impl SyncState {
             next_namespace_seq: 0,
             next_cache_seq: 0,
             next_stream_seq: 0,
+            seeded: SeededSnapshots::default(),
         }
     }
 }
@@ -377,13 +399,14 @@ async fn sync_once(
     let log_as_debug = cfg!(test) || std::env::var_os("RUST_TEST_THREADS").is_some();
     // === Cold start snapshot seeding ===
     // 1. Seed tenants first.
-    if state.next_tenant_seq == 0 {
+    if !state.seeded.tenants {
         match fetch_tenant_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for tenant in snapshot.items {
                     broker.register_tenant(tenant.tenant_id).await?;
                 }
                 state.next_tenant_seq = snapshot.next_seq;
+                state.seeded.tenants = true;
             }
             Err(err) => {
                 if log_as_debug {
@@ -396,7 +419,7 @@ async fn sync_once(
     }
 
     // 2. Seed namespaces after tenants.
-    if state.next_namespace_seq == 0 {
+    if !state.seeded.namespaces {
         match fetch_namespace_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for namespace in snapshot.items {
@@ -404,6 +427,7 @@ async fn sync_once(
                         .await?;
                 }
                 state.next_namespace_seq = snapshot.next_seq;
+                state.seeded.namespaces = true;
             }
             Err(err) => {
                 if log_as_debug {
@@ -416,7 +440,7 @@ async fn sync_once(
     }
 
     // 3. Seed caches after namespaces.
-    if state.next_cache_seq == 0 {
+    if !state.seeded.caches {
         match fetch_cache_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for cache in snapshot.items {
@@ -424,6 +448,7 @@ async fn sync_once(
                         .await?;
                 }
                 state.next_cache_seq = snapshot.next_seq;
+                state.seeded.caches = true;
             }
             Err(err) => {
                 if log_as_debug {
@@ -436,7 +461,7 @@ async fn sync_once(
     }
 
     // 4. Seed streams after caches.
-    if state.next_stream_seq == 0 {
+    if !state.seeded.streams {
         match fetch_snapshot(client, base_url).await {
             Ok(snapshot) => {
                 for stream in snapshot.items {
@@ -453,6 +478,7 @@ async fn sync_once(
                     .await?;
                 }
                 state.next_stream_seq = snapshot.next_seq;
+                state.seeded.streams = true;
             }
             Err(err) => {
                 if log_as_debug {
@@ -1505,13 +1531,77 @@ mod tests {
         let mut state = SyncState::new();
         assert!(!state.is_seeded(), "a fresh state is not seeded");
 
-        state.next_tenant_seq = 2;
-        state.next_namespace_seq = 2;
-        state.next_cache_seq = 2;
+        state.seeded.tenants = true;
+        state.seeded.namespaces = true;
+        state.seeded.caches = true;
         assert!(!state.is_seeded(), "streams never arrived");
 
-        state.next_stream_seq = 2;
+        state.seeded.streams = true;
         assert!(state.is_seeded());
+
+        // A cursor advancing on its own proves nothing: a failed snapshot
+        // leaves the cursor at 0 and the change feed in the same iteration
+        // polls from zero, which can carry it straight to the global tail.
+        let mut cursors_only = SyncState::new();
+        cursors_only.next_tenant_seq = 9_000;
+        cursors_only.next_namespace_seq = 9_000;
+        cursors_only.next_cache_seq = 9_000;
+        cursors_only.next_stream_seq = 9_000;
+        assert!(
+            !cursors_only.is_seeded(),
+            "advanced cursors must not stand in for an applied snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_catalog_still_becomes_seeded() -> Result<()> {
+        // A successful snapshot of an empty catalog returns next_seq == 0. That
+        // is a valid cursor, not a failure, and such a deployment has to be
+        // able to reach ready.
+        let router = Router::new()
+            .route(
+                "/v1/tenants/snapshot",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({ "items": [], "next_seq": 0 }))
+                }),
+            )
+            .route(
+                "/v1/namespaces/snapshot",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({ "items": [], "next_seq": 0 }))
+                }),
+            )
+            .route(
+                "/v1/caches/snapshot",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({ "items": [], "next_seq": 0 }))
+                }),
+            )
+            .route(
+                "/v1/streams/snapshot",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({ "items": [], "next_seq": 0 }))
+                }),
+            );
+        let (addr, shutdown_tx, handle) = serve_router(router).await?;
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let client = build_test_client()?;
+
+        let state = sync_once(
+            &broker,
+            &client,
+            &format!("http://{addr}"),
+            SyncState::new(),
+        )
+        .await?;
+        assert!(
+            state.is_seeded(),
+            "an empty catalog that fetched cleanly is seeded"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
+        Ok(())
     }
 
     #[tokio::test]

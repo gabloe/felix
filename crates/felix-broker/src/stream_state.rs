@@ -209,7 +209,36 @@ impl StreamState {
         state.senders.len()
     }
 
+    /// Append with sequence numbers drawn from the ring's own counter.
+    ///
+    /// Only ephemeral streams use this; a durable stream pins its sequences to
+    /// disk offsets via [`StreamState::append_batch_at`]. Kept for tests, which
+    /// exercise the ring without a log behind it.
+    #[cfg(test)]
     pub(crate) fn append_batch(&self, payloads: &[Bytes], log_capacity: usize) {
+        self.append_batch_at(payloads, None, log_capacity);
+    }
+
+    /// Append to the replay ring, optionally pinning the sequence numbers.
+    ///
+    /// `first_seq` is `Some` for durable streams, carrying the offsets the log
+    /// already assigned. That pinning is what keeps a cursor's sequence number
+    /// and a record's disk offset the same value.
+    ///
+    /// Deriving the sequence from an independent counter instead let the two
+    /// drift the moment a publish did not reach the ring — a cancelled publish
+    /// consumes a disk offset, so the next record would take the *next* offset
+    /// on disk but the *cancelled* record's sequence in memory. The same record
+    /// then answered to one cursor before a restart and a different one after,
+    /// because hydration rebuilds sequences from disk offsets. Pinning removes
+    /// the possibility rather than relying on every path to keep two counters
+    /// in step.
+    pub(crate) fn append_batch_at(
+        &self,
+        payloads: &[Bytes],
+        first_seq: Option<u64>,
+        log_capacity: usize,
+    ) {
         if payloads.is_empty() {
             return;
         }
@@ -231,17 +260,18 @@ impl StreamState {
             }
         }
 
+        let mut seq = first_seq.unwrap_or(state.next_seq);
         for payload in payloads {
-            let seq = state.next_seq;
-            state.next_seq = state
-                .next_seq
-                .checked_add(1)
-                .expect("log sequence overflow");
             state.log.push_back(LogEntry {
                 seq,
                 payload: payload.clone(),
             });
+            seq = seq.checked_add(1).expect("log sequence overflow");
         }
+        // A pinned batch may start beyond `next_seq` when an earlier publish
+        // consumed offsets without reaching the ring; the tail is what the next
+        // cursor must point at either way.
+        state.next_seq = state.next_seq.max(seq);
 
         // Trim once after append to keep the newest `log_capacity` entries.
         let overflow = state.log.len().saturating_sub(log_capacity);
