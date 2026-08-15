@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786819142391,
+  "lastUpdate": 1786822895557,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1716,6 +1716,58 @@ window.BENCHMARK_DATA = {
             "range": "8289.04",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 554855.09\nmean: 555009.45\nstdev: 8289.04\ncv: 1.49%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d8390ecdd3b146e1d4510173bfddcce4cd23c91c",
+          "message": "perf(storage): cut an fsync from the rollover path; add background rollover (off by default) (#192)\n\n* perf(storage): stop fsyncing a freshly created index file\n\nCreating a segment persisted its index through `IndexWriter::open`, which\nends in `sync_all()`. For a brand new segment that index holds a header\nand no entries, so the flush makes nothing durable that a rebuild would\nnot reproduce -- indexes are derived data, rewritten from the segment\nwhenever they are missing, short or inconsistent.\n\nIt is on the rollover path, which is where it costs: over five 200k-record\nruns at 16 MiB segments and 16 publishers, median p999 improves from\n5.12ms to 3.98ms (-22%) and max from 61.8ms to 47.0ms (-24%).\n\nSplits segment creation in two while it is here. `BlankSegment` owns the\nexpensive half -- the file, its preallocated blocks, its index, and the\ndirectory fsync that makes the entry durable -- and `activate` writes the\nheader. That is what lets a caller create a segment before knowing which\nbase offset it will take.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(storage): add background segment rollover, disabled by default\n\nBuilds the replacement segment off the append lock and swaps it in with a\npointer write, so a rollover's flushes never land on a publish.\n\nIt ships disabled, because it was measured and it does not help. Five\n200k-record runs at 16 MiB segments and 16 publishers: median p999 3.98ms\ninline against 7.97ms in the background, with a much heavier upper tail\n(worst run 5.0ms against 19.0ms). At 256 MiB and 1 MiB the two are within\nnoise. It was not faster in any configuration tested.\n\nThe reason is that `F_FULLFSYNC` flushes the device write cache and so\ndoes not overlap with concurrent writes. Moving rollover flushes off the\nappend lock does not hide them, it stops confining them: the same cost\nlands on whichever appends are in flight instead of queueing behind one\nlock. That is a property of a flush that reaches the device rather than\nof the design, so the code is kept and configurable -- where `fdatasync`\nreturns once the write is in the kernel the trade may invert.\n\nThe design, for when that is revisited:\n\n* The replacement takes its base offset at the *swap*, not when it is\n  built. Appends keep advancing the tail while a segment is being\n  prepared, so a base offset chosen up front is stale by the time it is\n  installed -- and a scheme that discards the preparation for that reason\n  is no faster than rolling inline. This is why segment creation had to\n  be split: the header cannot be written until the swap.\n* Under the lock: one page-cache write and two file opens. No fsync.\n* An explicit `Idle -> Preparing -> Sealing -> Idle` state machine, with\n  `Failed` terminal. A rollover fails on a failed fsync or a failed file\n  creation, both of which mean the log can no longer honour what it has\n  acknowledged, so it stops accepting appends rather than retrying\n  quietly forever.\n* `flush` now syncs the retired segment as well as the active one. It\n  reports durability for the whole log but only ever synced the active\n  segment, which was sound only because an inline roll sealed before the\n  replacement existed. Between a background swap and its seal there are\n  records that no sync of the active segment covers.\n* Recovery discards uninstalled preparations. They are self-describing --\n  newest, no records, base offset not at the tail (or no header at all) --\n  so no durable roll-intent record is needed, and a segment holding no\n  records cannot cost an acknowledged write.\n* Shutdown waits for a rollover in flight rather than abandoning a\n  half-installed segment.\n* `max_overshoot_percent` bounds how far a segment may grow while its\n  replacement is built. Unbounded overshoot would undo the recovery-time\n  sizing that `segment_size_bytes` exists to provide.\n\nCovered by tests for a crash at each transition, for both directions of\nstranded preparation, and for a headerless and a torn-header file.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs(storage): disclose the segment-size latency trade\n\n`segment_size_bytes` was documented as a recovery-time dial: only the\nactive segment is scanned in full at startup, so smaller restarts faster.\nTrue, and not the whole trade. Every rollover costs several device\nflushes, and smaller segments roll more often, so the cost shows up in\nthe tail -- trading 256 MiB for 1 MiB buys about 0.25s of restart time\nand costs roughly 30x on p999.\n\nRecords the measurements behind that, and the negative result for rolling\nsegments in the background.\n\nExposes the two knobs on `felix-log-tool` and on the broker's environment\nconfiguration. `--rollover-threshold-percent 100` disables the background\nroll, which makes the two paths A/B-able within one binary.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T12:39:38-07:00",
+          "tree_id": "956c1ccb1346f3d9eecc415342ff42d0666b488a",
+          "url": "https://github.com/gabloe/felix/commit/d8390ecdd3b146e1d4510173bfddcce4cd23c91c"
+        },
+        "date": 1786822894289,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 185470.68,
+            "range": "8719.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 185470.68\nmean: 187154.06\nstdev: 8719.31\ncv: 4.66%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 185470.68,
+            "range": "8719.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 185470.68\nmean: 187154.06\nstdev: 8719.31\ncv: 4.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54754.99,
+            "range": "1738.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54754.99\nmean: 54649.59\nstdev: 1738.44\ncv: 3.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 547549.86,
+            "range": "17384.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 547549.86\nmean: 546495.87\nstdev: 17384.42\ncv: 3.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
