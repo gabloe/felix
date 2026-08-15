@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786824028772,
+  "lastUpdate": 1786824348318,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2310,6 +2310,72 @@ window.BENCHMARK_DATA = {
             "range": "328.72",
             "unit": "us",
             "extra": "trials: 5\nmedian: 722.00\nmean: 887.00\nstdev: 328.72\ncv: 37.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a43df27c4ae4673b4dd39edf1a4c465eb5931f9",
+          "message": "chore(deps): bump the OpenTelemetry stack to 0.32 together (#194)\n\nSupersedes #183 (opentelemetry-otlp 0.31.1 -> 0.32.0) and #187\n(tracing-opentelemetry 0.32.1 -> 0.33.0), neither of which can pass CI on\nits own.\n\nThese four crates are version-locked to each other, and Dependabot raises\none pull request per crate, so each lands a single bump into a tree still\npinning the other three at 0.31. That puts two copies of `opentelemetry`\nin the dependency graph, and the errors are the ones that diamond always\nproduces:\n\n    expected `opentelemetry::context::Context`,\n       found `opentelemetry::Context`\n    the trait bound `opentelemetry_otlp::SpanExporter:\n       opentelemetry_sdk::trace::SpanExporter` is not satisfied\n\nMoving all four at once:\n\n  opentelemetry         0.31.0 -> 0.32.0\n  opentelemetry-otlp    0.31.1 -> 0.32.0\n  opentelemetry_sdk     0.31.0 -> 0.32.1\n  tracing-opentelemetry 0.32.1 -> 0.33.0\n\nNo source changes were needed. `cargo tree -i opentelemetry` reports a\nsingle `opentelemetry v0.32.0`.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T13:03:39-07:00",
+          "tree_id": "42973c249077a2a7fad7f91d5dc111f170edf34d",
+          "url": "https://github.com/gabloe/felix/commit/7a43df27c4ae4673b4dd39edf1a4c465eb5931f9"
+        },
+        "date": 1786824346422,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "2.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 160.80\nstdev: 2.39\ncv: 1.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 209,
+            "range": "1.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 209.00\nstdev: 1.87\ncv: 0.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 237,
+            "range": "6.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 237.00\nmean: 239.40\nstdev: 6.47\ncv: 2.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 206,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 206.00\nstdev: 1.22\ncv: 0.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 507,
+            "range": "13.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 507.00\nmean: 509.40\nstdev: 13.13\ncv: 2.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 703,
+            "range": "230.02",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 703.00\nmean: 793.20\nstdev: 230.02\ncv: 29.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
