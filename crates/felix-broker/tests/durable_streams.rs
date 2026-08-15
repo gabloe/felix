@@ -924,3 +924,58 @@ async fn a_cancelled_publish_does_not_shift_cursor_identity() {
         "the same cursor named different records before and after a restart"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_backlog_to_live_handoff_loses_nothing_under_concurrent_publishes() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::None).await;
+    register(&broker, "orders", true).await;
+
+    // A publisher running flat out while a subscriber joins. The handoff is the
+    // moment a record can fall between a backlog captured too early and a
+    // subscriber registered too late.
+    const TOTAL: u32 = 400;
+    let publisher = {
+        let broker = Arc::clone(&broker);
+        tokio::spawn(async move {
+            for i in 0..TOTAL {
+                broker
+                    .publish("t1", "default", "orders", payload(&format!("v{i:04}")))
+                    .await
+                    .expect("publish");
+            }
+        })
+    };
+
+    // Join mid-flight.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let cursor = broker
+        .cursor_tail("t1", "default", "orders")
+        .await
+        .expect("cursor");
+    let (backlog, mut sub) = broker
+        .subscribe_with_cursor("t1", "default", "orders", cursor)
+        .await
+        .expect("subscribe");
+    publisher.await.expect("join");
+
+    // Everything from the cursor onwards must arrive, once, in order, across
+    // the backlog/live seam.
+    let mut seen: Vec<String> = backlog
+        .into_iter()
+        .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
+        .collect();
+    let expected_from = cursor.next_seq() as u32;
+    while (seen.len() as u32) < TOTAL - expected_from {
+        match tokio::time::timeout(Duration::from_secs(5), sub.recv()).await {
+            Ok(Some(msg)) => seen.push(String::from_utf8(msg.to_vec()).expect("utf8")),
+            _ => break,
+        }
+    }
+
+    let expected: Vec<String> = (expected_from..TOTAL).map(|i| format!("v{i:04}")).collect();
+    assert_eq!(
+        seen, expected,
+        "a record fell between the backlog snapshot and the live subscription"
+    );
+}

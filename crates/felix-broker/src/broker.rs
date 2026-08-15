@@ -287,7 +287,8 @@ impl Broker {
         // disk. A durable stream pins the sequence numbers to the offsets the
         // log assigned, so a cursor and a disk offset are the same value no
         // matter what happened to any publish in between.
-        stream_state.append_batch_at(payloads, durable_first_offset, self.log_capacity);
+        let senders =
+            stream_state.append_batch_at(payloads, durable_first_offset, self.log_capacity);
 
         if let Some(start) = append_start {
             let append_ns = start.elapsed().as_nanos() as u64;
@@ -296,7 +297,6 @@ impl Broker {
         }
 
         let send_start = t_now_if(sample);
-        let senders = stream_state.subscriber_snapshot();
         let fanout = senders.len();
         #[cfg(feature = "telemetry")]
         let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
@@ -467,16 +467,16 @@ impl Broker {
             .await?;
         let stream_state = handle.state;
 
-        let (oldest, backlog) = stream_state.snapshot_from(cursor.next_seq);
-        // TODO: Should we really return an error? Would this not just be all entries?
-        if cursor.next_seq < oldest {
-            return Err(BrokerError::CursorTooOld {
+        // Backlog and registration are captured together. Taking the snapshot
+        // first and registering after left a window in which a publish landed
+        // in neither: appended after the snapshot, fanned out to a subscriber
+        // list that did not yet include this one.
+        let (backlog, subscriber_id, receiver) = stream_state
+            .register_with_backlog(cursor.next_seq)
+            .map_err(|oldest| BrokerError::CursorTooOld {
                 oldest,
                 requested: cursor.next_seq,
-            });
-        }
-        // Return backlog for replay plus a live subscription for new events.
-        let (subscriber_id, receiver) = stream_state.register_subscriber();
+            })?;
         Ok((
             backlog,
             Subscription {

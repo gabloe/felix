@@ -187,6 +187,12 @@ impl StreamState {
         }
     }
 
+    /// The current fanout list.
+    ///
+    /// The publish path no longer calls this: it takes the list from
+    /// [`StreamState::append_batch_at`] under the log lock, which is what makes
+    /// a joining subscriber's handoff lossless. Retained for tests.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn subscriber_snapshot(&self) -> Arc<Vec<SubscriberEntry>> {
         self.subscribers_snapshot.load_full()
@@ -233,14 +239,25 @@ impl StreamState {
     /// because hydration rebuilds sequences from disk offsets. Pinning removes
     /// the possibility rather than relying on every path to keep two counters
     /// in step.
+    /// Append and capture the subscriber list that must receive this batch.
+    ///
+    /// The two happen under one lock on purpose. A subscriber joining is only
+    /// well defined relative to a point in the log: it takes everything before
+    /// that point as backlog and everything after it live. If a publish could
+    /// append *after* a joining subscriber captured its backlog and then fan
+    /// out to a list captured *before* that subscriber registered, the record
+    /// would be in neither — silently dropped from a replay the caller believes
+    /// is contiguous. Pairing the append with the fanout list, and pairing
+    /// registration with the backlog snapshot (see
+    /// [`StreamState::register_with_backlog`]), removes the window.
     pub(crate) fn append_batch_at(
         &self,
         payloads: &[Bytes],
         first_seq: Option<u64>,
         log_capacity: usize,
-    ) {
+    ) -> Arc<Vec<SubscriberEntry>> {
         if payloads.is_empty() {
-            return;
+            return self.subscribers_snapshot.load_full();
         }
 
         // Hot path: one lock per publish batch (instead of per payload).
@@ -278,30 +295,44 @@ impl StreamState {
         if overflow > 0 {
             state.log.drain(..overflow);
         }
+
+        // Captured while the log lock is still held, so any subscriber that
+        // registers after this point takes these records as backlog instead.
+        self.subscribers_snapshot.load_full()
     }
 
-    pub(crate) fn snapshot_range(&self, from_seq: u64, to_seq: u64) -> (u64, Vec<Bytes>) {
+    /// Register a subscriber and capture its backlog atomically.
+    ///
+    /// Returns `(oldest, backlog, subscriber_id, receiver)`. Holding the log
+    /// lock across both halves is what makes the handoff lossless: a publish
+    /// either completes before this and appears in the backlog, or happens
+    /// after and is fanned out to a list that already contains this
+    /// subscriber. It cannot fall between.
+    pub(crate) fn register_with_backlog(
+        &self,
+        from_seq: u64,
+    ) -> std::result::Result<(Vec<Bytes>, u64, SubscriptionReceiver), u64> {
         let state = self.log_state.lock();
-
-        // We return this to let the caller know if they need to indicate
-        // they are requesting entries which are too far back in time.
         let oldest = state
             .log
             .front()
             .map(|entry| entry.seq)
             .unwrap_or(state.next_seq);
-
+        // Checked before registering, so a rejected subscribe leaves no slot
+        // behind for the publish path to discover and reap.
+        if from_seq < oldest {
+            return Err(oldest);
+        }
         let backlog = state
             .log
             .iter()
-            .filter(|entry| entry.seq >= from_seq && entry.seq <= to_seq)
+            .filter(|entry| entry.seq >= from_seq)
             .map(|entry| entry.payload.clone())
             .collect();
-        (oldest, backlog)
-    }
 
-    pub(crate) fn snapshot_from(&self, from_seq: u64) -> (u64, Vec<Bytes>) {
-        self.snapshot_range(from_seq, u64::MAX)
+        let (subscriber_id, receiver) = self.register_subscriber();
+        drop(state);
+        Ok((backlog, subscriber_id, receiver))
     }
 
     pub(crate) fn tail_seq(&self) -> u64 {
