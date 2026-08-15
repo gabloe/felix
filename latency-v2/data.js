@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786822892603,
+  "lastUpdate": 1786824028772,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2244,6 +2244,72 @@ window.BENCHMARK_DATA = {
             "range": "750.32",
             "unit": "us",
             "extra": "trials: 5\nmedian: 840.00\nmean: 1106.80\nstdev: 750.32\ncv: 67.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e615d93ea251bff380062f44d9e97872118d2109",
+          "message": "ci: stop failing the perf check when its comment cannot be posted (#193)\n\nThe performance workflow is advisory by design -- its own header says it\ndoes not fail the check on a regression -- but it was failing on every\nDependabot pull request, all ten currently open. The benchmarks ran fine;\nposting the summary comment did not, because Dependabot pull requests\n(like those from forks) run with a read-only GITHUB_TOKEN, so the\n`issues: write` the comment needs is withheld. The unhandled 403 took the\nwhole job down and left every one of those pull requests un-mergeable.\n\nWrites the report to the job summary unconditionally, and treats posting\nit as a comment as a convenience that is allowed to fail with a warning.\nThe content is identical either way.\n\nAlso states the workflow's permissions rather than inheriting them, so\nwhat the comment step needs is visible at the top of the file.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T12:58:32-07:00",
+          "tree_id": "051a3486af92f0702f61765a9b770857a43bdd26",
+          "url": "https://github.com/gabloe/felix/commit/e615d93ea251bff380062f44d9e97872118d2109"
+        },
+        "date": 1786824027028,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 125,
+            "range": "2.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 124.60\nstdev: 2.61\ncv: 2.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 169,
+            "range": "4.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 170.00\nstdev: 4.06\ncv: 2.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 204,
+            "range": "171.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 280.60\nstdev: 171.58\ncv: 61.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 169.40\nstdev: 1.67\ncv: 0.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 424,
+            "range": "19.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 424.00\nmean: 433.00\nstdev: 19.89\ncv: 4.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 722,
+            "range": "328.72",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 722.00\nmean: 887.00\nstdev: 328.72\ncv: 37.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
