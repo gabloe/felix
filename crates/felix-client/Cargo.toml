@@ -12,6 +12,7 @@ keywords = ["felix", "client", "pubsub", "messaging", "quic"]
 categories = ["network-programming", "api-bindings"]
 
 [dependencies]
+thiserror = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 ahash = "0.8"

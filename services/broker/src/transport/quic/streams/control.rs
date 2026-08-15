@@ -100,6 +100,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // Otherwise, we will cancel downstream tasks and tear down the connection cooperatively.
     let mut graceful_close = false;
     let mut auth_ctx: Option<AuthContext> = None;
+    // Frame-flag bits the client understands. Narrowed to the pre-negotiation
+    // set until an `Auth` says otherwise.
+    let mut peer_flags = felix_wire::ORIGINAL_V1_FLAGS;
     let authz_ctx = AuthzResponseContext {
         out_ack_tx: &out_ack_tx,
         out_ack_depth: &out_ack_depth,
@@ -257,6 +260,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 match auth.authenticate(&tenant_id, &token).await {
                     Ok(ctx) => {
                         auth_ctx = Some(ctx);
+                        // Remembered, not just answered: delivery paths need to
+                        // know which optional frame shapes this client can read.
+                        // Absent means a pre-negotiation client, and the only
+                        // safe reading of that silence is the original bits.
+                        peer_flags = client_flags.unwrap_or(felix_wire::ORIGINAL_V1_FLAGS);
                         // Advertise our flag set only to a client that offered its
                         // own. A client that sent no `client_flags` predates
                         // negotiation and would not understand `AuthOk`, so it must
@@ -394,6 +402,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 namespace,
                 stream,
                 subscription_id,
+                start,
             } => {
                 if !authorize_stream_simple(
                     auth_ctx.as_ref(),
@@ -424,11 +433,26 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     namespace,
                     stream,
                     subscription_id,
+                    start,
+                    peer_flags,
                 )
                 .await?;
                 if done {
                     return Ok(true);
                 }
+            }
+            // Broker -> client only; a client sending one is a protocol error.
+            Message::SubscribeCursorError { .. } => {
+                send_control_error(
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    "subscribe_cursor_error is a server-to-client message",
+                )
+                .await?;
+                return Ok(false);
             }
             Message::CachePut {
                 tenant_id,

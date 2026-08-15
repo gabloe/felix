@@ -209,7 +209,11 @@ impl StreamState {
         self.subscribers_snapshot.store(Arc::new(snapshot));
     }
 
-    #[cfg(test)]
+    /// How many subscriber slots are registered right now.
+    ///
+    /// No longer test-only: `Broker::registered_subscribers` exposes it so a
+    /// test can prove a *failed* subscribe left nothing behind. A stranded
+    /// registration is otherwise invisible until some later publish reaps it.
     pub(crate) fn subscriber_count(&self) -> usize {
         let state = self.subscribers.lock();
         state.senders.len()
@@ -333,6 +337,71 @@ impl StreamState {
         let (subscriber_id, receiver) = self.register_subscriber();
         drop(state);
         Ok((backlog, subscriber_id, receiver))
+    }
+
+    /// Register a subscriber starting as far back as the replay ring allows,
+    /// reporting where that turned out to be.
+    ///
+    /// This is [`Self::register_with_backlog`] without the rejection. It cannot
+    /// fail on a too-old cursor: it clamps to the oldest entry the ring still
+    /// holds and returns that offset, so the caller learns exactly which range
+    /// it must serve from disk to close the gap.
+    ///
+    /// The clamp has to happen *here*, under the one lock acquisition that also
+    /// takes the backlog and registers the subscriber. Discovering `oldest` from
+    /// a failed call and registering again would leave a window in which the
+    /// ring evicts further, and the second registration would start later than
+    /// the offset the caller was told to read up to -- which is precisely the
+    /// gap this whole path exists to prevent.
+    ///
+    /// Returns `(backlog, backlog_start, subscriber_id, receiver)`, where
+    /// `backlog_start` is the offset of the first backlog entry. Everything from
+    /// `backlog_start` onward is either in `backlog` or will arrive on
+    /// `receiver`; nothing can fall between them.
+    pub(crate) fn register_clamped(
+        &self,
+        from_seq: u64,
+    ) -> (Vec<(u64, Bytes)>, u64, u64, SubscriptionReceiver) {
+        let state = self.log_state.lock();
+        let oldest = state
+            .log
+            .front()
+            .map(|entry| entry.seq)
+            .unwrap_or(state.next_seq);
+        let start = from_seq.max(oldest);
+        // Each payload keeps its sequence number. The ring is *not* guaranteed
+        // contiguous: a publish that consumed disk offsets and was cancelled
+        // before reaching the ring leaves a hole. Returning bare payloads made
+        // the caller assume `start, start+1, start+2, ...`, which both mislabels
+        // every offset after a hole and hides the missing record entirely.
+        let backlog: Vec<(u64, Bytes)> = state
+            .log
+            .iter()
+            .filter(|entry| entry.seq >= start)
+            .map(|entry| (entry.seq, entry.payload.clone()))
+            .collect();
+        // Where the backlog *actually* begins, which is not `start` when the
+        // first surviving entry sits above it.
+        let backlog_start = match backlog.first() {
+            Some((seq, _)) => *seq,
+            // An empty ring means the live edge is `next_seq`, and that is where
+            // the backlog would have started had there been one.
+            None => state.next_seq.max(start),
+        };
+
+        let (subscriber_id, receiver) = self.register_subscriber();
+        drop(state);
+        (backlog, backlog_start, subscriber_id, receiver)
+    }
+
+    /// Oldest sequence the in-memory replay ring can still serve.
+    pub(crate) fn oldest_seq(&self) -> u64 {
+        let state = self.log_state.lock();
+        state
+            .log
+            .front()
+            .map(|entry| entry.seq)
+            .unwrap_or(state.next_seq)
     }
 
     pub(crate) fn tail_seq(&self) -> u64 {

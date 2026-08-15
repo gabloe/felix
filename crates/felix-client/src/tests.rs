@@ -350,6 +350,7 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                             write_message(
                                 &mut uni,
                                 Message::EventBatch {
+                                    base_offset: None,
                                     tenant_id: "t1".to_string(),
                                     namespace: "default".to_string(),
                                     stream: "updates".to_string(),
@@ -934,6 +935,7 @@ async fn subscription_legacy_event_paths_and_unexpected_message_error() -> Resul
                         write_message(
                             &mut uni,
                             Message::Event {
+                                offset: None,
                                 tenant_id: "t1".to_string(),
                                 namespace: "default".to_string(),
                                 stream: "updates".to_string(),
@@ -944,6 +946,7 @@ async fn subscription_legacy_event_paths_and_unexpected_message_error() -> Resul
                         write_message(
                             &mut uni,
                             Message::EventBatch {
+                                base_offset: None,
                                 tenant_id: "t1".to_string(),
                                 namespace: "default".to_string(),
                                 stream: "updates".to_string(),
@@ -1067,6 +1070,7 @@ async fn subscription_empty_event_batch_returns_none() -> Result<()> {
                         write_message(
                             &mut uni,
                             Message::EventBatch {
+                                base_offset: None,
                                 tenant_id: "t1".to_string(),
                                 namespace: "default".to_string(),
                                 stream: "updates".to_string(),

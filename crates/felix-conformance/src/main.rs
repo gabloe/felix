@@ -169,6 +169,7 @@ async fn run_pubsub(
     quic::write_message(
         &mut sub_send,
         Message::Subscribe {
+            start: None,
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             stream: "conformance".to_string(),

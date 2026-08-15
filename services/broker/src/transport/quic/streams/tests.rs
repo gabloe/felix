@@ -961,6 +961,7 @@ async fn control_loop_subscribe_forbidden_sends_error() -> Result<()> {
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::Subscribe {
+            start: None,
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             stream: "updates".to_string(),
@@ -989,6 +990,7 @@ async fn control_loop_subscribe_returns_true() -> Result<()> {
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::Subscribe {
+            start: None,
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             stream: "missing".to_string(),
@@ -1013,6 +1015,7 @@ async fn control_loop_subscribe_tenant_mismatch_sends_error() -> Result<()> {
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::Subscribe {
+            start: None,
             tenant_id: "t2".to_string(),
             namespace: "default".to_string(),
             stream: "updates".to_string(),
@@ -1178,6 +1181,7 @@ async fn control_loop_rejects_subscribe_without_auth() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
     let frames = vec![Ok(Some(frame_from_message(Message::Subscribe {
+        start: None,
         tenant_id: "t1".to_string(),
         namespace: "default".to_string(),
         stream: "updates".to_string(),
@@ -3022,6 +3026,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
         Ok(Some(frame_from_message(Message::Subscribe {
+            start: None,
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
             stream: "missing".to_string(),

@@ -165,6 +165,15 @@ impl StreamLog {
         self.log.tail_offset().await.map_err(storage_error)
     }
 
+    /// Oldest offset still on disk.
+    ///
+    /// Rises as retention trims the head, so this is the floor a resuming
+    /// subscriber can ask for: anything below it has been discarded and must be
+    /// reported rather than silently skipped.
+    pub fn base_offset(&self) -> Offset {
+        self.log.base_offset()
+    }
+
     /// Exclusive bound on offsets that survive a crash right now.
     pub fn durable_offset(&self) -> Offset {
         self.log.durable_offset()

@@ -27,10 +27,10 @@ pub mod text;
 pub use error::{Error, Result};
 pub use frame::{
     FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
-    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, Frame, FrameHeader, KNOWN_FLAGS, MAGIC,
-    ORIGINAL_V1_FLAGS, VERSION, has_unknown_flags, supports,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_EVENT_BATCH_OFFSETS, Frame,
+    FrameHeader, KNOWN_FLAGS, MAGIC, ORIGINAL_V1_FLAGS, VERSION, has_unknown_flags, supports,
 };
-pub use message::{AckMode, Message};
+pub use message::{AckMode, CursorErrorReason, Message, StartPosition};
 
 #[cfg(test)]
 mod tests;

@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use felix_broker::{Broker, BrokerError, DurableStorage, StreamMetadata};
+use felix_broker::{
+    Broker, BrokerError, DurableStorage, ResumedSubscription, StartPosition, StreamMetadata,
+};
 use felix_storage::EphemeralCache;
 use felix_storage::log::{FsyncMode, LogConfig};
 use tempfile::{TempDir, tempdir};
@@ -966,16 +968,340 @@ async fn the_backlog_to_live_handoff_loses_nothing_under_concurrent_publishes() 
         .map(|b| String::from_utf8(b.to_vec()).expect("utf8"))
         .collect();
     let expected_from = cursor.next_seq() as u32;
+    // A timeout used to `break` and let the length assertion below report it as
+    // a lost record, which sends anyone reading the failure after the handoff
+    // logic instead of at the clock. On a machine busy enough -- a full test
+    // suite, or a benchmark run alongside it -- waiting is not the same fact as
+    // losing, so the two now fail differently.
+    let mut timed_out = false;
     while (seen.len() as u32) < TOTAL - expected_from {
-        match tokio::time::timeout(Duration::from_secs(5), sub.recv()).await {
+        match tokio::time::timeout(Duration::from_secs(30), sub.recv()).await {
             Ok(Some(msg)) => seen.push(String::from_utf8(msg.to_vec()).expect("utf8")),
-            _ => break,
+            Ok(None) => break,
+            Err(_) => {
+                timed_out = true;
+                break;
+            }
         }
     }
+    assert!(
+        !timed_out,
+        "timed out after {} of {} records -- the machine was too slow to \
+         conclude anything about the handoff",
+        seen.len(),
+        TOTAL - expected_from,
+    );
 
     let expected: Vec<String> = (expected_from..TOTAL).map(|i| format!("v{i:04}")).collect();
     assert_eq!(
         seen, expected,
         "a record fell between the backlog snapshot and the live subscription"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Resuming from a position: the seam between stored history and live delivery.
+// ---------------------------------------------------------------------------
+
+/// A broker whose replay ring is deliberately tiny, so history has to come off
+/// disk rather than out of memory.
+async fn broker_with_small_ring(dir: &TempDir, ring: usize) -> Arc<Broker> {
+    let storage = DurableStorage::open(dir.path(), log_config(FsyncMode::None)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into())
+        .with_durable_storage(storage)
+        .with_log_capacity(ring)
+        .expect("capacity");
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    Arc::new(broker)
+}
+
+/// Drain everything a resume produced: disk history, then ring backlog, then
+/// whatever is already sitting on the live receiver.
+async fn drain_resume(
+    broker: &Broker,
+    stream: &str,
+    resumed: &mut ResumedSubscription,
+) -> Vec<String> {
+    let mut seen = Vec::new();
+    if let Some(range) = resumed.history {
+        let mut at = range.from_offset;
+        while at < range.until_offset {
+            let records = broker
+                .read_durable("t1", "default", stream, at, 64 * 1024)
+                .await
+                .expect("history");
+            if records.is_empty() {
+                break;
+            }
+            for record in records {
+                if record.offset >= range.until_offset {
+                    break;
+                }
+                seen.push(String::from_utf8(record.payload.to_vec()).expect("utf8"));
+                at = record.offset + 1;
+            }
+        }
+    }
+    for (_, payload) in &resumed.backlog {
+        seen.push(String::from_utf8(payload.to_vec()).expect("utf8"));
+    }
+    seen
+}
+
+#[tokio::test]
+async fn resuming_at_an_offset_older_than_the_ring_replays_from_disk() {
+    let dir = tempdir().expect("dir");
+    // Ring holds 4; publish 20. Everything below offset 16 exists only on disk.
+    let broker = broker_with_small_ring(&dir, 4).await;
+    register(&broker, "orders", true).await;
+    for i in 0..20 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i:02}")))
+            .await
+            .expect("publish");
+    }
+
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(3))
+        .await
+        .expect("resume");
+
+    // The request is older than the ring, so a disk range must have been
+    // produced -- and it must stop exactly where the backlog starts.
+    let range = resumed.history.expect("history below the ring");
+    assert_eq!(range.from_offset, 3);
+    assert_eq!(range.until_offset, resumed.backlog_start);
+
+    let seen = drain_resume(&broker, "orders", &mut resumed).await;
+    let expected: Vec<String> = (3..20).map(|i| format!("v{i:02}")).collect();
+    assert_eq!(seen, expected, "history and backlog must join with no gap");
+}
+
+#[tokio::test]
+async fn a_publish_during_the_resume_arrives_live_exactly_once() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 4).await;
+    register(&broker, "orders", true).await;
+    for i in 0..20 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i:02}")))
+            .await
+            .expect("publish");
+    }
+
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(3))
+        .await
+        .expect("resume");
+
+    // Published *after* registration but *before* the history is read. This is
+    // the record that a read-then-subscribe ordering loses: it is too new for
+    // the disk range and would have missed a later registration.
+    broker
+        .publish("t1", "default", "orders", payload("during"))
+        .await
+        .expect("publish");
+
+    let mut seen = drain_resume(&broker, "orders", &mut resumed).await;
+    while let Ok(Some(delivery)) =
+        tokio::time::timeout(Duration::from_millis(200), resumed.subscription.recv()).await
+    {
+        seen.push(String::from_utf8(delivery.to_vec()).expect("utf8"));
+    }
+
+    let mut expected: Vec<String> = (3..20).map(|i| format!("v{i:02}")).collect();
+    expected.push("during".to_string());
+    assert_eq!(seen, expected);
+}
+
+#[tokio::test]
+async fn resuming_within_the_ring_needs_no_disk_history() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 16).await;
+    register(&broker, "orders", true).await;
+    for i in 0..8 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i}")))
+            .await
+            .expect("publish");
+    }
+
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(5))
+        .await
+        .expect("resume");
+    assert!(resumed.history.is_none(), "the ring covered the request");
+    assert_eq!(resumed.backlog_start, 5);
+    assert_eq!(
+        drain_resume(&broker, "orders", &mut resumed).await,
+        ["v5", "v6", "v7"]
+    );
+}
+
+#[tokio::test]
+async fn latest_delivers_nothing_already_published() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 16).await;
+    register(&broker, "orders", true).await;
+    for i in 0..5 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i}")))
+            .await
+            .expect("publish");
+    }
+
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Latest)
+        .await
+        .expect("resume");
+    assert!(resumed.history.is_none());
+    assert!(
+        drain_resume(&broker, "orders", &mut resumed)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn earliest_replays_the_whole_retained_stream() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 4).await;
+    register(&broker, "orders", true).await;
+    for i in 0..12 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i:02}")))
+            .await
+            .expect("publish");
+    }
+
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Earliest)
+        .await
+        .expect("resume");
+    let seen = drain_resume(&broker, "orders", &mut resumed).await;
+    let expected: Vec<String> = (0..12).map(|i| format!("v{i:02}")).collect();
+    assert_eq!(seen, expected);
+}
+
+#[tokio::test]
+async fn an_in_memory_stream_reports_a_cursor_older_than_its_ring() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 4).await;
+    // Not durable: there is no disk to fall back to, so a request below the
+    // ring is unservable rather than slow.
+    register(&broker, "ephemeral", false).await;
+    for i in 0..20 {
+        broker
+            .publish("t1", "default", "ephemeral", payload(&format!("v{i:02}")))
+            .await
+            .expect("publish");
+    }
+
+    let err = broker
+        .subscribe_from("t1", "default", "ephemeral", StartPosition::Offset(2))
+        .await
+        .expect_err("cursor is below the ring and there is no disk");
+    assert!(
+        matches!(err, BrokerError::CursorTooOld { requested: 2, .. }),
+        "unexpected error: {err}",
+    );
+}
+
+#[tokio::test]
+async fn a_resume_past_the_tail_is_rejected_not_reinterpreted() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 16).await;
+    register(&broker, "orders", true).await;
+    for i in 0..5 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i}")))
+            .await
+            .expect("publish");
+    }
+
+    // Tail is 5. Asking for 99 previously registered for live delivery and then
+    // handed over records at offsets 5, 6, 7... -- below the requested position,
+    // which is the opposite of what was asked for.
+    let err = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(99))
+        .await
+        .expect_err("99 is past the tail");
+    assert!(
+        matches!(
+            err,
+            BrokerError::CursorInFuture {
+                requested: 99,
+                tail: 5
+            }
+        ),
+        "unexpected error: {err}",
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_resume_leaves_no_subscriber_behind() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 4).await;
+    register(&broker, "ephemeral", false).await;
+    for i in 0..20 {
+        broker
+            .publish("t1", "default", "ephemeral", payload(&format!("v{i:02}")))
+            .await
+            .expect("publish");
+    }
+
+    // Registration happens before the too-old check can run, so each rejection
+    // used to strand a closed sender in the registry -- reaped only when some
+    // later publish happened to notice. Repeated rejected subscribes could grow
+    // the slab without ever touching the per-connection subscription cap.
+    for _ in 0..50 {
+        let err = broker
+            .subscribe_from("t1", "default", "ephemeral", StartPosition::Offset(1))
+            .await
+            .expect_err("below the ring, and no disk to fall back to");
+        assert!(matches!(err, BrokerError::CursorTooOld { .. }));
+    }
+
+    assert_eq!(
+        broker
+            .registered_subscribers("t1", "default", "ephemeral")
+            .await
+            .expect("count"),
+        0,
+        "the 50 rejected subscribes must not have left registrations behind",
+    );
+}
+
+#[tokio::test]
+async fn backlog_entries_carry_their_own_offsets() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 16).await;
+    register(&broker, "orders", true).await;
+    for i in 0..6 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("v{i}")))
+            .await
+            .expect("publish");
+    }
+
+    let resumed = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(2))
+        .await
+        .expect("resume");
+
+    // Offsets travel with the payloads rather than being derived by index from
+    // `backlog_start`. The ring is not guaranteed contiguous -- a publish that
+    // consumed disk offsets and was cancelled before reaching the ring leaves a
+    // hole -- and numbering by position mislabels everything after one.
+    let offsets: Vec<u64> = resumed.backlog.iter().map(|(offset, _)| *offset).collect();
+    assert_eq!(offsets, vec![2, 3, 4, 5]);
+    assert_eq!(resumed.backlog_start, 2);
+    for (offset, payload) in &resumed.backlog {
+        let expected = format!("v{offset}");
+        assert_eq!(String::from_utf8(payload.to_vec()).expect("utf8"), expected);
+    }
 }
