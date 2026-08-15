@@ -48,7 +48,7 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Install Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@v3
 
       - name: Lint
         run: task lint
