@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786825156570,
+  "lastUpdate": 1786825283580,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1976,6 +1976,58 @@ window.BENCHMARK_DATA = {
             "range": "10414.03",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 542214.98\nmean: 541920.81\nstdev: 10414.03\ncv: 1.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "589fcf19edd763c106a148b09f4ec48208f760df",
+          "message": "chore(deps): bump actions/setup-node from 6 to 7 (#184)\n\nBumps [actions/setup-node](https://github.com/actions/setup-node) from 6 to 7.\n- [Release notes](https://github.com/actions/setup-node/releases)\n- [Commits](https://github.com/actions/setup-node/compare/v6...v7)\n\n---\nupdated-dependencies:\n- dependency-name: actions/setup-node\n  dependency-version: '7'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-15T13:19:13-07:00",
+          "tree_id": "68480ff7d38656cedb2a5a70bfcd438e03ac3a79",
+          "url": "https://github.com/gabloe/felix/commit/589fcf19edd763c106a148b09f4ec48208f760df"
+        },
+        "date": 1786825282899,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 178314.62,
+            "range": "8058.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 178314.62\nmean: 179429.83\nstdev: 8058.34\ncv: 4.49%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 178314.62,
+            "range": "8058.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 178314.62\nmean: 179429.83\nstdev: 8058.34\ncv: 4.49%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 52907.2,
+            "range": "4131.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 52907.20\nmean: 51820.86\nstdev: 4131.52\ncv: 7.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 529072.03,
+            "range": "41315.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 529072.03\nmean: 518208.56\nstdev: 41315.17\ncv: 7.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
