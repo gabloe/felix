@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786825375188,
+  "lastUpdate": 1786825683998,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2080,6 +2080,58 @@ window.BENCHMARK_DATA = {
             "range": "39367.24",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 804096.74\nmean: 797889.71\nstdev: 39367.24\ncv: 4.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f43d5e1d1b7eee9ae1a42731ba4d7c77091a17a",
+          "message": "chore(deps): bump quinn from 0.11.9 to 0.11.11 (#190)\n\nBumps [quinn](https://github.com/quinn-rs/quinn) from 0.11.9 to 0.11.11.\n- [Release notes](https://github.com/quinn-rs/quinn/releases)\n- [Commits](https://github.com/quinn-rs/quinn/compare/quinn-0.11.9...quinn-0.11.11)\n\n---\nupdated-dependencies:\n- dependency-name: quinn\n  dependency-version: 0.11.11\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-15T13:26:11-07:00",
+          "tree_id": "80623e26bb57434c45e5139d92adce3a1b71571c",
+          "url": "https://github.com/gabloe/felix/commit/9f43d5e1d1b7eee9ae1a42731ba4d7c77091a17a"
+        },
+        "date": 1786825683636,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 201311.03,
+            "range": "10692.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 201311.03\nmean: 195923.63\nstdev: 10692.12\ncv: 5.46%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 201311.03,
+            "range": "10692.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 201311.03\nmean: 195923.63\nstdev: 10692.12\ncv: 5.46%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55845.57,
+            "range": "4260.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55845.57\nmean: 54606.59\nstdev: 4260.82\ncv: 7.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558455.73,
+            "range": "42608.25",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558455.73\nmean: 546065.91\nstdev: 42608.25\ncv: 7.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
