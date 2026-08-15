@@ -249,6 +249,61 @@ Bounds that hold regardless of log size:
   offset returns `StorageError::Trimmed { requested, oldest }` — those offsets
   existed and are gone, which is a different fact from "nothing here yet".
 
+## Resuming a subscription
+
+Durability is only half of a resume: records surviving a restart is worthless if
+a reconnecting client cannot say where it got to. A subscriber asks for a start
+position — `latest`, `earliest`, or an exact offset — and delivered events carry
+their offsets so the client has something to checkpoint. See
+[the protocol](protocol.md#subscribe).
+
+The hard part is not reading history. It is joining history to live delivery
+without losing a record in between, and the ordering that achieves it is not the
+obvious one.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant B as Broker
+    participant R as Replay ring
+    participant D as Disk
+
+    C->>B: Subscribe(start = offset 3)
+    Note over B,R: Register the live subscription FIRST,<br/>clamped to the oldest offset the ring holds
+    B->>R: register_clamped(3)
+    R-->>B: backlog from 16, live receiver
+    Note over B,D: Only now read the older range.<br/>[3, 16) is closed: nothing can grow it,<br/>and the live edge is already pinned
+    B->>D: read_durable(3 → 16), one page at a time
+    D-->>B: records 3…15
+    B->>C: history
+    B->>C: backlog (16…)
+    B->>C: live events
+```
+
+Registering first is what makes the disk range `[requested, backlog_start)`
+**closed**: every record from `backlog_start` onward is already captured, either
+in the returned backlog or on the subscription's receiver. Nothing can be
+evicted out of the range while it is being read, and nothing published during
+the read can fall between the two halves.
+
+Reading history first and subscribing after is the version that looks natural
+and loses records: a publish landing between the read and the registration
+reaches neither.
+
+Two consequences worth stating plainly:
+
+- **History is paged, never collected.** The broker reads one bounded page at a
+  time and writes it before reading the next, so a client resuming from the
+  start of a large stream costs one page of memory rather than the whole
+  history. A slow client turns into slower reading rather than unbounded
+  buffering.
+- **A discarded offset is an error, not a silent skip.** Asking for an offset
+  below what retention still holds returns `CursorTooOld` naming the oldest
+  available offset. Quietly restarting at the tail — which is what a client got
+  before resume existed — is the failure this exists to remove, so it is not the
+  fallback.
+
 ## Recovery
 
 ```mermaid
@@ -396,7 +451,10 @@ fail rather than print the wrong numbers.
 - **One log per stream.** `StreamMetadata::shards` is carried through to the
   shard key but the data path is not yet sharded, so every stream uses shard 0.
 - **No retention.** `truncate` exists for replication's benefit; nothing deletes
-  segments on age or size yet.
+  segments on age or size yet. So a durable stream grows without bound, and
+  `CursorTooOld` is currently only reachable for an in-memory stream whose replay
+  ring has evicted — the durable path will start returning it once retention
+  lands.
 - **No tiered storage.** [`tiered.rs`](../crates/felix-storage/src/tiered.rs) is
   still trait scaffolding — `TieredStore`, `OffloadedSegment`, `ColdCacheConfig`
   and `RetentionPolicy` are declared, and nothing implements them. There is no

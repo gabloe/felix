@@ -52,6 +52,7 @@ Field definitions:
   | `0x0004` | `BINARY_EVENT_BATCH_SHARED` | Payload is a shared binary event batch |
   | `0x0008` | `BINARY_PUBLISH_ACKED` | Modifier on `0x0001`: the batch carries a `request_id` prefix and is owed an ack |
   | `0x0010` | `BINARY_PUBLISH_ACK` | Payload is a binary publish acknowledgement (broker → client) |
+  | `0x0020` | `EVENT_BATCH_OFFSETS` | Modifier on `0x0002` or `0x0004`: the batch carries a `base_offset` |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -77,13 +78,40 @@ Message schemas below are shown in pseudo-struct notation for readability; on th
 
 ### Subscribe
 ```
-{ "type": "subscribe", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>" }
+{ "type": "subscribe", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "start": <"latest"|"earliest"|{"offset": <number>}> }
 ```
+
+`start` is optional. Omitting it means `latest`, which is what every client sent
+before the field existed — so an old client and a new broker exchange exactly the
+frames they always did.
+
+- `latest` — deliver only what is published from now on.
+- `earliest` — the oldest record still retained. Deliberately not "offset 0":
+  for a stream whose head has been trimmed, offset 0 is gone, and `earliest`
+  means "as far back as you can" rather than an error.
+- `{"offset": n}` — resume at exactly offset `n`, the first record the client has
+  *not* seen. A client that checkpoints the offset it last handled resumes at
+  that offset plus one.
+
+Requesting an offset the broker cannot serve returns `subscribe_cursor_error`
+rather than a silent restart at the tail:
+
+```
+{ "type": "subscribe_cursor_error", "reason": "<too_old|in_future>", "requested": <number>, "available": <number> }
+```
+
+`too_old` means retention has discarded the offset and `available` is the oldest
+still retained. `in_future` means the offset is past the end of the stream and
+`available` is the current tail. The two have opposite remedies, which is why
+they are distinguishable in code rather than only in prose.
 
 ### Event (server -> client)
 ```
-{ "type": "event", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>" }
+{ "type": "event", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>", "offset": <number|absent> }
 ```
+
+`offset` is present for durable streams and absent for in-memory ones, which
+have no durable position to checkpoint against.
 
 ### CachePut
 ```
@@ -111,12 +139,17 @@ Message schemas below are shown in pseudo-struct notation for readability; on th
 ```
 
 ## Semantics (v1)
-- Subscribe starts at tail (no historical replay).
+- Subscribe starts at the tail unless `start` asks otherwise; a durable stream
+  can be replayed from any retained offset. History read from disk joins live
+  delivery with no gap and no duplicate — see
+  [durable storage](durable-storage.md#resuming-a-subscription).
 - Publish returns `ok` when accepted by the broker unless `ack` is `none`.
 - PublishBatch returns `ok` once for the batch unless `ack` is `none`.
 - CachePut returns `ok` when stored (TTL is optional).
 - CacheGet returns `cache_value` with `null` when missing/expired.
-- Backpressure: v1 is best-effort; subscribers may miss events if they fall behind.
+- Backpressure: v1 is best-effort; subscribers may miss events if they fall
+  behind. With event offsets negotiated a client can *detect* that loss, because
+  a gap between consecutive delivered offsets is exactly a drop.
 
 ## Protocol Flows (v1)
 
@@ -285,6 +318,38 @@ repeated count times:
 The subscription is identified by the preceding `EventStreamHello`, so event
 batches carry no per-subscriber identifier and the broker can share one encoded
 frame across subscribers. The legacy `0x0002` format remains decodable.
+
+## Event batch offsets
+
+When `flags & 0x0020 != 0`, a `u64 base_offset` precedes the `u32 count` — after
+the `u64 subscription_id` on the `0x0002` form, and at the very start of the
+payload on the shared `0x0004` form:
+
+```
+u64 base_offset          # offset of the first payload
+u32 count
+repeated count times:
+  u32 payload_len
+  u8[payload_len] payload
+```
+
+A batch's offsets are contiguous, so one `u64` per *batch* is enough: payload
+`i` sits at `base_offset + i`. That is what keeps offsets off the per-event cost
+model — 8 bytes per batch, not per event.
+
+Offsets belong to the **stream**, not to the subscriber, so the shared
+encode-once frame still serves every subscriber that negotiated the bit. A
+subscriber that did not negotiate it receives the frame without the field, so
+the broker encodes at most one extra variant per batch regardless of how many
+subscribers there are.
+
+Two uses:
+
+- **Checkpointing.** A client records the offset it last handled and resumes at
+  that offset plus one after a reconnect.
+- **Detecting loss.** Subscriber queues drop under `DropNew`, so consecutive
+  delivered batches can have a gap. Without offsets that loss is invisible; with
+  them it is a discontinuity the client can see and act on.
 
 ## Future Compatibility
 - Undefined `flags` bits are reserved. Receivers MUST reject frames carrying an
