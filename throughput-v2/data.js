@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786739925906,
+  "lastUpdate": 1786770740424,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1612,6 +1612,58 @@ window.BENCHMARK_DATA = {
             "range": "35941.73",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 641479.44\nmean: 618196.07\nstdev: 35941.73\ncv: 5.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "366e6256294d1a775aa3e306d226d3c5153b607c",
+          "message": "fix: pin cursor identity to disk offsets and prove the catalog seeded (#180)\n\nFour findings from the sixth review, each verified in the code first.\n\n**Cancellation could change cursor identity.** The replay ring numbered its\nentries from an independent counter, so a publish that consumed disk offsets\nwithout reaching the ring — a cancelled request does exactly that — left the\ntwo sequences one apart. The next record then held one offset on disk and a\ndifferent cursor number in memory, and because hydration rebuilds sequences\n*from* disk offsets, the same record answered to one cursor before a restart\nand another after.\n\nA durable stream now pins its ring sequences to the offsets the log already\nassigned. The invariant holds by construction rather than by two counters\nbeing kept in step on every path.\n\nThe same drift reached `cursor_tail`, which read the ring's counter and so\ncould hand out a cursor already in the past on disk — replaying from it then\nfailed as too old. For a durable stream the log is authoritative, and\n`cursor_tail` now says so.\n\n**Seeding was inferred from cursors, which cannot carry that meaning.** Two\nindependent failures: a *successful* snapshot of an empty catalog returns\n`next_seq == 0`, which read as \"never seeded\" and would leave such a\ndeployment unready forever; and a *failed* snapshot left the cursor at 0,\nafter which the change feed in the same iteration polled from zero and could\nadvance the cursor straight to the global tail — making a resource look\nseeded when nothing had been applied.\n\nSeeding is now an explicit per-resource flag, set where the snapshot is\napplied. Tests cover the empty catalog reaching ready and advanced cursors\nfailing to stand in for an applied snapshot.\n\n**QUIC accepted before recovery.** I had left this open, arguing readiness was\nthe signal that mattered. That was too narrow: readiness only steers\norchestrated traffic, and a client holding the address connects anyway and is\ntold its durable stream does not exist. A durable broker now waits for the\nsame seed signal before accepting. Shutdown still wins the race, so a broker\ntold to stop during recovery stops, and the accept gate is released before\nreadiness flips so a connection arriving on that edge is answered.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-14T22:10:26-07:00",
+          "tree_id": "bfad258452e0e3ff3c766ad500956f41ee6e3b76",
+          "url": "https://github.com/gabloe/felix/commit/366e6256294d1a775aa3e306d226d3c5153b607c"
+        },
+        "date": 1786770739187,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 210362.74,
+            "range": "25493.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 210362.74\nmean: 219956.12\nstdev: 25493.00\ncv: 11.59%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 210362.74,
+            "range": "25493.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 210362.74\nmean: 219956.12\nstdev: 25493.00\ncv: 11.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 66021.25,
+            "range": "11148.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 66021.25\nmean: 62057.24\nstdev: 11148.83\ncv: 17.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 660212.5,
+            "range": "111488.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 660212.50\nmean: 620572.35\nstdev: 111488.27\ncv: 17.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
