@@ -23,6 +23,15 @@ concurrency:
   group: perf-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Stated rather than inherited, so it is clear what the comment step needs.
+# `issues: write` is what posting the report costs; GitHub withholds it on
+# Dependabot and fork pull requests regardless of what is asked for here, which
+# is why the step treats it as optional.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 env:
   CARGO_TERM_COLOR: always
   # NOTE: core shards are intentionally left disabled here. `FELIX_CORE_SHARDS=N`
@@ -156,27 +165,44 @@ jobs:
             }
             const fullBody = `${marker}\n## Performance comparison (fast subset)\n\n${body}`;
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            // The report goes to the job summary unconditionally. Posting it as
+            // a comment is a convenience on top of that, and is allowed to fail:
+            // Dependabot pull requests run with a read-only GITHUB_TOKEN, as do
+            // pull requests from forks, so `issues: write` is simply not
+            // available there. This workflow is advisory and must never fail a
+            // check -- losing the comment costs nothing when the same content is
+            // one click away in the summary.
+            await core.summary.addRaw(fullBody).write();
 
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body: fullBody,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            try {
+              const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: fullBody,
               });
+              const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body: fullBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: fullBody,
+                });
+              }
+            } catch (error) {
+              core.warning(
+                `Could not post the performance comment (${error.message}). ` +
+                'The report is in this job\'s summary. This is expected on ' +
+                'Dependabot and fork pull requests, which get a read-only token.'
+              );
             }
 
       - name: Upload raw results
