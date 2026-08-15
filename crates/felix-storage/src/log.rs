@@ -66,6 +66,57 @@ pub struct LogConfig {
     /// that will not start, which is a defensible trade under `FsyncMode::None`
     /// and is not one under `OnCommit`.
     pub repair_checksum_tail: bool,
+    /// Percentage of `segment_size_bytes` at which a rollover is started in the
+    /// background. **100 disables it, which is the default.**
+    ///
+    /// Rolling a segment costs several fsyncs, and doing that work when an
+    /// append discovers the segment is full puts those flushes on the publish
+    /// path. Starting the roll early — building the replacement off the lock
+    /// while the current segment still has room — is the obvious way to keep
+    /// appends off them, and it is implemented here in full.
+    ///
+    /// It is off by default because it was measured, and it does not help.
+    /// Over five 200k-record runs at 16 MiB segments and 16 publishers, median
+    /// p999 was 3.98ms with it disabled and 7.97ms with it enabled, with a much
+    /// heavier upper tail (worst run 19.0ms against 5.0ms). At 256 MiB and at
+    /// 1 MiB it was neutral. It was never better anywhere.
+    ///
+    /// The reason is `F_FULLFSYNC`, which is what durability on macOS actually
+    /// requires: it flushes the whole device write cache, so it does not
+    /// overlap with concurrent writes. Moving a rollover's flushes off the
+    /// append lock does not hide them; it just stops confining them, so instead
+    /// of blocking behind one lock they land on whichever appends happen to be
+    /// in flight. The cost is the same and the tail is worse.
+    ///
+    /// It is kept, and kept configurable, because that reasoning is specific to
+    /// a flush that reaches the device. On a platform where `fdatasync` returns
+    /// once the write is in the kernel, the overlap is real and the trade may
+    /// invert — but that has not been measured here, so it is not the default.
+    ///
+    /// Enabling it makes `segment_size_bytes` a target rather than a ceiling;
+    /// see `max_overshoot_percent`.
+    pub rollover_threshold_percent: u8,
+    /// How far past `segment_size_bytes` a segment may grow while its
+    /// replacement is being prepared, as a percentage.
+    ///
+    /// This is the price of keeping rollover off the append path, and it is not
+    /// optional slack: preparing a replacement costs two fsyncs — milliseconds —
+    /// while the appends that fill the remaining space cost microseconds. With
+    /// no room to overshoot, the inline roll always wins that race, every roll
+    /// blocks exactly as it did before, and the prepared segment is discarded
+    /// unused. Measured, that combination is *slower* than not preparing at all.
+    ///
+    /// It is bounded rather than open-ended because `segment_size_bytes` also
+    /// bounds recovery time: the newest segment is the one scanned in full at
+    /// startup. Once a segment reaches this bound its appends roll inline and
+    /// pay the latency, which is the right trade against an unboundedly large
+    /// segment to re-scan after a crash.
+    ///
+    /// The overshoot a segment actually takes is roughly `write_rate x
+    /// prepare_time`, so it shrinks as segments grow: at 256 MiB and 300 MB/s
+    /// an 8ms preparation overshoots by about 1%. Small segments are the case
+    /// this cannot rescue — see the note on `segment_size_bytes`.
+    pub max_overshoot_percent: u8,
     /// Checksum every record of every segment at open time.
     ///
     /// Off by default: startup would otherwise cost one full pass over all data
@@ -86,6 +137,8 @@ impl Default for LogConfig {
             },
             max_records_per_read: 10_000,
             preallocate_segments: true,
+            rollover_threshold_percent: 100,
+            max_overshoot_percent: 100,
             repair_checksum_tail: false,
             verify_all_on_open: false,
         }

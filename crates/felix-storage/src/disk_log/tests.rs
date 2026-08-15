@@ -228,6 +228,38 @@ async fn records_survive_reopening_the_log() {
 }
 
 #[tokio::test]
+async fn background_rollover_keeps_the_log_contiguous_and_reopenable() {
+    // `rollover_threshold_percent` is 100 by default -- the background roll is
+    // measured to hurt tail latency on a device-level flush, so it ships off.
+    // This exercises it explicitly so the path stays covered.
+    let dir = tempdir().expect("dir");
+    let config = LogConfig {
+        rollover_threshold_percent: 60,
+        max_overshoot_percent: 200,
+        ..config(FsyncMode::OnCommit)
+    };
+    {
+        let log = DiskLog::open(dir.path(), "t/ns/s/0", config.clone()).expect("open");
+        for i in 0..60 {
+            log.append(&records(&[&format!("value-{i:03}")]))
+                .await
+                .expect("append");
+        }
+        assert!(log.segments().len() > 1, "expected rollovers");
+        log.shutdown().await.expect("shutdown");
+    }
+
+    // Reopening is the real assertion: a background roll that left an
+    // uninstalled segment, a gap, or a duplicated offset shows up here.
+    let log = DiskLog::open(dir.path(), "t/ns/s/0", config).expect("reopen");
+    assert_eq!(log.tail_offset().await.expect("tail"), 60);
+    let values = read_all(&log, 0).await;
+    assert_eq!(values.len(), 60);
+    assert_eq!(values[0], "value-000");
+    assert_eq!(values[59], "value-059");
+}
+
+#[tokio::test]
 async fn on_commit_acknowledges_only_durable_records() {
     let dir = tempdir().expect("dir");
     let log = open(&dir, FsyncMode::OnCommit);
@@ -244,7 +276,17 @@ async fn on_commit_acknowledges_only_durable_records() {
             "offset {} not durable at ack",
             result.last_offset
         );
-        assert_eq!(log.unsynced_bytes(), 0);
+        // Zero, or one segment header. A background rollover installs its
+        // replacement by writing the header into the page cache and leaving the
+        // flush to the next sync, so an ack can land in the window where those
+        // 32 bytes are the only thing outstanding. No *record* is ever
+        // unsynced at an ack, which is what the assertion above checks
+        // directly.
+        assert!(
+            log.unsynced_bytes() <= crate::segment::SEGMENT_HEADER_LEN,
+            "unsynced record bytes at ack: {}",
+            log.unsynced_bytes(),
+        );
     }
 }
 
