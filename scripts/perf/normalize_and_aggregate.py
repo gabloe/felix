@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,7 +96,18 @@ def write_csv(path: Path, rows: list):
             writer.writerow(row)
 
 
-def aggregate(rows: list):
+def aggregate(rows: list, strict: bool = True):
+    """Median each workload group across trials.
+
+    A median is only meaningful over runs that differ by nothing but trial
+    index. The grouping key therefore includes the things that change what is
+    being measured -- commit, host, toolchain, warmup/total -- and not only the
+    workload shape. `run_latency_matrix.py` appends to the same JSONL by
+    default, so without this a second run on a different commit or a different
+    machine silently merges into the first and the median describes no build
+    that ever existed. Recording `git_sha = "mixed"` afterwards labels the
+    problem rather than avoiding it.
+    """
     grouped = {}
     for row in rows:
         key = (
@@ -105,12 +117,52 @@ def aggregate(rows: list):
             row["payload_bytes"],
             row["preset"],
             row["binary"],
+            row.get("git_sha"),
+            row.get("git_dirty"),
+            row.get("hostname"),
+            row.get("platform"),
+            row.get("rustc_version"),
+            row.get("warmup"),
+            row.get("total"),
         )
         grouped.setdefault(key, []).append(row)
 
+    # A dirty tree cannot be attributed to a commit, so its numbers are not
+    # comparable to anything -- including a later run of the "same" sha.
+    dirty = sum(1 for row in rows if row.get("git_dirty"))
+    if dirty:
+        print(
+            f"warning: {dirty}/{len(rows)} runs were recorded from a dirty "
+            "working tree; their git_sha does not identify what was measured",
+            file=sys.stderr,
+        )
+    distinct_builds = {
+        (row.get("git_sha"), row.get("hostname")) for row in rows
+    }
+    if len(distinct_builds) > 1:
+        print(
+            f"warning: input spans {len(distinct_builds)} (commit, host) pairs; "
+            "they are aggregated separately and must not be compared on one chart",
+            file=sys.stderr,
+        )
+
     agg_rows = []
     for key, group in grouped.items():
-        profile, fanout, batch, payload, preset, binary = key
+        (
+            profile,
+            fanout,
+            batch,
+            payload,
+            preset,
+            binary,
+            key_git_sha,
+            key_git_dirty,
+            hostname,
+            platform,
+            rustc_version,
+            key_warmup,
+            key_total,
+        ) = key
         failures = [r for r in group if r.get("parse_error") or r.get("exit_code") != 0]
         successes = [r for r in group if r not in failures]
 
@@ -131,9 +183,9 @@ def aggregate(rows: list):
         def median_ms(values):
             return median(values) / 1000.0 if values else None
 
-        git_shas = sorted({r.get("git_sha") for r in group if r.get("git_sha")})
-        git_sha = git_shas[0] if len(git_shas) == 1 else "mixed"
-        git_dirty = any(r.get("git_dirty") for r in group)
+        # Part of the grouping key now, so it is exact rather than "mixed".
+        git_sha = key_git_sha
+        git_dirty = key_git_dirty
 
         agg_rows.append(
             {
@@ -143,8 +195,11 @@ def aggregate(rows: list):
                 "payload_bytes": payload,
                 "preset": preset,
                 "binary": binary,
-                "warmup": group[0].get("warmup"),
-                "total": group[0].get("total"),
+                "warmup": key_warmup,
+                "total": key_total,
+                "hostname": hostname,
+                "platform": platform,
+                "rustc_version": rustc_version,
                 "trial_count": len(group),
                 "failure_count": len(failures),
                 "git_sha": git_sha,
