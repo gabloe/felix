@@ -174,6 +174,63 @@ against, and a breach is a design conversation rather than an automatic failure.
 | Batch-16 throughput vs batch-1 | ≥ 4× | Confirms one `write` per batch, not per record |
 | Recovery time | ≤ 1s per GiB of active segment | Measured at 0.32s for a 1.01 GiB segment (~3.2 GiB/s), so the budget carries about 3× headroom. Only the active segment is fully scanned |
 
+### Segment size is a latency knob, not only a recovery knob
+
+`segment_size_bytes` is usually presented as a recovery-time dial: only the
+active segment is scanned in full at startup, so a smaller segment restarts
+faster. That is true, and it is not the whole trade.
+
+Every rollover costs several device flushes — sealing the retired segment, and
+creating and directory-syncing its replacement — and those flushes land on
+whichever appends are in flight. Smaller segments roll more often, so the cost
+appears more often, and it appears in the tail:
+
+| Segment size | p999, 16 publishers | Rollovers per 20k records |
+| --- | --- | --- |
+| 256 MiB (default) | ~0.9ms | 0 |
+| 16 MiB | ~1.3ms | ~1 |
+| 1 MiB | ~30ms | ~20 |
+| 128 KiB | ~112ms | ~160 |
+
+Trading a 256 MiB segment for a 1 MiB one buys about 0.25s of restart time and
+costs roughly 30× on p999. Below a few MiB the log is rolling often enough that
+tail latency is dominated by rollover flushes rather than by appends. Prefer the
+default unless restart time is genuinely the binding constraint, and if it is,
+measure the tail rather than assuming recovery is the only thing that moved.
+
+### Rolling segments in the background does not help
+
+The obvious fix for the table above is to stop doing rollover work on the append
+path: build the replacement segment ahead of time, off the lock, and swap it in
+with a pointer write. `rollover_threshold_percent` implements exactly that. It
+is disabled by default, because it was measured and it is worse.
+
+Five 200k-record runs, 16 MiB segments, 16 publishers, median across runs:
+
+| | p99 | p999 | max | throughput |
+| --- | --- | --- | --- | --- |
+| Inline roll (default) | 669µs | **3.98ms** | 47.0ms | 99.1k rec/s |
+| Background roll | 667µs | **7.97ms** | 50.8ms | 98.0k rec/s |
+
+The upper tail is where it shows: the worst background-roll run reached 19.0ms
+p999 against 5.0ms for the inline path. At 256 MiB and at 1 MiB the two were
+within noise. The background roll was not faster in any configuration tested.
+
+The reason is `F_FULLFSYNC`. Durability on macOS means flushing the device write
+cache, and that flush does not overlap with concurrent writes — so moving a
+rollover's flushes off the append lock does not hide them, it only stops
+confining them. Instead of a queue behind one lock, the same cost lands on
+whichever appends happen to be in flight, which is strictly worse for the tail.
+
+Two things are worth keeping from the exercise. The first is that reasoning is
+specific to a flush that reaches the device; where `fdatasync` returns once the
+write is in the kernel, overlap is real and the trade may invert, which is why
+the code is kept and configurable rather than deleted. The second is what the
+work actually did buy: measuring it exposed an `fsync` of a freshly created
+(and therefore empty) index file sitting inside the rollover path. Removing it
+improved the **default** inline path from 5.12ms to 3.98ms median p999 (-22%)
+and 61.8ms to 47.0ms max (-24%).
+
 ### Operating envelope
 
 | If you need | Choose | Expect |

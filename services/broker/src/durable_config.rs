@@ -48,6 +48,14 @@ impl DurableStorageConfig {
                 .unwrap_or(LogConfig::default().verify_all_on_open),
             repair_checksum_tail: parse_bool_env("FELIX_DURABLE_REPAIR_CHECKSUM_TAIL")?
                 .unwrap_or(LogConfig::default().repair_checksum_tail),
+            // Off by default: rolling segments in the background measured worse
+            // than rolling them inline, because a device-level flush does not
+            // overlap with concurrent writes. Exposed anyway, since that is a
+            // property of the platform's fsync rather than of the design.
+            rollover_threshold_percent: parse_env("FELIX_DURABLE_ROLLOVER_THRESHOLD_PERCENT")?
+                .unwrap_or(LogConfig::default().rollover_threshold_percent),
+            max_overshoot_percent: parse_env("FELIX_DURABLE_MAX_OVERSHOOT_PERCENT")?
+                .unwrap_or(LogConfig::default().max_overshoot_percent),
         };
         // Fail at startup rather than at the first durable publish.
         log.validate()
