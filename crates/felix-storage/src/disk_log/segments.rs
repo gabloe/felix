@@ -323,6 +323,14 @@ impl SegmentSet {
     /// target rather than a hard ceiling — a segment can overshoot slightly
     /// while its replacement is being created.
     pub fn should_prepare_roll(&self) -> bool {
+        // 100 means "never roll early", and it is the default. Without this the
+        // comparison below still fires whenever the segment has *reached* its
+        // configured size -- which an exactly fitting batch or a single
+        // oversized record does -- so the documented way to disable the
+        // background roll would quietly enter it anyway.
+        if self.config.rollover_threshold_percent >= 100 {
+            return false;
+        }
         if self.active.record_count() == 0 {
             return false;
         }
@@ -756,6 +764,37 @@ mod tests {
         set.append(&[record("v4")]).expect("append");
         assert_eq!(read_all(&set, 0).len(), 5);
         assert_eq!(set.descriptors().len(), 2);
+    }
+
+    #[test]
+    fn the_default_threshold_never_starts_a_background_roll() {
+        let dir = tempdir().expect("dir");
+        // 100 is the default and is documented as disabling the background
+        // roll. An exactly-full segment is the case that used to slip through.
+        let mut set = new_set(&dir, 4096);
+        assert_eq!(set.config.rollover_threshold_percent, 100);
+        // Enough appends to fill the segment several times over, so the check
+        // covers a segment that is nearly full, exactly full, and freshly
+        // rolled. `append` rolls on its own, so this cannot run forever.
+        for _ in 0..400 {
+            set.append(&[record("padding")]).expect("append");
+            assert!(
+                !set.should_prepare_roll(),
+                "a threshold of 100 must never ask for an early roll",
+            );
+        }
+        assert!(set.descriptors().len() > 1, "expected inline rollovers");
+    }
+
+    #[test]
+    fn an_oversized_first_record_does_not_trigger_a_disabled_roll() {
+        let dir = tempdir().expect("dir");
+        let mut set = new_set(&dir, 128);
+        // One record larger than the whole segment: `size_bytes` lands far past
+        // the threshold in a single step.
+        set.append(&[record(&"x".repeat(512))]).expect("append");
+        assert!(set.active().size_bytes() > 128);
+        assert!(!set.should_prepare_roll());
     }
 
     fn read_all(set: &SegmentSet, start: Offset) -> Vec<String> {
