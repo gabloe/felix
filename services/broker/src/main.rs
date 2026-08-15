@@ -96,6 +96,11 @@ where
     // Cancelled the moment shutdown begins, so startup work in flight can tell
     // "not ready yet" from "no longer ready".
     let draining = CancellationToken::new();
+    // Cancelled once the catalog is applied and every durable log recovered.
+    // Both readiness and the accept loop wait on it, so a durable broker
+    // neither advertises itself nor answers a direct client before its streams
+    // exist.
+    let seeded = CancellationToken::new();
     let sync_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
     let connections = TaskTracker::new();
@@ -180,7 +185,26 @@ where
         let auth = Arc::clone(&auth);
         let accept_shutdown = accept_shutdown.clone();
         let connections = connections.clone();
+        let seeded = seeded.clone();
         tokio::spawn(async move {
+            // A durable broker does not accept until its streams exist.
+            // Readiness alone only steers orchestrated traffic; a client with
+            // the address in hand would otherwise connect during recovery and
+            // be told its durable stream does not exist. Waiting is the honest
+            // answer, and shutdown still wins the race so a broker told to stop
+            // during recovery stops.
+            if gate_readiness_on_sync {
+                tokio::select! {
+                    biased;
+                    _ = accept_shutdown.cancelled() => {
+                        tracing::info!("shutdown before initial sync; not accepting");
+                        return;
+                    }
+                    _ = seeded.cancelled() => {
+                        tracing::info!("initial sync applied; accepting connections");
+                    }
+                }
+            }
             if let Err(err) = quic::serve_with_shutdown(
                 quic_server,
                 broker,
@@ -247,6 +271,7 @@ where
     if gate_readiness_on_sync {
         let readiness = readiness.clone();
         let draining = draining.clone();
+        let seeded = seeded.clone();
         tokio::spawn(async move {
             // `Readiness` is a single flag, so it cannot distinguish "never
             // ready yet" from "already drained" — both read false. The drain
@@ -257,8 +282,12 @@ where
                 _ = draining.cancelled() => {
                     tracing::warn!("shutdown began before the initial sync; staying unready");
                 }
-                seeded = seeded_rx => {
-                    if seeded.is_ok() {
+                result = seeded_rx => {
+                    if result.is_ok() {
+                        // Release the accept loop first, so a connection that
+                        // arrives the instant readiness flips is answered
+                        // rather than dropped.
+                        seeded.cancel();
                         readiness.mark_ready();
                         tracing::info!("initial control-plane sync applied; reporting ready");
                     }

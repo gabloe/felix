@@ -250,6 +250,7 @@ impl Broker {
         // below, not just the replay-ring append, because a subscriber's
         // delivery order is as much a part of the stream's order as its
         // cursors are.
+        let mut durable_first_offset = None;
         let _commit_turn = match &stream_state.durable {
             None => None,
             Some(durable) => {
@@ -263,6 +264,7 @@ impl Broker {
                 // publish abandoned its range, and every later publish waited
                 // on a turn that could never arrive.
                 let pending = durable.begin_append(payloads).await?;
+                durable_first_offset = Some(pending.first_offset());
                 let turn = stream_state
                     .commit_sequencer
                     .reserve(pending.first_offset(), pending.last_offset() + 1);
@@ -282,8 +284,10 @@ impl Broker {
 
         let append_start = t_now_if(sample);
         // Append to the in-memory log so cursors can replay without touching
-        // disk. For durable streams this mirrors what was just persisted.
-        stream_state.append_batch(payloads, self.log_capacity);
+        // disk. A durable stream pins the sequence numbers to the offsets the
+        // log assigned, so a cursor and a disk offset are the same value no
+        // matter what happened to any publish in between.
+        stream_state.append_batch_at(payloads, durable_first_offset, self.log_capacity);
 
         if let Some(start) = append_start {
             let append_ns = start.elapsed().as_nanos() as u64;
@@ -425,6 +429,13 @@ impl Broker {
     }
 
     // Return a cursor positioned at the tail of the stream log.
+    //
+    // For a durable stream the log is authoritative, not the replay ring. A
+    // publish can consume offsets without reaching the ring — a cancelled
+    // request does exactly that — so the ring's counter can sit behind the
+    // durable tail. Handing out a cursor from the ring would then name a
+    // position that is already in the past on disk, and replaying from it
+    // fails as too old rather than resuming where the caller actually was.
     pub async fn cursor_tail(
         &self,
         tenant_id: &str,
@@ -435,9 +446,11 @@ impl Broker {
             .resolve_stream_handle(tenant_id, namespace, stream)
             .await?;
 
-        Ok(Cursor {
-            next_seq: handle.state.tail_seq(),
-        })
+        let next_seq = match &handle.state.durable {
+            Some(log) => log.tail_offset().await?,
+            None => handle.state.tail_seq(),
+        };
+        Ok(Cursor { next_seq })
     }
 
     /// Allows us to subscribe from a previous point in time. If that point in time
