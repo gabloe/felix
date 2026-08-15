@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786824351306,
+  "lastUpdate": 1786825014505,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1872,6 +1872,58 @@ window.BENCHMARK_DATA = {
             "range": "117164.50",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544663.11\nmean: 493135.89\nstdev: 117164.50\ncv: 23.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca9c07f25b7255e553c426f910d08eaa32280be5",
+          "message": "chore(deps): bump tower-http from 0.6.8 to 0.7.0 (#188)\n\nBumps [tower-http](https://github.com/tower-rs/tower-http) from 0.6.8 to 0.7.0.\n- [Release notes](https://github.com/tower-rs/tower-http/releases)\n- [Commits](https://github.com/tower-rs/tower-http/compare/tower-http-0.6.8...tower-http-0.7.0)\n\n---\nupdated-dependencies:\n- dependency-name: tower-http\n  dependency-version: 0.7.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-15T13:13:57-07:00",
+          "tree_id": "ea7e82fc4a81dbc4fddcb151840d244c638f689b",
+          "url": "https://github.com/gabloe/felix/commit/ca9c07f25b7255e553c426f910d08eaa32280be5"
+        },
+        "date": 1786825013747,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 255884.11,
+            "range": "7168.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255884.11\nmean: 252778.56\nstdev: 7168.57\ncv: 2.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 255884.11,
+            "range": "7168.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255884.11\nmean: 252778.56\nstdev: 7168.57\ncv: 2.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 73397.6,
+            "range": "2513.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 73397.60\nmean: 73115.12\nstdev: 2513.97\ncv: 3.44%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 733976.03,
+            "range": "25139.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 733976.03\nmean: 731151.16\nstdev: 25139.66\ncv: 3.44%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
