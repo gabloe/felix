@@ -23,7 +23,7 @@ felix-common = { path = "../../crates/felix-common", version = "0.1.1", features
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
