@@ -11,6 +11,12 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Dependencies
+
+- `opentelemetry` 0.31.0 → 0.32.0, `opentelemetry-otlp` 0.31.1 → 0.32.0,
+  `opentelemetry_sdk` 0.31.0 → 0.32.1, `tracing-opentelemetry` 0.32.1 → 0.33.0.
+  These four are version-locked to each other and have to move together.
+
 ## [0.1.1] - 2026-08-09
 
 Maintenance release. No wire-protocol changes — `felix-wire` `VERSION` remains `1`,
