@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786739923194,
+  "lastUpdate": 1786770737003,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2046,6 +2046,72 @@ window.BENCHMARK_DATA = {
             "range": "3323.95",
             "unit": "us",
             "extra": "trials: 5\nmedian: 523.00\nmean: 2049.20\nstdev: 3323.95\ncv: 162.21%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "366e6256294d1a775aa3e306d226d3c5153b607c",
+          "message": "fix: pin cursor identity to disk offsets and prove the catalog seeded (#180)\n\nFour findings from the sixth review, each verified in the code first.\n\n**Cancellation could change cursor identity.** The replay ring numbered its\nentries from an independent counter, so a publish that consumed disk offsets\nwithout reaching the ring — a cancelled request does exactly that — left the\ntwo sequences one apart. The next record then held one offset on disk and a\ndifferent cursor number in memory, and because hydration rebuilds sequences\n*from* disk offsets, the same record answered to one cursor before a restart\nand another after.\n\nA durable stream now pins its ring sequences to the offsets the log already\nassigned. The invariant holds by construction rather than by two counters\nbeing kept in step on every path.\n\nThe same drift reached `cursor_tail`, which read the ring's counter and so\ncould hand out a cursor already in the past on disk — replaying from it then\nfailed as too old. For a durable stream the log is authoritative, and\n`cursor_tail` now says so.\n\n**Seeding was inferred from cursors, which cannot carry that meaning.** Two\nindependent failures: a *successful* snapshot of an empty catalog returns\n`next_seq == 0`, which read as \"never seeded\" and would leave such a\ndeployment unready forever; and a *failed* snapshot left the cursor at 0,\nafter which the change feed in the same iteration polled from zero and could\nadvance the cursor straight to the global tail — making a resource look\nseeded when nothing had been applied.\n\nSeeding is now an explicit per-resource flag, set where the snapshot is\napplied. Tests cover the empty catalog reaching ready and advanced cursors\nfailing to stand in for an applied snapshot.\n\n**QUIC accepted before recovery.** I had left this open, arguing readiness was\nthe signal that mattered. That was too narrow: readiness only steers\norchestrated traffic, and a client holding the address connects anyway and is\ntold its durable stream does not exist. A durable broker now waits for the\nsame seed signal before accepting. Shutdown still wins the race, so a broker\ntold to stop during recovery stops, and the accept gate is released before\nreadiness flips so a connection arriving on that edge is answered.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-14T22:10:26-07:00",
+          "tree_id": "bfad258452e0e3ff3c766ad500956f41ee6e3b76",
+          "url": "https://github.com/gabloe/felix/commit/366e6256294d1a775aa3e306d226d3c5153b607c"
+        },
+        "date": 1786770734403,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 89,
+            "range": "2.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 89.00\nmean: 88.00\nstdev: 2.35\ncv: 2.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 127,
+            "range": "5.93",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 126.80\nstdev: 5.93\ncv: 4.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 160,
+            "range": "116.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 232.80\nstdev: 116.33\ncv: 49.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 115,
+            "range": "5.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 115.00\nmean: 118.20\nstdev: 5.81\ncv: 4.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 328,
+            "range": "439.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 328.00\nmean: 512.60\nstdev: 439.99\ncv: 85.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 656,
+            "range": "1091.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 656.00\nmean: 1270.80\nstdev: 1091.38\ncv: 85.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
