@@ -74,6 +74,127 @@ pub struct SegmentWriter {
     index_degraded: bool,
 }
 
+/// A segment file that exists on disk but has no header yet, and so does not
+/// yet claim a base offset.
+///
+/// This split is what lets a rollover be prepared without blocking appends.
+/// Everything expensive about creating a segment — the file, its preallocated
+/// blocks, its index, and the *directory* fsync that makes the entry durable —
+/// happens here, with no lock held. What is left for [`Self::activate`] is a
+/// 32-byte write into the page cache.
+///
+/// The reason the header cannot be written up front is that its `base_offset`
+/// must be the log's tail *at the moment of the swap*, and the whole point of
+/// preparing ahead is that appends keep advancing that tail meanwhile. Writing
+/// the header early would pin the segment to an offset the log has already
+/// passed, and the swap would have to be abandoned — which is exactly what
+/// makes a prepare-ahead scheme with an early header no faster than rolling
+/// inline.
+///
+/// A crash between `create` and `activate` leaves a headerless file. Recovery
+/// treats one as an uninstalled rollover and deletes it; it can hold no
+/// records, so nothing acknowledged is at stake.
+#[derive(Debug)]
+pub struct BlankSegment {
+    id: SegmentId,
+    path: PathBuf,
+    file: File,
+    index_path: PathBuf,
+    index_spacing_bytes: u64,
+}
+
+impl BlankSegment {
+    /// Create the file and its index, and make the directory entry durable.
+    pub fn create(
+        dir: &Path,
+        id: SegmentId,
+        preallocate_bytes: u64,
+        index_spacing_bytes: u64,
+    ) -> Result<Self> {
+        let path = dir.join(segment_file_name(id));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        preallocate(&file, preallocate_bytes)?;
+        sync_dir(dir)?;
+        Ok(Self {
+            id,
+            path,
+            file,
+            index_path: dir.join(index_file_name(id)),
+            index_spacing_bytes,
+        })
+    }
+
+    pub fn id(&self) -> SegmentId {
+        self.id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn index_path(&self) -> &Path {
+        &self.index_path
+    }
+
+    /// Write the header and become a writable segment based at `base_offset`.
+    ///
+    /// One page-cache write and no flush, so this is safe to call under the
+    /// lock that appends contend on. The header reaches disk with the first
+    /// sync of this segment, which under every fsync policy happens no later
+    /// than the acknowledgement of the first record written to it.
+    pub fn activate(
+        mut self,
+        base_offset: Offset,
+        created_at_micros: u64,
+    ) -> Result<SegmentWriter> {
+        self.file
+            .write_all(&SegmentHeader::new(base_offset, created_at_micros).encode())?;
+        let index = IndexWriter::create(
+            &self.index_path,
+            SparseIndex::new(base_offset),
+            self.index_spacing_bytes,
+        )?;
+        let sync_handle = Arc::new(self.file.try_clone()?);
+        Ok(SegmentWriter {
+            id: self.id,
+            base_offset,
+            path: self.path,
+            file: self.file,
+            index,
+            size_bytes: SEGMENT_HEADER_LEN,
+            synced_bytes: 0,
+            next_offset: base_offset,
+            record_count: 0,
+            staging: Vec::new(),
+            sync_handle,
+            poisoned: false,
+            index_degraded: false,
+        })
+    }
+
+    /// Delete a blank segment that will never be activated.
+    pub fn discard(self) -> Result<()> {
+        let Self {
+            path,
+            file,
+            index_path,
+            ..
+        } = self;
+        drop(file);
+        for path in [path, index_path] {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(StorageError::Io(err)),
+            }
+        }
+        Ok(())
+    }
+}
+
 impl SegmentWriter {
     /// Create a brand new segment starting at `base_offset`.
     pub fn create(
@@ -84,41 +205,13 @@ impl SegmentWriter {
         preallocate_bytes: u64,
         index_spacing_bytes: u64,
     ) -> Result<Self> {
-        let path = dir.join(segment_file_name(id));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-
-        preallocate(&file, preallocate_bytes)?;
-        file.write_all(&SegmentHeader::new(base_offset, created_at_micros).encode())?;
-        // The header must be durable, and the directory entry must be durable
-        // too, before any record claims to live in this segment.
-        sync_data(&file)?;
-        sync_dir(dir)?;
-
-        let index = IndexWriter::open(
-            &dir.join(index_file_name(id)),
-            SparseIndex::new(base_offset),
-        )?
-        .with_spacing(index_spacing_bytes);
-        let sync_handle = Arc::new(file.try_clone()?);
-
-        Ok(Self {
-            id,
-            base_offset,
-            path,
-            file,
-            index,
-            size_bytes: SEGMENT_HEADER_LEN,
-            synced_bytes: SEGMENT_HEADER_LEN,
-            next_offset: base_offset,
-            record_count: 0,
-            staging: Vec::new(),
-            sync_handle,
-            poisoned: false,
-            index_degraded: false,
-        })
+        let mut writer = BlankSegment::create(dir, id, preallocate_bytes, index_spacing_bytes)?
+            .activate(base_offset, created_at_micros)?;
+        // The header must be durable before any record claims to live here. The
+        // directory entry already is: `BlankSegment::create` synced it.
+        sync_data(&writer.file)?;
+        writer.mark_synced(SEGMENT_HEADER_LEN);
+        Ok(writer)
     }
 
     /// Reopen an existing, already validated segment for further appends.

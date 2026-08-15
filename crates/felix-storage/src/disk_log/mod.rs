@@ -37,6 +37,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use parking_lot::{Mutex, RwLock};
 
 use crate::log::{
@@ -53,7 +55,7 @@ use crate::{Result, StorageError, metrics_names};
 /// interleaving.
 const MAX_ROLL_ATTEMPTS: usize = 8;
 
-use segments::SegmentSet;
+use segments::{RollOutcome, SegmentSet};
 use sync::{Durability, PeriodicSyncer};
 
 /// Shared state behind every clone of a [`DiskLog`].
@@ -67,6 +69,61 @@ struct LogInner {
     durability: Durability,
     /// `None` unless the fsync policy is `Periodic`. Taken on shutdown.
     syncer: Mutex<Option<PeriodicSyncer>>,
+    /// Where the background rollover is in its lifecycle. At most one runs at
+    /// a time, and a failure is terminal for the log.
+    roll_state: AtomicU8,
+    /// The in-flight rollover, so shutdown can wait for it to finish rather
+    /// than dropping the runtime out from under a half-installed segment.
+    roll_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// A retired segment that has been swapped out but not yet flushed.
+    ///
+    /// `flush` reports durability for the whole log, but it only ever syncs the
+    /// *active* segment. With an inline rollover that was sound, because
+    /// sealing happened before the replacement existed. A background rollover
+    /// breaks it: between the swap and the seal there are records in the
+    /// retired segment that no sync of the active segment covers, and reporting
+    /// them durable would be a lie under `FsyncMode::OnCommit`. So `flush`
+    /// syncs this handle too for as long as it is set.
+    pending_seal: Mutex<Option<Arc<std::fs::File>>>,
+}
+
+/// Lifecycle of the background rollover.
+///
+/// Explicit rather than a boolean because the states are not symmetric: the
+/// first two are recoverable and self-clearing, the last is terminal.
+///
+/// ```text
+///   Idle ──► Preparing ──► Sealing ──► Idle
+///              │              │
+///              └──────────────┴──────► Failed  (terminal)
+/// ```
+///
+/// * `Preparing` — building the replacement segment. Nothing is installed yet;
+///   a crash here leaves an uninstalled segment that recovery discards.
+/// * `Sealing` — the replacement is live and the retired segment is being
+///   flushed. Reads already route across it, so a crash here loses nothing that
+///   the fsync policy had promised.
+/// * `Failed` — the retired segment could not be flushed. The log stops
+///   accepting appends: a failed fsync means bytes that were reported durable
+///   may not be, and continuing to append over that is worse than stopping.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+enum RollState {
+    Idle = 0,
+    Preparing = 1,
+    Sealing = 2,
+    Failed = 3,
+}
+
+impl RollState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Preparing,
+            2 => Self::Sealing,
+            3 => Self::Failed,
+            _ => Self::Idle,
+        }
+    }
 }
 
 impl std::fmt::Debug for LogInner {
@@ -79,6 +136,83 @@ impl std::fmt::Debug for LogInner {
 }
 
 impl LogInner {
+    /// Build the next segment and swap it in, with every fsync off the lock.
+    ///
+    /// Runs on a blocking thread. The segment lock is taken twice and held only
+    /// for pointer work: once to install the replacement, once to record the
+    /// retired segment as sealed. The two expensive halves — creating the new
+    /// file and flushing the old one — happen with no lock held, so an append
+    /// never queues behind a rollover's flushes.
+    async fn roll_in_background(self: Arc<Self>) -> Result<()> {
+        let inner = Arc::clone(&self);
+        tokio::task::spawn_blocking(move || {
+            // The plan is copied out under a read lock; the segment is built
+            // with no lock at all. Creating it fsyncs its header and its parent
+            // directory, so by the time anything can be appended here it is
+            // durable -- and holding a lock across those two flushes would stall
+            // every append waiting on the write lock, which is the entire cost
+            // this design exists to remove.
+            let plan = { inner.segments.read().roll_plan() };
+            let prepared = plan.build()?;
+
+            let retired = {
+                let mut segments = inner.segments.write();
+                match segments.commit_roll(prepared)? {
+                    RollOutcome::Installed(retired) => {
+                        // Published before the lock is released, so no flush can
+                        // observe the new active segment without also seeing the
+                        // retired one it has to cover.
+                        *inner.pending_seal.lock() = Some(retired.sync_handle());
+                        retired
+                    }
+                    // The tail moved past the offset this segment was built
+                    // for. Delete it here — leaving it for recovery to clean up
+                    // works, but only because recovery knows the rule.
+                    RollOutcome::Stale(prepared) => {
+                        drop(segments);
+                        metrics::counter!(metrics_names::SEGMENT_ROLL_DISCARDED_TOTAL).increment(1);
+                        return prepared.discard();
+                    }
+                }
+            };
+
+            inner
+                .roll_state
+                .store(RollState::Sealing as u8, Ordering::Release);
+
+            // Flushed with no lock held. The segment is already listed as
+            // sealed and readable — this only makes it durable.
+            let mut retired = retired;
+            let sealed = retired.seal();
+            // Cleared either way: on success it is durable, and on failure the
+            // log is about to stop accepting appends anyway.
+            *inner.pending_seal.lock() = None;
+            sealed?;
+            Ok::<(), StorageError>(())
+        })
+        .await
+        .map_err(|err| StorageError::Io(std::io::Error::other(err)))?
+    }
+
+    /// Whether a background rollover is between its start and its completion.
+    fn roll_pending(&self) -> bool {
+        matches!(
+            RollState::from_u8(self.roll_state.load(Ordering::Acquire)),
+            RollState::Preparing | RollState::Sealing
+        )
+    }
+
+    /// Refuse further appends once a rollover has failed.
+    fn check_roll_state(&self) -> Result<()> {
+        if RollState::from_u8(self.roll_state.load(Ordering::Acquire)) == RollState::Failed {
+            return Err(StorageError::SyncFailed(format!(
+                "{}: a background segment rollover failed; the log is no longer accepting appends",
+                self.label
+            )));
+        }
+        Ok(())
+    }
+
     /// Flush the active segment and report the exclusive offset bound now
     /// durable.
     ///
@@ -96,11 +230,22 @@ impl LogInner {
                 segments.tail_offset(),
             )
         };
+        // Taken after the active handle, so a rollover that lands in between is
+        // seen here rather than missed: `commit_roll` sets it before releasing
+        // the lock this read just took.
+        let retired = self.pending_seal.lock().clone();
 
         let started = std::time::Instant::now();
-        let outcome = tokio::task::spawn_blocking(move || sync_data(&handle))
-            .await
-            .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?;
+        let outcome = tokio::task::spawn_blocking(move || {
+            // The retired segment first. `durable_upto` covers records in both,
+            // and it may not be reported until every one of them is on disk.
+            if let Some(retired) = retired {
+                sync_data(&retired)?;
+            }
+            sync_data(&handle)
+        })
+        .await
+        .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?;
         outcome.map_err(|err| StorageError::SyncFailed(err.to_string()))?;
 
         metrics::counter!(metrics_names::SYNC_TOTAL).increment(1);
@@ -110,8 +255,9 @@ impl LogInner {
         {
             let mut segments = self.segments.write();
             // A rollover may have swapped the active segment while the flush was
-            // in flight. The old segment was sealed (and therefore synced) as
-            // part of that roll, so there is nothing to record against it.
+            // in flight. Its records were covered by the `pending_seal` sync
+            // above, and the retired writer is owned by the rollover task, so
+            // there is nothing to record against it here.
             if segments.active().id() == segment_id {
                 segments.active_mut().mark_synced(synced_bytes);
             }
@@ -182,6 +328,9 @@ impl DiskLog {
             segments: RwLock::new(segments),
             durability: Durability::new(config.fsync_mode, durable_upto),
             syncer: Mutex::new(None),
+            roll_state: AtomicU8::new(RollState::Idle as u8),
+            roll_task: Mutex::new(None),
+            pending_seal: Mutex::new(None),
         });
 
         if let FsyncMode::Periodic { interval } = config.fsync_mode {
@@ -277,6 +426,16 @@ impl DiskLog {
         if let Some(syncer) = syncer {
             syncer.shutdown().await;
         }
+        // A rollover in flight owns the retired segment and is the only thing
+        // that will ever flush it. Dropping the runtime here would abandon it
+        // half-installed, so wait it out first — it is bounded by two fsyncs.
+        let roll = self.inner.roll_task.lock().take();
+        if let Some(roll) = roll {
+            // A panicked rollover has already recorded itself as `Failed`; the
+            // `sync` below is what reports the problem.
+            let _ = roll.await;
+        }
+        self.inner.check_roll_state()?;
         self.sync().await
     }
 }
@@ -308,23 +467,22 @@ impl DiskLog {
         if records.is_empty() {
             return Err(StorageError::InvalidRange);
         }
+        inner.check_roll_state()?;
 
-        // Rolling a segment seals one file, creates another, and fsyncs both
-        // plus the directory entry. That is real blocking work, so it must not
-        // run on a reactor worker.
-        //
-        // Detect-and-retry rather than detect-then-append: a concurrent append
-        // can fill the segment between the check and the write lock, and if
-        // this path then let `SegmentSet::append` roll inline, the flushes
-        // would land on a Tokio worker after all — exactly what moving the roll
-        // off-thread was meant to prevent. So the write lock is released and
-        // the roll retried on a blocking thread instead.
-        //
-        // `would_roll` is false for an empty active segment, so an oversized
-        // record terminates the loop rather than spinning: it gets a segment to
-        // itself, which is the documented policy.
+        // The hard-limit fallback. A background roll normally replaces the
+        // segment well before this, so reaching here means the log filled
+        // faster than a replacement could be built — rare, and still correct.
         for attempt in 0..MAX_ROLL_ATTEMPTS {
-            if inner.segments.read().would_roll(&records) {
+            // While a background rollover is building the replacement, the
+            // segment is allowed to grow past its configured size rather than
+            // blocking here. That headroom is what gives the preparation time
+            // to finish; without it the inline path below wins every race.
+            let roll_pending = inner.roll_pending();
+            if inner
+                .segments
+                .read()
+                .would_roll_within(&records, roll_pending)
+            {
                 let roller = Arc::clone(&inner);
                 let batch = records.clone();
                 tokio::task::spawn_blocking(move || {
@@ -332,7 +490,7 @@ impl DiskLog {
                     // Re-checked under the write lock: another publisher may
                     // have rolled already, and rolling twice leaves an empty
                     // segment behind.
-                    if segments.would_roll(&batch) {
+                    if segments.would_roll_within(&batch, roller.roll_pending()) {
                         segments.roll()?;
                     }
                     Ok::<(), StorageError>(())
@@ -342,7 +500,7 @@ impl DiskLog {
             }
 
             let mut segments = inner.segments.write();
-            if segments.would_roll(&records) {
+            if segments.would_roll_within(&records, inner.roll_pending()) {
                 // Filled again in the gap. Drop the lock and roll off-thread.
                 drop(segments);
                 debug_assert!(attempt + 1 < MAX_ROLL_ATTEMPTS, "rollover retry starved");
@@ -350,6 +508,54 @@ impl DiskLog {
             }
             let (first_offset, last_offset) = segments.append(&records)?;
             let durable_target = segments.tail_offset();
+            let prepare_roll = segments.should_prepare_roll();
+            drop(segments);
+
+            // Start the replacement while the current segment still has room,
+            // so the flushes it costs never land on an append. `Idle ->
+            // Preparing` is a compare-exchange, which is what keeps exactly one
+            // rollover in flight and leaves `Failed` terminal.
+            if prepare_roll
+                && inner
+                    .roll_state
+                    .compare_exchange(
+                        RollState::Idle as u8,
+                        RollState::Preparing as u8,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+            {
+                let roller = Arc::clone(&inner);
+                metrics::counter!(metrics_names::SEGMENT_ROLL_BACKGROUND_TOTAL).increment(1);
+                let handle = tokio::spawn(async move {
+                    match Arc::clone(&roller).roll_in_background().await {
+                        Ok(()) => roller
+                            .roll_state
+                            .store(RollState::Idle as u8, Ordering::Release),
+                        Err(err) => {
+                            // Terminal. A rollover fails on a failed fsync or a
+                            // failed file creation, and both mean the log can no
+                            // longer honour what it has already acknowledged.
+                            // Retrying would just fail again, quietly, forever.
+                            tracing::error!(
+                                shard = %roller.label,
+                                error = %err,
+                                "background segment rollover failed; the log will reject further appends",
+                            );
+                            metrics::counter!(metrics_names::SEGMENT_ROLL_FAILED_TOTAL)
+                                .increment(1);
+                            roller
+                                .roll_state
+                                .store(RollState::Failed as u8, Ordering::Release);
+                        }
+                    }
+                });
+                // Replaces a handle only when the previous roll has finished,
+                // because the compare-exchange above admits one at a time.
+                *inner.roll_task.lock() = Some(handle);
+            }
+
             return Ok(PendingAppend {
                 result: AppendResult {
                     first_offset,

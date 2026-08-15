@@ -34,6 +34,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::log::{LogConfig, Offset, SegmentDescriptor, SegmentId};
+use crate::segment::format::SEGMENT_HEADER_LEN;
 use crate::segment::io::sync_dir;
 use crate::segment::writer::ResumeState;
 use crate::segment::{
@@ -92,7 +93,12 @@ pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Reco
         sync_dir(parent)?;
     }
 
-    let ids = discover_segment_ids(dir)?;
+    let mut ids = discover_segment_ids(dir)?;
+    // Rollover prepares the replacement segment ahead of the swap that installs
+    // it, so a crash — or a truncation — can leave one behind that was never
+    // used. Drop them before recovery proper, or their base offset reads as a
+    // break in the offset chain. See `discard_abandoned_preparations`.
+    let abandoned = discard_abandoned_preparations(dir, label, config, &mut ids)?;
     let recovered = match ids.split_last() {
         None => Recovered {
             sealed: Vec::new(),
@@ -118,11 +124,121 @@ pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Reco
         metrics::counter!(metrics_names::RECOVERY_TRUNCATED_BYTES)
             .increment(recovered.truncated_bytes);
     }
+    if abandoned > 0 {
+        metrics::counter!(metrics_names::RECOVERY_ABANDONED_ROLLS_TOTAL)
+            .increment(abandoned as u64);
+    }
     if recovered.index_rebuilds > 0 {
         metrics::counter!(metrics_names::RECOVERY_INDEX_REBUILDS_TOTAL)
             .increment(recovered.index_rebuilds as u64);
     }
     Ok(recovered)
+}
+
+/// Remove trailing segments that a rollover created but never installed.
+///
+/// A background rollover builds its replacement segment — file, header,
+/// directory entry, all fsynced — before taking the lock that swaps it in, so
+/// that the flushes never land on an append. The consequence is a window in
+/// which a replacement exists on disk but is not yet part of the log, and two
+/// things can end that window without installing it: a crash, or a truncation
+/// that rewinds the tail past the offset the replacement was built for.
+///
+/// Such a segment is recognisable without any durable roll-intent record,
+/// because it is self-describing: it is the newest segment, it holds **zero
+/// records**, and its base offset is not where the log actually ends. A segment
+/// that holds no records has nothing to lose, so deleting it cannot discard an
+/// acknowledged write — which is what makes this rule safe to apply blindly.
+///
+/// Both directions occur and both are handled:
+///
+/// * base offset *below* the tail — appends kept landing in the old segment
+///   after the replacement was built, which is the normal design of the
+///   background roll;
+/// * base offset *above* the tail — a truncation rewound the log underneath a
+///   replacement that had already been built.
+///
+/// An empty newest segment whose base offset *does* match the tail is the
+/// ordinary state right after a successful roll, and is kept.
+fn discard_abandoned_preparations(
+    dir: &Path,
+    label: &str,
+    config: &LogConfig,
+    ids: &mut Vec<SegmentId>,
+) -> Result<usize> {
+    let mut discarded = 0;
+    // More than one can accumulate: each crash during a roll can leave its own.
+    while ids.len() > 1 {
+        let id = *ids.last().expect("non-empty");
+        let path = dir.join(segment_file_name(id));
+
+        // A file too short to hold a header is a rollover that was interrupted
+        // between creating the segment and writing its header. It has no base
+        // offset to compare and, having no header, cannot hold a record either.
+        let headerless = std::fs::metadata(&path)?.len() < SEGMENT_HEADER_LEN;
+        let base_offset = if headerless {
+            None
+        } else {
+            let outcome = scan_segment(
+                &path,
+                id,
+                label,
+                config.index_spacing_bytes,
+                ScanStart::Full,
+                config.repair_checksum_tail,
+            )?;
+            if outcome.record_count > 0 {
+                break;
+            }
+
+            // Empty. Compare its base against where the previous segment ends.
+            let previous = *ids.get(ids.len() - 2).expect("len > 1");
+            let previous_end = scan_segment(
+                &dir.join(segment_file_name(previous)),
+                previous,
+                label,
+                config.index_spacing_bytes,
+                ScanStart::Full,
+                config.repair_checksum_tail,
+            )?
+            .next_offset;
+            if outcome.header.base_offset == previous_end {
+                break;
+            }
+            Some((outcome.header.base_offset, previous_end))
+        };
+
+        match base_offset {
+            None => tracing::warn!(
+                shard = label,
+                segment = id,
+                "discarding a headerless segment left behind by an uninstalled rollover"
+            ),
+            Some((base_offset, log_tail)) => tracing::warn!(
+                shard = label,
+                segment = id,
+                base_offset,
+                log_tail,
+                "discarding an empty segment left behind by an uninstalled rollover"
+            ),
+        }
+        for path in [
+            dir.join(segment_file_name(id)),
+            dir.join(index_file_name(id)),
+        ] {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(StorageError::Io(err)),
+            }
+        }
+        ids.pop();
+        discarded += 1;
+    }
+    if discarded > 0 {
+        sync_dir(dir)?;
+    }
+    Ok(discarded)
 }
 
 fn preallocate_bytes(config: &LogConfig) -> u64 {
@@ -384,6 +500,144 @@ mod tests {
 
     fn reopen(dir: &TempDir) -> Result<Recovered> {
         recover_shard(dir.path(), "t/ns/s/0", &config())
+    }
+
+    /// Reproduce the on-disk state left by a crash while a rollover was
+    /// *preparing*: a replacement segment exists, fsynced, but was never
+    /// installed. `base_offset` is whatever the tail was when it was built.
+    fn plant_uninstalled_preparation(dir: &TempDir, base_offset: Offset) -> SegmentId {
+        let id = discover_segment_ids(dir.path())
+            .expect("ids")
+            .last()
+            .copied()
+            .expect("ids")
+            + 1;
+        SegmentWriter::create(
+            dir.path(),
+            id,
+            base_offset,
+            now_micros(),
+            0,
+            config().index_spacing_bytes,
+        )
+        .expect("create");
+        id
+    }
+
+    #[test]
+    fn a_crash_before_the_header_is_written_leaves_the_log_openable() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        // A rollover interrupted between creating the segment and activating
+        // it: the file exists, preallocated and directory-synced, but carries
+        // no header and so claims no base offset at all.
+        let id = discover_segment_ids(dir.path())
+            .expect("ids")
+            .last()
+            .copied()
+            .expect("ids")
+            + 1;
+        let path = dir.path().join(segment_file_name(id));
+        std::fs::write(&path, b"").expect("create");
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_partially_written_header_is_also_an_uninstalled_rollover() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        let id = discover_segment_ids(dir.path())
+            .expect("ids")
+            .last()
+            .copied()
+            .expect("ids")
+            + 1;
+        let path = dir.path().join(segment_file_name(id));
+        // Torn mid-header. Nothing can have been acknowledged here.
+        std::fs::write(&path, vec![0u8; (SEGMENT_HEADER_LEN - 1) as usize]).expect("create");
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_crash_while_preparing_a_rollover_leaves_the_log_openable() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        // Built when the tail was 3 records back; appends kept going after.
+        // This is the ordinary shape of the background roll, interrupted.
+        let planted = plant_uninstalled_preparation(&dir, tail - 3);
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail, "no record was lost");
+        assert!(
+            !dir.path().join(segment_file_name(planted)).exists(),
+            "the uninstalled preparation should have been removed",
+        );
+    }
+
+    #[test]
+    fn a_preparation_stranded_ahead_of_the_tail_is_also_discarded() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        // The mirror image: a truncation rewound the log underneath a
+        // replacement that had already been built for a higher offset.
+        let planted = plant_uninstalled_preparation(&dir, tail + 50);
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail);
+        assert!(!dir.path().join(segment_file_name(planted)).exists());
+    }
+
+    #[test]
+    fn an_empty_newest_segment_at_the_tail_is_a_completed_roll_and_is_kept() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        // Same shape as an abandoned preparation except for the one thing that
+        // distinguishes them: its base offset *is* the tail. That is simply a
+        // roll that finished with nothing appended yet.
+        let planted = plant_uninstalled_preparation(&dir, tail);
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.id(), planted, "it is the active segment");
+        assert_eq!(recovered.active.next_offset(), tail);
+        assert!(dir.path().join(segment_file_name(planted)).exists());
+    }
+
+    #[test]
+    fn successive_crashes_can_strand_more_than_one_preparation() {
+        let dir = tempdir().expect("dir");
+        let tail = populate(&dir, 12);
+        let first = plant_uninstalled_preparation(&dir, tail - 3);
+        let second = plant_uninstalled_preparation(&dir, tail - 1);
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail);
+        for id in [first, second] {
+            assert!(!dir.path().join(segment_file_name(id)).exists());
+        }
+    }
+
+    #[test]
+    fn a_crash_while_sealing_a_retired_segment_loses_nothing() {
+        let dir = tempdir().expect("dir");
+        // A retired segment that was never sealed is byte-identical to one that
+        // was: sealing only syncs and trims to `size_bytes`, and preallocation
+        // never extends the logical length. So the crash window between
+        // installing the replacement and flushing the retired segment leaves a
+        // chain recovery reads normally -- which is what makes the background
+        // roll safe without a durable roll-intent record.
+        let tail = populate(&dir, 12);
+        let ids = discover_segment_ids(dir.path()).expect("ids");
+        assert!(ids.len() > 1, "the test needs a retired segment");
+
+        let recovered = reopen(&dir).expect("recover");
+        assert_eq!(recovered.active.next_offset(), tail);
+        assert_eq!(recovered.sealed.len(), ids.len() - 1);
     }
 
     #[test]

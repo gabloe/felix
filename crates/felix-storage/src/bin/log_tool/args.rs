@@ -73,6 +73,10 @@ COMMON OPTIONS:
     --segment-bytes <N>           Segment rollover size [default: 67108864]
     --index-spacing-bytes <N>     Sparse index interval [default: 4096]
     --no-preallocate              Do not reserve segment blocks up front
+    --rollover-threshold-percent <N>  Start the background roll at this % of
+                                  --segment-bytes; 100 disables it [default: 80]
+    --max-overshoot-percent <N>   How far past --segment-bytes a segment may
+                                  grow while its replacement is prepared
 
 write OPTIONS:
     --records <N>                 Records to append; 0 means run until killed
@@ -237,6 +241,17 @@ impl Flags {
                 .unwrap_or(defaults.index_spacing_bytes),
             fsync_mode,
             preallocate_segments: !self.flag("--no-preallocate"),
+            // Exposed so a benchmark can A/B the background rollover in one
+            // binary: at 100% no roll is ever started early, which is exactly
+            // the behaviour that predates it.
+            rollover_threshold_percent: self
+                .number("--rollover-threshold-percent")?
+                .unwrap_or(defaults.rollover_threshold_percent as u64)
+                as u8,
+            max_overshoot_percent: self
+                .number("--max-overshoot-percent")?
+                .unwrap_or(defaults.max_overshoot_percent as u64)
+                as u8,
             ..defaults
         };
         config.validate().map_err(|err| err.to_string())?;

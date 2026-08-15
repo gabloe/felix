@@ -149,6 +149,39 @@ pub struct IndexWriter {
 
 impl IndexWriter {
     /// Open `path` for appending, seeding in-memory state from `index`.
+    /// Open an index for a segment that has just been created.
+    ///
+    /// Skips the fsync that [`Self::open`] performs, because there is nothing
+    /// yet to make durable: the file holds a header and no entries. That
+    /// matters because this runs while installing a rollover, under the lock
+    /// appends contend on, where an fsync costs milliseconds and would put back
+    /// exactly the stall that preparing the segment ahead of time removes.
+    ///
+    /// Safe for the same reason a stale index is safe anywhere: indexes are
+    /// derived data, rebuilt from the segment whenever they are missing, short
+    /// or inconsistent. Losing this write costs a rebuild, never a record.
+    pub fn create(path: &Path, index: SparseIndex, spacing_bytes: u64) -> Result<Self> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        file.write_all(
+            &IndexHeader {
+                base_offset: index.base_offset(),
+            }
+            .encode(),
+        )?;
+        drop(file);
+        let file = OpenOptions::new().append(true).open(path)?;
+        Ok(Self {
+            file,
+            index,
+            spacing_bytes: spacing_bytes.max(1),
+            bytes_since_entry: 0,
+        })
+    }
+
     pub fn open(path: &Path, index: SparseIndex) -> Result<Self> {
         // The index was just rebuilt or loaded, so rewrite it whole and append
         // from there. This is what makes a stale index self-correcting.

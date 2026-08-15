@@ -44,6 +44,12 @@ pub const INDEX_WRITE_FAILURES_TOTAL: &str = "felix_storage_index_write_failures
 
 /// Segment rollovers.
 pub const SEGMENT_ROLL_TOTAL: &str = "felix_storage_segment_roll_total";
+/// Rollovers started in the background, off the append path.
+pub const SEGMENT_ROLL_BACKGROUND_TOTAL: &str = "felix_storage_segment_roll_background_total";
+/// Background rollovers that failed and degraded the log.
+pub const SEGMENT_ROLL_FAILED_TOTAL: &str = "felix_storage_segment_roll_failed_total";
+/// Prepared segments discarded because the tail moved on before the swap.
+pub const SEGMENT_ROLL_DISCARDED_TOTAL: &str = "felix_storage_segment_roll_discarded_total";
 /// Segments currently on disk for a shard.
 pub const SEGMENT_COUNT: &str = "felix_storage_segment_count";
 
@@ -58,5 +64,7 @@ pub const READ_DURATION_SECONDS: &str = "felix_storage_read_duration_seconds";
 pub const RECOVERY_DURATION_SECONDS: &str = "felix_storage_recovery_duration_seconds";
 /// Bytes discarded from a torn tail during recovery.
 pub const RECOVERY_TRUNCATED_BYTES: &str = "felix_storage_recovery_truncated_bytes";
+/// Empty segments removed at startup because a rollover never installed them.
+pub const RECOVERY_ABANDONED_ROLLS_TOTAL: &str = "felix_storage_recovery_abandoned_rolls_total";
 /// Indexes rebuilt because they were missing or stale.
 pub const RECOVERY_INDEX_REBUILDS_TOTAL: &str = "felix_storage_recovery_index_rebuilds_total";
