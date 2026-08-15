@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786822895557,
+  "lastUpdate": 1786824031011,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1768,6 +1768,58 @@ window.BENCHMARK_DATA = {
             "range": "17384.42",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 547549.86\nmean: 546495.87\nstdev: 17384.42\ncv: 3.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e615d93ea251bff380062f44d9e97872118d2109",
+          "message": "ci: stop failing the perf check when its comment cannot be posted (#193)\n\nThe performance workflow is advisory by design -- its own header says it\ndoes not fail the check on a regression -- but it was failing on every\nDependabot pull request, all ten currently open. The benchmarks ran fine;\nposting the summary comment did not, because Dependabot pull requests\n(like those from forks) run with a read-only GITHUB_TOKEN, so the\n`issues: write` the comment needs is withheld. The unhandled 403 took the\nwhole job down and left every one of those pull requests un-mergeable.\n\nWrites the report to the job summary unconditionally, and treats posting\nit as a comment as a convenience that is allowed to fail with a warning.\nThe content is identical either way.\n\nAlso states the workflow's permissions rather than inheriting them, so\nwhat the comment step needs is visible at the top of the file.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T12:58:32-07:00",
+          "tree_id": "051a3486af92f0702f61765a9b770857a43bdd26",
+          "url": "https://github.com/gabloe/felix/commit/e615d93ea251bff380062f44d9e97872118d2109"
+        },
+        "date": 1786824030313,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 207279.46,
+            "range": "7276.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 207279.46\nmean: 209523.43\nstdev: 7276.62\ncv: 3.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 207279.46,
+            "range": "7276.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 207279.46\nmean: 209523.43\nstdev: 7276.62\ncv: 3.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57933.01,
+            "range": "5693.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57933.01\nmean: 56917.49\nstdev: 5693.76\ncv: 10.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 579330.07,
+            "range": "56937.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 579330.07\nmean: 569174.90\nstdev: 56937.64\ncv: 10.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
