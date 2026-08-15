@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786770737003,
+  "lastUpdate": 1786819139160,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2112,6 +2112,72 @@ window.BENCHMARK_DATA = {
             "range": "1091.38",
             "unit": "us",
             "extra": "trials: 5\nmedian: 656.00\nmean: 1270.80\nstdev: 1091.38\ncv: 85.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "abe8d0cff67c49787cb628811faf3fe07cae7dab",
+          "message": "fix(broker): make the backlog-to-live handoff lossless (#191)\n\n`subscribe_with_cursor` captured the backlog and then registered the\nsubscriber. A publish landing between the two was in neither: appended after\nthe snapshot was taken, then fanned out to a subscriber list that did not yet\ninclude the joining subscriber. The caller saw a replay it believed was\ncontiguous with a record silently missing from it.\n\nA subscriber joining is only well defined relative to a point in the log — it\ntakes everything before that point as backlog and everything after it live —\nso the two halves have to be decided together. Both sides now do that under\nthe log lock:\n\n  * `append_batch_at` captures the fanout list while it still holds the lock,\n    so any subscriber registering afterwards takes those records as backlog\n    instead of missing them.\n  * `register_with_backlog` registers and snapshots together, so a publish\n    either completes first and appears in the backlog, or happens after and is\n    fanned out to a list that already contains the new subscriber.\n\nThe `CursorTooOld` check moved inside that lock as well: rejecting after\nregistering left a subscriber slot behind for the publish path to discover\nand reap.\n\n`snapshot_range` and `snapshot_from` had no callers left and are removed;\n`subscriber_snapshot` is now test-only, since the publish path takes its list\nfrom the append.\n\nThe regression test runs a publisher flat out while a subscriber joins\nmid-flight and asserts the union of backlog and live delivery is exactly the\ncontiguous range from the cursor.\n\nNot addressed here, and reported rather than folded in: rollover still holds\nthe segment lock across sealing and fsync, so a Tokio appender can block on\nthat lock even though the filesystem work itself moved to `spawn_blocking`.\nFixing it means making the segment lock async or shortening the critical\nsection, both of which are publish-hot-path changes that deserve their own\nreview.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T11:37:02-07:00",
+          "tree_id": "3b24c13b9dd6880a0904996ef0bd6caab6bd6feb",
+          "url": "https://github.com/gabloe/felix/commit/abe8d0cff67c49787cb628811faf3fe07cae7dab"
+        },
+        "date": 1786819136782,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.00\nstdev: 1.87\ncv: 1.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 204.80\nstdev: 1.48\ncv: 0.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 238,
+            "range": "17.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 238.00\nmean: 241.40\nstdev: 17.77\ncv: 7.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 205,
+            "range": "6.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 207.00\nstdev: 6.28\ncv: 3.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 500,
+            "range": "176.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 500.00\nmean: 582.00\nstdev: 176.78\ncv: 30.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 893,
+            "range": "729.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 893.00\nmean: 1200.80\nstdev: 729.18\ncv: 60.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
