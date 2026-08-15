@@ -259,6 +259,56 @@ async fn background_rollover_keeps_the_log_contiguous_and_reopenable() {
     assert_eq!(values[59], "value-059");
 }
 
+/// A rollover whose seal fails must never let an `OnCommit` append be
+/// acknowledged on the strength of a flush that did not cover it.
+///
+/// The window this guards: the seal fails, `pending_seal` is cleared, and an
+/// append already in flight captures only the new active segment, syncs that,
+/// and reports a durable bound spanning both. The retired segment's records
+/// were never flushed.
+#[tokio::test]
+async fn a_failed_seal_stops_the_log_instead_of_acknowledging() {
+    let dir = tempdir().expect("dir");
+    let config = LogConfig {
+        rollover_threshold_percent: 60,
+        max_overshoot_percent: 200,
+        ..config(FsyncMode::OnCommit)
+    };
+    let log = DiskLog::open(dir.path(), "t/ns/s/0", config).expect("open");
+
+    log.inner
+        .fail_seal
+        .store(true, std::sync::atomic::Ordering::Release);
+
+    // Append until the background rollover has run and failed. Every append
+    // either succeeds durably or fails -- what must never happen is an
+    // acknowledgement after the seal failed.
+    let mut rejected = None;
+    for i in 0..200 {
+        if let Err(err) = log.append(&records(&[&format!("value-{i:03}")])).await {
+            rejected = Some(err);
+            break;
+        }
+    }
+    let rejected = rejected.expect("the failed seal should have stopped the log");
+    assert!(
+        rejected.to_string().contains("rollover failed"),
+        "unexpected error: {rejected}",
+    );
+
+    // Terminal, on every path that accepts work or reports durability.
+    assert!(log.append(&records(&["after"])).await.is_err());
+    assert!(log.sync().await.is_err());
+    assert!(log.shutdown().await.is_err());
+
+    // And the retired segment is still owed a flush, so no later flush can
+    // silently skip it.
+    assert!(
+        log.inner.pending_seal.lock().is_some(),
+        "a failed seal must keep the retired segment on the flush path",
+    );
+}
+
 #[tokio::test]
 async fn on_commit_acknowledges_only_durable_records() {
     let dir = tempdir().expect("dir");

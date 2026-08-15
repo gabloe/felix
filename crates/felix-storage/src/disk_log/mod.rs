@@ -84,7 +84,23 @@ struct LogInner {
     /// retired segment that no sync of the active segment covers, and reporting
     /// them durable would be a lie under `FsyncMode::OnCommit`. So `flush`
     /// syncs this handle too for as long as it is set.
+    ///
+    /// Cleared only after a *successful* seal. A failed one leaves it in place
+    /// so every later flush keeps trying to cover those records rather than
+    /// quietly reporting them durable.
     pending_seal: Mutex<Option<Arc<std::fs::File>>>,
+    /// Why the log stopped accepting work, once a rollover has failed.
+    ///
+    /// Separate from `roll_state` because the two are read for different
+    /// reasons and, critically, are written in a specific order: this is set
+    /// *before* anything observable is relaxed, so there is no window in which
+    /// a durability wait can see a cleared `pending_seal` and a state that is
+    /// not yet `Failed`. `roll_state` remains the scheduler's view; this is the
+    /// durability view.
+    roll_failure: Mutex<Option<String>>,
+    /// Forces the next seal to fail, so the failure path can be tested.
+    #[cfg(test)]
+    fail_seal: std::sync::atomic::AtomicBool,
 }
 
 /// Lifecycle of the background rollover.
@@ -183,12 +199,24 @@ impl LogInner {
             // Flushed with no lock held. The segment is already listed as
             // sealed and readable — this only makes it durable.
             let mut retired = retired;
-            let sealed = retired.seal();
-            // Cleared either way: on success it is durable, and on failure the
-            // log is about to stop accepting appends anyway.
-            *inner.pending_seal.lock() = None;
-            sealed?;
-            Ok::<(), StorageError>(())
+            match inner.seal_retired(&mut retired) {
+                Ok(()) => {
+                    // Only now: these records are on the device, so a flush no
+                    // longer has to cover them.
+                    *inner.pending_seal.lock() = None;
+                    Ok::<(), StorageError>(())
+                }
+                Err(err) => {
+                    // Order matters. `pending_seal` stays set and the failure is
+                    // recorded before this task returns, so an `OnCommit` append
+                    // already in flight cannot find a cleared `pending_seal`
+                    // alongside a roll state that has not been marked failed
+                    // yet, sync only the new segment, and acknowledge records
+                    // that are still sitting in an unflushed retired one.
+                    inner.record_roll_failure(&err);
+                    Err(err)
+                }
+            }
         })
         .await
         .map_err(|err| StorageError::Io(std::io::Error::other(err)))?
@@ -202,8 +230,47 @@ impl LogInner {
         )
     }
 
-    /// Refuse further appends once a rollover has failed.
+    /// Seal the retired segment, with a hook tests use to force a failure.
+    fn seal_retired(&self, retired: &mut crate::segment::SegmentWriter) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_seal.load(Ordering::Acquire) {
+            return Err(StorageError::SyncFailed(
+                "injected seal failure".to_string(),
+            ));
+        }
+        retired.seal().map(|_| ())
+    }
+
+    /// Record a failed rollover as terminal, and say why.
+    ///
+    /// Idempotent and first-writer-wins: the first failure is the interesting
+    /// one, and a later flush failing for the same underlying reason should not
+    /// overwrite it.
+    fn record_roll_failure(&self, err: &StorageError) {
+        let mut failure = self.roll_failure.lock();
+        if failure.is_none() {
+            *failure = Some(err.to_string());
+        }
+        self.roll_state
+            .store(RollState::Failed as u8, Ordering::Release);
+    }
+
+    /// The terminal rollover error, if one has been recorded.
+    ///
+    /// Checked on every path that either accepts new work or reports
+    /// durability — not just at the entry to an append. A rollover can fail
+    /// while an append is already in flight, and that append must not be
+    /// acknowledged on the strength of a flush that did not cover it.
     fn check_roll_state(&self) -> Result<()> {
+        if let Some(reason) = self.roll_failure.lock().as_deref() {
+            return Err(StorageError::SyncFailed(format!(
+                "{}: a background segment rollover failed ({reason}); the log is no longer \
+                 accepting appends",
+                self.label
+            )));
+        }
+        // A `Failed` state with no recorded reason means the rollover task
+        // itself panicked or was cancelled. Still terminal.
         if RollState::from_u8(self.roll_state.load(Ordering::Acquire)) == RollState::Failed {
             return Err(StorageError::SyncFailed(format!(
                 "{}: a background segment rollover failed; the log is no longer accepting appends",
@@ -234,6 +301,7 @@ impl LogInner {
         // seen here rather than missed: `commit_roll` sets it before releasing
         // the lock this read just took.
         let retired = self.pending_seal.lock().clone();
+        let had_pending_seal = retired.is_some();
 
         let started = std::time::Instant::now();
         let outcome = tokio::task::spawn_blocking(move || {
@@ -246,7 +314,15 @@ impl LogInner {
         })
         .await
         .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?;
-        outcome.map_err(|err| StorageError::SyncFailed(err.to_string()))?;
+        if let Err(err) = outcome {
+            let err = StorageError::SyncFailed(err.to_string());
+            // A flush that could not cover the retired segment is the same
+            // failure as a seal that could not, and is equally terminal.
+            if had_pending_seal {
+                self.record_roll_failure(&err);
+            }
+            return Err(err);
+        }
 
         metrics::counter!(metrics_names::SYNC_TOTAL).increment(1);
         metrics::histogram!(metrics_names::SYNC_DURATION_SECONDS)
@@ -264,6 +340,12 @@ impl LogInner {
             metrics::gauge!(metrics_names::UNSYNCED_BYTES)
                 .set(segments.active().unsynced_bytes() as f64);
         }
+
+        // Rechecked after the flush, not only before it. A rollover can fail
+        // while this flush is in flight, and `durable_upto` spans the retired
+        // segment as well as the active one -- reporting it would acknowledge
+        // records that the failed seal left unflushed.
+        self.check_roll_state()?;
 
         Ok(durable_upto)
     }
@@ -329,6 +411,9 @@ impl DiskLog {
             durability: Durability::new(config.fsync_mode, durable_upto),
             syncer: Mutex::new(None),
             roll_state: AtomicU8::new(RollState::Idle as u8),
+            roll_failure: Mutex::new(None),
+            #[cfg(test)]
+            fail_seal: std::sync::atomic::AtomicBool::new(false),
             roll_task: Mutex::new(None),
             pending_seal: Mutex::new(None),
         });
@@ -404,7 +489,11 @@ impl DiskLog {
         if self.inner.durability.acknowledges_before_sync() {
             return Ok(());
         }
-        self.inner.ensure_durable(pending.durable_target).await
+        self.inner.ensure_durable(pending.durable_target).await?;
+        // `ensure_durable` returns immediately when the target is already
+        // covered, which skips the check inside `flush`. A rollover that failed
+        // since then still has to be reported rather than acknowledged.
+        self.inner.check_roll_state()
     }
 
     /// Force a flush regardless of the configured policy.
@@ -413,7 +502,7 @@ impl DiskLog {
             .durability
             .force_flush(|| Arc::clone(&self.inner).flush())
             .await?;
-        Ok(())
+        self.inner.check_roll_state()
     }
 
     /// Stop background work and flush everything one last time.
@@ -545,9 +634,10 @@ impl DiskLog {
                             );
                             metrics::counter!(metrics_names::SEGMENT_ROLL_FAILED_TOTAL)
                                 .increment(1);
-                            roller
-                                .roll_state
-                                .store(RollState::Failed as u8, Ordering::Release);
+                            // Usually already recorded, by the seal that failed.
+                            // This covers a failure earlier in the rollover --
+                            // building the replacement, or installing it.
+                            roller.record_roll_failure(&err);
                         }
                     }
                 });
@@ -586,6 +676,11 @@ impl AppendOnlyLog for DiskLog {
             // on the periodic flush (or the operating system) from there.
             if !inner.durability.acknowledges_before_sync() {
                 inner.ensure_durable(pending.durable_target).await?;
+                // Checked again after the wait: `check_roll_state` at the top of
+                // `write_batch` only covers rollovers that had already failed
+                // when this append started, and this one may have been in flight
+                // across the failure.
+                inner.check_roll_state()?;
             }
 
             metrics::histogram!(metrics_names::APPEND_DURATION_SECONDS)
