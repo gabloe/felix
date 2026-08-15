@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786824031011,
+  "lastUpdate": 1786824351306,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -1820,6 +1820,58 @@ window.BENCHMARK_DATA = {
             "range": "56937.64",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 579330.07\nmean: 569174.90\nstdev: 56937.64\ncv: 10.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a43df27c4ae4673b4dd39edf1a4c465eb5931f9",
+          "message": "chore(deps): bump the OpenTelemetry stack to 0.32 together (#194)\n\nSupersedes #183 (opentelemetry-otlp 0.31.1 -> 0.32.0) and #187\n(tracing-opentelemetry 0.32.1 -> 0.33.0), neither of which can pass CI on\nits own.\n\nThese four crates are version-locked to each other, and Dependabot raises\none pull request per crate, so each lands a single bump into a tree still\npinning the other three at 0.31. That puts two copies of `opentelemetry`\nin the dependency graph, and the errors are the ones that diamond always\nproduces:\n\n    expected `opentelemetry::context::Context`,\n       found `opentelemetry::Context`\n    the trait bound `opentelemetry_otlp::SpanExporter:\n       opentelemetry_sdk::trace::SpanExporter` is not satisfied\n\nMoving all four at once:\n\n  opentelemetry         0.31.0 -> 0.32.0\n  opentelemetry-otlp    0.31.1 -> 0.32.0\n  opentelemetry_sdk     0.31.0 -> 0.32.1\n  tracing-opentelemetry 0.32.1 -> 0.33.0\n\nNo source changes were needed. `cargo tree -i opentelemetry` reports a\nsingle `opentelemetry v0.32.0`.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T13:03:39-07:00",
+          "tree_id": "42973c249077a2a7fad7f91d5dc111f170edf34d",
+          "url": "https://github.com/gabloe/felix/commit/7a43df27c4ae4673b4dd39edf1a4c465eb5931f9"
+        },
+        "date": 1786824350581,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 167079.07,
+            "range": "9565.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 167079.07\nmean: 168064.75\nstdev: 9565.20\ncv: 5.69%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 167079.07,
+            "range": "9565.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 167079.07\nmean: 168064.75\nstdev: 9565.20\ncv: 5.69%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54466.31,
+            "range": "11716.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54466.31\nmean: 49313.59\nstdev: 11716.45\ncv: 23.76%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 544663.11,
+            "range": "117164.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 544663.11\nmean: 493135.89\nstdev: 117164.50\ncv: 23.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
