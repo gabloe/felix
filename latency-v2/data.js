@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786825681788,
+  "lastUpdate": 1786845050956,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2706,6 +2706,72 @@ window.BENCHMARK_DATA = {
             "range": "989.71",
             "unit": "us",
             "extra": "trials: 5\nmedian: 800.00\nmean: 1257.40\nstdev: 989.71\ncv: 78.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d79b7e5a3861e6b5c32bf86bc9dc2693ce3dd3cd",
+          "message": "M1: resumable subscriptions and event offsets over the wire (#177) (#197)\n\n* fix(perf): stop the charts from understating measured performance\n\nThe charts made Felix look far worse than the data says. None of it was a\nunit error -- the microsecond-to-millisecond conversion is correct -- but\nseveral data-selection and presentation bugs compounded.\n\n* **Missing results were plotted as zero.** The checked-in raw data covers\n  two configurations; the chart expects six presets across four payload\n  sizes, so nearly every bar was a fabricated zero. On a throughput chart\n  that reads as total failure. Absent data is now NaN, drawn as a gap and\n  annotated \"no data\".\n* **Fanout throughput was understated 10x.** The chart plotted\n  `throughput_median` -- messages a publisher sent -- under a bare\n  \"throughput\" label, while the headline fanout numbers are\n  `delivered_throughput`. At fanout 10 that is ~49.9K/s against ~499K/s.\n  Both are now charted, separately and named.\n* **Batch-64 queueing was presented as request latency.** The existing runs\n  all use batch 64, whose p99 includes batch fill. The title now says so.\n* **Aggregation medianed across commits and hosts.** The grouping key was\n  workload shape only, while `run_latency_matrix.py` appends to one JSONL,\n  so a second run on a different commit merged into the first and the\n  median described no build that ever existed. Recording `git_sha =\n  \"mixed\"` afterwards labelled that rather than avoiding it. Commit, dirty\n  flag, host, toolchain and warmup/total are now part of the key, and a\n  dirty tree or a span of multiple (commit, host) pairs warns.\n* **Binary and JSON charts overwrote each other.** `binary` was in the\n  grouping key but not the filename, so whichever rendered last won.\n* **Clipping was invisible per bar.** The default clips at p95, which on a\n  p99 chart hides the tail the chart exists to show. Clipped bars are now\n  hatched and annotated with their real value.\n\nTitles wrap instead of running off the figure, because these titles carry\nthe caveats that keep a chart from being misread.\n\nVerified by running the pipeline on the checked-in data: the dirty-tree\nwarning fires on all 20 runs, and the fanout-10 delivered-throughput chart\nrenders ~500K/s with \"no data\" gaps where nothing was measured.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(wire,broker,client): resumable subscriptions with event offsets\n\nCloses the M1 gap where durable records survived a restart but nothing\ncould replay them over the wire: a reconnecting client silently restarted\nat the tail, which from the application's point of view is the same\noutcome as having no durability at all.\n\n`Subscribe` gains an optional `start` -- `latest`, `earliest`, or an exact\noffset -- and delivered events carry their offsets so a client has\nsomething to checkpoint. Omitting `start` is byte-for-byte the frame\nclients already sent, and offsets ride a negotiated flag bit\n(`FLAG_EVENT_BATCH_OFFSETS`, 0x0020), so old and new peers interoperate in\nboth directions.\n\nThe seam is the hard part, and the correct ordering is not the obvious\none. The live subscription is registered *first*, clamped to the oldest\nentry the replay ring holds, under the one lock that also takes the\nbacklog. That makes the remaining disk range closed: everything from\n`backlog_start` on is already captured, so nothing can be evicted out of\nit while it is read. Reading history first and subscribing after loses\nevery publish landing in between.\n\nOffsets are carried, never derived. The replay ring can contain holes -- a\npublish that consumed disk offsets and was cancelled before reaching the\nring leaves one -- so numbering payloads sequentially from the requested\noffset both mislabels everything after a hole and hides the missing\nrecord. Batches are cut on a gap in offsets as well as on count and byte\nlimits, because one `base_offset` describes a batch only while its\nrecords are contiguous.\n\nLive delivery carries offsets too, not just replay. Without that a\nresumed client gets offsets for its history and then nothing at the live\nedge -- exactly where it needs to start checkpointing. The envelope caches\nthe offset-bearing and plain encodings separately, so a stream with\nsubscribers of both kinds costs at most two encodings per batch however\nmany subscribers there are; the encode-once fanout property holds.\n\nAlso closed, each of which could lose or mislabel records on its own:\n\n* **Acknowledge before streaming.** The client waits for `Subscribed`\n  before it reads the event stream, so writing replay first deadlocked\n  once history exceeded the 64 MiB stream window. Small replays fit and\n  hid it.\n* **Catch-up after replay.** The live subscriber's ordinary bounded queue\n  drops under `DropNew`, so a long replay lost live records. Whatever\n  queued is now drained and any gap backfilled from disk, which is the\n  authority; the queue is only a shortcut for what has not been evicted.\n* **Registration leak.** A subscriber was registered before the too-old\n  check could reject it, stranding a closed sender until some later\n  publish reaped it. The guard is now built at registration, so every\n  error path releases by `Drop`.\n* **Future offsets.** A request past the tail registered for live delivery\n  and then handed over records *below* what was asked for. Now a typed\n  `CursorInFuture`.\n* **Byte-bounded replay.** Backlog was chunked by count alone and could\n  build a frame past the configured frame limits.\n* **Capability-gated resume.** The client had the negotiated flags and\n  ignored them, so resuming against a broker that predates this silently\n  became a tail subscription.\n\n`CursorTooOld` and `CursorInFuture` reach the client as a typed\n`SubscribeCursorError` carrying `requested` and `available`, not a\nformatted string -- the two have opposite remedies and have to be\ndistinguishable in code.\n\nBoth acceptance tests are verified by inversion. Sending `start: None`\nmakes the reconnect test fail on the records published while\ndisconnected; dropping the offset from the delivery envelope makes it\nfail on \"a durable stream must report offsets on live delivery\".\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: document resumable subscriptions, and add CLAUDE.md\n\n`protocol.md` gains the `start` position, the `offset`/`base_offset`\nfields, the 0x0020 frame layout, and the `subscribe_cursor_error` frame.\nIts \"Subscribe starts at tail (no historical replay)\" line is now false\nand gone.\n\n`durable-storage.md` gains a \"Resuming a subscription\" section: why the\nlive subscription is registered before the disk range is read, and why\nthe reverse order loses records.\n\nThe status page had drifted in the other direction too -- durable storage\nshipped in M1 but was still listed under \"None of the following exists\ntoday\", and was absent from the capability table entirely. Both\ncapabilities move up into that table with their real caveats (single\nnode, nothing trims the log), and retention appears as its own target row\nso its absence stays visible rather than being implied.\n\nCLAUDE.md records the two things that cost the most time to rediscover:\nfour demo crates live outside the workspace, so workspace-scoped lint\ncannot see them and \"this is unused\" is unreliable; and the publish\npath's ordering is load-bearing rather than incidental.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* chore: refresh lockfiles for the felix-client thiserror dependency\n\n`SubscribeCursorError` is a typed error, so felix-client now depends on\nthiserror. The demo crates carry their own lockfiles because they sit\noutside the workspace.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(perf): fail the charting step with something actionable\n\n`task perf:latency-matrix` ends in `make_charts.py`, which needs\nmatplotlib. Without it the task died on a bare ImportError traceback\nafter a benchmark run of many minutes, reading as though the whole run\nhad failed -- when the measurements were already safely written to\ndata/raw and data/derived.\n\nThe import now fails with a message that says what is missing, names the\nfiles that survived, and gives the two ways to finish: `task perf:deps`,\nor a virtualenv for a Python that is externally managed.\n\nAdds `task perf:deps` to install `scripts/perf/requirements.txt`, and\n`task perf:charts` to re-render from data already on disk without\nre-running the benchmark.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(perf): create virtual environment for charting dependencies and update instructions\n\n* feat(charting): enhance chart grouping by including git commit and hostname in output\n\n* fix(perf): sweep both encodings, and say which one the headline number is\n\nThe published latency figure (p50 82-128 us) and the matrix disagreed by\nabout 2x, which read as a regression. It is not one. `latency-demo`\nenables per-message acks only when `batch <= 1 && !binary`, so `--binary`\nsilently measures fire-and-forget delivery instead of a request round\ntrip. The matrix set `binary: true` for every run, so it never measured\nthe configuration the headline number comes from.\n\nMeasured on the machine that produced the original figures, batch 1,\nfanout 1, 0 B - 1 KiB, five runs each:\n\n  JSON framing (per-message ack)   p50 130-132 us   p999 204-256 us\n  binary framing                   p50 256-260 us   p999 566-672 us\n\nThe first reproduces the documented range. The second is a different\nworkload, and comparing it against that range will always look like a 2x\nregression.\n\nBisecting confirmed there is no regression to find: the commit that\n*documented* 82-128 us measures 253 us on the binary path itself, as do\nevery commit since. The gap was never code.\n\nSo: `binary` in the workload config now accepts a list and defaults to\nboth, doubling the matrix to 384 runs but covering the ack path. And the\ndocs name the framing the figures were taken with, plus what the other\npath measures, so the next person to compare them does not re-derive this.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T18:48:51-07:00",
+          "tree_id": "1c88f313f71c9241e63359eddde3426c5243e501",
+          "url": "https://github.com/gabloe/felix/commit/d79b7e5a3861e6b5c32bf86bc9dc2693ce3dd3cd"
+        },
+        "date": 1786845049435,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "2.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 164.40\nstdev: 2.70\ncv: 1.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 219,
+            "range": "5.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 219.00\nmean: 217.20\nstdev: 5.81\ncv: 2.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 260,
+            "range": "24.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 260.00\nmean: 266.40\nstdev: 24.37\ncv: 9.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 209,
+            "range": "5.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 211.60\nstdev: 5.55\ncv: 2.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 526,
+            "range": "263.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 526.00\nmean: 636.40\nstdev: 263.21\ncv: 41.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 903,
+            "range": "790.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 903.00\nmean: 1187.00\nstdev: 790.99\ncv: 66.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
