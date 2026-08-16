@@ -244,6 +244,12 @@ def main():
 
     rows = cast_rows(read_csv(Path(args.input)))
 
+    # One chart is one build. The aggregator already refuses to median across
+    # commits and hosts, but grouping charts only by workload shape put those
+    # separate rows back on the same axes -- bars from different builds side by
+    # side, distinguishable only by a footer reading "git mixed". Comparing
+    # commits is a legitimate thing to want, but it needs a chart that says so,
+    # not one that looks like a single measurement.
     groups = {}
     for row in rows:
         key = (
@@ -251,17 +257,19 @@ def main():
             row["fanout"],
             row["batch"],
             row["binary"],
+            row.get("git_sha"),
+            row.get("hostname"),
         )
         groups.setdefault(key, []).append(row)
 
     date_str = dt.datetime.now(dt.UTC).date().isoformat()
 
     for key, group_rows in groups.items():
-        profile, fanout, batch, binary = key
+        profile, fanout, batch, binary, key_git_sha, key_hostname = key
         warmup = unique_or_mixed([r.get("warmup") for r in group_rows])
         total = unique_or_mixed([r.get("total") for r in group_rows])
         trials = unique_or_mixed([r.get("trial_count") for r in group_rows])
-        git_sha = unique_or_mixed([r.get("git_sha") for r in group_rows])
+        git_sha = key_git_sha
 
         title_prefix = (
             f"latency_demo {profile} fanout={fanout} batch={batch} "
@@ -278,14 +286,21 @@ def main():
                 " queueing delay. Not a request-latency measurement; use batch=1"
                 " with per-message acks for that."
             )
-        footer = f"git {git_sha} | {date_str}"
+        dirty = any(r.get("git_dirty") in (True, "True") for r in group_rows)
+        footer = (
+            f"git {(git_sha or 'unknown')[:12]}{' (DIRTY)' if dirty else ''}"
+            f" | {key_hostname or 'unknown host'} | {date_str}"
+        )
 
         base_dir = CHARTS_DIR / profile
         # `binary` is part of the grouping key, so it must be part of the file
         # name too. Without it a JSON run and a binary run of the same
         # fanout/batch write to the same path and the last one silently wins.
         encoding = "binary" if binary else "json"
-        base_name = base_dir / f"f{fanout}_b{batch}_{encoding}"
+        # The commit is in the path too, so two builds cannot overwrite each
+        # other's charts and it is obvious which build a file describes.
+        build = (key_git_sha or "unknown")[:8]
+        base_name = base_dir / f"f{fanout}_b{batch}_{encoding}_{build}"
 
         chart_group(
             group_rows,
