@@ -8,7 +8,8 @@
     "payload_bytes": [0, 256, 1024, 4096],
     "warmup": 2000,
     "total": 20000,
-    "binary": true
+    "_comment_binary": "Both encodings, deliberately. latency-demo enables per-message acks only when batch<=1 && !binary, so a binary-only sweep never measures the request-latency configuration the published headline number comes from -- and comparing the two shows a ~2x regression that does not exist.",
+    "binary": [true, false]
   },
   "profiles": {
     "balanced": {

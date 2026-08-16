@@ -187,8 +187,19 @@ def build_matrix(config: dict, trials: int, binary_override=None):
     workload = config["workload"]
     profiles = config["profiles"]
     presets = config["presets"]
+    # `binary` accepts a list so one run can cover both encodings. It is not a
+    # cosmetic switch: the demo enables per-message acks only when
+    # `batch <= 1 && !binary`, so a binary-only sweep never measures the
+    # request-latency configuration the published headline figure comes from.
+    # Comparing a binary-only matrix against that figure shows a ~2x regression
+    # that does not exist.
     binary_default = workload.get("binary", True)
-    binary = binary_override if binary_override is not None else binary_default
+    binary_setting = binary_override if binary_override is not None else binary_default
+    binaries = (
+        [bool(b) for b in binary_setting]
+        if isinstance(binary_setting, (list, tuple))
+        else [bool(binary_setting)]
+    )
 
     matrix = []
     for profile_name, profile in profiles.items():
@@ -196,6 +207,7 @@ def build_matrix(config: dict, trials: int, binary_override=None):
             for batch in workload["batch"]:
                 for payload in workload["payload_bytes"]:
                     for preset_name, preset in presets.items():
+                      for binary in binaries:
                         for trial_index in range(1, trials + 1):
                             matrix.append(
                                 {
