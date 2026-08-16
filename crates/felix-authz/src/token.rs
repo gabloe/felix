@@ -1,23 +1,20 @@
-//! Felix token minting and verification for the broker/control-plane boundary.
+//! Shared Felix token minting and verification across the broker/control-plane
+//! boundary.
 //!
-//! Provide shared, EdDSA-only JWT minting and verification logic for Felix
-//! tokens, plus key caching to reduce per-request overhead.
+//! EdDSA (Ed25519) only -- RSA and HS algorithms are rejected rather than
+//! supported, because the caller supplies the token and accepting a second
+//! algorithm means accepting whichever is weakest. `iss`, `aud`, `tid` and the
+//! signature are all checked before a token is trusted.
 //!
-//! - Felix tokens are always EdDSA (Ed25519); RSA/HS algorithms are rejected.
-//! - `iss`, `aud`, and `tid` claims are mandatory and validated.
-//! - Public keys must match the stored 32-byte Ed25519 seed.
+//! Private keys never leave this module serialized; PKCS8 DER is built in
+//! memory only to hand to `jsonwebtoken`. `kid` drives rotation and cache
+//! lookup and is not a secret.
 //!
-//! - Attackers may present arbitrary JWTs; we validate algorithm, issuer,
-//!   audience, tenant ID, and signature before accepting.
-//! - Private keys are never serialized in this module; only in-memory PKCS8
-//!   DER is constructed for `jsonwebtoken`.
-//! - `kid` is used for rotation and caching, not as a secret.
+//! Key caches sit behind an `RwLock` for concurrent readers, and verification
+//! tries keys in `kid`-preferred order so the common case is one attempt.
 //!
-//! - Encoding/decoding key caches use `RwLock` for concurrent readers.
-//! - Verification attempts keys in `kid`-preferred order to reduce failures.
-//!
-//! Use [`FelixTokenIssuer`] to mint tokens and [`FelixTokenVerifier`] to verify
-//! them, providing a [`TenantKeyStore`] implementation for key access.
+//! [`FelixTokenIssuer`] mints; [`FelixTokenVerifier`] verifies; both need a
+//! [`TenantKeyStore`] for key access.
 //!
 //! # Examples
 //! ```rust
@@ -38,14 +35,6 @@
 //! let issuer = FelixTokenIssuer::new("felix-auth", "felix-broker", Duration::from_secs(60), Arc::new(store));
 //! let _ = issuer.mint(&TenantId::new("t1"), "principal", vec![]);
 //! ```
-//!
-//! # Common pitfalls
-//! - Using mismatched issuer/audience values between issuer and verifier.
-//! - Forgetting to invalidate the cache when rotating keys.
-//! - Passing non-Ed25519 keys, which are explicitly rejected.
-//!
-//! # Future work
-//! - Add background JWKS refresh and cache eviction policies.
 use crate::{AuthzError, AuthzResult, Jwks, TenantId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -278,23 +267,6 @@ pub trait TenantKeyStore: Send + Sync {
     /// - [`AuthzError::MissingJwks`] when JWKS is absent.
     ///
     /// - JWKS must never contain private key material.
-    ///
-    /// # Example
-    /// ```rust
-    /// use felix_authz::{TenantId, TenantKeyStore, TenantKeyMaterial, Jwks};
-    /// use jsonwebtoken::Algorithm;
-    /// use std::collections::HashMap;
-    ///
-    /// let mut store: HashMap<String, TenantKeyMaterial> = HashMap::new();
-    /// store.insert("t1".to_string(), TenantKeyMaterial {
-    ///     kid: "k1".to_string(),
-    ///     alg: Algorithm::EdDSA,
-    ///     private_key: [1u8; 32],
-    ///     public_key: [2u8; 32],
-    ///     jwks: Jwks { keys: vec![] },
-    /// });
-    /// let _ = store.jwks(&TenantId::new("t1"));
-    /// ```
     fn jwks(&self, tenant_id: &TenantId) -> AuthzResult<Jwks>;
 }
 
@@ -386,26 +358,6 @@ impl TenantKeyStore for HashMap<String, TenantKeyMaterial> {
 ///
 /// # Concurrency
 /// - Cloning the issuer shares the underlying cache and key store.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{FelixTokenIssuer, TenantId, TenantKeyMaterial, Jwks};
-/// use jsonwebtoken::Algorithm;
-/// use std::collections::HashMap;
-/// use std::sync::Arc;
-/// use std::time::Duration;
-///
-/// let mut store = HashMap::new();
-/// store.insert("t1".to_string(), TenantKeyMaterial {
-///     kid: "k1".to_string(),
-///     alg: Algorithm::EdDSA,
-///     private_key: [1u8; 32],
-///     public_key: [2u8; 32],
-///     jwks: Jwks { keys: vec![] },
-/// });
-/// let issuer = FelixTokenIssuer::new("felix-auth", "felix-broker", Duration::from_secs(60), Arc::new(store));
-/// let _ = issuer.mint(&TenantId::new("t1"), "principal", vec![]);
-/// ```
 pub struct FelixTokenIssuer {
     issuer: String,
     audience: String,
@@ -517,26 +469,6 @@ impl FelixTokenIssuer {
     /// - Tokens should be treated as secrets and not logged.
     ///
     /// - Uses a cached encoding key to avoid repeated PKCS8 conversion.
-    ///
-    /// # Example
-    /// ```rust
-    /// use felix_authz::{FelixTokenIssuer, TenantId, TenantKeyMaterial, Jwks};
-    /// use jsonwebtoken::Algorithm;
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    /// use std::time::Duration;
-    ///
-    /// let mut store = HashMap::new();
-    /// store.insert("t1".to_string(), TenantKeyMaterial {
-    ///     kid: "k1".to_string(),
-    ///     alg: Algorithm::EdDSA,
-    ///     private_key: [1u8; 32],
-    ///     public_key: [2u8; 32],
-    ///     jwks: Jwks { keys: vec![] },
-    /// });
-    /// let issuer = FelixTokenIssuer::new("felix-auth", "felix-broker", Duration::from_secs(60), Arc::new(store));
-    /// let _ = issuer.mint(&TenantId::new("t1"), "principal", vec![]);
-    /// ```
     pub fn mint(
         &self,
         tenant_id: &TenantId,

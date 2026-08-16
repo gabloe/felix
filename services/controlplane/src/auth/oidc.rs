@@ -1,37 +1,21 @@
-//! OIDC token validation with cached discovery and JWKS fetching.
+//! Validation of upstream IdP tokens -- the boundary between an external
+//! identity provider and Felix's own authorization.
 //!
-//! Validate inbound IdP bearer tokens against configured issuers using cached
-//! discovery documents and JWKS with TTL-based refresh.
+//! ES256 is the default and only algorithm. RS* and PS* can be enabled by
+//! configuration but are off by default because of the Marvin side-channel
+//! attack, which has no known mitigation in Rust's crypto libraries today; many
+//! IdPs publish RSA keys via JWKS, so the allowlist is opt-in rather than
+//! absent. Felix's own EdDSA tokens are a separate path entirely.
 //!
-//! Provides the IdP boundary for the control-plane: it verifies upstream tokens
-//! (ES256/RS*/PS* based on configured allowlist) before issuing Felix EdDSA tokens elsewhere.
+//! Claims are decoded once *without* verification purely to find the issuer, so
+//! the right JWKS can be fetched. Everything else -- issuer, audience,
+//! signature -- is checked only after that, against configuration.
 //!
-//! - Token exchange endpoint (`/token/exchange`) validates IdP tokens.
-//! - Tests that exercise JWKS caching and issuer validation.
+//! Discovery documents and JWKS are cached with a TTL and refreshed on demand,
+//! in a `DashMap` so concurrent tasks share them without a global lock.
 //!
-//! - Only ES256 is accepted by default.
-//! - RS256/RS384/RS512 and PS256/PS384/PS512 can be enabled via configuration.
-//! - Felix tokens are EdDSA and handled in a separate module.
-//! - RSA/PS algorithms are disabled by default because of the Marvin side-channel attack
-//!   which currently has no known mitigations in Rust's crypto libraries.
-//! - Issuer and audience claims are validated against configuration.
-//! - JWKS and discovery caches are time-bounded and refreshed on demand.
-//!
-//! Shared caches are stored in `DashMap` for concurrent read/write access across
-//! async tasks without global locks.
-//!
-//! # Security boundary
-//! This module is the boundary between external IdP tokens and the internal
-//! authorization system. It must reject unsupported algorithms and issuers.
-//!
-//! # Security model and threat assumptions
-//! - Attackers may craft tokens; we validate issuer, audience, and signature.
-//! - RSA/PS support is opt-in via allowlist because many IdPs publish RSA keys via JWKS.
-//! - We decode claims without verification only to locate the issuer; all other
-//!   validation happens after signature verification.
-//!
-//! Construct an [`UpstreamOidcValidator`] and call [`UpstreamOidcValidator::validate`]
-//! with the bearer token and configured issuers.
+//! Construct an [`UpstreamOidcValidator`] and call
+//! [`UpstreamOidcValidator::validate`].
 use crate::auth::idp_registry::IdpIssuerConfig;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

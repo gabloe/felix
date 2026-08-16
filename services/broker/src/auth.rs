@@ -1,23 +1,16 @@
-//! Broker-side authentication and JWKS caching.
+//! Broker-side authentication: JWKS caching and Felix token verification.
 //!
-//! Fetch and cache tenant JWKS from the control-plane, then verify Felix tokens
-//! using EdDSA (Ed25519) public keys.
+//! Felix tokens are EdDSA (Ed25519); RSA is never accepted here. JWKS fetched
+//! from the control plane carries public key material only, and is treated as
+//! untrusted input -- key shape and length are checked before use. `kid` guides
+//! which key is tried first, but verification still tries all of them, so a
+//! rotation in progress does not reject valid tokens.
 //!
-//! - Felix-issued tokens must be EdDSA; RSA is never accepted for broker auth.
-//! - JWKS data contains only public key material; private keys are never loaded.
-//! - `kid` guides verification order but verification still tries all keys.
-//!
-//! - Attackers may present arbitrary bearer tokens; we validate signature,
-//!   issuer, audience, and tenant ID via `felix_authz`.
-//! - JWKS endpoints are public; we treat the data as untrusted input and validate
-//!   key shape/length before use.
-//! - No tokens or keys are logged to avoid secret leakage.
-//!
-//! - JWKS cache is thread-safe via `DashMap`.
-//! - Key cache invalidation is per-tenant and coordinated with JWKS refresh.
+//! The JWKS cache is a `DashMap`; invalidation is per-tenant and coordinated
+//! with refresh. Nothing here logs a token or a key.
 //!
 //! Construct [`BrokerAuth`] with the control-plane URL and call
-//! [`BrokerAuth::authenticate`] to validate a token and obtain an [`AuthContext`].
+//! [`BrokerAuth::authenticate`] to get an [`AuthContext`].
 //!
 //! # Examples
 //! ```rust,no_run
@@ -25,13 +18,6 @@
 //!
 //! let auth = BrokerAuth::new("http://controlplane".to_string());
 //! ```
-//!
-//! # Common pitfalls
-//! - Forgetting to warm the JWKS cache leads to auth latency on first request.
-//! - Not invalidating cache on JWKS rotation keeps stale public keys in memory.
-//!
-//! # Future work
-//! - Add background JWKS refresh to avoid on-demand fetches under load.
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -59,13 +45,6 @@ use std::time::{Duration, Instant};
 ///
 /// # Concurrency
 /// - Cloning shares the verifier and key store via `Arc`.
-///
-/// # Example
-/// ```rust,no_run
-/// use broker::auth::BrokerAuth;
-///
-/// let auth = BrokerAuth::new("http://controlplane".to_string());
-/// ```
 #[derive(Clone)]
 pub struct BrokerAuth {
     verifier: Arc<FelixTokenVerifier>,
@@ -86,13 +65,6 @@ impl BrokerAuth {
     /// - The verifier is pinned to `iss=felix-auth` and `aud=felix-broker`.
     ///
     /// - Construction is O(1); network IO happens during authentication.
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use broker::auth::BrokerAuth;
-    ///
-    /// let auth = BrokerAuth::new("http://controlplane".to_string());
-    /// ```
     pub fn new(controlplane_url: String) -> Self {
         // We share a key cache between the verifier and JWKS store so that
         // refreshing JWKS invalidates cached decoding keys reliably.
