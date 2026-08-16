@@ -20,14 +20,12 @@ except ImportError:
         "  data/raw/latency_demo_runs.jsonl      (raw runs)\n"
         "  data/derived/latency_demo_agg.csv     (aggregated)\n"
         "\n"
-        "Install the charting dependencies and re-run this step alone:\n"
-        "  task perf:deps\n"
-        "  python3 scripts/perf/make_charts.py\n"
-        "\n"
-        "Or in a virtualenv, if this Python is externally managed:\n"
-        "  python3 -m venv .venv-perf\n"
-        "  .venv-perf/bin/pip install -r scripts/perf/requirements.txt\n"
-        "  .venv-perf/bin/python scripts/perf/make_charts.py"
+        "Install the charting dependencies, then re-render without re-running\n"
+        "the benchmark:\n"
+        "  task perf:deps      # creates .venv-perf (system Python is usually\n"
+        "                      # externally managed -- PEP 668 -- so a bare\n"
+        "                      # pip install into it fails)\n"
+        "  task perf:charts    # re-renders from data/derived"
     ) from None
 
 ROOT = Path(__file__).resolve().parents[2]
