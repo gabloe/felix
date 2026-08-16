@@ -78,6 +78,14 @@ pub enum Message {
         stream: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         subscription_id: Option<u64>,
+        /// Where to begin delivering from.
+        ///
+        /// Absent means the tail, which is what every client sent before this
+        /// field existed — so an old client and a new broker still produce
+        /// byte-for-byte the frames they always did, and a new client talking
+        /// to an old broker has its position ignored rather than misread.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start: Option<StartPosition>,
     },
     // Subscription confirmation with server-assigned ID.
     Subscribed {
@@ -94,6 +102,13 @@ pub enum Message {
         stream: String,
         #[serde(with = "crate::base64_serde::base64_bytes")]
         payload: Vec<u8>,
+        /// Log offset of this event, for durable streams.
+        ///
+        /// Absent for in-memory streams, which have no durable position to
+        /// checkpoint against, and absent from every frame a pre-offsets broker
+        /// sends.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<u64>,
     },
     // JSON event batch (binary batch uses FLAG_BINARY_EVENT_BATCH).
     EventBatch {
@@ -102,6 +117,10 @@ pub enum Message {
         stream: String,
         #[serde(with = "crate::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
+        /// Offset of the first payload. The rest are contiguous from there, so
+        /// payload `i` sits at `base_offset + i`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_offset: Option<u64>,
     },
     // Cache set operation; may include TTL and request id.
     CachePut {
@@ -154,6 +173,55 @@ pub enum Message {
     Error {
         message: String,
     },
+    /// A subscribe could not start where it was asked to.
+    ///
+    /// Distinct from `Error` because the client must be able to *act* on it:
+    /// `too_old` means pick a newer offset (or `earliest`), `in_future` means
+    /// the log has not reached that offset yet. A generic string forces every
+    /// client to parse prose to tell those apart, and a client that guesses
+    /// wrong silently restarts at the tail -- the failure resume exists to
+    /// remove.
+    SubscribeCursorError {
+        reason: CursorErrorReason,
+        /// The offset that was asked for.
+        requested: u64,
+        /// For `too_old`, the oldest offset still retained. For `in_future`,
+        /// the current tail. Either way: the nearest offset that would work.
+        available: u64,
+    },
+}
+
+/// Why a subscribe could not start at the requested position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorErrorReason {
+    /// The offset has been discarded by retention, or has fallen out of an
+    /// in-memory stream's replay ring.
+    TooOld,
+    /// The offset is past the end of the stream.
+    InFuture,
+}
+
+/// Where a subscription should begin.
+///
+/// Untagged on the wire so `"latest"` and `{"offset": 42}` are both accepted,
+/// and so the common cases stay short in a JSON control message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartPosition {
+    /// The live tail: deliver only what is published from now on. Identical to
+    /// omitting the field, and spelled out for clients that prefer to be
+    /// explicit.
+    Latest,
+    /// The oldest record the broker still retains.
+    ///
+    /// Deliberately not "offset 0": for a stream whose head has been trimmed,
+    /// offset 0 is gone and asking for it is an error, whereas `earliest` means
+    /// "as far back as you can" and always succeeds.
+    Earliest,
+    /// Resume at an exact log offset — the first record the client has *not*
+    /// seen, so a client checkpoints the offset it last handled plus one.
+    Offset(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

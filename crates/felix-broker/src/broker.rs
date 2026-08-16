@@ -21,6 +21,7 @@ use crate::stream_state::{Cursor, StreamState};
 use crate::subscription::{Subscription, SubscriptionGuard};
 use crate::telemetry::{t_now_if, t_should_sample};
 use crate::timings;
+pub use felix_wire::StartPosition;
 
 /// In-process broker for pub/sub messaging.
 ///
@@ -128,6 +129,40 @@ impl Default for StreamMetadata {
             shards: 1,
         }
     }
+}
+
+/// The disk-backed range a resumed subscription must replay before its backlog.
+///
+/// Half-open: `[from_offset, until_offset)`. Closed at the moment it is
+/// produced, because the live subscription is already registered at
+/// `until_offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryRange {
+    pub from_offset: u64,
+    pub until_offset: u64,
+}
+
+/// A subscription resumed from a position, with the history needed to reach it.
+///
+/// Deliver in order: `history` (paged from disk by the caller, so an arbitrarily
+/// long backlog is never buffered here), then `backlog`, then the live
+/// subscription. The three are contiguous by construction.
+#[derive(Debug)]
+pub struct ResumedSubscription {
+    /// Older records to page off disk, or `None` when the ring covered the
+    /// whole request.
+    pub history: Option<HistoryRange>,
+    /// Records already in the replay ring, each with its own offset.
+    ///
+    /// Offsets are carried rather than derived because the ring can contain
+    /// holes -- a publish that took disk offsets and was cancelled before
+    /// reaching the ring leaves one. A caller that numbered these sequentially
+    /// from `backlog_start` would mislabel everything after a hole.
+    pub backlog: Vec<(u64, Bytes)>,
+    /// Offset of the first backlog entry, and of the live edge when the backlog
+    /// is empty.
+    pub backlog_start: u64,
+    pub subscription: Subscription,
 }
 
 impl Broker {
@@ -310,7 +345,12 @@ impl Broker {
         let fanout_start = t_now_if(sample);
         let mut closed_subscribers = Vec::new();
         let mut sent = 0usize;
-        let envelope = DeliveryEnvelope::new(payloads);
+        // The offsets the log just assigned travel with the batch, so live
+        // delivery can report them exactly as replay does. Without this a
+        // resumed subscriber gets offsets for its history and then nothing once
+        // it reaches the live edge, which is precisely where it needs to start
+        // checkpointing.
+        let envelope = DeliveryEnvelope::with_base_offset(payloads, durable_first_offset);
         let item_count = envelope.len();
         let enqueue_start = t_now_if(sample);
         for subscriber in senders.iter() {
@@ -528,6 +568,135 @@ impl Broker {
             });
         };
         log.read_from(from_offset, max_bytes).await
+    }
+
+    /// Subscribe from a chosen position, joining stored history to live
+    /// delivery without a gap or a duplicate.
+    ///
+    /// The ordering is what makes this correct, and it is not the obvious one.
+    /// The live subscription is registered **first**, clamped to the oldest
+    /// entry the replay ring still holds, and only then is the older history
+    /// read from disk. Registering first pins the live edge: every record from
+    /// `backlog_start` onward is already captured, either in the returned
+    /// backlog or on the subscription's receiver. The disk range left to serve,
+    /// `[requested, backlog_start)`, is therefore closed -- it cannot grow, and
+    /// nothing can be evicted out of it into a gap while it is being read.
+    ///
+    /// Reading history first and subscribing after is the version that looks
+    /// natural and loses records: publishes landing between the read and the
+    /// registration reach neither.
+    ///
+    /// The caller delivers in three phases: `history` (paged from disk),
+    /// then `backlog`, then whatever arrives on the subscription.
+    pub async fn subscribe_from(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: StartPosition,
+    ) -> Result<ResumedSubscription> {
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
+            .await?;
+        let stream_state = handle.state;
+        let durable = stream_state.durable.clone();
+
+        // Resolve the requested position to an offset before touching the ring.
+        let requested = match start {
+            StartPosition::Latest => match &durable {
+                Some(log) => log.tail_offset().await?,
+                None => stream_state.tail_seq(),
+            },
+            StartPosition::Earliest => match &durable {
+                // The oldest offset still on disk, which retention raises as it
+                // trims. Never 0 for a trimmed stream.
+                Some(log) => log.base_offset(),
+                None => stream_state.oldest_seq(),
+            },
+            StartPosition::Offset(offset) => offset,
+        };
+
+        // Resuming past the tail would register for live delivery and then hand
+        // over records *below* the requested offset -- the opposite of what was
+        // asked for. Rejected rather than silently reinterpreted; a client that
+        // wants to wait for an offset that does not exist yet should ask for
+        // `Latest` and track its own position.
+        let tail = match &durable {
+            Some(log) => log.tail_offset().await?,
+            None => stream_state.tail_seq(),
+        };
+        if requested > tail {
+            return Err(BrokerError::CursorInFuture { requested, tail });
+        }
+
+        let (backlog, backlog_start, subscriber_id, receiver) =
+            stream_state.register_clamped(requested);
+        // Built the moment the subscriber exists, so every error path below
+        // releases the registration by `Drop` instead of stranding a closed
+        // sender in the registry for the publish path to reap later. Repeated
+        // rejected subscribes would otherwise grow the slab without ever
+        // touching the per-connection subscription cap.
+        let guard = SubscriptionGuard {
+            stream_state: Arc::downgrade(&stream_state),
+            subscriber_id,
+        };
+
+        // Anything older than the ring has to come from disk, and only a
+        // durable stream has any. For an in-memory stream this is the same
+        // "your cursor is too old" condition `subscribe_with_cursor` reports.
+        let history = if requested < backlog_start {
+            if durable.is_none() {
+                return Err(BrokerError::CursorTooOld {
+                    oldest: backlog_start,
+                    requested,
+                });
+            }
+            Some(HistoryRange {
+                from_offset: requested,
+                until_offset: backlog_start,
+            })
+        } else {
+            None
+        };
+
+        // A durable stream can also have been trimmed past the request, which
+        // the ring cannot tell us about -- it only knows its own oldest entry.
+        if let (Some(range), Some(log)) = (&history, &durable)
+            && range.from_offset < log.base_offset()
+        {
+            return Err(BrokerError::CursorTooOld {
+                oldest: log.base_offset(),
+                requested,
+            });
+        }
+
+        Ok(ResumedSubscription {
+            history,
+            backlog,
+            backlog_start,
+            subscription: Subscription {
+                receiver,
+                guard,
+                pending: VecDeque::new(),
+            },
+        })
+    }
+
+    /// Number of subscriber slots currently registered for a stream.
+    ///
+    /// Exposed for tests that need to prove a failed subscribe left nothing
+    /// behind: a stranded registration is invisible from the outside until some
+    /// later publish happens to reap it.
+    pub async fn registered_subscribers(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<usize> {
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
+            .await?;
+        Ok(handle.state.subscriber_count())
     }
 
     pub fn cache(&self) -> &(dyn StorageApi + Send) {

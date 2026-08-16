@@ -46,7 +46,11 @@ pub(super) async fn run_lane_feeder(
             let payload_bytes: usize = payloads.iter().map(Bytes::len).sum();
             if payloads.len() <= max_events && payload_bytes <= max_bytes {
                 let prefix_start = t_now_if(t_should_sample());
-                let frame = match envelope.shared_event_frame() {
+                let frame = match if config.offsets_enabled {
+                    envelope.shared_event_frame_with_offsets()
+                } else {
+                    envelope.shared_event_frame()
+                } {
                     Ok(frame) => frame,
                     Err(err) => {
                         tracing::warn!(
@@ -86,7 +90,19 @@ pub(super) async fn run_lane_feeder(
                     end += 1;
                 }
                 let batch = &payloads[start..end];
-                match felix_wire::binary::encode_shared_event_batch_bytes(batch) {
+                // A split batch keeps its own base offset: the envelope's
+                // offsets are contiguous, so this sub-batch begins `start`
+                // records into the run.
+                let encoded = match (config.offsets_enabled, envelope.base_offset()) {
+                    (true, Some(base)) => {
+                        felix_wire::binary::encode_shared_event_batch_bytes_with_offset(
+                            batch,
+                            base + start as u64,
+                        )
+                    }
+                    _ => felix_wire::binary::encode_shared_event_batch_bytes(batch),
+                };
+                match encoded {
                     Ok(frame) => {
                         enqueue_lane_frame(
                             &manager,
@@ -114,6 +130,12 @@ pub(super) async fn run_lane_feeder(
         let mut batch = Vec::with_capacity(max_events);
         let mut batch_bytes = first.len();
         batch.push(first);
+        // Coalescing merges *separate* publishes into one frame, and their
+        // offsets are only contiguous if nothing landed between them. One
+        // `base_offset` describes the frame only while that holds, so a break in
+        // the run ends the batch exactly as a byte or count limit would.
+        let batch_base = envelope.base_offset();
+        let mut expected_next = batch_base.map(|base| base + envelope.len() as u64);
 
         while batch.len() < max_events && batch_bytes < max_bytes {
             let next = if config.single_event_mode {
@@ -131,6 +153,11 @@ pub(super) async fn run_lane_feeder(
                 pending = Some(envelope);
                 break;
             }
+            if config.offsets_enabled && envelope.base_offset() != expected_next {
+                // Numbering this into the current frame would misreport it.
+                pending = Some(envelope);
+                break;
+            }
             let payload = envelope.payloads()[0].clone();
             if batch_bytes.saturating_add(payload.len()) > max_bytes {
                 pending = Some(envelope);
@@ -138,12 +165,19 @@ pub(super) async fn run_lane_feeder(
             }
             batch_bytes += payload.len();
             batch.push(payload);
+            expected_next = expected_next.map(|next| next + 1);
         }
 
         let sample = t_should_sample();
         let enqueue_start = t_now_if(sample);
         let prefix_start = t_now_if(sample);
-        let frame = match felix_wire::binary::encode_shared_event_batch_bytes(&batch) {
+        let encoded = match (config.offsets_enabled, batch_base) {
+            (true, Some(base)) => {
+                felix_wire::binary::encode_shared_event_batch_bytes_with_offset(&batch, base)
+            }
+            _ => felix_wire::binary::encode_shared_event_batch_bytes(&batch),
+        };
+        let frame = match encoded {
             Ok(frame) => frame,
             Err(err) => {
                 tracing::warn!(

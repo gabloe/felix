@@ -30,6 +30,14 @@ pub(crate) struct EventWriterConfig {
     /// If true, encode each payload as its own one-item EventBatch frame.
     pub(super) single_event_mode: bool,
 
+    /// Whether this subscriber negotiated `FLAG_EVENT_BATCH_OFFSETS`.
+    ///
+    /// Per-subscriber, because a stream can carry subscribers of both kinds and
+    /// each must receive the frame shape it agreed to. The envelope caches both
+    /// encodings, so the cost is at most two per batch however many subscribers
+    /// there are -- the encode-once fanout property still holds.
+    pub(super) offsets_enabled: bool,
+
     /// Max number of lane commands to gather per flush.
     pub(super) flush_max_items: usize,
 

@@ -169,11 +169,32 @@ tasks:
       - "task pg:up"
       - "cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml -- {{.CLI_ARGS}}"
       - "task pg:down"
+  perf:deps:
+    desc: "Create .venv-perf and install the Python deps the charting pipeline needs"
+    cmds:
+      # A virtualenv rather than a bare `pip install`: Homebrew and most distro
+      # Pythons are marked externally managed (PEP 668), so installing into them
+      # fails outright. Everything below prefers this venv when it exists and
+      # falls back to system python3 otherwise, so nothing is required of a
+      # machine where the deps happen to be installed already.
+      - "python3 -m venv .venv-perf"
+      - ".venv-perf/bin/python -m pip install --quiet --upgrade pip"
+      - ".venv-perf/bin/python -m pip install --quiet -r scripts/perf/requirements.txt"
+      - '.venv-perf/bin/python -c "import matplotlib; print(f\"matplotlib {matplotlib.__version__} ready in .venv-perf\")"'
+  perf:charts:
+    desc: "Re-render charts from data already in data/derived (no benchmark run)"
+    cmds:
+      - |
+        PY=$([ -x .venv-perf/bin/python ] && echo .venv-perf/bin/python || echo python3)
+        "$PY" scripts/perf/make_charts.py
+        "$PY" scripts/perf/render_markdown_snippets.py
   perf:latency-matrix:
     cmds:
-      - "python3 scripts/perf/run_latency_matrix.py"
-      - "python3 scripts/perf/normalize_and_aggregate.py"
-      - "python3 scripts/perf/make_charts.py"
-      - "python3 scripts/perf/render_markdown_snippets.py"
+      - |
+        PY=$([ -x .venv-perf/bin/python ] && echo .venv-perf/bin/python || echo python3)
+        "$PY" scripts/perf/run_latency_matrix.py
+        "$PY" scripts/perf/normalize_and_aggregate.py
+        "$PY" scripts/perf/make_charts.py
+        "$PY" scripts/perf/render_markdown_snippets.py
   conformance:
     cmds: ["cargo run -p felix-conformance"]

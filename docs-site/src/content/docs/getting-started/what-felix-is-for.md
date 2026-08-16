@@ -13,7 +13,7 @@ around as if it exists, or claimed externally.
 - 🎯 **Target** — intended design. Not implemented. May change.
 :::
 :::note[Maintenance]
-**Status markers last verified against the code on 2026-08-09.** This page
+**Status markers last verified against the code on 2026-08-15.** This page
 goes stale the moment a 🎯 row lands, and stale status markers are worse than
 no status markers — a reader who catches one wrong row stops trusting the
 other twenty. Treat updating it as part of shipping any capability listed
@@ -140,6 +140,8 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Token-based authorization | ✅ Today | OIDC token exchange, tenant-scoped JWTs, broker-side permission checks on publish/subscribe/cache |
 | Control plane metadata service | ✅ Today | REST + OpenAPI, tenant/namespace/stream/cache CRUD, snapshot and changes feeds, in-memory or Postgres backing |
 | Prometheus metrics, health endpoints | ✅ Today | Plus opt-in `telemetry` feature for per-stage timings |
+| Durable streams | ✅ Today | Opt-in per stream via `durable: true`, and only when the broker runs with `FELIX_DURABLE_STORAGE_DIR`. Segmented crash-safe log: CRC-verified records, torn-tail recovery, group commit, three fsync policies. Single node, and nothing trims it |
+| Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; unbounded until retention exists |
 | Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
 | Sharding | 🚧 Partial | Streams carry a shard count; ops are not yet directed to a shard leader |
 
@@ -147,8 +149,15 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 
 Single host, loopback, release build, TLS 1.3 on, defaults, zero delivery drops:
 
-- **Latency (batch = 1, per-message ack):** p50 82–128 µs, p999 175–329 µs at
-  fanout 1 across 0 B–1 KiB payloads.
+- **Latency (batch = 1, per-message ack, JSON framing):** p50 82–128 µs,
+  p999 175–329 µs at fanout 1 across 0 B–1 KiB payloads.
+
+  The framing matters and is easy to get wrong. `latency-demo` enables
+  per-message acks only when `batch <= 1 && !binary`, so passing `--binary`
+  silently measures a different thing — fire-and-forget delivery rather than a
+  request round trip. On the same machine that produced the figures above, the
+  binary path measures ~256 µs p50. That is not a regression against them; it
+  is a different configuration, and the two are not comparable.
 - **Throughput (batch = 64, lossless):** up to 2.92 M deliveries/s for 0 B at
   fanout 10; ~1.57 M/s at 1 KiB × fanout 10; ~2.3 GB/s of payload at 4 KiB ×
   fanout 10 on Linux.
@@ -162,11 +171,14 @@ for behavior at thousands of subscribers or across a network.
 - **At-most-once.** No redelivery, no publisher-visible confirmation that a
   subscriber received anything.
 - **Per-stream ordering** preserved for a given subscriber. No ordering across streams.
-- **Tail-only subscriptions over the wire.** A subscriber receives events
-  published after it subscribes; `Subscribe` still carries no offset or replay
-  parameter. Cursor replay and paged historical reads exist on the in-process
-  broker API for durable streams, but are not yet exposed through the wire
-  protocol.
+- **Resumable subscriptions over the wire, for durable streams.** `Subscribe`
+  carries an optional `start` — `latest` (the default, and what every older
+  client sends), `earliest`, or an exact offset — and every delivered event
+  carries its offset, so an application checkpoints what it handled and resumes
+  at the next one. History read from disk joins live delivery with no gap and no
+  duplicate. Asking for an offset retention has discarded is a typed error, not
+  a silent restart at the tail. A non-durable stream stays tail-only beyond its
+  bounded replay ring, because there is nothing older to read.
 - **Slow subscribers drop** under the default policy, and lag is surfaced to the
   subscriber. Publishers never block on subscriber speed.
 - **Ephemeral by default.** Nothing survives a broker restart unless the stream
@@ -174,26 +186,27 @@ for behavior at thousands of subscribers or across a network.
   acknowledging it and replays it afterwards. Durable storage is opt-in per
   stream and off unless the broker is started with `FELIX_DURABLE_STORAGE_DIR`.
   Retention and tiering are not implemented, so a durable stream grows without
-  bound today.
+  bound today — which also means a resume never fails for having been trimmed
+  yet.
 
 ---
 
 ## 3. What Felix is being built to become
 
 None of the following exists today. It is listed so the intent is legible, not so
-it can be planned around.
+it can be planned around. Capabilities move up into the table above when they
+ship rather than being marked off here.
 
 | Capability | Status | Current state of the code |
 |---|---|---|
 | Log-backed cache (one core log, many semantics) | 🎯 Target | Cache is a separate storage handle, not a projection over the stream log |
-| Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` has no snapshot or offset parameter |
+| Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
-| Durable streams and replay | 🎯 Target | Storage traits and a durable-log sketch exist; no durable data-plane backend |
+| Retention and log trimming | 🎯 Target | Nothing deletes segments on age or size, so a durable stream grows without bound |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
 | Multi-node clustering and replication | 🎯 Target | Not started |
 | Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
-| Resumable subscriptions after disconnect | 🎯 Target | Not started |
 | At-least-once / quorum acks | 🎯 Target | Not started |
 | Non-Rust client SDKs | 🎯 Target | Rust client only |
 
@@ -224,9 +237,9 @@ whether you could build it on the current release.
 | Internal service event bus | Moderate | Mostly | Works, but NATS and RabbitMQ serve this well already — weak differentiation |
 | Distributed live-state synchronization | Strong | **No** | Needs gap-free snapshot + change stream; drops corrupt local state |
 | Infrastructure / control-plane state distribution | Strong | **No** | Same gap, plus needs multi-node |
-| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state does not |
-| Edge and disconnected operation | Strong | **No** | Needs durability, resumable subscriptions, and replication — none exist |
-| Durable event log, replay, event sourcing | Weak | No | Use Kafka |
+| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node, without retention or replication |
+| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist; replication does not, and neither does retention |
+| Durable event log, replay, event sourcing | Weak | Partly | A single-node durable log with offset replay exists. No retention, no tiering, no replication — use Kafka for anything that needs history to outlive one machine |
 | Primary datastore | Weak | No | Use a database |
 | General-purpose key-value store | Weak | No | Use Redis or Valkey |
 | Complex broker routing, workflow messaging | Weak | No | Use RabbitMQ |
@@ -276,8 +289,15 @@ and an incorrect one for the second.
 Closing this requires at least one of: gap-free snapshot-plus-stream subscribe,
 resumable subscriptions with a durable log behind them, or an explicit
 resynchronization protocol triggered by the lag signal subscribers already
-receive. Until one of those lands, "distributed live-state synchronization" is a
-direction, not a supported use case.
+receive.
+
+The second of those now exists for durable streams: a subscriber that records
+the offsets it handles can resume from them, and — because offsets are
+contiguous — can *detect* a drop rather than diverging silently. That narrows
+the case rather than closing it. It does not help a non-durable stream, it
+requires the application to checkpoint, and without retention there is no
+statement yet about how far back a resume can reach. "Distributed live-state
+synchronization" remains a direction, not a supported use case.
 
 ---
 
@@ -286,8 +306,9 @@ direction, not a supported use case.
 Felix should not be positioned against any of these, now or later.
 
 - **Not a Kafka replacement.** Kafka is excellent at durable event history,
-  long-term retention, replay, and data integration. Felix's eventual durability
-  is meant to serve live distribution, not to compete on retention.
+  long-term retention, replay, and data integration. Felix's durability is meant
+  to serve live distribution, not to compete on retention — it is single-node,
+  and nothing trims a log yet.
 - **Not a Redis replacement.** Cache semantics in Felix exist as part of a
   state-distribution model, not as a general-purpose data-structure server.
 - **Not a RabbitMQ replacement.** Elaborate routing topologies and traditional

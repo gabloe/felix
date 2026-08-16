@@ -77,6 +77,21 @@ impl SubscriptionReceiver {
     }
 }
 
+impl Subscription {
+    /// Take whatever is already queued, without waiting.
+    ///
+    /// Used by resume to drain what accumulated while history was being read,
+    /// so the handler can spot a queue drop -- a jump in offsets -- and fill it
+    /// from disk before live delivery starts.
+    pub fn drain_ready(&mut self) -> Vec<DeliveryEnvelope> {
+        let mut drained = Vec::new();
+        while let Ok(envelope) = self.receiver.try_recv() {
+            drained.push(envelope);
+        }
+        drained
+    }
+}
+
 impl Drop for SubscriptionReceiver {
     fn drop(&mut self) {
         self.receiver.close();

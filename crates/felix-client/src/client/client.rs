@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_transport::{QuicClient, QuicConnection, TransportConfig};
-use felix_wire::Message;
+use felix_wire::{CursorErrorReason, Message, StartPosition};
 use quinn::{RecvStream, SendStream};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -254,11 +254,33 @@ impl Client {
         })
     }
 
+    /// Subscribe from the live tail, delivering only what is published from now.
     pub async fn subscribe(
         &self,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+    ) -> Result<Subscription> {
+        self.subscribe_from(tenant_id, namespace, stream, None)
+            .await
+    }
+
+    /// Subscribe from a chosen position, resuming a durable stream.
+    ///
+    /// `start: None` is exactly [`Client::subscribe`]. Pass
+    /// `Some(StartPosition::Offset(n))` to resume at the first record not yet
+    /// seen -- an application that checkpoints the offset of the last event it
+    /// handled resumes at that offset plus one.
+    ///
+    /// Fails with a `CursorTooOld` error if retention has already discarded the
+    /// requested offset, rather than silently restarting at the tail: a resume
+    /// that quietly skips records is the failure mode this exists to remove.
+    pub async fn subscribe_from(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<StartPosition>,
     ) -> Result<Subscription> {
         if tenant_id != self.auth_tenant_id {
             return Err(anyhow::anyhow!(
@@ -280,7 +302,7 @@ impl Client {
         let connection_index = rr as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
         let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
+        let server_flags = authenticate_stream(
             &mut send,
             &mut recv,
             &self.auth_tenant_id,
@@ -288,6 +310,24 @@ impl Client {
             self.runtime_config.max_frame_bytes,
         )
         .await?;
+
+        // A broker that predates resume ignores the unknown `start` field and
+        // subscribes at the tail, then answers `Subscribed` -- so the client
+        // would report success while silently losing everything published
+        // during the disconnect. That is worse than an error, because the
+        // application has no way to notice. `Latest` is safe to send either
+        // way: it is what an old broker does anyway.
+        let needs_replay = matches!(
+            start,
+            Some(StartPosition::Earliest) | Some(StartPosition::Offset(_))
+        );
+        if needs_replay && !felix_wire::supports(server_flags, felix_wire::FLAG_EVENT_BATCH_OFFSETS)
+        {
+            return Err(anyhow::anyhow!(
+                "broker does not support resumable subscriptions (negotiated flags {server_flags:#06x}); \
+                 resuming from a position would silently start at the tail instead"
+            ));
+        }
         let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
         write_message(
             &mut send,
@@ -296,6 +336,7 @@ impl Client {
                 namespace: namespace.to_string(),
                 stream: stream.to_string(),
                 subscription_id: None,
+                start,
             },
         )
         .await?;
@@ -312,6 +353,21 @@ impl Client {
                 return Err(anyhow::anyhow!(
                     "subscribe response missing subscription id"
                 ));
+            }
+            Some(Message::SubscribeCursorError {
+                reason,
+                requested,
+                available,
+            }) => {
+                // Surfaced as a typed error rather than a debug-formatted
+                // message, because the two reasons have opposite remedies and an
+                // application has to be able to tell them apart in code.
+                return Err(SubscribeCursorError {
+                    reason,
+                    requested,
+                    available,
+                }
+                .into());
             }
             other => return Err(anyhow::anyhow!("subscribe failed: {other:?}")),
         };
@@ -496,5 +552,39 @@ async fn authenticate_stream(
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
+    }
+}
+
+/// A resume could not start where it asked to.
+///
+/// Typed rather than a formatted string so callers can branch: `TooOld` means
+/// retention has passed the requested offset and the application must decide
+/// whether to accept the gap or start from `earliest`; `InFuture` means the
+/// offset does not exist yet, which usually means a checkpoint was written from
+/// a different stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub struct SubscribeCursorError {
+    pub reason: CursorErrorReason,
+    /// The offset that was asked for.
+    pub requested: u64,
+    /// The nearest offset that would have worked: the oldest retained for
+    /// `TooOld`, the current tail for `InFuture`.
+    pub available: u64,
+}
+
+impl std::fmt::Display for SubscribeCursorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.reason {
+            CursorErrorReason::TooOld => write!(
+                f,
+                "offset {} is no longer retained; oldest available is {}",
+                self.requested, self.available
+            ),
+            CursorErrorReason::InFuture => write!(
+                f,
+                "offset {} is past the end of the stream; tail is {}",
+                self.requested, self.available
+            ),
+        }
     }
 }

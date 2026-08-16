@@ -16,6 +16,16 @@ pub const FLAG_BINARY_PUBLISH_ACKED: u16 = 0x0008;
 /// Broker → client acknowledgement of an acked publish, replacing the JSON
 /// `PublishOk`/`PublishError` messages on the binary path.
 pub const FLAG_BINARY_PUBLISH_ACK: u16 = 0x0010;
+/// Modifier on either event-batch flag: the payload carries a `base_offset`
+/// before its payload count, giving the log offset of the batch's first event.
+///
+/// A batch's offsets are contiguous, so one `u64` per *batch* is enough — a
+/// client derives each event's offset by adding its index. That is what keeps
+/// this off the per-event cost model, and it is why offsets can ride the shared
+/// encode-once batch at all: the offsets belong to the stream, not to the
+/// subscriber, so one encoding still serves every subscriber that negotiated
+/// the bit.
+pub const FLAG_EVENT_BATCH_OFFSETS: u16 = 0x0020;
 
 /// Every flag bit this version understands.
 ///
@@ -31,7 +41,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_EVENT_BATCH
     | FLAG_BINARY_EVENT_BATCH_SHARED
     | FLAG_BINARY_PUBLISH_ACKED
-    | FLAG_BINARY_PUBLISH_ACK;
+    | FLAG_BINARY_PUBLISH_ACK
+    | FLAG_EVENT_BATCH_OFFSETS;
 
 /// The flag bits that existed before capability negotiation.
 ///

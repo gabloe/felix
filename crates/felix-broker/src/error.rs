@@ -8,6 +8,13 @@ pub enum BrokerError {
     CapacityTooLarge,
     #[error("cursor too old (oldest {oldest}, requested {requested})")]
     CursorTooOld { oldest: u64, requested: u64 },
+    /// A resume asked to start past the end of the stream.
+    ///
+    /// Distinct from `CursorTooOld` because the remedy is the opposite: the
+    /// client is ahead of the log, not behind it, and silently starting at the
+    /// tail would deliver records it explicitly skipped past.
+    #[error("cursor is past the tail (tail {tail}, requested {requested})")]
+    CursorInFuture { requested: u64, tail: u64 },
     #[error("stream not found: tenant={tenant_id} namespace={namespace} stream={stream}")]
     StreamNotFound {
         tenant_id: String,

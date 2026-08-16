@@ -416,3 +416,229 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
     server_task.abort();
     Ok(())
 }
+
+/// The acceptance criterion of #177, end to end over QUIC: a client that
+/// disconnects, reconnects with the offset it last handled, and resumes must
+/// receive every record published in between, exactly once, in order.
+///
+/// Everything before this test exercised the broker API directly. This is the
+/// only one that proves the *wire* carries it: the start position out, the
+/// offsets back, and the join between disk history and live delivery.
+#[tokio::test]
+#[serial]
+async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
+    unsafe {
+        std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
+    }
+    let dir = tempfile::tempdir()?;
+    let storage = felix_broker::DurableStorage::open(
+        dir.path(),
+        felix_storage::log::LogConfig {
+            // Small enough that the run rolls segments, so history is read
+            // across a boundary rather than out of one file.
+            segment_size_bytes: 4 * 1024,
+            index_spacing_bytes: 256,
+            fsync_mode: felix_storage::log::FsyncMode::None,
+            preallocate_segments: false,
+            ..Default::default()
+        },
+    )?;
+    let broker = Arc::new(
+        Broker::new(EphemeralCache::new().into())
+            .with_durable_storage(storage)
+            // A replay ring far smaller than the record count, so the resume
+            // has to come off disk instead of out of memory.
+            .with_log_capacity(4)?,
+    );
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture(
+        "t1",
+        vec![
+            "stream.publish:stream:t1/*/*".to_string(),
+            "stream.subscribe:stream:t1/*/*".to_string(),
+        ],
+    );
+    let server_task = tokio::spawn(broker::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config,
+        Arc::clone(&auth.auth),
+    ));
+
+    const TOTAL: usize = 40;
+    let client =
+        Client::connect(addr, "localhost", build_client_config(cert.clone(), &auth)?).await?;
+    let publisher = client.publisher().await?;
+
+    // Phase 1: subscribe live, take the first few, then "crash".
+    let mut sub = client.subscribe("t1", "default", "orders").await?;
+    for i in 0..5usize {
+        publisher
+            .publish(
+                "t1",
+                "default",
+                "orders",
+                format!("v{i:03}").into_bytes(),
+                felix_wire::AckMode::None,
+            )
+            .await?;
+    }
+    let mut seen = Vec::new();
+    let mut checkpoint = None;
+    while seen.len() < 5 {
+        let Some(event) = timeout(Duration::from_secs(5), sub.next_event()).await?? else {
+            continue;
+        };
+        checkpoint = Some(
+            event
+                .offset
+                .expect("a durable stream must report offsets on live delivery"),
+        );
+        seen.push(String::from_utf8(event.payload.to_vec())?);
+    }
+    drop(sub);
+    let checkpoint = checkpoint.expect("checkpoint");
+    assert_eq!(checkpoint, 4, "five records occupy offsets 0..=4");
+
+    // Phase 2: publish while nobody is subscribed. These are exactly the records
+    // a tail-only reconnect loses, and there are far more than the ring holds.
+    for i in 5..TOTAL {
+        publisher
+            .publish(
+                "t1",
+                "default",
+                "orders",
+                format!("v{i:03}").into_bytes(),
+                felix_wire::AckMode::None,
+            )
+            .await?;
+    }
+
+    // Phase 3: reconnect and resume from the offset after the last one handled.
+    let client2 = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
+    let mut resumed = client2
+        .subscribe_from(
+            "t1",
+            "default",
+            "orders",
+            Some(felix_client::StartPosition::Offset(checkpoint + 1)),
+        )
+        .await?;
+
+    while seen.len() < TOTAL {
+        let Some(event) = timeout(Duration::from_secs(10), resumed.next_event()).await?? else {
+            continue;
+        };
+        let offset = event.offset.expect("resumed events carry offsets");
+        assert_eq!(
+            offset as usize,
+            seen.len(),
+            "offsets must be contiguous and match position",
+        );
+        seen.push(String::from_utf8(event.payload.to_vec())?);
+    }
+
+    let expected: Vec<String> = (0..TOTAL).map(|i| format!("v{i:03}")).collect();
+    assert_eq!(
+        seen, expected,
+        "resume must lose nothing and duplicate nothing"
+    );
+
+    drop(resumed);
+    server_task.abort();
+    Ok(())
+}
+
+/// Asking for an offset the log has already passed the end of is a typed
+/// protocol error, not a silent restart at the tail.
+#[tokio::test]
+#[serial]
+async fn quic_subscribe_rejects_a_cursor_past_the_tail() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let storage = felix_broker::DurableStorage::open(
+        dir.path(),
+        felix_storage::log::LogConfig {
+            fsync_mode: felix_storage::log::FsyncMode::None,
+            preallocate_segments: false,
+            ..Default::default()
+        },
+    )?;
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()).with_durable_storage(storage));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+            },
+        )
+        .await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = broker::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture(
+        "t1",
+        vec![
+            "stream.publish:stream:t1/*/*".to_string(),
+            "stream.subscribe:stream:t1/*/*".to_string(),
+        ],
+    );
+    let server_task = tokio::spawn(broker::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config,
+        Arc::clone(&auth.auth),
+    ));
+
+    let client = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
+    let err = client
+        .subscribe_from(
+            "t1",
+            "default",
+            "orders",
+            Some(felix_client::StartPosition::Offset(9_999)),
+        )
+        .await
+        .err()
+        .expect("9999 is far past the tail");
+    let typed = err
+        .downcast_ref::<felix_client::SubscribeCursorError>()
+        .expect("a typed cursor error, not a formatted string");
+    assert_eq!(typed.reason, felix_client::CursorErrorReason::InFuture);
+    assert_eq!(typed.requested, 9_999);
+    assert_eq!(typed.available, 0);
+
+    server_task.abort();
+    Ok(())
+}

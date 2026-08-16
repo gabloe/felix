@@ -5,8 +5,8 @@ use crate::binary;
 use crate::error::Error;
 use crate::frame::{
     FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
-    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, Frame, FrameHeader, MAGIC, VERSION,
-    has_unknown_flags,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_EVENT_BATCH_OFFSETS, Frame,
+    FrameHeader, KNOWN_FLAGS, MAGIC, VERSION, has_unknown_flags,
 };
 use crate::message::{AckMode, Message};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -320,8 +320,18 @@ fn unknown_flags_are_detected() {
         FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED
     ));
     assert!(!has_unknown_flags(0));
-    // The first undefined bit must be rejected rather than masked off.
-    assert!(has_unknown_flags(0x0020));
+    assert!(!has_unknown_flags(FLAG_EVENT_BATCH_OFFSETS));
+
+    // The lowest undefined bit must be rejected rather than masked off.
+    // Derived from `KNOWN_FLAGS` rather than written as a literal: this
+    // assertion was `0x0020` until that bit was defined, at which point it
+    // quietly became a claim about a *known* flag and failed. Computing it
+    // keeps the test about the property instead of about one bit.
+    let first_undefined = (0..16u16)
+        .map(|bit| 1u16 << bit)
+        .find(|bit| KNOWN_FLAGS & bit == 0)
+        .expect("a free flag bit");
+    assert!(has_unknown_flags(first_undefined));
     assert!(has_unknown_flags(FLAG_BINARY_PUBLISH_BATCH | 0x8000));
 }
 
@@ -525,6 +535,7 @@ fn text_publish_batch_json_with_special_chars() {
 fn message_all_variants_encode_decode() {
     // Test Subscribe message
     let message = Message::Subscribe {
+        start: None,
         subscription_id: Some(42),
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
@@ -667,6 +678,7 @@ fn message_cache_operations() {
 fn message_event_variants() {
     // Test Event message
     let message = Message::Event {
+        offset: None,
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
         stream: "stream1".to_string(),
@@ -678,6 +690,7 @@ fn message_event_variants() {
 
     // Test EventBatch message
     let message = Message::EventBatch {
+        base_offset: None,
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
         stream: "stream1".to_string(),

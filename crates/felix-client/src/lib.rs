@@ -77,6 +77,7 @@ mod wire;
 pub mod timings;
 
 pub use client::client::Client;
+pub use client::client::SubscribeCursorError;
 #[cfg(feature = "in-process")]
 pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
@@ -84,6 +85,7 @@ pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
 pub use config::{ClientConfig, ClientSubQueuePolicy};
 pub use counters::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
+pub use felix_wire::{CursorErrorReason, StartPosition};
 
 pub(crate) use macros::{t_now_if, t_should_sample};
 

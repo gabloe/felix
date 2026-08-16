@@ -21,7 +21,8 @@ struct QueuedFrame {
 }
 
 enum QueuedEvent {
-    Payload(Bytes),
+    /// A payload and, for a durable stream, the log offset it sits at.
+    Payload(Bytes, Option<u64>),
     Error(anyhow::Error),
 }
 
@@ -43,6 +44,14 @@ pub struct Event {
     pub namespace: Arc<str>,
     pub stream: Arc<str>,
     pub payload: Bytes,
+    /// Log offset of this event on a durable stream, or `None` for an in-memory
+    /// one and for any broker that did not negotiate offsets.
+    ///
+    /// Two uses. Record it to resume from `offset + 1` after a reconnect. And
+    /// because offsets are contiguous, a jump between consecutive events is a
+    /// gap -- the subscriber queue dropped something, which is otherwise
+    /// invisible.
+    pub offset: Option<u64>,
 }
 
 pub(crate) struct SubscriptionPipelineConfig {
@@ -111,7 +120,7 @@ impl Subscription {
             return Ok(None);
         };
         match queued {
-            QueuedEvent::Payload(payload) => {
+            QueuedEvent::Payload(payload, offset) => {
                 record_e2e_latency(
                     &payload,
                     #[cfg(feature = "telemetry")]
@@ -122,6 +131,7 @@ impl Subscription {
                     namespace: Arc::clone(&self.namespace),
                     stream: Arc::clone(&self.stream),
                     payload,
+                    offset,
                 }))
             }
             QueuedEvent::Error(err) => Err(err),
@@ -203,7 +213,7 @@ async fn run_subscription_dispatch_task(
         #[cfg(feature = "telemetry")]
         let decode_start = crate::t_now_if(sample);
 
-        let payloads =
+        let (payloads, base_offset) =
             if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
                 match felix_wire::binary::decode_shared_event_batch(&queued_frame.frame)
                     .context("decode shared binary event batch")
@@ -218,7 +228,7 @@ async fn run_subscription_dispatch_task(
                                 .sub_items_in_ok
                                 .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
                         }
-                        batch.payloads
+                        (batch.payloads, batch.base_offset)
                     }
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
@@ -270,7 +280,7 @@ async fn run_subscription_dispatch_task(
                                 .sub_items_in_ok
                                 .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
                         }
-                        batch.payloads
+                        (batch.payloads, batch.base_offset)
                     }
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
@@ -316,16 +326,22 @@ async fn run_subscription_dispatch_task(
                     counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
                 }
                 match message {
-                    Message::Event { payload, .. } => {
+                    Message::Event {
+                        payload, offset, ..
+                    } => {
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
                             counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
                             counters.sub_items_in_ok.fetch_add(1, Ordering::Relaxed);
                         }
-                        vec![Bytes::from(payload)]
+                        (vec![Bytes::from(payload)], offset)
                     }
-                    Message::EventBatch { payloads, .. } => {
+                    Message::EventBatch {
+                        payloads,
+                        base_offset,
+                        ..
+                    } => {
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
@@ -334,7 +350,7 @@ async fn run_subscription_dispatch_task(
                                 .sub_items_in_ok
                                 .fetch_add(payloads.len() as u64, Ordering::Relaxed);
                         }
-                        payloads.into_iter().map(Bytes::from).collect()
+                        (payloads.into_iter().map(Bytes::from).collect(), base_offset)
                     }
                     _ => {
                         let _ = enqueue_event(
@@ -360,10 +376,13 @@ async fn run_subscription_dispatch_task(
 
         #[cfg(feature = "telemetry")]
         let dispatch_start = crate::t_now_if(sample);
-        for payload in payloads {
+        for (index, payload) in payloads.into_iter().enumerate() {
+            // Offsets in a batch are contiguous by construction, so each event's
+            // offset is the batch base plus its position.
+            let offset = base_offset.map(|base| base + index as u64);
             if !enqueue_event(
                 &event_tx,
-                QueuedEvent::Payload(payload),
+                QueuedEvent::Payload(payload, offset),
                 queue_policy,
                 queue_capacity,
             )
