@@ -169,6 +169,15 @@ tasks:
       - "task pg:up"
       - "cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml -- {{.CLI_ARGS}}"
       - "task pg:down"
+  perf:deps:
+    desc: "Install the Python dependencies the perf charting pipeline needs"
+    cmds:
+      - "python3 -m pip install -r scripts/perf/requirements.txt"
+  perf:charts:
+    desc: "Re-render charts from data already in data/derived (no benchmark run)"
+    cmds:
+      - "python3 scripts/perf/make_charts.py"
+      - "python3 scripts/perf/render_markdown_snippets.py"
   perf:latency-matrix:
     cmds:
       - "python3 scripts/perf/run_latency_matrix.py"

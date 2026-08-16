@@ -6,7 +6,29 @@ import json
 import textwrap
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    # Charting is the last step of `task perf:latency-matrix`, after a benchmark
+    # run that takes many minutes. A bare ImportError here reads as "the run
+    # failed" when the measurements are already safely on disk, so say what is
+    # missing, what survived, and how to finish.
+    raise SystemExit(
+        "matplotlib is not installed, so charts were not rendered.\n"
+        "\n"
+        "The benchmark data is already written and is NOT lost:\n"
+        "  data/raw/latency_demo_runs.jsonl      (raw runs)\n"
+        "  data/derived/latency_demo_agg.csv     (aggregated)\n"
+        "\n"
+        "Install the charting dependencies and re-run this step alone:\n"
+        "  task perf:deps\n"
+        "  python3 scripts/perf/make_charts.py\n"
+        "\n"
+        "Or in a virtualenv, if this Python is externally managed:\n"
+        "  python3 -m venv .venv-perf\n"
+        "  .venv-perf/bin/pip install -r scripts/perf/requirements.txt\n"
+        "  .venv-perf/bin/python scripts/perf/make_charts.py"
+    ) from None
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "scripts" / "perf" / "presets.yml"
