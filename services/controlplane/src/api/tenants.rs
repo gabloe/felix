@@ -1,6 +1,5 @@
 //! Tenant API handlers.
 //!
-//! # Purpose
 //! Implements tenant CRUD, snapshot, and changefeed endpoints with consistent
 //! error mapping for store conflicts and missing records.
 use crate::api::error::{

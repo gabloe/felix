@@ -121,8 +121,6 @@ pub type BrokerCacheTimingSamples = (
 ///
 /// This function initializes the global collector and should be called once before recording.
 ///
-/// # Costs
-///
 /// Allocates empty vectors for sample storage. Sampling incurs lock acquisition costs
 /// and atomic counter increments during recording.
 ///
@@ -159,8 +157,6 @@ pub fn enable_collection(sample_every: usize) {
 ///
 /// When disabled, no new samples will be recorded, but existing samples remain.
 ///
-/// # Costs
-///
 /// Atomic store operation with `Relaxed` ordering (low cost).
 ///
 /// # Safety
@@ -177,8 +173,6 @@ pub fn set_enabled(enabled: bool) {
 ///
 /// This function increments an atomic counter and returns `true` if the event should be sampled
 /// according to the configured sampling frequency.
-///
-/// # Costs
 ///
 /// Atomic fetch_add operation with `Relaxed` ordering (very low cost).
 ///
@@ -199,8 +193,6 @@ pub fn should_sample() -> bool {
 
 /// Records a decode stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -214,8 +206,6 @@ pub fn record_decode_ns(value: u64) {
 }
 
 /// Records a fanout stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -231,8 +221,6 @@ pub fn record_fanout_ns(value: u64) {
 
 /// Records an acknowledgment write stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -247,8 +235,6 @@ pub fn record_ack_write_ns(value: u64) {
 
 /// Records a QUIC write stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -262,8 +248,6 @@ pub fn record_quic_write_ns(value: u64) {
 }
 
 /// Records a subscriber queue wait stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -290,8 +274,6 @@ pub fn record_sub_prefix_ns(value: u64) {
 
 /// Records a subscriber write stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -317,8 +299,6 @@ pub fn record_sub_write_await_ns(value: u64) {
 
 /// Records a subscriber delivery stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -332,8 +312,6 @@ pub fn record_sub_delivery_ns(value: u64) {
 }
 
 /// Records a cache read stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -349,8 +327,6 @@ pub fn record_cache_read_ns(value: u64) {
 
 /// Records a cache decode stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -364,8 +340,6 @@ pub fn record_cache_decode_ns(value: u64) {
 }
 
 /// Records a cache lookup stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -381,8 +355,6 @@ pub fn record_cache_lookup_ns(value: u64) {
 
 /// Records a cache insert stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -396,8 +368,6 @@ pub fn record_cache_insert_ns(value: u64) {
 }
 
 /// Records a cache encode stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -413,8 +383,6 @@ pub fn record_cache_encode_ns(value: u64) {
 
 /// Records a cache write stage timing sample in nanoseconds.
 ///
-/// # Costs
-///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
 /// # Safety
@@ -428,8 +396,6 @@ pub fn record_cache_write_ns(value: u64) {
 }
 
 /// Records a cache finish stage timing sample in nanoseconds.
-///
-/// # Costs
 ///
 /// Acquires a mutex lock to append to the internal vector (may block).
 ///
@@ -448,8 +414,6 @@ pub fn record_cache_finish_ns(value: u64) {
 /// This function drains the internal vectors and returns the collected samples as tuples.
 /// It uses `std::mem::take` to replace the vectors with empty ones, avoiding allocation
 /// but requiring exclusive access via mutex locks.
-///
-/// # Costs
 ///
 /// Acquires multiple mutex locks simultaneously, which may block other recording threads.
 ///
@@ -493,8 +457,6 @@ pub fn take_samples() -> Option<BrokerTimingSamples> {
 /// This function drains the internal vectors and returns the collected samples as tuples.
 /// It uses `std::mem::take` to replace the vectors with empty ones, avoiding allocation
 /// but requiring exclusive access via mutex locks.
-///
-/// # Costs
 ///
 /// Acquires multiple mutex locks simultaneously, which may block other recording threads.
 ///

@@ -1,10 +1,8 @@
 //! Felix control-plane HTTP service entry point.
 //!
-//! # Purpose
 //! Wires configuration, storage, auth validators, and HTTP routers, then starts
 //! the main API server and (optionally) the bootstrap server.
 //!
-//! # Notes
 //! The `build_state` helper keeps wiring testable and minimizes main setup logic.
 mod api;
 mod app;

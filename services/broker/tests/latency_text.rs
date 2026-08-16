@@ -1,6 +1,5 @@
 //! Text publish-batch latency integration test.
 //!
-//! # Purpose
 //! Exercises the broker and client over QUIC using JSON (text) frames to ensure
 //! large publish batches do not drop and that auth/JWKS wiring works end-to-end.
 use anyhow::{Context, Result};

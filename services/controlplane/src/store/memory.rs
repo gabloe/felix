@@ -1,6 +1,5 @@
 //! In-memory implementation of the control-plane store.
 //!
-//! # Purpose
 //! This store implements the `ControlPlaneStore` trait entirely in memory using `HashMap`s guarded
 //! by `tokio::sync::RwLock`. It exists for:
 //! - local development and tests (no external dependencies)

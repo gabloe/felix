@@ -1,6 +1,5 @@
 //! Core-sharded executor for stream-owned work (thread-per-core).
 //!
-//! # Purpose
 //! Runs broker-core stream work (publish workers, per-subscription lane feeders)
 //! on a fixed set of dedicated single-threaded runtimes, one per configured
 //! shard, pinned to CPU cores on Linux. A stream's handle id deterministically
@@ -10,7 +9,6 @@
 //! the per-message path, at the cost of serializing each stream's pipeline on
 //! its owning core (which is the point: shared-nothing ownership).
 //!
-//! # Scope
 //! QUIC I/O (endpoint driver, connection writers) stays on the main runtime:
 //! quinn performs packetization and TLS in its driver task regardless of where
 //! callers live, and its streams are executor-agnostic.

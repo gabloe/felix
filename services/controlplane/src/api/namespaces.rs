@@ -1,6 +1,5 @@
 //! Namespace API handlers.
 //!
-//! # Purpose
 //! Implements CRUD, snapshot, and changefeed endpoints for namespaces, including
 //! tenant existence checks and error mapping.
 use crate::api::ensure_tenant_exists;

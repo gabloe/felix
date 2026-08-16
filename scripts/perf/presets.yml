@@ -3,13 +3,27 @@
     "trials": 5
   },
   "workload": {
-    "fanout": [1, 10],
-    "batch": [1, 64],
-    "payload_bytes": [0, 256, 1024, 4096],
+    "fanout": [
+      1,
+      10
+    ],
+    "batch": [
+      1,
+      64
+    ],
+    "payload_bytes": [
+      0,
+      256,
+      1024,
+      4096
+    ],
     "warmup": 2000,
     "total": 20000,
     "_comment_binary": "Both encodings, deliberately. latency-demo enables per-message acks only when batch<=1 && !binary, so a binary-only sweep never measures the request-latency configuration the published headline number comes from -- and comparing the two shows a ~2x regression that does not exist.",
-    "binary": [true, false]
+    "binary": [
+      true,
+      false
+    ]
   },
   "profiles": {
     "balanced": {
@@ -39,25 +53,98 @@
   },
   "presets": {
     "P1_hash": {
-      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "1", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns",
+        "1",
+        "--pub-streams-per-conn",
+        "1",
+        "--pub-stream-count",
+        "1",
+        "--pub-sharding",
+        "hash_stream"
+      ]
     },
     "P2_hash": {
-      "args": ["--pub-conns", "1", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns",
+        "1",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "2",
+        "--pub-sharding",
+        "hash_stream"
+      ]
     },
     "P4_hash": {
-      "args": ["--pub-conns", "2", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns",
+        "2",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "4",
+        "--pub-sharding",
+        "hash_stream"
+      ]
     },
     "P8_hash": {
-      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "hash_stream"]
+      "args": [
+        "--pub-conns",
+        "4",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "8",
+        "--pub-sharding",
+        "hash_stream"
+      ]
+    },
+    "P8_hash_1stream": {
+      "args": [
+        "--pub-conns",
+        "4",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "1",
+        "--pub-sharding",
+        "hash_stream"
+      ]
     },
     "P8_rr": {
-      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "rr"]
+      "args": [
+        "--pub-conns",
+        "4",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "1",
+        "--pub-sharding",
+        "rr"
+      ]
     },
     "P8_rrN": {
-      "args": ["--pub-conns", "4", "--pub-streams-per-conn", "2", "--pub-sharding", "rr", "--pub-stream-count", "8"]
+      "args": [
+        "--pub-conns",
+        "4",
+        "--pub-streams-per-conn",
+        "2",
+        "--pub-stream-count",
+        "8",
+        "--pub-sharding",
+        "rr"
+      ]
     }
   },
-  "preset_order": ["P1_hash", "P2_hash", "P4_hash", "P8_hash", "P8_rr", "P8_rrN"]
-  ,
+  "preset_order": [
+    "P1_hash",
+    "P2_hash",
+    "P4_hash",
+    "P8_hash",
+    "P8_hash_1stream",
+    "P8_rr",
+    "P8_rrN"
+  ],
   "chart_outlier_cap_percentile": 0.95
 }

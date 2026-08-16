@@ -1,6 +1,5 @@
 //! Cache client worker implementations and request handling.
 //!
-//! # Purpose
 //! Manages the per-connection cache stream, serializing cache requests and
 //! returning responses to callers while recording optional timings.
 //!

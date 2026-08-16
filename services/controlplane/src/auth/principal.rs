@@ -20,13 +20,10 @@ use sha2::{Digest, Sha256};
 
 /// Normalized principal identity derived from an OIDC token.
 ///
-/// # What it does
 /// Stores the stable principal ID plus the original issuer/subject and groups.
 ///
-/// # Why it exists
 /// Provides a consistent identity representation for RBAC and auditing.
 ///
-/// # Invariants
 /// - `principal_id` must be derived from `issuer` + `subject`.
 /// - `groups` contains raw group strings from the IdP.
 ///
@@ -47,13 +44,10 @@ pub struct Principal {
 
 /// Derive a stable principal ID from issuer and subject.
 ///
-/// # What it does
 /// Hashes `issuer|subject` using SHA-256 and returns the hex digest.
 ///
-/// # Why it exists
 /// Keeps a stable identifier without persisting raw subject values.
 ///
-/// # Invariants
 /// - The same inputs must yield the same output.
 ///
 /// # Errors
@@ -77,13 +71,10 @@ pub fn principal_id(issuer: &str, subject: &str) -> String {
 
 /// Build a [`Principal`] from validated OIDC claims.
 ///
-/// # What it does
 /// Constructs a principal with a deterministic ID and the provided group list.
 ///
-/// # Why it exists
 /// Centralizes how principals are derived so policy evaluation is consistent.
 ///
-/// # Invariants
 /// - `issuer` and `subject` must already be validated and normalized.
 ///
 /// # Errors

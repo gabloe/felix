@@ -1,6 +1,5 @@
 //! Cache API handlers.
 //!
-//! # Purpose
 //! Implements cache CRUD, patching, snapshot, and changefeed endpoints with
 //! tenant/namespace validation.
 use crate::api::ensure_tenant_namespace;

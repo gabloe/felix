@@ -1,10 +1,8 @@
 //! Pub/sub demo binary for the QUIC transport.
 //!
-//! # Purpose
 //! Demonstrates the end-to-end flow for broker boot, subscription, publish, and
 //! message receive using felix-wire frames over QUIC.
 //!
-//! # Notes
 //! This is a developer-facing demo; it favors clarity over performance.
 use anyhow::{Context, Result};
 use broker::{auth::BrokerAuth, auth_demo, quic};

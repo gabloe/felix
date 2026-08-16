@@ -27,10 +27,8 @@ use axum::extract::{Path, State};
 )]
 /// List configured regions.
 ///
-/// # What it does
 /// Returns the single region configured for this control-plane instance.
 ///
-/// # Why it exists
 /// Allows clients to discover region metadata for routing or display.
 ///
 /// # Errors
@@ -56,10 +54,8 @@ pub(crate) async fn list_regions(State(state): State<AppState>) -> Json<ListRegi
 )]
 /// Fetch region metadata by ID.
 ///
-/// # What it does
 /// Returns the configured region when the ID matches.
 ///
-/// # Why it exists
 /// Provides a stable per-region lookup for clients.
 ///
 /// # Errors

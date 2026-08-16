@@ -1,6 +1,5 @@
 //! Felix authn/authz primitives shared by control-plane and broker services.
 //!
-//! # Purpose
 //! Centralizes the authorization model (Casbin), permission matching, and
 //! token/JWKS helpers used across services.
 //!
@@ -8,7 +7,6 @@
 //! Control-plane services mint and publish tokens/JWKS, while brokers verify
 //! tokens and enforce permissions using shared types from this crate.
 //!
-//! # Key invariants
 //! - Felix tokens are EdDSA/Ed25519 only; RSA/HS algorithms are rejected.
 //! - Permission strings follow the `action:resource` pattern with wildcards.
 //!

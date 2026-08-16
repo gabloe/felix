@@ -1,23 +1,18 @@
 //! JWKS endpoint handler for tenant signing keys.
 //!
-//! # Purpose
 //! Expose tenant public keys in JWKS format so brokers/clients can verify Felix
 //! tokens without access to private key material.
 //!
-//! # Architectural role
 //! Bridges the control-plane key store to external verifiers by translating
 //! internal Ed25519 key material into RFC-compliant JWKS.
 //!
-//! # Callers / consumers
 //! - Broker auth layer fetching `/.well-known/jwks.json`.
 //! - External clients that verify Felix-issued JWTs.
 //!
-//! # Key invariants
 //! - Only Ed25519 public keys are exported.
 //! - JWKS never contains private key material.
 //! - `kid` is stable for the life of a key and used for rotation.
 //!
-//! # Concurrency model
 //! Stateless request handler; relies on async store calls and does not share
 //! mutable state across requests.
 //!
@@ -30,7 +25,6 @@
 //! - We must avoid accidental RSA exposure by always returning EdDSA/Ed25519.
 //! - JWKS output must be deterministic for cacheability and verification.
 //!
-//! # How to use
 //! Call the `GET /v1/tenants/{tenant_id}/.well-known/jwks.json` endpoint and use
 //! the returned `x` values as Ed25519 public keys for EdDSA verification.
 use crate::api::error::{ApiError, api_internal, api_not_found};
@@ -44,24 +38,17 @@ use utoipa::ToSchema;
 
 /// Return the JWKS for a tenant's current and previous signing keys.
 ///
-/// # Overview
 /// Loads the tenant's signing keys, converts them to JWKs with Ed25519 public
 /// components, and returns a JWKS payload suitable for broker verification.
 ///
-/// # Arguments
 /// - `tenant_id`: Path parameter identifying the tenant.
 /// - `state`: Shared application state providing access to the store.
 ///
-/// # Returns
 /// - `Ok(Json<JwksResponse>)` containing Ed25519 public keys.
 ///
 /// # Errors
 /// - `404` if the tenant does not exist.
 /// - `500` if the store fails to load keys.
-///
-/// # Panics
-/// - Does not panic under normal conditions.
-///
 /// # Examples
 /// ```rust,no_run
 /// use axum::extract::{Path, State};
@@ -73,7 +60,6 @@ use utoipa::ToSchema;
 /// }
 /// ```
 ///
-/// # Security
 /// - Only public keys are returned; never expose private keys or seeds.
 /// - The algorithm is pinned to EdDSA to prevent RSA/HS confusion.
 #[utoipa::path(
@@ -126,21 +112,9 @@ pub async fn tenant_jwks(
 
 /// A single JWK entry for an Ed25519 public key.
 ///
-/// # Overview
 /// Represents the minimal fields required for EdDSA verification.
 ///
-/// # Arguments
 /// - This is a data container; fields are populated by the JWKS handler.
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::jwks::JwkResponse;
@@ -156,7 +130,6 @@ pub async fn tenant_jwks(
 /// assert_eq!(jwk.kty, "OKP");
 /// ```
 ///
-/// # Security
 /// - Only public key material should be stored in `x`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct JwkResponse {
@@ -171,21 +144,9 @@ pub struct JwkResponse {
 
 /// A JWKS response payload containing one or more JWK entries.
 ///
-/// # Overview
 /// Wraps a list of Ed25519 JWKs for JSON serialization.
 ///
-/// # Arguments
 /// - This is a data container; fields are populated by the JWKS handler.
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::jwks::{JwkResponse, JwksResponse};
@@ -201,7 +162,6 @@ pub struct JwkResponse {
 /// assert_eq!(payload.keys.len(), 1);
 /// ```
 ///
-/// # Security
 /// - Only include public keys; never serialize private key material.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct JwksResponse {

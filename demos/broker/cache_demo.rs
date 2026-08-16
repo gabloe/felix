@@ -1,10 +1,8 @@
 //! Cache demo binary for QUIC cache put/get operations.
 //!
-//! # Purpose
 //! Spins up an in-process broker and QUIC server, then drives cache traffic
 //! from a client to measure latency and throughput characteristics.
 //!
-//! # Notes
 //! Intended for local benchmarking and diagnostics rather than production use.
 use anyhow::{Context, Result};
 use broker::timings as broker_timings;

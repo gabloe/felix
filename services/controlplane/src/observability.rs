@@ -1,10 +1,8 @@
 //! Observability wiring for the control-plane service.
 //!
-//! # Purpose
 //! Initializes tracing, OpenTelemetry propagation, and Prometheus metrics
 //! endpoints with sensible defaults for both local and production usage.
 //!
-//! # Notes
 //! Initialization is guarded by `OnceLock` to keep startup idempotent in tests.
 use felix_common::lifecycle::Readiness;
 use metrics_exporter_prometheus::PrometheusBuilder;

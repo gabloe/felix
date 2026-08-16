@@ -1,6 +1,5 @@
 //! Casbin model definition for Felix authorization policies.
 //!
-//! # Purpose
 //! Provides the embedded Casbin model string and helper to build a
 //! `DefaultModel` for policy evaluation.
 //!
@@ -8,13 +7,8 @@
 //! The authorization layer loads this model before applying policy rules.
 //! Request handlers and tests call into this module to ensure model parity.
 //!
-//! # Key invariants
 //! - The matcher must include domain and action checks.
 //! - `keyMatch2` is used for resource pattern matching.
-//!
-//! # Important configuration
-//! - None; the model is embedded and versioned with the crate.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::casbin_model_string;
@@ -52,10 +46,8 @@ m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && keyMatch2(r.obj, p.obj) && r.act
 /// # Parameters
 /// - None.
 ///
-/// # Returns
 /// - The model string, suitable for logging or tests.
 ///
-/// # Invariants
 /// - The returned string must match the model used by policy evaluation.
 ///
 /// # Example
@@ -73,13 +65,11 @@ pub fn casbin_model_string() -> &'static str {
 /// # Parameters
 /// - None.
 ///
-/// # Returns
 /// - A parsed `DefaultModel` ready for policy enforcement.
 ///
 /// # Errors
 /// - Panics if the embedded model is invalid (should never happen in CI).
 ///
-/// # Performance
 /// - Parsing is O(model size) and should be cached by callers.
 ///
 /// # Example

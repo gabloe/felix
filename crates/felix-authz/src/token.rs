@@ -1,26 +1,21 @@
 //! Felix token minting and verification for the broker/control-plane boundary.
 //!
-//! # Purpose
 //! Provide shared, EdDSA-only JWT minting and verification logic for Felix
 //! tokens, plus key caching to reduce per-request overhead.
 //!
-//! # Key invariants
 //! - Felix tokens are always EdDSA (Ed25519); RSA/HS algorithms are rejected.
 //! - `iss`, `aud`, and `tid` claims are mandatory and validated.
 //! - Public keys must match the stored 32-byte Ed25519 seed.
 //!
-//! # Security model / threat assumptions
 //! - Attackers may present arbitrary JWTs; we validate algorithm, issuer,
 //!   audience, tenant ID, and signature before accepting.
 //! - Private keys are never serialized in this module; only in-memory PKCS8
 //!   DER is constructed for `jsonwebtoken`.
 //! - `kid` is used for rotation and caching, not as a secret.
 //!
-//! # Concurrency + ordering guarantees
 //! - Encoding/decoding key caches use `RwLock` for concurrent readers.
 //! - Verification attempts keys in `kid`-preferred order to reduce failures.
 //!
-//! # How to use
 //! Use [`FelixTokenIssuer`] to mint tokens and [`FelixTokenVerifier`] to verify
 //! them, providing a [`TenantKeyStore`] implementation for key access.
 //!
@@ -66,21 +61,17 @@ const ED25519_KEY_LEN: usize = 32;
 
 /// Claims carried by Felix-issued JWTs.
 ///
-/// # What it does
 /// Encodes issuer, audience, tenant scope, subject, and permissions for broker
 /// authorization.
 ///
-/// # Inputs/outputs
 /// - Inputs: populated during minting or decoding.
 /// - Outputs: used by the broker to enforce permissions.
 ///
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - `tid` and `perms` are authorization-critical and must be validated.
 ///
-/// # Performance
 /// - Plain data container; cloning scales with permission count.
 ///
 /// # Example
@@ -114,21 +105,17 @@ pub struct FelixClaims {
 
 /// Tenant signing key material for Felix token minting.
 ///
-/// # What it does
 /// Holds Ed25519 private seed and public key along with `kid` and algorithm.
 ///
-/// # Inputs/outputs
 /// - Inputs: loaded from a [`TenantKeyStore`].
 /// - Outputs: used to create encoding keys for JWT signing.
 ///
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - Never serialize or log `private_key`.
 /// - `alg` must remain `Algorithm::EdDSA` for Felix tokens.
 ///
-/// # Performance
 /// - Copying this struct is cheap (fixed-size arrays).
 ///
 /// # Example
@@ -157,20 +144,16 @@ pub struct TenantSigningKey {
 
 /// Tenant verification key material for Felix token verification.
 ///
-/// # What it does
 /// Holds Ed25519 public key and metadata used to verify Felix tokens.
 ///
-/// # Inputs/outputs
 /// - Inputs: derived from JWKS or a key store.
 /// - Outputs: used to build decoding keys for verification.
 ///
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - `alg` must be EdDSA; RSA/HS are rejected.
 ///
-/// # Performance
 /// - Copying this struct is cheap (fixed-size arrays).
 ///
 /// # Example
@@ -194,17 +177,14 @@ pub struct TenantVerificationKey {
 
 /// Key store abstraction for Felix token signing and verification.
 ///
-/// # What it does
 /// Provides signing keys, verification keys, and JWKS for a tenant.
 ///
-/// # Inputs/outputs
 /// - Inputs: tenant identifier.
 /// - Outputs: key material or JWKS for that tenant.
 ///
 /// # Errors
 /// - Implementations return [`AuthzError`] for missing or invalid key material.
 ///
-/// # Security notes
 /// - Implementations must never expose private keys outside trusted boundaries.
 ///
 /// # Concurrency
@@ -229,10 +209,8 @@ pub struct TenantVerificationKey {
 pub trait TenantKeyStore: Send + Sync {
     /// Return the current signing key for a tenant.
     ///
-    /// # What it does
     /// Provides the active Ed25519 signing key used to mint new Felix tokens.
     ///
-    /// # Inputs/outputs
     /// - Input: `tenant_id`.
     /// - Output: [`TenantSigningKey`].
     ///
@@ -240,7 +218,6 @@ pub trait TenantKeyStore: Send + Sync {
     /// - [`AuthzError::MissingSigningKey`] when the key is absent.
     /// - [`AuthzError::Key`] if the key is invalid or uses a disallowed algorithm.
     ///
-    /// # Security notes
     /// - Private keys must not leave trusted storage boundaries.
     ///
     /// # Example
@@ -262,10 +239,8 @@ pub trait TenantKeyStore: Send + Sync {
     fn current_signing_key(&self, tenant_id: &TenantId) -> AuthzResult<TenantSigningKey>;
     /// Return verification keys for a tenant.
     ///
-    /// # What it does
     /// Provides Ed25519 public keys used to verify Felix tokens.
     ///
-    /// # Inputs/outputs
     /// - Input: `tenant_id`.
     /// - Output: list of [`TenantVerificationKey`].
     ///
@@ -273,7 +248,6 @@ pub trait TenantKeyStore: Send + Sync {
     /// - [`AuthzError::MissingVerificationKeys`] when keys are absent.
     /// - [`AuthzError::Key`] if any key is invalid.
     ///
-    /// # Security notes
     /// - Only EdDSA keys should be returned.
     ///
     /// # Example
@@ -295,17 +269,14 @@ pub trait TenantKeyStore: Send + Sync {
     fn verification_keys(&self, tenant_id: &TenantId) -> AuthzResult<Vec<TenantVerificationKey>>;
     /// Return the JWKS payload for a tenant.
     ///
-    /// # What it does
     /// Provides the JWKS JSON structure containing public key data.
     ///
-    /// # Inputs/outputs
     /// - Input: `tenant_id`.
     /// - Output: [`Jwks`] payload.
     ///
     /// # Errors
     /// - [`AuthzError::MissingJwks`] when JWKS is absent.
     ///
-    /// # Security notes
     /// - JWKS must never contain private key material.
     ///
     /// # Example
@@ -329,20 +300,16 @@ pub trait TenantKeyStore: Send + Sync {
 
 /// In-memory tenant key material with JWKS payload.
 ///
-/// # What it does
 /// Bundles tenant key data and the JWKS representation for convenience.
 ///
-/// # Inputs/outputs
 /// - Inputs: typically constructed in tests or in-memory stores.
 /// - Outputs: returned via [`TenantKeyStore`] methods.
 ///
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - `private_key` must never be logged.
 ///
-/// # Performance
 /// - Copying this struct is cheap (fixed-size arrays).
 ///
 /// # Example
@@ -407,17 +374,14 @@ impl TenantKeyStore for HashMap<String, TenantKeyMaterial> {
 
 /// Felix token issuer using Ed25519 signing keys.
 ///
-/// # What it does
 /// Mints Felix JWTs with configured issuer/audience, TTL, and key store.
 ///
-/// # Inputs/outputs
 /// - Inputs: issuer, audience, TTL, and a [`TenantKeyStore`].
 /// - Output: signed JWT strings.
 ///
 /// # Errors
 /// - Errors from key lookup or JWT encoding.
 ///
-/// # Security notes
 /// - Always uses EdDSA and validates key material before signing.
 ///
 /// # Concurrency
@@ -453,20 +417,16 @@ pub struct FelixTokenIssuer {
 impl FelixTokenIssuer {
     /// Create a new Felix token issuer.
     ///
-    /// # What it does
     /// Stores issuer/audience/TTL and key store used to sign tokens.
     ///
-    /// # Inputs/outputs
     /// - Inputs: issuer, audience, TTL, key store.
     /// - Output: [`FelixTokenIssuer`].
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - `issuer` and `audience` must match the verifier configuration.
     ///
-    /// # Performance
     /// - Construction is O(1); key parsing happens on first mint.
     ///
     /// # Example
@@ -504,17 +464,14 @@ impl FelixTokenIssuer {
 
     /// Attach a shared tenant key cache.
     ///
-    /// # What it does
     /// Reuses an existing cache to share encoding/decoding keys across components.
     ///
-    /// # Inputs/outputs
     /// - Input: `cache`.
     /// - Output: `self` with updated cache.
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - Shared caches must be invalidated on key rotation.
     ///
     /// # Concurrency
@@ -547,10 +504,8 @@ impl FelixTokenIssuer {
 
     /// Mint a Felix token for a tenant/principal with permissions.
     ///
-    /// # What it does
     /// Builds Felix claims and signs them using the tenant's current Ed25519 key.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `tenant_id`, `principal_id`, `perms`.
     /// - Output: signed JWT string.
     ///
@@ -558,11 +513,9 @@ impl FelixTokenIssuer {
     /// - Missing signing key or invalid key algorithm.
     /// - JWT encoding errors.
     ///
-    /// # Security notes
     /// - Always uses EdDSA; never emits RSA/HS tokens.
     /// - Tokens should be treated as secrets and not logged.
     ///
-    /// # Performance
     /// - Uses a cached encoding key to avoid repeated PKCS8 conversion.
     ///
     /// # Example
@@ -619,17 +572,14 @@ impl FelixTokenIssuer {
 
 /// Felix token verifier using Ed25519 public keys.
 ///
-/// # What it does
 /// Verifies Felix JWTs against a tenant's verification keys and claim rules.
 ///
-/// # Inputs/outputs
 /// - Inputs: issuer, audience, leeway, and a [`TenantKeyStore`].
 /// - Output: decoded [`FelixClaims`] on success.
 ///
 /// # Errors
 /// - Missing verification keys or JWT validation failures.
 ///
-/// # Security notes
 /// - Enforces `iss`, `aud`, and `tid` checks.
 /// - Algorithm is pinned to EdDSA.
 ///
@@ -665,20 +615,16 @@ pub struct FelixTokenVerifier {
 impl FelixTokenVerifier {
     /// Create a new Felix token verifier.
     ///
-    /// # What it does
     /// Stores issuer/audience/leeway and key store used for verification.
     ///
-    /// # Inputs/outputs
     /// - Inputs: issuer, audience, leeway, key store.
     /// - Output: [`FelixTokenVerifier`].
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - Issuer and audience must match the token issuer configuration.
     ///
-    /// # Performance
     /// - Construction is O(1); decoding keys are cached on first verify.
     ///
     /// # Example
@@ -715,17 +661,14 @@ impl FelixTokenVerifier {
 
     /// Attach a shared tenant key cache.
     ///
-    /// # What it does
     /// Reuses an existing cache to avoid rebuilding decoding keys.
     ///
-    /// # Inputs/outputs
     /// - Input: `cache`.
     /// - Output: `self` with updated cache.
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - Cache must be invalidated on key rotation.
     ///
     /// # Concurrency
@@ -757,21 +700,17 @@ impl FelixTokenVerifier {
 
     /// Verify a Felix token for a tenant.
     ///
-    /// # What it does
     /// Validates JWT signature, issuer/audience claims, and tenant ID using the
     /// tenant's verification keys (with `kid`-aware ordering).
     ///
-    /// # Inputs/outputs
     /// - Inputs: `tenant_id`, `token`.
     /// - Output: decoded [`FelixClaims`].
     ///
     /// # Errors
     /// - Missing verification keys or JWT validation failures.
     ///
-    /// # Security notes
     /// - Enforces EdDSA-only verification and `tid` match.
     ///
-    /// # Performance
     /// - Attempts verification in `kid`-preferred order to reduce retries.
     ///
     /// # Example
@@ -861,17 +800,14 @@ fn now_epoch_seconds() -> i64 {
 
 /// Cache for derived encoding/decoding keys.
 ///
-/// # What it does
 /// Stores `jsonwebtoken` encoding/decoding keys by tenant and `kid`.
 ///
-/// # Inputs/outputs
 /// - Inputs: tenant identifiers and key material.
 /// - Outputs: cached `EncodingKey`/`DecodingKey` instances.
 ///
 /// # Errors
 /// - Not applicable (cache container).
 ///
-/// # Security notes
 /// - Cache entries must be invalidated on key rotation to avoid stale keys.
 ///
 /// # Concurrency
@@ -893,20 +829,16 @@ pub struct TenantKeyCache {
 impl TenantKeyCache {
     /// Invalidate cached keys for a tenant.
     ///
-    /// # What it does
     /// Removes all cached encoding/decoding keys for the given tenant.
     ///
-    /// # Inputs/outputs
     /// - Input: `tenant_id`.
     /// - Output: none.
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - Must be called on key rotation to prevent stale verification keys.
     ///
-    /// # Performance
     /// - Eviction is O(number of cached keys for the tenant).
     ///
     /// # Example

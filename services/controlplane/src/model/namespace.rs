@@ -1,6 +1,5 @@
 //! Namespace model definitions and change-log payloads.
 //!
-//! # Purpose
 //! Defines namespace identifiers, records, and change events used by the store
 //! and HTTP API.
 use serde::{Deserialize, Serialize};

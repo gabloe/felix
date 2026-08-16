@@ -1,12 +1,10 @@
 //! Restart-and-recover demo for durable streams.
 //!
-//! # Purpose
 //! Shows the M1 guarantee end to end: a durable stream acknowledges a publish
 //! only once the record is on disk, so an abrupt process death loses nothing
 //! that was acknowledged — while a non-durable stream on the same broker loses
 //! everything, which is the trade being made.
 //!
-//! # What it does
 //! 1. Boots a broker with durable storage in a temp directory.
 //! 2. Publishes to one durable and one non-durable stream.
 //! 3. Drops the broker **without a graceful shutdown**, standing in for a crash:
@@ -14,7 +12,6 @@
 //!    guaranteed can survive.
 //! 4. Boots a second broker over the same directory and reads both streams back.
 //!
-//! # Notes
 //! Developer-facing demo; it favours clarity over performance. Run it with:
 //!
 //! ```text

@@ -41,10 +41,8 @@ use utoipa::OpenApi;
 
 /// OpenAPI document for the control-plane API.
 ///
-/// # What it does
 /// Aggregates paths, schemas, and tags into a single `OpenApi` document.
 ///
-/// # Why it exists
 /// Enables consistent documentation and client generation.
 #[derive(OpenApi)]
 #[openapi(

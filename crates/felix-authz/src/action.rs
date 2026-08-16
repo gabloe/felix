@@ -1,6 +1,5 @@
 //! Canonical action identifiers used in Felix authorization rules.
 //!
-//! # Purpose
 //! Defines the stable, serialized action names that appear in permissions,
 //! policies, and API responses.
 //!
@@ -8,13 +7,8 @@
 //! Action values are produced by request handlers and compared by the
 //! authorization layer (Casbin matcher and permission evaluation).
 //!
-//! # Key invariants
 //! - Each enum variant maps to a single snake-cased permission string.
 //! - String representations are stable for policy persistence.
-//!
-//! # Important configuration
-//! - None (this module is pure data mapping).
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::Action;
@@ -36,10 +30,8 @@ use serde::{Deserialize, Serialize};
 /// # Summary
 /// Enumerates the set of allowed action identifiers.
 ///
-/// # Invariants
 /// - The serialized form is snake_case and stable for policy storage.
 ///
-/// # Performance
 /// - Matching is a simple string or enum match; no allocations after deserialization.
 ///
 /// # Example
@@ -70,10 +62,8 @@ impl Action {
     /// # Parameters
     /// - `self`: the action variant.
     ///
-    /// # Returns
     /// - The stable permission string (e.g. `"stream.publish"`).
     ///
-    /// # Invariants
     /// - Returned strings must stay in sync with `FromStr` and stored policies.
     ///
     /// # Example

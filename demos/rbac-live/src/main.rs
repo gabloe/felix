@@ -1,4 +1,3 @@
-//! # Purpose
 //! Demonstrate a full end-to-end RBAC mutation flow in Felix using real
 //! networking, real auth, and the existing control-plane API surface.
 //!
@@ -215,13 +214,10 @@ async fn main() -> Result<()> {
     run_demo().await
 }
 
-/// # What it does
 /// Starts a minimal OIDC IdP server that serves discovery + JWKS.
 ///
-/// # Why it exists
 /// Exercises the real upstream validation path used by token exchange.
 ///
-/// # Invariants
 /// - Serves ES256 keys only.
 /// - `issuer` matches the bound server URL.
 async fn spawn_fake_idp() -> Result<(SocketAddr, JoinHandle<()>)> {
@@ -285,13 +281,10 @@ struct IdpState {
     issuer: String,
 }
 
-/// # What it does
 /// Starts the control plane HTTP server on a random local port.
 ///
-/// # Why it exists
 /// Provides the real API surface used by this demo (bootstrap + admin + core).
 ///
-/// # Invariants
 /// - In-memory store only.
 /// - Bootstrap enabled with a fixed token.
 async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
@@ -327,13 +320,10 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
     Ok((addr, handle))
 }
 
-/// # What it does
 /// Starts a real broker QUIC server and a control-plane sync loop.
 ///
-/// # Why it exists
 /// Ensures authZ decisions are enforced by the broker using live metadata.
 ///
-/// # Invariants
 /// - Sync interval is short to keep the demo fast and deterministic.
 /// - Uses an ephemeral cache backend.
 async fn spawn_broker(
@@ -502,10 +492,8 @@ struct TokenExchangeResponse {
     felix_token: String,
 }
 
-/// # What it does
 /// Exchanges an upstream ID token for a Felix access token.
 ///
-/// # Why it exists
 /// Ensures the demo uses the real auth flow instead of shortcuts.
 async fn exchange_token(http: &reqwest::Client, cp_base: &str, id_token: &str) -> Result<String> {
     let url = format!("{cp_base}/v1/tenants/{TENANT_ID}/token/exchange");
@@ -524,10 +512,8 @@ async fn exchange_token(http: &reqwest::Client, cp_base: &str, id_token: &str) -
     Ok(body.felix_token)
 }
 
-/// # What it does
 /// Mints a deterministic ES256 ID token for the fake IdP.
 ///
-/// # Invariants
 /// - Uses fixed iat/exp for reproducibility.
 /// - `iss` matches the configured issuer.
 fn mint_id_token(issuer: &str, subject: &str, groups: &[&str]) -> Result<String> {
@@ -548,10 +534,8 @@ fn mint_id_token(issuer: &str, subject: &str, groups: &[&str]) -> Result<String>
     Ok(token)
 }
 
-/// # What it does
 /// Adds the policies needed for publish/subscribe/cache access.
 ///
-/// # Why it exists
 /// Demonstrates live RBAC mutation through the official admin API.
 async fn add_rbac_policies(
     http: &reqwest::Client,
@@ -598,10 +582,8 @@ async fn add_rbac_policies(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// # What it does
 /// Binds alice's principal ID to the reader role.
 ///
-/// # Why it exists
 /// Demonstrates live role assignment via the admin API.
 async fn add_rbac_grouping(
     http: &reqwest::Client,
@@ -709,10 +691,8 @@ fn print_op(label: &str, result: Result<()>, expect_ok: bool) -> Result<()> {
     }
 }
 
-/// # What it does
 /// Retries a broker operation until it succeeds or the timeout elapses.
 ///
-/// # Why it exists
 /// Broker metadata sync is eventually consistent; initial "not found" can
 /// occur before the broker has applied control-plane changes.
 async fn retry_op<F, Fut>(label: &str, timeout: Duration, mut op: F) -> Result<()>

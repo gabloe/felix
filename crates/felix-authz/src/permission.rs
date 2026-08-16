@@ -1,19 +1,13 @@
 //! Permission and permission-pattern primitives.
 //!
-//! # Purpose
 //! Defines strongly typed permission values and parseable permission patterns.
 //!
 //! # How it fits
 //! Request handlers and policy loaders produce `PermissionPattern` values which
 //! are later evaluated by the permission matcher.
 //!
-//! # Key invariants
 //! - Permission strings are `action:resource`.
 //! - Action names must match the canonical [`Action`] strings.
-//!
-//! # Important configuration
-//! - None; permissions are pure data structures.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::{Action, Permission};
@@ -36,7 +30,6 @@ use serde::{Deserialize, Serialize};
 /// # Summary
 /// Holds the canonical action and resource identifier.
 ///
-/// # Invariants
 /// - `resource` should use the same namespace format as policy rules.
 ///
 /// # Example
@@ -59,7 +52,6 @@ impl Permission {
     /// - `action`: the action to allow.
     /// - `resource`: resource identifier string.
     ///
-    /// # Returns
     /// - A new [`Permission`].
     pub fn new(action: Action, resource: impl Into<String>) -> Self {
         Self {
@@ -70,10 +62,8 @@ impl Permission {
 
     /// Render the permission as a `action:resource` string.
     ///
-    /// # Returns
     /// - A newly allocated string representation.
     ///
-    /// # Performance
     /// - Allocates a new `String` each call.
     pub fn as_string(&self) -> String {
         // Use the canonical action string to keep policies stable.
@@ -86,7 +76,6 @@ impl Permission {
 /// # Summary
 /// Holds an action plus a resource pattern used for wildcard matching.
 ///
-/// # Invariants
 /// - `resource_pattern` may contain `*` as a glob.
 ///
 /// # Example
@@ -109,7 +98,6 @@ impl PermissionPattern {
     /// - `action`: the action to allow.
     /// - `resource_pattern`: resource pattern with optional wildcards.
     ///
-    /// # Returns
     /// - A new [`PermissionPattern`].
     pub fn new(action: Action, resource_pattern: impl Into<String>) -> Self {
         Self {
@@ -120,10 +108,8 @@ impl PermissionPattern {
 
     /// Render the permission pattern as a string.
     ///
-    /// # Returns
     /// - `action:resource_pattern` string.
     ///
-    /// # Performance
     /// - Allocates a new `String`.
     pub fn as_string(&self) -> String {
         format!("{}:{}", self.action.as_str(), self.resource_pattern)
@@ -151,7 +137,6 @@ impl PermissionPattern {
     /// # Parameters
     /// - `value`: a `action:resource_pattern` string.
     ///
-    /// # Returns
     /// - Parsed [`PermissionPattern`].
     ///
     /// # Errors

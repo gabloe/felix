@@ -1,6 +1,5 @@
 //! Identity provider issuer configuration models.
 //!
-//! # Purpose
 //! Defines IdP issuer settings and claim mapping configuration used by OIDC
 //! validation and bootstrap/admin endpoints.
 use serde::{Deserialize, Serialize};

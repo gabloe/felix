@@ -1,4 +1,3 @@
-//! # Purpose
 //! Demonstrate end-to-end cross-tenant isolation using real Felix components.
 //!
 //! # What this demo proves
@@ -16,7 +15,6 @@
 //! 7. Validate that `t1` token succeeds on `t1` and is denied on `t2`.
 //! 8. Validate that `t2` token is denied on `t2` (no RBAC granted).
 //!
-//! # Notes
 //! - Uses only existing control-plane routes; no demo-only APIs.
 //! - Uses ES256 (no RSA) for the fake IdP.
 //! - Prints a summary table and exits non-zero on failure.
@@ -276,7 +274,6 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
     Ok(())
 }
 
-/// # What it does
 /// Starts a minimal OIDC IdP server that serves discovery + JWKS.
 async fn spawn_fake_idp() -> Result<(SocketAddr, JoinHandle<()>)> {
     let jwks = json!({
@@ -420,7 +417,6 @@ fn resolve_db_urls() -> Vec<String> {
     ]
 }
 
-/// # What it does
 /// Starts the control plane HTTP server on a random local port.
 async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, JoinHandle<()>)> {
     let state = AppState {
@@ -451,7 +447,6 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
     Ok((addr, handle))
 }
 
-/// # What it does
 /// Starts a real broker QUIC server and a control-plane sync loop.
 async fn spawn_broker(
     controlplane_url: &str,
@@ -717,7 +712,6 @@ struct TokenExchangeResponse {
     felix_token: String,
 }
 
-/// # What it does
 /// Exchanges an upstream ID token for a Felix access token for a tenant.
 async fn exchange_token(
     http: &reqwest::Client,
@@ -746,7 +740,6 @@ async fn exchange_token(
     Ok(body.felix_token)
 }
 
-/// # What it does
 /// Mints a deterministic ES256 ID token for the fake IdP.
 fn mint_id_token(issuer: &str, subject: &str, groups: &[&str]) -> Result<String> {
     let claims = json!({
@@ -850,7 +843,6 @@ async fn wait_for_controlplane(http: &reqwest::Client, cp_base: &str) -> Result<
     bail!("control plane did not become ready");
 }
 
-/// # What it does
 /// Retries a broker operation until it succeeds or the timeout elapses.
 async fn retry_op<F, Fut>(label: &str, timeout: Duration, mut op: F) -> Result<()>
 where

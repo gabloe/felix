@@ -1,10 +1,8 @@
 //! Control-plane storage interfaces and shared types.
 //!
-//! # Purpose
 //! Defines the `ControlPlaneStore` trait, error types, and shared snapshot/change
 //! structs used by both in-memory and Postgres backends.
 //!
-//! # Notes
 //! Store implementors should preserve change ordering and enforce conflict/not-found
 //! semantics consistently with these trait contracts.
 use crate::auth::felix_token::TenantSigningKeys;

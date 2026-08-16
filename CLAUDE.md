@@ -119,9 +119,19 @@ broker does not accept traffic for streams it does not yet know about.
 
 ## Conventions
 
-- **Comments explain *why*, and are load-bearing.** Much of this codebase's reasoning about
-  ordering, durability, and failure modes lives in comments next to the code that depends on
-  it. Match that density; do not strip it.
+- **Comment the *why*, briefly.** A non-obvious constraint — an ordering requirement, a
+  failure mode, a limit that exists for a reason — is worth a sentence or two next to the
+  code that depends on it. Aim for that, not for an essay.
+  - Don't restate what the code says. If the comment tracks the code line by line, delete it.
+  - Don't narrate history ("previously this did X"). The reason the current code is shaped
+    this way is what matters; git holds the rest.
+  - When an explanation genuinely needs paragraphs, it belongs in `docs/` with a one-line
+    pointer from the code.
+  - `///` on public items is documentation and is held to a different standard: say what the
+    thing does and what it guarantees, and keep it accurate.
+- **Prefer `pub(crate)`.** Reach for `pub` only when something outside the crate uses it.
+  Most of the workspace's public surface is only used internally, which makes the real API
+  hard to see and every item look load-bearing.
 - **Docs are treated as part of the change.** `docs/protocol.md`, `docs/durable-storage.md`,
   `docs/storage-format.md`, `docs/storage-performance.md`, and the status tables in
   `docs-site/src/content/docs/getting-started/what-felix-is-for.md` make specific claims about

@@ -31,11 +31,9 @@ use crate::model::NamespaceKey;
 
 /// Ensure a tenant and namespace exist before performing an operation.
 ///
-/// # What it does
 /// Checks tenant existence, then namespace existence, and returns a 404 error
 /// if either is missing.
 ///
-/// # Why it exists
 /// Centralizes resource validation and keeps error messages consistent.
 ///
 /// # Errors
@@ -66,10 +64,8 @@ pub(crate) async fn ensure_tenant_namespace(
 
 /// Ensure a tenant exists before performing an operation.
 ///
-/// # What it does
 /// Checks tenant existence and returns a 404 error if missing.
 ///
-/// # Why it exists
 /// Centralizes tenant validation to keep handlers consistent.
 ///
 /// # Errors

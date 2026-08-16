@@ -1,6 +1,5 @@
 //! HTTP API request/response types.
 //!
-//! # Purpose
 //! Defines shared payload shapes for the control-plane REST API and OpenAPI
 //! schema generation.
 use crate::model::{

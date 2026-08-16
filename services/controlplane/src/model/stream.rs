@@ -1,6 +1,5 @@
 //! Stream model definitions and patch/change payloads.
 //!
-//! # Purpose
 //! Defines stream identifiers, configuration fields, and change-log payloads
 //! used by the control-plane store and API handlers.
 use serde::{Deserialize, Serialize};

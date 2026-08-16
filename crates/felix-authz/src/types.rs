@@ -1,6 +1,5 @@
 //! Strongly typed identifiers for authz-related resources.
 //!
-//! # Purpose
 //! Wraps string identifiers to reduce accidental mix-ups between tenant,
 //! namespace, stream, and cache identifiers.
 //!
@@ -8,13 +7,8 @@
 //! These types are used throughout authz, resource building, and policy
 //! evaluation to enforce consistent formatting.
 //!
-//! # Key invariants
 //! - Each wrapper contains a non-empty string (not validated here).
 //! - Display and `as_str` must return the original value.
-//!
-//! # Important configuration
-//! - None; validation is the responsibility of callers.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::{Namespace, StreamName};
@@ -37,7 +31,6 @@ use serde::{Deserialize, Serialize};
 /// # Summary
 /// Newtype around a tenant string ID.
 ///
-/// # Invariants
 /// - The inner string is preserved exactly.
 ///
 /// # Example
@@ -56,7 +49,6 @@ impl TenantId {
     /// # Parameters
     /// - `value`: raw tenant identifier string.
     ///
-    /// # Returns
     /// - A new [`TenantId`].
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -64,7 +56,6 @@ impl TenantId {
 
     /// Access the inner tenant string.
     ///
-    /// # Returns
     /// - The raw tenant identifier.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -98,7 +89,6 @@ impl Namespace {
     /// # Parameters
     /// - `value`: raw namespace string.
     ///
-    /// # Returns
     /// - A new [`Namespace`].
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -106,7 +96,6 @@ impl Namespace {
 
     /// Access the inner namespace string.
     ///
-    /// # Returns
     /// - The raw namespace value.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -140,7 +129,6 @@ impl StreamName {
     /// # Parameters
     /// - `value`: raw stream name string.
     ///
-    /// # Returns
     /// - A new [`StreamName`].
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -148,7 +136,6 @@ impl StreamName {
 
     /// Access the inner stream name.
     ///
-    /// # Returns
     /// - The raw stream name value.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -182,7 +169,6 @@ impl CacheScope {
     /// # Parameters
     /// - `value`: raw cache scope string.
     ///
-    /// # Returns
     /// - A new [`CacheScope`].
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -190,7 +176,6 @@ impl CacheScope {
 
     /// Access the inner cache scope string.
     ///
-    /// # Returns
     /// - The raw cache scope value.
     pub fn as_str(&self) -> &str {
         &self.0

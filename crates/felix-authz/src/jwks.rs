@@ -1,20 +1,15 @@
 //! JWKS data types used for Felix key distribution.
 //!
-//! # Purpose
 //! Define minimal JSON Web Key Set structures for publishing Ed25519 public keys.
 //!
-//! # Key invariants
 //! - JWKS must contain only public key material.
 //! - Felix uses OKP/Ed25519 with `alg = EdDSA`.
 //!
-//! # Security model / threat assumptions
 //! - JWKS is public and should be treated as untrusted input by consumers.
 //! - Private keys must never be serialized into these structs.
 //!
-//! # Concurrency + ordering guarantees
 //! - These are plain data types with no concurrency concerns.
 //!
-//! # How to use
 //! Populate [`Jwks`] with one or more [`Jwk`] entries and serialize with `serde`.
 //!
 //! # Common pitfalls
@@ -27,7 +22,6 @@ use serde::{Deserialize, Serialize};
 
 /// Intended usage for a JWK.
 ///
-/// # What it does
 /// Indicates whether a key is used for signatures.
 ///
 /// # Parameters / returns
@@ -36,10 +30,8 @@ use serde::{Deserialize, Serialize};
 /// # Errors
 /// - Not applicable (enum).
 ///
-/// # Security notes
 /// - Felix uses only signing keys (`sig`).
 ///
-/// # Invariants
 /// - `KeyUse::Sig` is the only variant supported by Felix.
 ///
 /// # Example
@@ -56,7 +48,6 @@ pub enum KeyUse {
 
 /// A single JSON Web Key entry.
 ///
-/// # What it does
 /// Represents an Ed25519 public key in JWKS format.
 ///
 /// # Parameters / returns
@@ -66,13 +57,10 @@ pub enum KeyUse {
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - Only public key data (`x`) should be populated; never include private keys.
 ///
-/// # Invariants
 /// - `kty` must be `"OKP"`, `alg` must be `"EdDSA"`, `crv` should be `"Ed25519"`.
 ///
-/// # Performance
 /// - This is a plain data container; cloning is O(fields).
 ///
 /// # Example
@@ -104,7 +92,6 @@ pub struct Jwk {
 
 /// A JSON Web Key Set container.
 ///
-/// # What it does
 /// Wraps a list of JWK entries for serialization.
 ///
 /// # Parameters / returns
@@ -113,10 +100,8 @@ pub struct Jwk {
 /// # Errors
 /// - Not applicable (data container).
 ///
-/// # Security notes
 /// - Ensure only public keys are included.
 ///
-/// # Performance
 /// - Cloning scales with the number of keys.
 ///
 /// # Example

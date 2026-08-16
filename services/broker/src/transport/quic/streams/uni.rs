@@ -66,7 +66,6 @@ pub(super) struct UniLoopArgs {
 /// - `stream_cache_key`: Key identifying the stream in the cache.
 /// - `frame_scratch`: Mutable buffer used to read frames efficiently.
 ///
-/// # Returns
 /// Returns `Ok(())` on clean stream closure, or an error if a decode or processing failure occurs.
 pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
     source: &mut S,

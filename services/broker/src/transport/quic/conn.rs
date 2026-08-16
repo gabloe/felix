@@ -40,14 +40,11 @@ use super::streams::{handle_stream, handle_uni_stream};
 
 /// Serve incoming QUIC connections for the broker.
 ///
-/// # What it does
 /// Runs the accept loop, spawns a task per connection, and configures timing
 /// telemetry based on the broker configuration.
 ///
-/// # Why it exists
 /// Centralizes connection lifecycle handling and isolates per-connection work.
 ///
-/// # Invariants
 /// - Timing telemetry is disabled when `disable_timings` is set.
 /// - Each accepted connection is handled in its own task.
 ///
@@ -83,17 +80,14 @@ pub async fn serve(
 
 /// Accept loop with cooperative shutdown.
 ///
-/// # What it does
 /// Same as [`serve`], but stops accepting when `shutdown` is cancelled and registers
 /// every per-connection task with `connections` so a drain can wait for in-flight
 /// work to finish.
 ///
-/// # Why it exists
 /// Aborting the accept task kills the loop but says nothing about the connections it
 /// already spawned — those are detached and die with the process. Separating "stop
 /// admitting" from "wait for in-flight" is what makes a bounded drain possible.
 ///
-/// # Invariants
 /// - Cancelling `shutdown` stops admission only; accepted connections keep running.
 /// - The caller owns `connections`, and must `close()` it before `wait()`ing or the
 ///   wait never resolves.
@@ -252,11 +246,9 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
 /// Handle a single QUIC connection and its streams, winding down when
 /// `shutdown` is cancelled.
 ///
-/// # What it does
 /// Creates per-connection publish workers and dispatches incoming bi/uni streams
 /// to their respective handlers.
 ///
-/// # Why it exists
 /// Keeps per-connection state (publish queues and depth counters) scoped to the
 /// connection lifecycle.
 ///
@@ -273,7 +265,6 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
 /// connection so the peer learns this was a clean shutdown rather than a
 /// disappearance.
 ///
-/// # Invariants
 /// - `worker_count` and `publish_queue_depth` are at least 1.
 /// - Global ingress depth counters are decremented when workers exit.
 /// - The stream grace is bounded, so one connection cannot outlast the caller's

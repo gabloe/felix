@@ -1,6 +1,5 @@
 //! Tenant model definitions and change-log payloads.
 //!
-//! # Purpose
 //! Defines tenant records and change events used by the store and HTTP API.
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -1,6 +1,5 @@
 //! QUIC network client and connection pool setup.
 //!
-//! # Purpose
 //! Establishes the pooled QUIC connections and streams used by the client for
 //! publish, cache, and subscription workloads, and wires them to background
 //! worker tasks that handle the wire protocol.

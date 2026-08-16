@@ -19,13 +19,10 @@ use utoipa::ToSchema;
 
 /// A single RBAC policy rule.
 ///
-/// # What it does
 /// Represents the `(subject, object, action)` tuple used by Casbin.
 ///
-/// # Why it exists
 /// Provides a stable, serializable shape for storing and transporting policy.
 ///
-/// # Invariants
 /// - `action` must match the Felix action vocabulary.
 /// - `object` must be compatible with `keyMatch2` pattern matching.
 ///
@@ -48,13 +45,10 @@ pub struct PolicyRule {
 
 /// A single RBAC grouping rule.
 ///
-/// # What it does
 /// Binds a user/subject to a role for role-based access.
 ///
-/// # Why it exists
 /// Separates role assignment from policy definition for clarity and reuse.
 ///
-/// # Invariants
 /// - `user` and `role` must be non-empty identifiers.
 ///
 /// # Example

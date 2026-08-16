@@ -1,6 +1,5 @@
 //! Event stream router for subscription uni streams.
 //!
-//! # Purpose
 //! Accepts incoming uni streams from the server, decodes the subscription id
 //! from the EventStreamHello frame, and hands the stream to the waiting
 //! subscription task.

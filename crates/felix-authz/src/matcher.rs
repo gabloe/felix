@@ -1,6 +1,5 @@
 //! Permission matching helpers for Felix authorization.
 //!
-//! # Purpose
 //! Implements a lightweight wildcard matcher and a permission matcher that
 //! evaluates action/resource pairs.
 //!
@@ -8,13 +7,8 @@
 //! Brokers and control-plane components use this matcher to validate whether
 //! a request's action/resource is allowed by a set of permission patterns.
 //!
-//! # Key invariants
 //! - `*` matches zero or more characters.
 //! - Matching is byte-based and case-sensitive.
-//!
-//! # Important configuration
-//! - None; matching behavior is fixed and shared across services.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::{Action, PermissionMatcher, PermissionPattern};
@@ -39,13 +33,10 @@ use crate::{Action, AuthzResult, PermissionPattern};
 /// - `pattern`: the wildcard pattern to apply.
 /// - `value`: the candidate string to test.
 ///
-/// # Returns
 /// - `true` if the value matches the pattern.
 ///
-/// # Invariants
 /// - Matching is case-sensitive and byte-based.
 ///
-/// # Performance
 /// - O(pattern length × value length) worst case due to backtracking.
 ///
 /// # Example
@@ -107,7 +98,6 @@ pub fn wildcard_match(pattern: &str, value: &str) -> bool {
 /// # Summary
 /// Holds parsed permission patterns and checks them against requests.
 ///
-/// # Invariants
 /// - Patterns must be validated to ensure `action:resource` structure.
 ///
 /// # Example
@@ -130,10 +120,8 @@ impl PermissionMatcher {
     /// # Parameters
     /// - `patterns`: parsed permission patterns.
     ///
-    /// # Returns
     /// - A new [`PermissionMatcher`].
     ///
-    /// # Performance
     /// - Clones the vector; complexity is O(patterns).
     pub fn new(patterns: Vec<PermissionPattern>) -> Self {
         Self { patterns }
@@ -144,7 +132,6 @@ impl PermissionMatcher {
     /// # Parameters
     /// - `patterns`: raw permission strings like `"action:resource"`.
     ///
-    /// # Returns
     /// - A matcher containing parsed patterns.
     ///
     /// # Errors
@@ -173,10 +160,8 @@ impl PermissionMatcher {
     /// - `action`: requested action.
     /// - `resource`: requested resource identifier.
     ///
-    /// # Returns
     /// - `true` if any pattern matches.
     ///
-    /// # Performance
     /// - O(number of patterns).
     pub fn allows(&self, action: Action, resource: &str) -> bool {
         // Any matching pattern grants access; no denies are modeled here.
@@ -187,7 +172,6 @@ impl PermissionMatcher {
 
     /// Return the parsed permission patterns.
     ///
-    /// # Returns
     /// - Slice of parsed patterns, useful for inspection and tests.
     pub fn patterns(&self) -> &[PermissionPattern] {
         &self.patterns

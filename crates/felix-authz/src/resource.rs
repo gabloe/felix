@@ -1,19 +1,13 @@
 //! Resource string builders for Felix permissions.
 //!
-//! # Purpose
 //! Provides helpers to build canonical resource identifiers used in policies.
 //!
 //! # How it fits
 //! Action handlers and policy writers use these helpers to keep resource strings
 //! consistent across broker and control-plane code.
 //!
-//! # Key invariants
 //! - Resource strings are prefixed by a stable kind (`tenant`, `namespace`, `stream`, `cache`).
 //! - Namespace, stream, and cache resources are always tenant-qualified.
-//!
-//! # Important configuration
-//! - None.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::{Namespace, StreamName, TenantId, stream_resource};
@@ -40,7 +34,6 @@ use crate::{CacheScope, Namespace, StreamName, TenantId};
 /// # Parameters
 /// - `tenant_id`: tenant identifier.
 ///
-/// # Returns
 /// - Resource string in the form `tenant:{id}`.
 pub fn tenant_resource(tenant_id: &TenantId) -> String {
     format!("tenant:{}", tenant_id.as_str())
@@ -48,7 +41,6 @@ pub fn tenant_resource(tenant_id: &TenantId) -> String {
 
 /// Build the canonical namespace resource string.
 ///
-/// # Returns
 /// - `namespace:{tenant_id}/{namespace}`.
 pub fn namespace_resource(tenant_id: &TenantId, namespace: &Namespace) -> String {
     format!("namespace:{}/{}", tenant_id.as_str(), namespace.as_str())
@@ -61,7 +53,6 @@ pub fn namespace_resource(tenant_id: &TenantId, namespace: &Namespace) -> String
 /// - `namespace`: namespace identifier.
 /// - `stream`: stream name.
 ///
-/// # Returns
 /// - `stream:{tenant_id}/{namespace}/{stream}`.
 pub fn stream_resource(tenant_id: &TenantId, namespace: &Namespace, stream: &StreamName) -> String {
     format!(
@@ -79,7 +70,6 @@ pub fn stream_resource(tenant_id: &TenantId, namespace: &Namespace, stream: &Str
 /// - `namespace`: namespace identifier.
 /// - `cache`: cache scope identifier.
 ///
-/// # Returns
 /// - `cache:{tenant_id}/{namespace}/{cache}`.
 pub fn cache_resource(tenant_id: &TenantId, namespace: &Namespace, cache: &CacheScope) -> String {
     format!(

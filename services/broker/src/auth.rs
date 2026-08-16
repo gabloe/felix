@@ -1,26 +1,21 @@
 //! Broker-side authentication and JWKS caching.
 //!
-//! # Purpose
 //! Fetch and cache tenant JWKS from the control-plane, then verify Felix tokens
 //! using EdDSA (Ed25519) public keys.
 //!
-//! # Key invariants
 //! - Felix-issued tokens must be EdDSA; RSA is never accepted for broker auth.
 //! - JWKS data contains only public key material; private keys are never loaded.
 //! - `kid` guides verification order but verification still tries all keys.
 //!
-//! # Security model / threat assumptions
 //! - Attackers may present arbitrary bearer tokens; we validate signature,
 //!   issuer, audience, and tenant ID via `felix_authz`.
 //! - JWKS endpoints are public; we treat the data as untrusted input and validate
 //!   key shape/length before use.
 //! - No tokens or keys are logged to avoid secret leakage.
 //!
-//! # Concurrency + ordering guarantees
 //! - JWKS cache is thread-safe via `DashMap`.
 //! - Key cache invalidation is per-tenant and coordinated with JWKS refresh.
 //!
-//! # How to use
 //! Construct [`BrokerAuth`] with the control-plane URL and call
 //! [`BrokerAuth::authenticate`] to validate a token and obtain an [`AuthContext`].
 //!
@@ -51,10 +46,8 @@ use std::time::{Duration, Instant};
 
 /// Broker authentication facade for Felix tokens.
 ///
-/// # What it does
 /// Holds the verifier and JWKS-backed key store needed to validate tokens.
 ///
-/// # Inputs/outputs
 /// - Inputs: control-plane URL or an injected [`ControlPlaneKeyStore`].
 /// - Outputs: [`AuthContext`] from [`BrokerAuth::authenticate`].
 ///
@@ -62,7 +55,6 @@ use std::time::{Duration, Instant};
 /// - Construction does not fail; authentication errors are surfaced by
 ///   [`BrokerAuth::authenticate`].
 ///
-/// # Security notes
 /// - Verifier is configured for EdDSA only and uses cached public keys.
 ///
 /// # Concurrency
@@ -83,20 +75,16 @@ pub struct BrokerAuth {
 impl BrokerAuth {
     /// Create a broker auth handler using the control-plane JWKS endpoint.
     ///
-    /// # What it does
     /// Builds a JWKS-backed key store and an EdDSA verifier with caching.
     ///
-    /// # Inputs/outputs
     /// - Input: `controlplane_url` base URL.
     /// - Output: Configured [`BrokerAuth`].
     ///
     /// # Errors
     /// - Does not return errors; misconfiguration surfaces during auth calls.
     ///
-    /// # Security notes
     /// - The verifier is pinned to `iss=felix-auth` and `aud=felix-broker`.
     ///
-    /// # Performance
     /// - Construction is O(1); network IO happens during authentication.
     ///
     /// # Example
@@ -125,17 +113,14 @@ impl BrokerAuth {
 
     /// Create a broker auth handler from an existing JWKS key store.
     ///
-    /// # What it does
     /// Reuses the provided key store and its key cache to build the verifier.
     ///
-    /// # Inputs/outputs
     /// - Input: `key_store` with JWKS caching.
     /// - Output: Configured [`BrokerAuth`].
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - The caller is responsible for ensuring the store fetches Ed25519 JWKS.
     ///
     /// # Concurrency
@@ -165,11 +150,9 @@ impl BrokerAuth {
 
     /// Authenticate a Felix token for a tenant and produce an auth context.
     ///
-    /// # What it does
     /// Ensures JWKS are cached, verifies the token, and builds a permission
     /// matcher for authorization checks.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `tenant_id`, `token`.
     /// - Output: [`AuthContext`] containing a precomputed permission matcher.
     ///
@@ -177,11 +160,9 @@ impl BrokerAuth {
     /// - JWKS fetch errors if control-plane is unavailable.
     /// - Verification errors if token is invalid or claims mismatch.
     ///
-    /// # Security notes
     /// - Enforces issuer/audience/tenant checks via `felix_authz`.
     /// - Never logs or returns the token contents.
     ///
-    /// # Performance
     /// - Uses cached JWKS and decoding keys to minimize per-request overhead.
     ///
     /// # Example
@@ -211,19 +192,15 @@ impl BrokerAuth {
 
 /// Authorization context produced after successful authentication.
 ///
-/// # What it does
 /// Holds tenant scope and a permission matcher for fast authorization checks.
 ///
-/// # Inputs/outputs
 /// - Output from [`BrokerAuth::authenticate`].
 ///
 /// # Errors
 /// - Not applicable.
 ///
-/// # Security notes
 /// - `matcher` encapsulates permissions embedded in a verified token.
 ///
-/// # Performance
 /// - Matcher creation cost scales with permission count.
 ///
 /// # Example
@@ -243,18 +220,15 @@ pub struct AuthContext {
 
 /// JWKS-backed key store for broker verification.
 ///
-/// # What it does
 /// Fetches and caches JWKS from the control-plane and exposes verification keys
 /// to the Felix authz layer.
 ///
-/// # Inputs/outputs
 /// - Input: control-plane base URL and shared key cache.
 /// - Output: JWKS data and verification keys.
 ///
 /// # Errors
 /// - Fetch/JSON decode errors bubble up from `reqwest`.
 ///
-/// # Security notes
 /// - Only Ed25519 public keys are accepted; private keys are never stored here.
 ///
 /// # Concurrency
@@ -286,20 +260,16 @@ struct CachedJwks {
 impl ControlPlaneKeyStore {
     /// Create a new JWKS key store.
     ///
-    /// # What it does
     /// Normalizes the base URL, sets up HTTP client, and initializes caches.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `base_url`, `key_cache`.
     /// - Output: [`ControlPlaneKeyStore`].
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - `base_url` must be trusted and point to the control-plane.
     ///
-    /// # Performance
     /// - Construction is O(1); no network IO is performed.
     ///
     /// # Example
@@ -322,17 +292,14 @@ impl ControlPlaneKeyStore {
 
     /// Insert JWKS into the cache for a tenant.
     ///
-    /// # What it does
     /// Stores JWKS and expires it after a fixed TTL; invalidates cached decoding keys.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `tenant_id`, `jwks`.
     /// - Output: None.
     ///
     /// # Errors
     /// - Does not return errors.
     ///
-    /// # Security notes
     /// - Invalidating the key cache ensures new keys are used immediately.
     ///
     /// # Concurrency
@@ -362,21 +329,17 @@ impl ControlPlaneKeyStore {
 
     /// Fetch and cache JWKS for a tenant from the control-plane.
     ///
-    /// # What it does
     /// Performs a GET request to the JWKS endpoint and stores the result with TTL.
     ///
-    /// # Inputs/outputs
     /// - Input: `tenant_id`.
     /// - Output: `Jwks` payload.
     ///
     /// # Errors
     /// - Network failures or JSON decode errors from `reqwest`.
     ///
-    /// # Security notes
     /// - JWKS is public data but treated as untrusted until validated.
     /// - The URL should not be logged because it may include credentials in some deployments.
     ///
-    /// # Performance
     /// - Refresh performs a network round-trip and JSON decode.
     ///
     /// # Example
@@ -482,20 +445,16 @@ fn jwks_to_keys(jwks: &Jwks) -> AuthzResult<Vec<TenantVerificationKey>> {
 
 /// Ensure JWKS are available in the cache for a tenant.
 ///
-/// # What it does
 /// Checks the cache and performs a refresh if necessary.
 ///
-/// # Inputs/outputs
 /// - Inputs: `key_store`, `tenant_id`.
 /// - Output: `Ok(())` if cache is populated.
 ///
 /// # Errors
 /// - Network/JSON errors when fetching JWKS.
 ///
-/// # Security notes
 /// - Performs network IO only when cache is missing or expired.
 ///
-/// # Performance
 /// - Avoids network IO when cached JWKS is still valid.
 ///
 /// # Example

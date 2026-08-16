@@ -1,22 +1,17 @@
 //! Integration test for broker JWKS refresh and authentication flow.
 //!
-//! # Purpose
 //! Ensure the broker refreshes JWKS from the control-plane and successfully
 //! authenticates a Felix EdDSA token.
 //!
-//! # Key invariants
 //! - Felix tokens are EdDSA and validated against Ed25519 JWKS.
 //! - JWKS refresh invalidates cached decoding keys.
 //!
-//! # Security model / threat assumptions
 //! - Test uses local JWKS server with public keys only.
 //! - Tokens and private keys are test fixtures and must not be logged.
 //!
-//! # Concurrency + ordering guarantees
 //! - Local JWKS server binds to 127.0.0.1:0 for deterministic, isolated tests.
 //! - Async ordering is controlled by awaiting server bind before use.
 //!
-//! # How to use
 //! Run with `cargo test -p broker auth_jwks_refresh` to execute this test.
 use anyhow::Result;
 use axum::{Json, Router, routing::get};

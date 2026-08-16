@@ -1,6 +1,5 @@
 //! Orders/payments pipeline demo (pub/sub + cache last-known state).
 //!
-//! # Purpose
 //! Demonstrates a multi-stage pipeline with idempotent workers, cache-backed
 //! last-known state, and failure injection.
 //!

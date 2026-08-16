@@ -1,6 +1,5 @@
 //! Bootstrap API handlers.
 //!
-//! # Purpose
 //! Implements the initial tenant bootstrap flow that seeds auth configuration,
 //! RBAC policies, and signing keys for a newly created tenant.
 use crate::api::error::{
