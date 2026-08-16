@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786845053785,
+  "lastUpdate": 1786854302633,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2184,6 +2184,58 @@ window.BENCHMARK_DATA = {
             "range": "120983.05",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 545378.46\nmean: 488588.57\nstdev: 120983.05\ncv: 24.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a36c52c861b10f9f30ef72ddf364a88f85ba61ec",
+          "message": "Users/gabloe/cleanup (#199)\n\n* docs: strip boilerplate scaffolding from doc comments\n\nA section template had been applied mechanically across the repo --\n\"# Purpose\", \"# Architectural role\", \"# Callers / consumers\", \"# What it\ndoes\", \"# Why it exists\", \"# Inputs/Outputs\" -- including sections whose\nentire body was \"Not applicable.\" or \"Does not panic.\" on plain data\nstructs.\n\nRemoves the invented headings while keeping their prose, and drops\nsections whose body says nothing. The conventional rustdoc sections\n(# Errors, # Panics, # Safety, # Examples) are kept, because those render\nmeaningfully and readers look for them; only their no-op bodies go.\n\nRewrites the two worst module headers by hand: the Postgres store (89\nlines -> 24, keeping the authoritative-plus-change-log design and the\nthree `seq` rules that are genuinely easy to get wrong) and the QUIC\nsubscribe handler (46 -> 16).\n\n903 comment lines removed. Verified mechanically: `git diff` shows zero\nchanges to any non-comment line, so this cannot have altered behaviour.\n\nAlso updates CLAUDE.md, which had told future readers to match the\nexisting comment density -- the opposite of what this repo needs. It now\nasks for a sentence or two on non-obvious constraints, no restating of\ncode, no narrating history, and long explanations moved to docs/ behind a\npointer. Adds a preference for `pub(crate)`, since most of the workspace's\npublic surface is only used internally.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(perf): make the publish-parallelism ladder actually vary parallelism\n\nP1_hash..P8_rr were meant to sweep publish parallelism by raising\n--pub-conns and --pub-streams-per-conn. None of them set\n--pub-stream-count, so it stayed at 1, and `hash_stream` picks a worker by\nhashing the *stream name* -- a constant when there is only one stream.\nEvery preset therefore funnelled all traffic onto a single worker\nregardless of how many existed, and the six presets measured the same\nconfiguration six times:\n\n  batch=64 binary: P1=325864 P2=345082 P4=324774 P8=320439 P8_rr=331318\n\nStream count now tracks worker count so the ladder can spread. Adds\nP8_hash_1stream -- eight workers all serving one stream -- so the cost of\nper-stream ordering is isolated from publish parallelism rather than\nconflated with it, and restores the rr/rrN distinction (1 stream vs 8),\nwhich had been the only thing separating them.\n\nNote this does not change the conclusion: with the ladder fixed,\nthroughput is still flat at ~330k msg/s from 1 worker to 8, and the\nsingle-stream control matches. The ceiling is real and is not\nparallelism. It was simply not measurable before.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T21:22:58-07:00",
+          "tree_id": "c2b8fd99c7345b70bcbd5f779e5f0243c2e8fd23",
+          "url": "https://github.com/gabloe/felix/commit/a36c52c861b10f9f30ef72ddf364a88f85ba61ec"
+        },
+        "date": 1786854301400,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 175445.45,
+            "range": "12402.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 175445.45\nmean: 176006.11\nstdev: 12402.65\ncv: 7.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 175445.45,
+            "range": "12402.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 175445.45\nmean: 176006.11\nstdev: 12402.65\ncv: 7.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3e2563066bb8\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 50991.13,
+            "range": "1881.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 50991.13\nmean: 51624.04\nstdev: 1881.60\ncv: 3.64%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 509911.27,
+            "range": "18816.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 509911.27\nmean: 516240.43\nstdev: 18816.03\ncv: 3.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: c116a862aeae\nbinary: true"
           }
         ]
       }
