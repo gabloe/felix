@@ -1,10 +1,8 @@
 //! Felix conformance test runner.
 //!
-//! # Purpose
 //! Exercises end-to-end broker and client behaviors (auth, QUIC, wire encoding)
 //! to validate protocol and security invariants outside unit tests.
 //!
-//! # Notes
 //! This binary is intended for CI and developer verification, not production use.
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;

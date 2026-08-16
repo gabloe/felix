@@ -22,12 +22,9 @@ pub mod policy_store;
 
 /// Embedded Casbin model configuration for RBAC enforcement.
 ///
-/// # What it does
 /// Stores the RBAC model as a compile-time string to avoid external files.
 ///
-/// # Why it exists
 /// Keeps deployment simple and ensures model consistency across services/tests.
 ///
-/// # Invariants
 /// - Must align with the policy shape stored in the control-plane store.
 pub const MODEL_CONF: &str = include_str!("rbac/model.conf");

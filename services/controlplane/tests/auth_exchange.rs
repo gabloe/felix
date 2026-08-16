@@ -1,23 +1,18 @@
 //! Integration tests for the token exchange endpoint.
 //!
-//! # Purpose
 //! Validate that upstream IdP tokens are exchanged for Felix EdDSA tokens with
 //! correct tenant scoping and RBAC-derived permissions.
 //!
-//! # Key invariants
 //! - Upstream IdP algorithms are controlled by OIDC allowlist config; these tests use RS256 fixtures.
 //! - Felix-issued tokens must be EdDSA and include `iss`, `aud`, and `tid`.
 //! - Exchange never widens permissions beyond RBAC policies.
 //!
-//! # Security model / threat assumptions
 //! - IdP RSA keys here are test-only fixtures and not secret.
 //! - Private keys and tokens must not be logged in production code.
 //!
-//! # Concurrency + ordering guarantees
 //! - Tests spawn a local JWKS server on a random port to avoid collisions.
 //! - Async ordering is controlled by awaiting server bind before requests.
 //!
-//! # How to use
 //! Run with `cargo test -p controlplane auth_exchange` to execute these tests.
 mod common;
 

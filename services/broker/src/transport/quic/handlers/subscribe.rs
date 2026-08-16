@@ -1,52 +1,20 @@
 //! QUIC subscribe handling and event-stream writer.
 //!
-//! ## High-level flow
-//! Subscriptions are requested on the **bi-directional control stream** (the same stream used
-//! for publish/control-plane operations). Once accepted, the broker opens a **new uni-directional
-//! stream** (broker → client) dedicated to delivering events for that subscription.
+//! A subscribe arrives on the bi-directional control stream; events go back on a
+//! fresh uni-directional stream. The `EventStreamHello` written first is what
+//! binds `subscription_id -> stream`, which is why event batches need no
+//! per-subscriber identifier and can be encoded once and shared across every
+//! subscriber.
 //!
-//! This file is responsible for:
-//! - Handling the `Message::Subscribe` request on the control stream.
-//! - Sending `Message::Subscribed` back on the control stream as the acknowledgement.
-//! - Opening a uni stream and sending a `Message::EventStreamHello` so the client can bind
-//!   `subscription_id -> stream`.
-//! - Handing the broker-provided shared batch queue directly to the writer task.
-//! - Running lane-sharded event writers that preserve per-subscriber ordering.
+//! Fanout uses `try_send` against bounded per-subscriber queues, so a full queue
+//! drops that batch (counted by `felix_subscribe_dropped_total`) rather than
+//! stalling publish. Backpressure stays local to the slow subscriber.
 //!
-//! ## Buffering and drops
-//! The broker core owns bounded per-subscriber queues and uses `try_send` for fanout:
-//! - If a subscriber queue is full, that delivery batch is **dropped** and
-//!   `felix_subscribe_dropped_total` is incremented in the broker.
-//! - This keeps backpressure localized to the subscriber rather than stalling publish.
-//!
-//! ## Writer lanes and routing
-//! Subscriber delivery is sharded into independent writer lanes to reduce write-path contention
-//! at high fanout and large payload sizes.
-//! - Each lane owns its own bounded command queue and write task.
-//! - Lane assignment is deterministic (`auto`, `subscriber_id_hash`, `connection_id_hash`,
-//!   `round_robin_pin`) so subscriber ordering remains stable.
-//! - `auto` prefers connection-aware routing when a connection id is available, otherwise it
-//!   falls back to subscriber-id hashing.
-//!
-//! ## Encoding / batching
-//! Multi-event publishes are encoded once as subscriber-independent binary `EventBatch` frames.
-//! `EventStreamHello` provides the subscription binding, so the same frame bytes can be shared
-//! across every subscriber.
-//!
-//! In batch mode, we coalesce by whichever triggers first:
-//! - max events (`max_events`)
-//! - max bytes (`max_bytes`)
-//! - deadline (`flush_delay`)
-//!
-//! ## Telemetry
-//! Telemetry is compiled out unless `--features telemetry` is enabled. When enabled, we record:
-//! - queue wait latency
-//! - write latency
-//! - end-to-end delivery latency (enqueue → write completion)
-//! - frame/batch/item counters
+//! Delivery is sharded into independent writer lanes to cut write-path
+//! contention at high fanout. Lane assignment is deterministic so per-subscriber
+//! ordering holds. Batches coalesce until whichever comes first: `max_events`,
+//! `max_bytes`, or `flush_delay`.
 
-// Subscribe path logic and event writer for subscription streams.
-//
 // Submodules:
 // - `config`: event-writer tunables.
 // - `lane`: writer-lane data model, manager, and routing.

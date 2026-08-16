@@ -1,6 +1,5 @@
 //! Cache model definitions and change-log payloads.
 //!
-//! # Purpose
 //! Defines cache identifiers, records, and change events used by the store and API.
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

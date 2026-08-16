@@ -1,21 +1,16 @@
 //! Integration tests for the tenant JWKS endpoint.
 //!
-//! # Purpose
 //! Verify that the control-plane exposes Ed25519 public keys in JWKS format and
 //! that missing tenants return 404s.
 //!
-//! # Key invariants
 //! - JWKS entries must be OKP/Ed25519 with `alg = EdDSA`.
 //! - No RSA components (`n`, `e`) are present for Felix keys.
 //!
-//! # Security model / threat assumptions
 //! - JWKS is public by design; tests ensure no private material is exposed.
 //! - Tokens/keys are treated as secrets and not logged.
 //!
-//! # Concurrency + ordering guarantees
 //! - Uses in-memory store for deterministic, race-free behavior.
 //!
-//! # How to use
 //! Run with `cargo test -p controlplane auth_jwks` to execute these tests.
 mod common;
 

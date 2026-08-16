@@ -23,15 +23,12 @@ use std::collections::HashSet;
 
 /// Compute effective permissions for a principal within a domain.
 ///
-/// # What it does
 /// Loads implicit permissions from Casbin, normalizes them into
 /// `action:object` strings, and applies inheritance expansion.
 ///
-/// # Why it exists
 /// Allows the token exchange flow to embed a flattened permission list that is
 /// fast to evaluate by brokers.
 ///
-/// # Invariants
 /// - Returned permissions are de-duplicated.
 /// - All permissions are scoped to the provided domain.
 ///

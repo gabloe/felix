@@ -1,18 +1,14 @@
 //! OIDC token validation with cached discovery and JWKS fetching.
 //!
-//! # Purpose
 //! Validate inbound IdP bearer tokens against configured issuers using cached
 //! discovery documents and JWKS with TTL-based refresh.
 //!
-//! # Architectural role
 //! Provides the IdP boundary for the control-plane: it verifies upstream tokens
 //! (ES256/RS*/PS* based on configured allowlist) before issuing Felix EdDSA tokens elsewhere.
 //!
-//! # Callers / consumers
 //! - Token exchange endpoint (`/token/exchange`) validates IdP tokens.
 //! - Tests that exercise JWKS caching and issuer validation.
 //!
-//! # Key invariants
 //! - Only ES256 is accepted by default.
 //! - RS256/RS384/RS512 and PS256/PS384/PS512 can be enabled via configuration.
 //! - Felix tokens are EdDSA and handled in a separate module.
@@ -21,7 +17,6 @@
 //! - Issuer and audience claims are validated against configuration.
 //! - JWKS and discovery caches are time-bounded and refreshed on demand.
 //!
-//! # Concurrency model
 //! Shared caches are stored in `DashMap` for concurrent read/write access across
 //! async tasks without global locks.
 //!
@@ -35,7 +30,6 @@
 //! - We decode claims without verification only to locate the issuer; all other
 //!   validation happens after signature verification.
 //!
-//! # How to use
 //! Construct an [`UpstreamOidcValidator`] and call [`UpstreamOidcValidator::validate`]
 //! with the bearer token and configured issuers.
 use crate::auth::idp_registry::IdpIssuerConfig;
@@ -52,22 +46,10 @@ use std::time::{Duration, Instant};
 
 /// Validator for upstream OIDC bearer tokens with cached discovery/JWKS.
 ///
-/// # Overview
 /// Maintains HTTP client and in-memory caches for discovery and JWKS, enabling
 /// efficient validation for configured issuers.
 ///
-/// # Arguments
 /// - Constructed via [`UpstreamOidcValidator::new`] or `Default`.
-///
-/// # Returns
-/// - Not applicable (stateful validator).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::oidc::UpstreamOidcValidator;
@@ -76,7 +58,6 @@ use std::time::{Duration, Instant};
 /// let validator = UpstreamOidcValidator::new(Duration::from_secs(300), Duration::from_secs(300), 60);
 /// ```
 ///
-/// # Security
 /// - ES256 is accepted by default.
 /// - RS256/RS384/RS512 and PS256/PS384/PS512 are accepted only when configured.
 #[derive(Debug, Clone)]
@@ -92,21 +73,9 @@ pub struct UpstreamOidcValidator {
 
 /// Claims extracted from a validated upstream OIDC token.
 ///
-/// # Overview
 /// Minimal identity payload used to derive a Felix principal.
 ///
-/// # Arguments
 /// - Populated by [`UpstreamOidcValidator::validate`].
-///
-/// # Returns
-/// - Not applicable (data container).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::oidc::ValidatedToken;
@@ -119,7 +88,6 @@ pub struct UpstreamOidcValidator {
 /// assert_eq!(token.subject, "user-1");
 /// ```
 ///
-/// # Security
 /// - The fields are derived from a verified token and should not be tampered with.
 #[derive(Debug, Clone)]
 pub struct ValidatedToken {
@@ -130,22 +98,10 @@ pub struct ValidatedToken {
 
 /// Errors returned during upstream OIDC validation.
 ///
-/// # Overview
 /// Enumerates validation failures such as issuer mismatch, unsupported
 /// algorithms, JWKS lookup errors, or JWT validation errors.
 ///
-/// # Arguments
 /// - Variants carry contextual error information.
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::oidc::OidcError;
@@ -154,7 +110,6 @@ pub struct ValidatedToken {
 /// assert!(matches!(err, OidcError::IssuerNotAllowed));
 /// ```
 ///
-/// # Security
 /// - Error details must not include sensitive token contents.
 #[derive(Debug, thiserror::Error)]
 pub enum OidcError {
@@ -206,24 +161,14 @@ impl Default for UpstreamOidcValidator {
 impl UpstreamOidcValidator {
     /// Create a new validator with explicit cache TTLs and clock skew.
     ///
-    /// # Overview
     /// Configures cache durations for JWKS and discovery documents and sets
     /// allowable clock skew for JWT validation.
     ///
-    /// # Arguments
     /// - `jwks_ttl`: Duration to cache JWKS responses.
     /// - `discovery_ttl`: Duration to cache OIDC discovery documents.
     /// - `clock_skew_seconds`: Allowed time skew for `iat/exp` validation.
     ///
-    /// # Returns
     /// - A configured [`UpstreamOidcValidator`].
-    ///
-    /// # Errors
-    /// - Not applicable.
-    ///
-    /// # Panics
-    /// - Does not panic.
-    ///
     /// # Examples
     /// ```rust
     /// use controlplane::auth::oidc::UpstreamOidcValidator;
@@ -232,7 +177,6 @@ impl UpstreamOidcValidator {
     /// let validator = UpstreamOidcValidator::new(Duration::from_secs(600), Duration::from_secs(600), 30);
     /// ```
     ///
-    /// # Security
     /// - Shorter TTLs reduce exposure to stale keys but increase fetch volume.
     pub fn new(jwks_ttl: Duration, discovery_ttl: Duration, clock_skew_seconds: u64) -> Self {
         Self::new_with_allowed_algorithms(
@@ -271,15 +215,12 @@ impl UpstreamOidcValidator {
 
     /// Validate an upstream OIDC bearer token against configured issuers.
     ///
-    /// # Overview
     /// Enforces allowed algorithms, resolves issuer configuration, fetches JWKS as needed,
     /// and validates issuer/audience/subject claims.
     ///
-    /// # Arguments
     /// - `token`: The JWT bearer token to validate.
     /// - `issuers`: Allowed issuer configurations for the tenant.
     ///
-    /// # Returns
     /// - `Ok(ValidatedToken)` containing issuer, subject, and groups.
     ///
     /// # Errors
@@ -290,10 +231,6 @@ impl UpstreamOidcValidator {
     /// - `OidcError::InvalidJwk` if the JWK metadata does not match the algorithm.
     /// - `OidcError::InvalidClaim` if `iat` is missing or invalid.
     /// - `OidcError::Jwt` for signature/claim validation failures.
-    ///
-    /// # Panics
-    /// - Does not panic.
-    ///
     /// # Examples
     /// ```rust,no_run
     /// use controlplane::auth::oidc::UpstreamOidcValidator;
@@ -304,7 +241,6 @@ impl UpstreamOidcValidator {
     /// }
     /// ```
     ///
-    /// # Security
     /// - The algorithm is pinned to the allowlist for IdP validation only.
     /// - `iss` and `aud` must match configured values.
     pub async fn validate(

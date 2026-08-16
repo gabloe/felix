@@ -1,6 +1,5 @@
 //! Felix client integration and unit tests.
 //!
-//! # Purpose
 //! Exercise client-side publish/subscribe/cache flows against an in-process broker or
 //! lightweight QUIC server, covering success and error paths for:
 //! - publish acks and error mapping

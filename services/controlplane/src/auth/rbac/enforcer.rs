@@ -21,15 +21,12 @@ use casbin::{CoreApi, DefaultModel, Enforcer, MemoryAdapter, MgmtApi, Result};
 
 /// Build an in-memory Casbin enforcer for a tenant domain.
 ///
-/// # What it does
 /// Loads the embedded model, inserts policy and grouping rules, and compiles
 /// role links for efficient enforcement.
 ///
-/// # Why it exists
 /// Centralizes enforcer setup so all authorization decisions use consistent
 /// policy semantics.
 ///
-/// # Invariants
 /// - All policies and groupings are applied with the provided `domain`.
 ///
 /// # Errors

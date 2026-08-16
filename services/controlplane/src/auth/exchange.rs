@@ -1,23 +1,18 @@
 //! Token exchange endpoint handler.
 //!
-//! # Purpose
 //! Validate upstream OIDC tokens, evaluate RBAC permissions, and mint Felix
 //! EdDSA tokens for broker access.
 //!
-//! # Architectural role
 //! This module is the control-plane boundary that turns IdP identity into a
 //! Felix-scoped authorization token for the broker.
 //!
-//! # Callers / consumers
 //! - HTTP clients invoking `/v1/tenants/{tenant_id}/token/exchange`.
 //! - Brokers and SDKs that need a Felix token after authenticating to an IdP.
 //!
-//! # Key invariants
 //! - Upstream IdP tokens must be validated before any Felix token is issued.
 //! - Felix tokens are always EdDSA and include `iss`, `aud`, and `tid` claims.
 //! - Permissions are never widened by the exchange request.
 //!
-//! # Concurrency model
 //! Stateless request handler; relies on async store calls and per-request data.
 //!
 //! # Security boundary
@@ -30,7 +25,6 @@
 //! - The exchange request may attempt to reduce scope, but never increase it.
 //! - Felix tokens must remain EdDSA to avoid RSA fallback in downstream services.
 //!
-//! # How to use
 //! POST a bearer IdP token to `/v1/tenants/{tenant_id}/token/exchange` and use
 //! the returned `felix_token` for broker authentication.
 use crate::api::error::{
@@ -53,23 +47,11 @@ use utoipa::ToSchema;
 
 /// Request body for token exchange, optionally narrowing the permissions.
 ///
-/// # Overview
 /// Allows callers to request a subset of permissions and/or resources that are
 /// already granted by RBAC, without expanding scope.
 ///
-/// # Arguments
 /// - `requested`: Optional list of action names (e.g. `stream.publish`).
 /// - `resources`: Optional list of resource patterns to further narrow access.
-///
-/// # Returns
-/// - Not applicable (data container).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::exchange::TokenExchangeRequest;
@@ -81,7 +63,6 @@ use utoipa::ToSchema;
 /// assert!(req.requested.is_some());
 /// ```
 ///
-/// # Security
 /// - Inputs are treated as a narrowing filter; they must never widen scope.
 #[derive(Debug, Deserialize, ToSchema, Clone, Default)]
 pub struct TokenExchangeRequest {
@@ -91,21 +72,7 @@ pub struct TokenExchangeRequest {
 
 /// Response body for token exchange.
 ///
-/// # Overview
 /// Returns a Felix-issued bearer token and expiration metadata.
-///
-/// # Arguments
-/// - Not applicable (data container).
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::exchange::TokenExchangeResponse;
@@ -118,7 +85,6 @@ pub struct TokenExchangeRequest {
 /// assert_eq!(resp.token_type, "Bearer");
 /// ```
 ///
-/// # Security
 /// - `felix_token` is a bearer token and must be treated as a secret in logs.
 #[derive(Debug, Serialize, ToSchema, Clone)]
 pub struct TokenExchangeResponse {
@@ -129,28 +95,21 @@ pub struct TokenExchangeResponse {
 
 /// Exchange an upstream IdP token for a Felix EdDSA token.
 ///
-/// # Overview
 /// Validates the incoming bearer token against configured issuers, computes
 /// effective permissions via RBAC, optionally narrows them, and mints a Felix
 /// token scoped to the tenant.
 ///
-/// # Arguments
 /// - `tenant_id`: Path parameter identifying the tenant.
 /// - `state`: Shared application state providing store access and OIDC validator.
 /// - `headers`: Incoming HTTP headers containing the bearer token.
 /// - `body`: Optional request body to narrow permissions.
 ///
-/// # Returns
 /// - `Ok(Json<TokenExchangeResponse>)` with a Felix bearer token.
 ///
 /// # Errors
 /// - `401` if the bearer token is missing or invalid.
 /// - `403` if the issuer is not allowed or no permissions are granted.
 /// - `500` for store errors or internal failures.
-///
-/// # Panics
-/// - Does not panic under normal conditions.
-///
 /// # Examples
 /// ```rust,no_run
 /// use axum::extract::{Path, State};
@@ -168,7 +127,6 @@ pub struct TokenExchangeResponse {
 /// }
 /// ```
 ///
-/// # Security
 /// - Upstream tokens are validated before issuing any Felix token.
 /// - Issuer/audience validation and RBAC enforcement are mandatory.
 /// - Felix tokens are always EdDSA; no RSA fallback is permitted.

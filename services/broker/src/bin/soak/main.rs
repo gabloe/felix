@@ -1,6 +1,5 @@
 //! Soak and resource-leak harness for the broker.
 //!
-//! # Purpose
 //! Produces the empirical evidence for M0's concurrency and resource-leak exit
 //! criterion (#154). It drives the broker through sustained load, connection
 //! churn, slow-subscriber saturation, and repeated process restarts, sampling
@@ -21,7 +20,6 @@
 //! - A genuine `SIGTERM` to a genuine child process, which is the gap
 //!   `services/broker/tests/graceful_shutdown.rs` could not cover in-process.
 //!
-//! # How to use
 //! ```text
 //! cargo run --release -p broker --bin soak -- --duration-secs 60
 //! cargo run --release -p broker --bin soak -- --serve-child   # internal

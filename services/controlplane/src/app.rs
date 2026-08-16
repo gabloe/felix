@@ -1,10 +1,8 @@
 //! Control-plane HTTP application wiring.
 //!
-//! # Purpose
 //! Builds the Axum router, configures middleware, and defines the shared
 //! application state injected into handlers.
 //!
-//! # Notes
 //! This module centralizes route composition to keep `main` small and testable.
 use crate::api;
 use crate::api::openapi::ApiDoc;

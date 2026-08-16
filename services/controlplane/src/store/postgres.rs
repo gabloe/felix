@@ -1,92 +1,28 @@
-//! Postgres-backed implementation of the control-plane store.
+//! Postgres-backed implementation of `ControlPlaneStore`.
 //!
-//! # What this module is
-//! This module implements the `ControlPlaneStore` trait using Postgres (via `sqlx`) as a durable,
-//! shared backing store for *control-plane metadata* (tenants, namespaces, streams, caches) used by
-//! Felix components to discover and validate configuration/state.
+//! Stores control-plane *metadata* (tenants, namespaces, streams, caches). Not
+//! the data plane: no events, cache payloads, or broker logs live here.
 //!
-//! # What this module is NOT
-//! This store is **not** the data-plane persistence layer (it does not store events, cache payloads,
-//! broker logs, or durable queues). It stores *metadata* that other services use to decide how to
-//! route, authorize, or configure data-plane behavior.
+//! State is kept twice, and the pairing is the point. Authoritative tables hold
+//! current state and serve `get_*`/`list_*`. Append-only `*_changes` tables hold
+//! an ordered log with a `seq` per table, so a client can bootstrap from
+//! `*_snapshot()` once and then poll `*_changes(since = next_seq)` cheaply.
+//! Every mutation writes both in one transaction, so "object exists but no
+//! change was emitted" cannot happen.
 //!
-//! # Key invariants
-//! - Authoritative tables represent current state; change tables are append-only.
-//! - Each change table has a monotonically increasing `seq`.
-//! - Transactions update authoritative state and append change events atomically.
+//! Three things about `seq` that are easy to get wrong:
+//! - it is monotonic *per change table*, not global across entity types;
+//! - `since` is inclusive (`seq >= since`);
+//! - `next_seq` is `MAX(seq) + 1`, i.e. the first sequence not yet observed.
 //!
-//! # Security model / threat assumptions
-//! - Database URLs may contain credentials; avoid logging them.
-//! - We assume Postgres enforces durability and access control.
-//! - Dynamic SQL is limited to a fixed, internal allowlist.
+//! The optional retention task bounds each change table to the most recent N
+//! rows. That caps growth at the cost of the catch-up window: a client that
+//! falls further behind than N must re-bootstrap from a snapshot. It is
+//! best-effort and never fatal -- a failed pass just retries on the next tick.
 //!
-//! # Concurrency model
-//! - The store is shared across async handlers; `sqlx::PgPool` manages concurrency.
-//! - Each method acquires a pooled connection; pool sizing controls throughput.
-//!
-//! # Data model: authoritative state + append-only change logs
-//! We persist state in two complementary forms:
-//!
-//! 1) **Authoritative tables** (`tenants`, `namespaces`, `streams`, `caches`)
-//!    - These tables represent the *current* state.
-//!    - Reads such as `list_*()` and `get_*()` use these tables.
-//!
-//! 2) **Append-only change tables** (`tenant_changes`, `namespace_changes`, `stream_changes`, `cache_changes`)
-//!    - These tables represent an ordered stream of changes for incremental sync.
-//!    - Each row has a monotonically increasing `seq` (per change table) assigned by Postgres.
-//!    - Each row includes an `op` (Created/Updated/Deleted), entity key columns, and an optional JSON payload.
-//!      Deletions often store `NULL` payloads, but some delete paths include the prior object as a “tombstone”
-//!      for richer downstream caches.
-//!
-//! This design allows clients to either:
-//! - bootstrap from a snapshot of the current state (fast, consistent picture), then
-//! - poll for changes since a checkpoint `seq` (cheap incremental updates).
-//!
-//! # Snapshot + changes contract
-//! Callers generally follow this pattern:
-//! 1) Call `*_snapshot()` once:
-//!    - returns `items` (full state) and `next_seq` (the next change sequence to request)
-//! 2) Periodically call `*_changes(since = next_seq)`:
-//!    - returns a page of changes `items` with `seq >= since` and a new `next_seq` checkpoint
-//! 3) Repeat step 2 using the returned `next_seq`.
-//!
-//! Important details:
-//! - `seq` is monotonic **within each change table**, not globally across entity types.
-//! - `since` is interpreted as **inclusive** (`seq >= since`).
-//! - `next_seq` is computed as `(MAX(seq) + 1)` (or `0` if empty), meaning “the next sequence number
-//!   that has not been observed yet”. If you request `since = next_seq`, you are asking for changes
-//!   that occur strictly after your last observed `seq`.
-//!
-//! # Consistency / atomicity
-//! Mutation operations (`create_*`, `patch_*`, `delete_*`) are implemented as transactions that
-//! update the authoritative table *and* append a corresponding change-log row in the same commit.
-//! This avoids inconsistent states such as “object exists but no change was emitted”.
-//!
-//! # Operational notes
-//! - Migrations are executed at startup via `sqlx::migrate!("./migrations")` to ensure the schema is
-//!   present and compatible before serving API requests.
-//! - Durability semantics come from your Postgres deployment (WAL + fsync settings, replication,
-//!   backups, disk durability). This code assumes Postgres is configured for real durability.
-//! - Connection pooling/timeouts are explicitly configured because hanging forever on DB failures is
-//!   unacceptable for production control-plane services.
-//!
-//! # How to use
-//! Call [`PostgresStore::connect`] with a [`PostgresConfig`] and [`StoreConfig`], then use the
-//! returned store via the [`ControlPlaneStore`] and [`AuthStore`] traits.
-//!
-//! # Retention of change logs (optional)
-//! This module can spawn a best-effort retention task that bounds each change table to the most
-//! recent `N` rows. This prevents unbounded growth, but it reduces the “catch-up window” for clients.
-//! If a client falls behind beyond the retained window, it must re-bootstrap via `*_snapshot()`.
-//!
-//! Retention is intentionally best-effort and operationally conservative: failures do not crash the
-//! service; the task simply retries on the next tick.
-//!
-//! # Security notes
-//! - Use a least-privilege DB role (only the required CRUD and migration permissions).
-//! - Prefer TLS to Postgres in production.
-//! - Avoid dynamic SQL. This module uses dynamic SQL only for retention deletes and only with a
-//!   fixed allowlist of table names defined in code.
+//! Dynamic SQL is confined to those retention deletes, against a fixed
+//! allowlist of table names defined in code.
+
 use super::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult,
 };
@@ -115,18 +51,15 @@ const RETENTION_TICK: Duration = Duration::from_secs(60);
 
 /// Durable control-plane store backed by Postgres.
 ///
-/// # What it does
 /// Implements [`ControlPlaneStore`] and [`AuthStore`] using Postgres as the
 /// authoritative metadata store and change-log backend.
 ///
-/// # Inputs/outputs
 /// - Inputs: Postgres connection config and store config.
 /// - Outputs: durable reads/writes for control-plane metadata.
 ///
 /// # Errors
 /// - Connection and query failures are surfaced as [`StoreError`].
 ///
-/// # Security notes
 /// - Database URLs may include credentials; avoid logging them.
 /// - Use least-privilege DB roles and TLS in production.
 ///
@@ -268,18 +201,15 @@ struct CacheChangeRow {
 impl PostgresStore {
     /// Connect to Postgres, run migrations, and optionally start retention maintenance.
     ///
-    /// # What it does
     /// Creates a connection pool, applies embedded migrations, and starts a
     /// best-effort retention task when configured.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `pg` connection config and `config` store settings.
     /// - Output: a ready-to-use [`PostgresStore`].
     ///
     /// # Errors
     /// - Connection, migration, or pool setup failures.
     ///
-    /// # Security notes
     /// - Avoid logging `pg.url` as it may contain credentials.
     /// - Use TLS and least-privilege DB roles in production.
     ///
@@ -300,18 +230,15 @@ impl PostgresStore {
 
     /// Connect to Postgres without running migrations.
     ///
-    /// # What it does
     /// Creates a connection pool without applying migrations. Intended for tests
     /// that manage migrations externally.
     ///
-    /// # Inputs/outputs
     /// - Inputs: `pg` connection config and `config` store settings.
     /// - Output: a [`PostgresStore`] using the existing schema.
     ///
     /// # Errors
     /// - Connection or pool setup failures.
     ///
-    /// # Security notes
     /// - Avoid logging `pg.url` as it may contain credentials.
     ///
     /// # Example

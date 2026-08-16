@@ -23,13 +23,10 @@ use axum::response::IntoResponse;
 
 /// Structured API error returned by handlers.
 ///
-/// # What it does
 /// Couples an HTTP status code with a JSON error body.
 ///
-/// # Why it exists
 /// Provides a single error type that implements `IntoResponse` for Axum.
 ///
-/// # Invariants
 /// - `status` must match the semantics of `body.code`.
 ///
 /// # Example
@@ -61,11 +58,7 @@ impl IntoResponse for ApiError {
 
 /// Build a 404 Not Found error.
 ///
-/// # What it does
 /// Returns an `ApiError` with code `not_found` and the provided message.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_not_found(message: &str) -> ApiError {
     // Return a consistent not-found error shape.
     ApiError {
@@ -80,11 +73,7 @@ pub fn api_not_found(message: &str) -> ApiError {
 
 /// Build a 404 error for disabled features.
 ///
-/// # What it does
 /// Uses a `not_enabled` code to indicate the endpoint is disabled.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_not_enabled(message: &str) -> ApiError {
     // Use NOT_FOUND to avoid exposing disabled feature presence.
     ApiError {
@@ -99,11 +88,7 @@ pub fn api_not_enabled(message: &str) -> ApiError {
 
 /// Build a 409 Conflict error.
 ///
-/// # What it does
 /// Returns an `ApiError` with a caller-provided conflict code.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_conflict(code: &str, message: &str) -> ApiError {
     // Caller provides a specific conflict code for precise client handling.
     ApiError {
@@ -118,11 +103,7 @@ pub fn api_conflict(code: &str, message: &str) -> ApiError {
 
 /// Build a 500 Internal Server Error from a store error.
 ///
-/// # What it does
 /// Logs the store error and returns a generic internal error response.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_internal(message: &str, err: &StoreError) -> ApiError {
     // Log internal details server-side for debugging; return generic message.
     tracing::error!(error = ?err, "controlplane storage error");
@@ -138,11 +119,7 @@ pub fn api_internal(message: &str, err: &StoreError) -> ApiError {
 
 /// Build a 500 Internal Server Error without a store error.
 ///
-/// # What it does
 /// Returns a generic internal error response with the provided message.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_internal_message(message: &str) -> ApiError {
     // Internal error without a concrete store error to log.
     ApiError {
@@ -157,11 +134,7 @@ pub fn api_internal_message(message: &str) -> ApiError {
 
 /// Build a 401 Unauthorized error.
 ///
-/// # What it does
 /// Returns an `ApiError` with code `unauthorized`.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_unauthorized(message: &str) -> ApiError {
     // Authentication failed or missing.
     ApiError {
@@ -176,11 +149,7 @@ pub fn api_unauthorized(message: &str) -> ApiError {
 
 /// Build a 403 Forbidden error.
 ///
-/// # What it does
 /// Returns an `ApiError` with code `forbidden`.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_forbidden(message: &str) -> ApiError {
     // Authorization failed despite authentication.
     ApiError {
@@ -195,11 +164,7 @@ pub fn api_forbidden(message: &str) -> ApiError {
 
 /// Build a 400 Bad Request validation error.
 ///
-/// # What it does
 /// Returns an `ApiError` with code `validation_error`.
-///
-/// # Errors
-/// - Does not fail.
 pub fn api_validation_error(message: &str) -> ApiError {
     // Client input failed validation or was malformed.
     ApiError {

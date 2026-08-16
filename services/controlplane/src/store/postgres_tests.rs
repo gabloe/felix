@@ -1,23 +1,18 @@
 //! Postgres store unit tests with real DB integration.
 //!
-//! # Purpose
 //! Exercise the Postgres-backed store with real SQL to verify schema, migrations,
 //! and CRUD/change-log behavior.
 //!
-//! # Key invariants
 //! - Tests use a dedicated schema to avoid cross-test contamination.
 //! - Migrations are run once per schema to minimize test time.
 //! - Reset logic truncates tables to a clean baseline.
 //!
-//! # Security model / threat assumptions
 //! - Database URLs may contain credentials; tests should not log them.
 //! - Docker-based Postgres is used only in test environments.
 //!
-//! # Concurrency + ordering guarantees
 //! - Tests are serialized to avoid shared schema races.
 //! - OnceCell guards ensure container/migration setup occurs once.
 //!
-//! # How to use
 //! Run with `cargo test -p controlplane --features pg-tests postgres_store_full_roundtrip`.
 //!
 //! These tests live in a separate module so coverage is attributed to the production

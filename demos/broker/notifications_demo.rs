@@ -1,6 +1,5 @@
 //! Multi-tenant real-time notifications demo (SaaS alerts).
 //!
-//! # Purpose
 //! Demonstrates tenant isolation, fanout subscriptions, cache snapshots, and
 //! failure injection for alert-style workloads.
 //!

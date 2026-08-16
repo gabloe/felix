@@ -1,24 +1,19 @@
 //! Felix JWT token minting and verification helpers.
 //!
-//! # Purpose
 //! Define claim structures and helpers for signing/verifying tenant-scoped
 //! access tokens used by the broker and control-plane APIs.
 //!
-//! # Architectural role
 //! Centralizes Felix token semantics (claims, issuer/audience, EdDSA signing)
 //! and key caching to ensure consistent verification across services.
 //!
-//! # Callers / consumers
 //! - Token exchange handler mints Felix tokens.
 //! - Broker and control-plane components verify Felix tokens.
 //! - Tests that assert EdDSA-only behavior and key rotation logic.
 //!
-//! # Key invariants
 //! - Felix tokens are always EdDSA (Ed25519) and never RSA/HS variants.
 //! - `iss`, `aud`, and `tid` claims are mandatory and validated.
 //! - The private key is a 32-byte Ed25519 seed; the public key must match it.
 //!
-//! # Concurrency model
 //! Thread-safe key cache protected by `RwLock`; safe for concurrent reads and
 //! rare writes when keys rotate or are first used.
 //!
@@ -33,7 +28,6 @@
 //!   side-channel risk compared to RSA.
 //! - Key IDs (`kid`) are used for rotation but are not secrets.
 //!
-//! # How to use
 //! Use [`mint_token`] to issue a Felix token and [`verify_token`] to validate it
 //! against a tenant's signing keys, including rotation handling.
 //!
@@ -78,22 +72,10 @@ const ED25519_KEY_LEN: usize = 32;
 
 /// Claims carried by Felix-issued JWTs.
 ///
-/// # Overview
 /// These claims encode issuer, audience, tenant scope, subject, and permissions
 /// for the broker to authorize access.
 ///
-/// # Arguments
 /// - Fields are populated during minting or decoding.
-///
-/// # Returns
-/// - Not applicable (data container).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::FelixClaims;
@@ -111,10 +93,8 @@ const ED25519_KEY_LEN: usize = 32;
 /// assert_eq!(claims.tid, "tenant-a");
 /// ```
 ///
-/// # Security
 /// - `perms` and `tid` are authorization-critical and must be validated.
 ///
-/// # Performance
 /// - Plain data container; cloning scales with permission count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FelixClaims {
@@ -131,25 +111,13 @@ pub struct FelixClaims {
 
 /// Felix signing key material for a tenant.
 ///
-/// # Overview
 /// Holds the Ed25519 private seed and public key along with its `kid` and
 /// algorithm for token minting.
 ///
-/// # Arguments
 /// - `kid`: Key ID used for JWKS lookup and rotation.
 /// - `alg`: Must be `Algorithm::EdDSA` for Felix tokens.
 /// - `private_key`: Raw 32-byte Ed25519 seed (must not be logged).
 /// - `public_key`: Ed25519 public key derived from the seed.
-///
-/// # Returns
-/// - Not applicable (data container).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::SigningKey;
@@ -167,11 +135,9 @@ pub struct FelixClaims {
 /// assert_eq!(key.alg, Algorithm::EdDSA);
 /// ```
 ///
-/// # Security
 /// - Never serialize or log `private_key`.
 /// - `alg` must remain EdDSA to avoid RSA fallback.
 ///
-/// # Performance
 /// - Copying this struct is cheap (fixed-size arrays).
 #[derive(Debug, Clone)]
 pub struct SigningKey {
@@ -183,23 +149,11 @@ pub struct SigningKey {
 
 /// Current and previous signing keys for a tenant.
 ///
-/// # Overview
 /// Supports key rotation by keeping a current key and a list of previous keys
 /// that may still validate existing tokens.
 ///
-/// # Arguments
 /// - `current`: The active signing key for new tokens.
 /// - `previous`: Older keys still accepted for verification.
-///
-/// # Returns
-/// - Not applicable (data container).
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::{SigningKey, TenantSigningKeys};
@@ -220,10 +174,8 @@ pub struct SigningKey {
 /// assert!(keys.previous.is_empty());
 /// ```
 ///
-/// # Security
 /// - Previous keys are still valid for verification; rotate carefully.
 ///
-/// # Performance
 /// - Cloning scales with the number of previous keys.
 #[derive(Debug, Clone)]
 pub struct TenantSigningKeys {
@@ -234,21 +186,14 @@ pub struct TenantSigningKeys {
 impl TenantSigningKeys {
     /// Validate the integrity of all signing keys.
     ///
-    /// # Overview
     /// Ensures all keys are EdDSA and that public keys match the private seed.
     ///
-    /// # Arguments
     /// - `&self`: The key set to validate.
     ///
-    /// # Returns
     /// - `Ok(())` if all keys are valid.
     ///
     /// # Errors
     /// - `TokenError::Key` if any key is invalid or mismatched.
-    ///
-    /// # Panics
-    /// - Does not panic.
-    ///
     /// # Examples
     /// ```rust
     /// use controlplane::auth::felix_token::{SigningKey, TenantSigningKeys};
@@ -269,10 +214,8 @@ impl TenantSigningKeys {
     /// let _ = keys.validate();
     /// ```
     ///
-    /// # Security
     /// - Prevents accidental use of RSA/HS algorithms for Felix tokens.
     ///
-    /// # Performance
     /// - Validation is O(number of keys).
     pub fn validate(&self) -> Result<(), TokenError> {
         // Step 1: Validate the current key before any verification attempt.
@@ -287,22 +230,12 @@ impl TenantSigningKeys {
 
     /// Iterate over current and previous keys in rotation order.
     ///
-    /// # Overview
     /// Returns an iterator where the current key is first, followed by previous
     /// keys. This ordering matters when trying keys for verification.
     ///
-    /// # Arguments
     /// - `&self`: The key set to iterate.
     ///
-    /// # Returns
     /// - An iterator of `&SigningKey` in verification order.
-    ///
-    /// # Errors
-    /// - Not applicable.
-    ///
-    /// # Panics
-    /// - Does not panic.
-    ///
     /// # Examples
     /// ```rust
     /// use controlplane::auth::felix_token::{SigningKey, TenantSigningKeys};
@@ -324,10 +257,8 @@ impl TenantSigningKeys {
     /// assert_eq!(iter.next().unwrap().kid, "k1");
     /// ```
     ///
-    /// # Security
     /// - Current key is always tried first to minimize acceptance of older keys.
     ///
-    /// # Performance
     /// - Iterator creation is O(1); iteration is linear in key count.
     pub fn all_keys(&self) -> impl Iterator<Item = &SigningKey> {
         std::iter::once(&self.current).chain(self.previous.iter())
@@ -337,22 +268,15 @@ impl TenantSigningKeys {
 impl SigningKey {
     /// Validate that the signing key is Ed25519 and consistent.
     ///
-    /// # Overview
     /// Ensures the algorithm is EdDSA and the public key matches the private
     /// seed to prevent mismatched or malformed key material.
     ///
-    /// # Arguments
     /// - `&self`: The signing key to validate.
     ///
-    /// # Returns
     /// - `Ok(())` if the key is valid.
     ///
     /// # Errors
     /// - `TokenError::Key` if the algorithm is not EdDSA or keys mismatch.
-    ///
-    /// # Panics
-    /// - Does not panic.
-    ///
     /// # Examples
     /// ```rust
     /// use controlplane::auth::felix_token::SigningKey;
@@ -370,10 +294,8 @@ impl SigningKey {
     /// let _ = key.validate();
     /// ```
     ///
-    /// # Security
     /// - Rejects any non-EdDSA algorithms to prevent RSA fallback.
     ///
-    /// # Performance
     /// - Validation is constant time for a single key.
     pub fn validate(&self) -> Result<(), TokenError> {
         // Step 1: Enforce the EdDSA-only invariant for Felix tokens.
@@ -399,21 +321,9 @@ impl SigningKey {
 
 /// Errors produced by token minting or verification.
 ///
-/// # Overview
 /// Wraps JWT decoding/encoding errors and key validation errors.
 ///
-/// # Arguments
 /// - Variants carry detailed error context for debugging.
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::TokenError;
@@ -423,10 +333,8 @@ impl SigningKey {
 /// assert!(matches!(err, TokenError::Jwt(_)));
 /// ```
 ///
-/// # Security
 /// - Error messages must not leak private key material.
 ///
-/// # Performance
 /// - Error construction is O(1) and clone-free.
 #[derive(Debug)]
 pub enum TokenError {
@@ -460,26 +368,19 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
 
 /// Mint a Felix EdDSA token for a tenant and principal.
 ///
-/// # Overview
 /// Builds Felix claims, enforces key validity, and signs using Ed25519.
 ///
-/// # Arguments
 /// - `keys`: Tenant signing keys, including current key for signing.
 /// - `tenant_id`: Tenant identifier to embed in `tid`.
 /// - `principal_id`: Subject identifier to embed in `sub`.
 /// - `perms`: Permission strings granted to the token.
 /// - `ttl`: Time-to-live for the token.
 ///
-/// # Returns
 /// - `Ok(String)` containing the signed JWT.
 ///
 /// # Errors
 /// - `TokenError::Key` if key validation fails.
 /// - `TokenError::Jwt` if encoding fails.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::{mint_token, SigningKey, TenantSigningKeys};
@@ -501,11 +402,9 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
 /// let _ = mint_token(&keys, "tenant-a", "principal", vec![], Duration::from_secs(60));
 /// ```
 ///
-/// # Security
 /// - The algorithm is pinned to EdDSA and the token includes `iss`, `aud`, `tid`.
 /// - Never log the resulting token in production logs.
 ///
-/// # Performance
 /// - Uses a cached encoding key to avoid repeated PKCS8 conversion.
 pub fn mint_token(
     keys: &TenantSigningKeys,
@@ -544,26 +443,19 @@ pub fn mint_token(
 
 /// Verify a Felix token against a tenant's signing keys.
 ///
-/// # Overview
 /// Validates JWT header, issuer, audience, tenant ID, and signature using the
 /// current and previous Ed25519 keys, with `kid`-guided ordering.
 ///
-/// # Arguments
 /// - `keys`: Tenant signing keys including current and previous keys.
 /// - `tenant_id`: Expected tenant ID in the `tid` claim.
 /// - `token`: The JWT string to verify.
 /// - `leeway`: Allowed clock skew in seconds.
 ///
-/// # Returns
 /// - `Ok(FelixClaims)` if the token is valid and tenant-scoped.
 ///
 /// # Errors
 /// - `TokenError::Jwt` for JWT validation/decoding failures.
 /// - `TokenError::Key` if key validation fails.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::{verify_token, SigningKey, TenantSigningKeys};
@@ -584,11 +476,9 @@ pub fn mint_token(
 /// let _ = verify_token(&keys, "tenant-a", "token", 0);
 /// ```
 ///
-/// # Security
 /// - Enforces `iss`, `aud`, and `tid` checks to prevent token confusion.
 /// - Only EdDSA tokens are accepted; RSA/HS are rejected via key validation.
 ///
-/// # Performance
 /// - Tries keys in `kid`-preferred order to reduce failed verification attempts.
 pub fn verify_token(
     keys: &TenantSigningKeys,
@@ -737,22 +627,10 @@ fn key_cache() -> &'static FelixKeyCache {
 
 /// Invalidate cached key material for a tenant.
 ///
-/// # Overview
 /// Clears both encoding and decoding caches for a tenant so rotations take
 /// effect immediately.
 ///
-/// # Arguments
 /// - `tenant_id`: Tenant identifier whose cached keys should be removed.
-///
-/// # Returns
-/// - Not applicable.
-///
-/// # Errors
-/// - Not applicable.
-///
-/// # Panics
-/// - Does not panic.
-///
 /// # Examples
 /// ```rust
 /// use controlplane::auth::felix_token::invalidate_tenant_cache;
@@ -760,10 +638,8 @@ fn key_cache() -> &'static FelixKeyCache {
 /// invalidate_tenant_cache("tenant-a");
 /// ```
 ///
-/// # Security
 /// - Should be called after key rotation to avoid accepting stale keys.
 ///
-/// # Performance
 /// - Eviction is linear in cached entries for the tenant.
 pub fn invalidate_tenant_cache(tenant_id: &str) {
     key_cache().invalidate_tenant(tenant_id);

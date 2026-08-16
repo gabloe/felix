@@ -1,27 +1,22 @@
 #![cfg(feature = "pg-tests")]
 //! Postgres-backed control-plane store end-to-end tests.
 //!
-//! # Purpose
 //! Exercise the Postgres store against a real database to validate:
 //! - schema migrations and connection setup
 //! - CRUD + snapshot/changefeed behaviors
 //! - auth/bootstrap tables (IdP issuers, RBAC, signing keys)
 //! - retention trimming and cascade delete semantics
 //!
-//! # Key invariants
 //! - Tests use isolated schemas to avoid cross-test contamination.
 //! - Felix signing keys are Ed25519 and stored as raw 32-byte seeds.
 //! - Change streams are monotonically increasing per table.
 //!
-//! # Security model / threat assumptions
 //! - Database URLs may include credentials and must not be logged.
 //! - Tokens/keys in these tests are fixtures only and not secrets in production.
 //!
-//! # Concurrency + ordering guarantees
 //! - Tests are serialized via `serial_test` to avoid shared container races.
 //! - JWKS/bootstrap paths are exercised after stores are fully initialized.
 //!
-//! # How to use
 //! Run with `cargo test -p controlplane --features pg-tests pg_store_e2e`.
 //!
 //! # Test infrastructure

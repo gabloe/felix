@@ -1,6 +1,5 @@
 //! Client-side defaults and transport configuration helpers.
 //!
-//! # Purpose
 //! Holds configuration defaults, env/YAML parsing, and transport tuning knobs
 //! for the Felix client. These settings control connection pools, stream
 //! windows, sharding behavior, and safety caps.

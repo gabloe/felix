@@ -1,16 +1,13 @@
 //! Graceful shutdown / drain integration tests for the QUIC accept loop.
 //!
-//! # Purpose
 //! Cover the transport half of the SIGTERM lifecycle: cancelling the accept token
 //! must stop *admitting* connections without killing the ones already accepted, and
 //! the drain must be bounded.
 //!
-//! # Key invariants
 //! - Cancellation stops admission; accepted connections keep running.
 //! - The accept loop exits promptly even when parked on an idle listener.
 //! - `TaskTracker::wait` resolves once tracked connections finish.
 //!
-//! # How to use
 //! Run with `cargo test -p broker --test graceful_shutdown`.
 use anyhow::Result;
 use broker::auth::BrokerAuth;

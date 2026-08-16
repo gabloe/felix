@@ -1,19 +1,13 @@
 //! Error types for Felix authorization and token processing.
 //!
-//! # Purpose
 //! Centralizes error variants for authz validation, key handling, and JWT work.
 //!
 //! # How it fits
 //! All authz modules return [`AuthzResult`] with these variants to keep error
 //! handling consistent across broker and control-plane code.
 //!
-//! # Key invariants
 //! - Variants are stable; external callers may match on them.
 //! - JWT errors are wrapped to preserve context from `jsonwebtoken`.
-//!
-//! # Important configuration
-//! - None.
-//!
 //! # Examples
 //! ```rust
 //! use felix_authz::{AuthzError, AuthzResult};
@@ -40,7 +34,6 @@ use thiserror::Error;
 /// # Summary
 /// Enumerates the failure modes for token, key, and permission handling.
 ///
-/// # Invariants
 /// - Variants that carry tenant IDs must include the raw tenant string.
 ///
 /// # Example

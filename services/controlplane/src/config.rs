@@ -1,10 +1,8 @@
 //! Control-plane configuration and defaults.
 //!
-//! # Purpose
 //! Defines config structs, defaults, and env/YAML parsing for the control-plane
 //! service, including storage backend selection and bootstrap settings.
 //!
-//! # Notes
 //! Defaults are chosen to keep dev setups simple while still bounding resource use.
 use anyhow::{Context, Result, anyhow};
 use jsonwebtoken::Algorithm;

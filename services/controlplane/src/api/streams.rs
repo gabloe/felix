@@ -1,6 +1,5 @@
 //! Stream API handlers.
 //!
-//! # Purpose
 //! Implements stream CRUD, patching, snapshot, and changefeed endpoints with
 //! tenant/namespace validation.
 use crate::api::ensure_tenant_namespace;

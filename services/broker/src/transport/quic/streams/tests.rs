@@ -1,23 +1,18 @@
 //! QUIC stream unit/integration tests for the broker transport.
 //!
-//! # Purpose
 //! Cover the control/uni loops, writer/ack waiter branches, and telemetry paths
 //! to ensure protocol handling and backpressure behaviors remain correct.
 //!
-//! # Key invariants
 //! - QUIC streams preserve ordering per stream and per connection.
 //! - Ack/writer loops respect backpressure and timeouts.
 //! - Felix tokens are EdDSA and verified via JWKS.
 //!
-//! # Security model / threat assumptions
 //! - Test keys and tokens are fixtures only; do not log secrets in production.
 //! - RSA is not used for Felix tokens; EdDSA is enforced.
 //!
-//! # Concurrency + ordering guarantees
 //! - Tests use local loopback and serial sections to avoid races.
 //! - Many tests spawn background tasks; ordering is validated explicitly.
 //!
-//! # How to use
 //! Run with `cargo test -p broker quic` or narrow with individual test names.
 use anyhow::{Context, Result};
 use base64::Engine;

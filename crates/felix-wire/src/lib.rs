@@ -1,6 +1,5 @@
 //! Wire format for framing Felix protocol messages.
 //!
-//! # Purpose
 //! Defines the frame header layout, message enums, and JSON/binary encoders
 //! used by broker and client transports to communicate over QUIC.
 //!

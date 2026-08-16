@@ -1,6 +1,5 @@
 //! QUIC subscribe integration tests for broker control/event streams.
 //!
-//! # Purpose
 //! Validate subscription lifecycle and error handling over QUIC, including:
 //! - auth enforcement and missing stream errors
 //! - event delivery + cancel cleanup
@@ -9,18 +8,14 @@
 //!
 //! These tests use ephemeral QUIC servers and in-memory broker state.
 //!
-//! # Key invariants
 //! - Felix tokens are EdDSA and verified via JWKS.
 //! - Subscription ordering is preserved per stream.
 //!
-//! # Security model / threat assumptions
 //! - Test keys are fixtures only and must not be logged in production.
 //! - No database or token secrets are written to logs.
 //!
-//! # Concurrency + ordering guarantees
 //! - Tests are serialized to avoid port collisions and shared state races.
 //!
-//! # How to use
 //! Run with `cargo test -p broker quic_subscribe`.
 use anyhow::Result;
 use base64::Engine;

@@ -29,10 +29,8 @@ use axum::extract::State;
 )]
 /// Return control-plane identity and feature flags.
 ///
-/// # What it does
 /// Exposes region ID, API version, and feature toggles.
 ///
-/// # Why it exists
 /// Enables clients and operators to discover capabilities at runtime.
 ///
 /// # Errors
@@ -56,10 +54,8 @@ pub(crate) async fn system_info(State(state): State<AppState>) -> Json<SystemInf
 )]
 /// Return control-plane health status.
 ///
-/// # What it does
 /// Probes the backing store and returns `ok` if healthy.
 ///
-/// # Why it exists
 /// Supports readiness/liveness checks and operational monitoring.
 ///
 /// # Errors

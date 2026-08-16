@@ -1,10 +1,8 @@
 //! Latency demo binary for QUIC publish/subscribe.
 //!
-//! # Purpose
 //! Runs a controlled pub/sub workload against an in-process broker and reports
 //! latency percentiles and throughput for different payload sizes and fanout.
 //!
-//! # Notes
 //! Intended for benchmarking and tuning; not part of production runtime.
 //!
 //! Throughput fairness experiments:

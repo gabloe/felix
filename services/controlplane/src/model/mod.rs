@@ -1,6 +1,5 @@
 //! Control-plane data model module.
 //!
-//! # Purpose
 //! Re-exports the core tenant/namespace/stream/cache models and change payloads
 //! used by the API and store layers.
 mod cache;
