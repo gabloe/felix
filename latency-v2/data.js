@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786845050956,
+  "lastUpdate": 1786854299697,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -2772,6 +2772,72 @@ window.BENCHMARK_DATA = {
             "range": "790.99",
             "unit": "us",
             "extra": "trials: 5\nmedian: 903.00\nmean: 1187.00\nstdev: 790.99\ncv: 66.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a36c52c861b10f9f30ef72ddf364a88f85ba61ec",
+          "message": "Users/gabloe/cleanup (#199)\n\n* docs: strip boilerplate scaffolding from doc comments\n\nA section template had been applied mechanically across the repo --\n\"# Purpose\", \"# Architectural role\", \"# Callers / consumers\", \"# What it\ndoes\", \"# Why it exists\", \"# Inputs/Outputs\" -- including sections whose\nentire body was \"Not applicable.\" or \"Does not panic.\" on plain data\nstructs.\n\nRemoves the invented headings while keeping their prose, and drops\nsections whose body says nothing. The conventional rustdoc sections\n(# Errors, # Panics, # Safety, # Examples) are kept, because those render\nmeaningfully and readers look for them; only their no-op bodies go.\n\nRewrites the two worst module headers by hand: the Postgres store (89\nlines -> 24, keeping the authoritative-plus-change-log design and the\nthree `seq` rules that are genuinely easy to get wrong) and the QUIC\nsubscribe handler (46 -> 16).\n\n903 comment lines removed. Verified mechanically: `git diff` shows zero\nchanges to any non-comment line, so this cannot have altered behaviour.\n\nAlso updates CLAUDE.md, which had told future readers to match the\nexisting comment density -- the opposite of what this repo needs. It now\nasks for a sentence or two on non-obvious constraints, no restating of\ncode, no narrating history, and long explanations moved to docs/ behind a\npointer. Adds a preference for `pub(crate)`, since most of the workspace's\npublic surface is only used internally.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(perf): make the publish-parallelism ladder actually vary parallelism\n\nP1_hash..P8_rr were meant to sweep publish parallelism by raising\n--pub-conns and --pub-streams-per-conn. None of them set\n--pub-stream-count, so it stayed at 1, and `hash_stream` picks a worker by\nhashing the *stream name* -- a constant when there is only one stream.\nEvery preset therefore funnelled all traffic onto a single worker\nregardless of how many existed, and the six presets measured the same\nconfiguration six times:\n\n  batch=64 binary: P1=325864 P2=345082 P4=324774 P8=320439 P8_rr=331318\n\nStream count now tracks worker count so the ladder can spread. Adds\nP8_hash_1stream -- eight workers all serving one stream -- so the cost of\nper-stream ordering is isolated from publish parallelism rather than\nconflated with it, and restores the rr/rrN distinction (1 stream vs 8),\nwhich had been the only thing separating them.\n\nNote this does not change the conclusion: with the ladder fixed,\nthroughput is still flat at ~330k msg/s from 1 worker to 8, and the\nsingle-stream control matches. The ceiling is real and is not\nparallelism. It was simply not measurable before.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-15T21:22:58-07:00",
+          "tree_id": "c2b8fd99c7345b70bcbd5f779e5f0243c2e8fd23",
+          "url": "https://github.com/gabloe/felix/commit/a36c52c861b10f9f30ef72ddf364a88f85ba61ec"
+        },
+        "date": 1786854297180,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "2.51",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 163.60\nstdev: 2.51\ncv: 1.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 215,
+            "range": "3.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 215.00\nmean: 214.00\nstdev: 3.00\ncv: 1.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 258,
+            "range": "8.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 256.60\nstdev: 8.32\ncv: 3.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 207,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 207.20\nstdev: 0.84\ncv: 0.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 516,
+            "range": "12.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 516.00\nmean: 511.00\nstdev: 12.75\ncv: 2.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 752,
+            "range": "51.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 752.00\nmean: 738.60\nstdev: 51.41\ncv: 6.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
