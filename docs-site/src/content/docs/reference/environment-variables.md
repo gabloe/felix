@@ -871,9 +871,20 @@ export FELIX_MAX_UDP_PAYLOAD="65527"
 
 **Description**: Size of the dedicated QUIC I/O runtime pool. Quinn's driver tasks (endpoint receive loop, per-connection transmit/ACK loops) do a bounded slice of work per poll and reschedule themselves, so their scheduler re-poll latency is the transport's throughput ceiling. Felix therefore runs them on a pool of single-threaded runtimes isolated from application tasks, assigned by role: server endpoints spread across every runtime but the last, client endpoints share the last. `0` disables the isolation and runs drivers on the application runtime (the pre-fix behavior). A larger pool cannot make a single endpoint faster — an endpoint's driver is one task on one runtime — and it splits endpoints that talk to each other onto separate threads, which measured 5–6× slower.
 
+:::caution[A macOS optimization; off by default elsewhere]
+The ceiling this pool removes is specific to macOS. On Linux the same
+benchmark already sustains ~643 MB/s (628 K msg/s × 1 KiB) *without* it —
+more than macOS reaches even with the pool — and isolating the drivers there
+only adds a cross-thread hop per datagram. Measured on Linux: p50 latency
+86 µs → 152 µs and fanout-10 throughput 1.48 M → 1.09 M msg/s, consistent
+across pool sizes 1/2/4/8 and with pump colocation on or off. Non-macOS
+platforms therefore default to `0`; set the variable explicitly to
+experiment.
+:::
+
 **Type**: Non-negative integer
 
-**Default**: `2`
+**Default**: `2` on macOS, `0` elsewhere
 
 ```bash
 export FELIX_IO_RUNTIME_THREADS="2"

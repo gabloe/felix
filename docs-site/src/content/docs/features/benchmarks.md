@@ -116,9 +116,15 @@ Against the pre-fix ceiling of ~73 MB/s — which was flat across every payload
 size — that is roughly a **7× improvement**, and the byte rate now rises with
 payload size instead of pinning to a constant.
 
-These are macOS figures. The transport work behind them is platform-neutral
-and enabled everywhere, but Linux has not been re-measured on the fixed
-pipeline, so no Linux numbers are published here yet.
+These are macOS figures, and the ceiling they describe is a macOS pathology.
+Spot-checked on Linux (4-CPU container, 1 KiB × batch 64 × fanout 1), the
+*pre-fix* baseline already sustains ~628 K msg/s ≈ 643 MB/s — above what
+macOS reaches with every fix applied. The dedicated I/O runtime pool is
+therefore enabled on macOS only; on Linux it measures slower (see
+`FELIX_IO_RUNTIME_THREADS` in the
+[environment variable reference](/felix/reference/environment-variables/)).
+A proper Linux benchmark run has not been done, so no Linux table is
+published here yet.
 
 :::note[Why the spread column is tight]
 Trial-to-trial spread this narrow is itself a result of the path-MTU fix in

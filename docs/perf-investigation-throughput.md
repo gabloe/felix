@@ -5,10 +5,13 @@ throughput, particularly at larger payload sizes. Records what was measured,
 what was concluded, and — importantly — which hypotheses turned out to be
 wrong.
 
-**Status: resolved. Main ceiling fixed (rounds 7–10); the residual bimodality
-was a path-MTU black-hole collapse (round 15); the Linux CI failure that
-followed was publish-side shedding in an under-configured test, not a
-transport defect (round 16).**
+**Status: resolved for macOS, open for Linux.** Main ceiling fixed (rounds
+7–10); residual bimodality was a path-MTU black-hole collapse (round 15); the
+Linux CI failure was publish-side shedding in an under-configured test (round
+16). Round 17 then established that **the ceiling itself is macOS-specific** —
+Linux is faster at the pre-fix baseline than macOS is after every fix — and
+that the I/O runtime pool must stay off there. Everything measured in rounds
+1–16 is macOS; Linux has never been properly benchmarked.
 The ceiling was scheduling, not any Felix
 stage: quinn's driver tasks do a bounded slice of work per poll and reschedule
 themselves, so sustained throughput is that slice divided by scheduler re-poll
@@ -1388,6 +1391,71 @@ Worth carrying separately: a 400-message unacked burst shedding ~19% at
 default settings on a 4-CPU host is *documented* behaviour, not a bug — but
 it is a sharper edge than the docs' "overload becomes visible" framing
 suggests, and worth revisiting when the ingress queue depth is next tuned.
+
+## Round 17: the ceiling was macOS-specific, and the pool hurts Linux
+
+GitHub was down, so the PR could not be re-tested; running CI's checks locally
+in a Linux container answered a question the whole investigation had left
+open — **all of rounds 1–16 were measured on macOS.**
+
+An A/B of the branch against the merge-base, same container, same configs
+(CI's `ci_subset_*` shapes, 5 trials each):
+
+| Metric | Base | Branch | Delta |
+|---|---:|---:|---:|
+| p50 latency, fanout 1 | 82 µs | 154 µs | **+88%** |
+| p50 latency, fanout 10 | 87 µs | 149 µs | **+71%** |
+| Throughput, fanout 1 | 628 K msg/s | 577 K | −8% |
+| Throughput, fanout 10 | 1.46 M msg/s | 1.09 M | **−25%** |
+
+Distributions are tight on both sides (base 78–85 µs, branch 151–155 µs), so
+this is not noise. It is also what CI's "18 potential performance
+regressions" was reporting — that verdict was correct and was *not* an
+artifact of the round-16 shedding bug.
+
+### Which change, and can it be tuned out
+
+Bisected by environment switch on the branch binary:
+
+| Config | p50 |
+|---|---|
+| default | 151–152 µs |
+| **`FELIX_IO_RUNTIME_THREADS=0`** | **82–86 µs** (= base) |
+| `FELIX_ACK_FREQ_DISABLE=1` | 157–160 µs |
+| both off | 83–85 µs |
+
+The I/O runtime pool accounts for all of it; ACK-frequency tuning and ack
+pipelining are innocent (both remain active in the restored-latency config).
+No variant recovers it — pool sizes 1, 2, 4 and 8 all land at 150–153 µs, and
+disabling pump colocation only partially recovers throughput (1.09 M → 1.19 M
+against the base's 1.48 M) while leaving latency unchanged.
+
+### Why: Linux never had the ceiling
+
+The decisive number is the *base* Linux throughput: 628 K msg/s at 1 KiB is
+**~643 MB/s of payload**, higher than macOS reaches with every fix in this
+branch applied (461 MB/s at 1 KiB). The ~73 MB/s per-byte ceiling that
+started this investigation does not exist on Linux at all.
+
+That reframes the pool. It removes a macOS scheduling pathology — quinn's
+bounded-work drivers re-polling slowly on a shared, loaded runtime. Linux's
+scheduler evidently does not have that pathology, so isolating drivers there
+buys nothing and costs a cross-thread hop per datagram, which is exactly what
+the numbers show.
+
+### Disposition
+
+The pool defaults to `2` on macOS and `0` elsewhere. This is the same code
+shape as the round-16 gate that was reverted — but for the opposite reason,
+and this time with both platforms measured: not "Linux is unvalidated", but
+"Linux is measurably faster without it".
+
+**Open, and now the highest-value perf question:** Linux is the primary
+deployment target and has never been benchmarked properly. Everything
+published in `benchmarks.md` is macOS. Before any further transport tuning,
+the matrix should be run on a real Linux host to establish where its ceiling
+actually is — the optimization targets there are likely entirely different
+from the ones rounds 1–15 chased.
 
 ## Everything changed this session
 

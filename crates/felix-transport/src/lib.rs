@@ -54,10 +54,24 @@ fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
         // at 6 runtimes before endpoints were grouped by role: slow mode on
         // every run. Two is what the roles need: servers on one, clients on the
         // other.
+        // Driver isolation is a macOS optimization; on Linux it is a
+        // pessimization, so it is defaulted on only where it measures faster.
+        //
+        // The ~7.5x per-byte ceiling this pool was built to fix is specific to
+        // macOS: on Linux the same benchmark at the pre-fix baseline already
+        // sustains ~643 MB/s (628K msg/s x 1 KiB), above what macOS reaches
+        // even with every fix applied. Isolating drivers there only adds a
+        // cross-thread hop per datagram, and it measures that way — p50
+        // latency 86 us -> 152 us and fanout-10 throughput 1.48M -> 1.09M
+        // msg/s, consistent across pool sizes 1/2/4/8 and with pump
+        // colocation both on and off.
+        //
+        // `FELIX_IO_RUNTIME_THREADS` overrides on any platform.
+        let default_threads = if cfg!(target_os = "macos") { 2 } else { 0 };
         let threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(2);
+            .unwrap_or(default_threads);
         (0..threads)
             .filter_map(|index| {
                 tokio::runtime::Builder::new_multi_thread()

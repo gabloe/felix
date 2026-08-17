@@ -13,6 +13,15 @@ The mechanisms and the code that implements them are described in
 [Concurrency internals](/felix/development/internals-concurrency/#the-quic-io-runtime).
 Current numbers are in [Benchmarks](/felix/features/benchmarks/).
 
+:::note[Scope: these are macOS findings]
+Every measurement here is macOS on loopback, and the first defect turns out
+to be a macOS pathology: the same benchmark on Linux sustains ~643 MB/s at
+the *pre-fix* baseline, above what macOS reaches with all of these fixes
+applied. The dedicated I/O runtime pool is therefore enabled on macOS only —
+on Linux it measures slower. The second defect (the MTU black-hole collapse)
+and the measurement lessons are platform-neutral.
+:::
+
 ## Defect 1: a throughput ceiling exactly proportional to bytes
 
 ### The symptom
