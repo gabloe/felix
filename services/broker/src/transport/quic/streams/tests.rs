@@ -475,6 +475,13 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
     let config = BrokerConfig {
         subscriber_queue_policy: felix_broker::SubQueuePolicy::Block,
         subscriber_lane_queue_policy: felix_broker::SubQueuePolicy::Block,
+        // Losslessness needs the *publish* side to block too. Checkpoint 4 (the
+        // per-worker ingress queue, depth 64) defaults to `Drop`, so an unacked
+        // burst that outruns the broker core is shed by design — measured here
+        // as 77 of 400 publishes dropped, which reads as a delivery stall
+        // because the events were never published at all. Blocking pins the
+        // whole path, which is what this test's ordering assertion assumes.
+        pub_ingress_wait: true,
         ..BrokerConfig::default()
     };
     let server_task = tokio::spawn(crate::transport::quic::serve(

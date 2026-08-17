@@ -202,14 +202,8 @@ saturated resource.
 
 Felix therefore runs quinn drivers on a pool of dedicated *single-threaded*
 runtimes, high QoS on macOS, via a custom `quinn::Runtime` implementation.
-`FELIX_IO_RUNTIME_THREADS` sizes the pool (`0` restores the shared runtime).
-
-The pool is **enabled by default on macOS only**. On Linux it currently
-loses a delivery wakeup — the receiver's QUIC layer accepts and ACKs a
-stream frame the application is never woken to read, stalling the
-connection until it times out — so non-macOS platforms default to `0`
-until that is resolved. Everything below describes the pool as it behaves
-where it is enabled.
+`FELIX_IO_RUNTIME_THREADS` sizes the pool (default: 2; `0` restores the
+shared runtime).
 
 Which endpoints share a runtime is load-bearing. Assignment is by role,
 not round-robin: server endpoints spread across every runtime but the last,

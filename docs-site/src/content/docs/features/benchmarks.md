@@ -116,14 +116,9 @@ Against the pre-fix ceiling of ~73 MB/s — which was flat across every payload
 size — that is roughly a **7× improvement**, and the byte rate now rises with
 payload size instead of pinning to a constant.
 
-These are macOS figures, and the transport work behind them is not all active
-on other platforms: the dedicated QUIC I/O runtime pool — the largest single
-contributor — is enabled by default on macOS only, pending a delivery-wakeup
-defect that appears when quinn's drivers are isolated on Linux (see
-`FELIX_IO_RUNTIME_THREADS` in the
-[environment variable reference](/felix/reference/environment-variables/)).
-Linux numbers on the fixed pipeline have not been measured and are not
-published here.
+These are macOS figures. The transport work behind them is platform-neutral
+and enabled everywhere, but Linux has not been re-measured on the fixed
+pipeline, so no Linux numbers are published here yet.
 
 :::note[Formerly: "throughput runs are bimodal"]
 Earlier versions of this table carried a warning that roughly one run in
