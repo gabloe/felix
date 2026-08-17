@@ -2305,8 +2305,15 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
-            idle_ms: 100,
+            // Generous on purpose: this bounds how long a subscriber waits
+            // before declaring a stall, and it has to cover a *cold* first
+            // event -- connection setup, subscribe registration and the first
+            // publish -- not just a steady-state delayed-ACK cycle (25 ms).
+            // Under a coverage-instrumented build the cold path alone exceeds
+            // 100 ms, which failed these runs spuriously. Matches the CLI
+            // default; a genuine stall still fails the run, just not a slow
+            // start.
+            idle_ms: 2000,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2322,6 +2329,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_end_to_end() -> Result<()> {
         let config = DemoConfig {
             warmup: 1,
@@ -2330,8 +2338,15 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
-            idle_ms: 100,
+            // Generous on purpose: this bounds how long a subscriber waits
+            // before declaring a stall, and it has to cover a *cold* first
+            // event -- connection setup, subscribe registration and the first
+            // publish -- not just a steady-state delayed-ACK cycle (25 ms).
+            // Under a coverage-instrumented build the cold path alone exceeds
+            // 100 ms, which failed these runs spuriously. Matches the CLI
+            // default; a genuine stall still fails the run, just not a slow
+            // start.
+            idle_ms: 2000,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2353,6 +2368,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_matrix_small() -> Result<()> {
         let config = DemoConfig {
             warmup: 0,
@@ -2361,8 +2377,15 @@ mod tests {
             fanout: 1,
             batch_size: 1,
             binary: false,
-            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
-            idle_ms: 100,
+            // Generous on purpose: this bounds how long a subscriber waits
+            // before declaring a stall, and it has to cover a *cold* first
+            // event -- connection setup, subscribe registration and the first
+            // publish -- not just a steady-state delayed-ACK cycle (25 ms).
+            // Under a coverage-instrumented build the cold path alone exceeds
+            // 100 ms, which failed these runs spuriously. Matches the CLI
+            // default; a genuine stall still fails the run, just not a slow
+            // start.
+            idle_ms: 2000,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: Some("rr".to_string()),
@@ -2507,6 +2530,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_run_all_fast() -> Result<()> {
         let base = base_config();
         tokio::time::timeout(Duration::from_secs(20), run_all_with_mode(base, true))
@@ -2515,6 +2539,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_smoke_flags() -> Result<()> {
         let config = DemoConfig {
             warmup: 1,
@@ -2523,8 +2548,15 @@ mod tests {
             fanout: 1,
             batch_size: 2,
             binary: false,
-            // >= one QUIC max_ack_delay (25 ms) so a delayed-ACK cycle can't starve the run.
-            idle_ms: 100,
+            // Generous on purpose: this bounds how long a subscriber waits
+            // before declaring a stall, and it has to cover a *cold* first
+            // event -- connection setup, subscribe registration and the first
+            // publish -- not just a steady-state delayed-ACK cycle (25 ms).
+            // Under a coverage-instrumented build the cold path alone exceeds
+            // 100 ms, which failed these runs spuriously. Matches the CLI
+            // default; a genuine stall still fails the run, just not a slow
+            // start.
+            idle_ms: 2000,
             pub_conns: 1,
             pub_streams_per_conn: 1,
             pub_sharding: None,
@@ -2546,6 +2578,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_dedicated_binary_warmup_exceeds_default_queue() -> Result<()> {
         let config = DemoConfig {
             warmup: 500,
@@ -2576,6 +2609,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_binary_fanout_is_lossless() -> Result<()> {
         let mut config = base_config();
         config.warmup = 200;
@@ -2675,6 +2709,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn latency_demo_compare_sub_delivery_shaping_path() -> Result<()> {
         let mut config = base_config();
         config.total = 3;
