@@ -808,7 +808,7 @@ export FELIX_MTU_UPPER_BOUND="4096"   # small-message optimized
 
 ### `FELIX_INITIAL_MTU`
 
-**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (jumbo-frame LAN) skips the discovery ramp. Connections to a loopback peer automatically start at the loopback MTU (16,336-byte payloads, capped by `FELIX_MTU_UPPER_BOUND`) — that path is known-good by construction, and starting at full size also makes the MTU immune to spurious black-hole collapse (see `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`). Setting `FELIX_INITIAL_MTU` explicitly disables the loopback special case and applies to every path.
+**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (jumbo-frame LAN) skips the discovery ramp. Connections to a loopback peer automatically start at the loopback MTU (16,336-byte payloads, capped by `FELIX_MTU_UPPER_BOUND`) — that path is known-good by construction, and starting at full size also makes the MTU immune to spurious black-hole collapse (see `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`). The loopback fast path additionally requires the socket's *granted* UDP buffers to hold ~64 full-size datagrams (~1 MiB): hosts where Linux silently clamps `SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB) lack the burst headroom that makes jumbo datagrams safe, and keep the RFC-safe default instead — raise `rmem_max`/`wmem_max` to enable it. Setting `FELIX_INITIAL_MTU` explicitly disables the loopback special case and applies to every path.
 
 **Type**: Positive integer (bytes, clamped to 1200–65527)
 

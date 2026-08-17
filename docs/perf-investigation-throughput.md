@@ -1513,6 +1513,18 @@ and shipped alone would not have worked.
    missed it; a client test with a sparse request/ack exchange hung reliably.
    The loopback config therefore sets `upper_bound = initial_mtu`: the size
    is guaranteed, there is nothing to discover, no probe is ever sent.
+5. **And gate the whole guarantee on the granted socket buffers.** CI turned
+   up the converse failure: on stock Linux, `SO_RCVBUF` is silently clamped
+   to `net.core.rmem_max` (~208 KB — about 26 jumbo datagrams of headroom
+   against ~350 at MTU 1200), and sustained batch load overflowed it so
+   badly that every CI throughput trial and the 4 KiB batch integration test
+   timed out. Worse, the pinned `min_mtu` forbids the one thing that helps a
+   tiny buffer: smaller datagrams. The guarantee now applies only when the
+   socket's *achieved* send/receive buffers (read back post-bind — the
+   configured size says nothing on Linux) hold at least 64 full-size
+   datagrams (~1 MiB); below that, connections keep the stock RFC-safe path.
+   macOS grants the requested 8 MiB and keeps the fast path; stock-limit
+   Linux hosts fall back until `rmem_max`/`wmem_max` are raised.
 
 Additionally, `black_hole_cooldown` drops 60 s → 2 s
 (`FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`) for non-loopback paths. It cannot rescue

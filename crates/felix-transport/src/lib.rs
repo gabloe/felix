@@ -275,13 +275,30 @@ impl TransportConfig {
     /// nothing to collapse to, which removes the failure mode on the one path
     /// where it was both most likely and least recoverable. An explicit
     /// `FELIX_INITIAL_MTU` wins over this.
-    fn loopback_initial_mtu(&self) -> Option<u16> {
+    ///
+    /// `effective_buffer_bytes` is the smaller of the socket's *achieved*
+    /// send/receive buffers, and gates the whole guarantee: full-size
+    /// datagrams are only safe when the kernel buffers hold a real burst of
+    /// them. Linux silently clamps `SO_RCVBUF` to `net.core.rmem_max`
+    /// (~208 KB on stock hosts and CI runners) — roughly 26 jumbo datagrams
+    /// of headroom, which sustained load overflows catastrophically, and the
+    /// pinned `min_mtu` would then also forbid the one thing that helps a
+    /// tiny buffer: smaller datagrams. Below the threshold the connection
+    /// keeps the stock RFC-safe path (initial 1200, normal discovery, short
+    /// black-hole cooldown).
+    fn loopback_initial_mtu(&self, effective_buffer_bytes: usize) -> Option<u16> {
         if env_u64("FELIX_INITIAL_MTU").is_some() {
             return None;
         }
         let target = LOOPBACK_UDP_PAYLOAD
             .min(self.mtu_discovery_upper_bound)
             .min(self.max_udp_payload_size);
+        // 64 full-size datagrams of burst headroom (~1 MiB at 16336). Hosts
+        // tuned per docs/storage-performance.md sysctl guidance qualify;
+        // stock-limit Linux hosts do not.
+        if effective_buffer_bytes < usize::from(target).saturating_mul(64) {
+            return None;
+        }
         (target > self.initial_mtu).then_some(target)
     }
 
@@ -430,6 +447,17 @@ impl TransportConfig {
     }
 }
 
+/// The smaller of the socket's achieved send/receive buffers. Read back from
+/// the socket rather than taken from config: Linux accepts an oversized
+/// `SO_RCVBUF`/`SO_SNDBUF` and silently clamps it to `net.core.rmem_max` /
+/// `wmem_max`, so the configured size says nothing about what was granted.
+fn effective_udp_buffer_bytes(socket: &std::net::UdpSocket) -> usize {
+    let socket = socket2::SockRef::from(socket);
+    let send = socket.send_buffer_size().unwrap_or(0);
+    let recv = socket.recv_buffer_size().unwrap_or(0);
+    send.min(recv)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Stable connection identifier used for tracing/logging.
 ///
@@ -494,15 +522,20 @@ impl QuicServer {
         mut server_config: ServerConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
-        // Apply transport defaults before binding the endpoint.
-        let quinn_transport = transport.quinn_transport_config();
-        let loopback_config = transport.loopback_initial_mtu().map(|mtu| {
-            let mut config = server_config.clone();
-            config.transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
-            Arc::new(config)
-        });
-        server_config.transport_config(Arc::new(quinn_transport));
+        // Apply transport defaults before binding the endpoint. The socket is
+        // bound first: the loopback MTU guarantee depends on the buffer sizes
+        // the OS actually granted it.
         let socket = transport.bind_udp_socket(addr)?;
+        let quinn_transport = transport.quinn_transport_config();
+        let loopback_config = transport
+            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .map(|mtu| {
+                let mut config = server_config.clone();
+                config
+                    .transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
+                Arc::new(config)
+            });
+        server_config.transport_config(Arc::new(quinn_transport));
         let (runtime, io_handle) = quinn_runtime(EndpointRole::Server);
         let endpoint = Endpoint::new(
             transport.quinn_endpoint_config(),
@@ -578,15 +611,20 @@ impl QuicClient {
         mut client_config: ClientConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
-        // Apply transport defaults before binding the endpoint.
-        let quinn_transport = transport.quinn_transport_config();
-        let loopback_config = transport.loopback_initial_mtu().map(|mtu| {
-            let mut config = client_config.clone();
-            config.transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
-            config
-        });
-        client_config.transport_config(Arc::new(quinn_transport));
+        // Apply transport defaults before binding the endpoint. The socket is
+        // bound first: the loopback MTU guarantee depends on the buffer sizes
+        // the OS actually granted it.
         let socket = transport.bind_udp_socket(addr)?;
+        let quinn_transport = transport.quinn_transport_config();
+        let loopback_config = transport
+            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .map(|mtu| {
+                let mut config = client_config.clone();
+                config
+                    .transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
+                config
+            });
+        client_config.transport_config(Arc::new(quinn_transport));
         let (runtime, io_handle) = quinn_runtime(EndpointRole::Client);
         let mut endpoint = Endpoint::new(transport.quinn_endpoint_config(), None, socket, runtime)
             .context("bind QUIC client")?;
@@ -897,24 +935,40 @@ mod tests {
 
     #[test]
     fn loopback_initial_mtu_respects_configured_bounds() {
+        // Plenty of socket buffer: a typical macOS 8 MiB grant.
+        const BIG_BUFFER: usize = 8 * 1024 * 1024;
+        // A stock-Linux clamp (net.core.rmem_max ~208 KB, doubled by the
+        // kernel): far too little burst headroom for jumbo datagrams.
+        const CLAMPED_BUFFER: usize = 416 * 1024;
+
         // Default config: loopback connections start at the loopback payload
         // size instead of the RFC-safe 1200.
         let config = TransportConfig::default();
-        assert_eq!(config.loopback_initial_mtu(), Some(LOOPBACK_UDP_PAYLOAD));
+        assert_eq!(
+            config.loopback_initial_mtu(BIG_BUFFER),
+            Some(LOOPBACK_UDP_PAYLOAD)
+        );
 
-        // A lowered discovery bound caps the loopback start size with it.
+        // A clamped socket buffer disables the guarantee entirely: 26 jumbo
+        // datagrams of headroom overflow under sustained load, and the pinned
+        // min_mtu would forbid falling back to smaller datagrams.
+        assert_eq!(config.loopback_initial_mtu(CLAMPED_BUFFER), None);
+
+        // A lowered discovery bound caps the loopback start size with it (and
+        // shrinks the buffer headroom it needs).
         let config = TransportConfig {
             mtu_discovery_upper_bound: 4096,
             ..TransportConfig::default()
         };
-        assert_eq!(config.loopback_initial_mtu(), Some(4096));
+        assert_eq!(config.loopback_initial_mtu(BIG_BUFFER), Some(4096));
+        assert_eq!(config.loopback_initial_mtu(CLAMPED_BUFFER), Some(4096));
 
         // No boost when the configured initial MTU is already at least as big.
         let config = TransportConfig {
             initial_mtu: 16354,
             ..TransportConfig::default()
         };
-        assert_eq!(config.loopback_initial_mtu(), None);
+        assert_eq!(config.loopback_initial_mtu(8 * 1024 * 1024), None);
     }
 
     #[test]

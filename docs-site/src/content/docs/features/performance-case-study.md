@@ -225,11 +225,16 @@ sides:
   quinn's default window is a flat 14,720 bytes, smaller than one 16 KiB
   segment, which otherwise deadlocks the handshake outright.
 
-An explicit `FELIX_INITIAL_MTU` disables the special case. For non-loopback
-paths, where `min_mtu` must never be raised, the black-hole cooldown drops
-from 60 s to 2 s (`FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`), so a spurious collapse
-on an intermittently loaded connection heals at the next idle gap instead of
-being pinned for a minute.
+The guarantee is conditional on the socket buffers the OS actually granted:
+jumbo datagrams are only safe when the kernel buffers hold a real burst of
+them (~64 datagrams, about 1 MiB), so hosts where Linux silently clamps
+`SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB — about 26 jumbo
+datagrams) keep the RFC-safe default path instead. An explicit
+`FELIX_INITIAL_MTU` disables the special case. For non-loopback paths, where
+`min_mtu` must never be raised, the black-hole cooldown drops from 60 s to
+2 s (`FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`), so a spurious collapse on an
+intermittently loaded connection heals at the next idle gap instead of being
+pinned for a minute.
 
 ### The result
 
