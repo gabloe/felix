@@ -56,6 +56,9 @@ pub struct Event {
 
 pub(crate) struct SubscriptionPipelineConfig {
     pub(crate) recv: RecvStream,
+    /// Connection whose transport drivers deliver this stream's data; the read
+    /// task is colocated with them via `spawn_pump`.
+    pub(crate) connection: felix_transport::QuicConnection,
     pub(crate) queue_capacity: usize,
     pub(crate) queue_policy: ClientSubQueuePolicy,
     pub(crate) subscription_id: u64,
@@ -75,7 +78,10 @@ impl Subscription {
         let (frame_tx, frame_rx) = mpsc::channel(capacity);
         let (event_tx, event_rx) = mpsc::channel(capacity);
 
-        tokio::spawn(run_subscription_io_task(
+        // The io task is woken per slice of arriving stream data, so it runs
+        // colocated with the connection's drivers; dispatch has no
+        // transport-facing wakeups and stays on the app runtime.
+        config.connection.spawn_pump(run_subscription_io_task(
             config.recv,
             frame_tx,
             config.queue_policy,

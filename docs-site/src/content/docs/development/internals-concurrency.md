@@ -138,12 +138,95 @@ agree on which shard owns a given stream:
 
 The result: a stream's publish-side append/fanout and its subscribers'
 dequeue/encode all execute on one core. What stays *off* the shards
-deliberately: QUIC I/O (the endpoint driver, connection writer tasks) —
-quinn does packetization and TLS in its own driver task regardless of who
-calls it, and moving writers to shards wouldn't change that. See
+deliberately: QUIC I/O — quinn does packetization and TLS in its own driver
+tasks regardless of who calls it, and those have their own placement story
+(next section). See
 [Benchmarks: Core Sharding](/felix/features/benchmarks/) for measured impact
 (scales with stream count; single-stream workloads are neutral-to-positive
 by design, since a single stream only ever has one owning shard either way).
+
+## The QUIC I/O runtime
+
+**File**: `crates/felix-transport/src/lib.rs`
+
+Quinn's driver tasks (the endpoint receive loop and each connection's
+transmit/ACK/timer loop) do a *bounded* slice of work per poll and then
+reschedule themselves. That makes their scheduler re-poll latency the
+transport's throughput ceiling: wakeups scale with datagram count, so a
+shared, loaded runtime turns per-wakeup latency directly into a per-byte
+rate cap — measured as a ~7.5× sustained-throughput defect before this
+existed, and per-byte rather than per-message, which is what made it look
+like a payload-size problem rather than a scheduling one.
+
+```mermaid
+flowchart LR
+    subgraph shared["Before: drivers share the application runtime"]
+        direction LR
+        N1(["datagram"]) s1@--> SD["quinn driver<br/><small>bounded work, then reschedules</small>"]
+        SD s2@--> SQ{{"waits behind<br/>~50 app tasks"}}
+        SQ s3@--> SP["read/write pump<br/><small>woken on another core</small>"]
+        SP s4@--> SO(["~73 MB/s<br/><small>a wakeup chain per datagram</small>"])
+    end
+
+    subgraph dedicated["After: drivers own single-threaded runtimes"]
+        direction LR
+        N2(["datagram"]) d1@--> DD["quinn driver<br/><small>dedicated thread, re-polls immediately</small>"]
+        DD d2@--> DP["colocated pump<br/><small>same-thread task switch</small>"]
+        DP d3@--> DO(["~500 MB/s<br/><small>bounded by capacity, not wakeups</small>"])
+    end
+
+    s1@{ animation: slow }
+    s2@{ animation: slow }
+    s3@{ animation: slow }
+    s4@{ animation: slow }
+    d1@{ animation: fast }
+    d2@{ animation: fast }
+    d3@{ animation: fast }
+
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef gate fill:#fdeaea,stroke:#b04a4a,color:#3d1414
+    classDef slow fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    classDef ok fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    class SD,SP,DD,DP step
+    class SQ gate
+    class N1,N2 step
+    class SO slow
+    class DO ok
+```
+
+The two rows animate at different speeds on purpose: the work per hop is the
+same in both, and only the waiting differs. Every stage measured in
+microseconds while the pipeline ran at a fraction of its capacity, which is
+exactly the signature of a latency-bound dependency chain rather than a
+saturated resource.
+
+Felix therefore runs quinn drivers on a pool of dedicated *single-threaded*
+runtimes, high QoS on macOS, via a custom `quinn::Runtime` implementation.
+`FELIX_IO_RUNTIME_THREADS` sizes the pool (default: 2; `0` restores the
+shared runtime).
+
+Which endpoints share a runtime is load-bearing. Assignment is by role,
+not round-robin: server endpoints spread across every runtime but the last,
+and client endpoints all share the last one. A server endpoint multiplexes
+every connection and drives traffic in both directions, so sharing its
+runtime starves it — measured 5–6× slower when a client endpoint landed
+next to it. A client's publish and event endpoints carry the two halves of
+one request/response flow, so *splitting* them across threads makes every
+message pay two cross-thread wakeups. The partition is independent of
+creation order — a history-dependent assignment recreated the slow topology
+on every second benchmark case before this was fixed.
+
+Two pump tasks are *colocated* with their connection's drivers through
+`QuicConnection::spawn_pump`, because they exchange a wakeup with the
+transport per datagram or per write, and a same-thread wakeup is a task
+switch rather than a cross-core kernel round trip:
+
+- the client's subscription read task (`felix-client`, `subscription.rs`);
+- the broker's per-connection delivery writer (`subscribe/lane.rs`).
+
+The client's *publisher* writer is deliberately not colocated: it spends its
+time blocked in `write_all` against a full send window, and parking it on
+the I/O thread starves the very drivers it waits on (measured 5× worse).
 
 ## Putting it together: what a "saturated" system looks like
 

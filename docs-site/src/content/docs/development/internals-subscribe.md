@@ -145,6 +145,50 @@ starting the next round. That's fine when every subscriber's stream is fast,
 but one backpressured or slow QUIC stream would stall the *next* round for
 every other subscriber sharing that connection — a straggler problem.
 
+```mermaid
+flowchart LR
+    subgraph barrier["Old: round barrier"]
+        direction TB
+        OR(["round starts"]) o1@--> OA["write to A"]
+        OR o2@--> OB["write to B"]
+        OR o3@--> OC["write to C<br/><small>slow / backpressured</small>"]
+        OA o4@--> OW{{"wait for<br/>all three"}}
+        OB o5@--> OW
+        OC o6@--> OW
+        OW o7@--> ON(["next round<br/><small>A and B sat idle</small>"])
+    end
+
+    subgraph pipelined["Current: continuous pipelining"]
+        direction TB
+        NA["A completes"] n1@--> NA2(["A's next write<br/><small>starts immediately</small>"])
+        NB["B completes"] n2@--> NB2(["B's next write<br/><small>starts immediately</small>"])
+        NC["C still in flight"] n3@--> NC2(["finishes later,<br/><small>blocks nobody</small>"])
+    end
+
+    o1@{ animation: slow }
+    o2@{ animation: slow }
+    o3@{ animation: slow }
+    o4@{ animation: slow }
+    o5@{ animation: slow }
+    o6@{ animation: slow }
+    o7@{ animation: slow }
+    n1@{ animation: fast }
+    n2@{ animation: fast }
+    n3@{ animation: slow }
+
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef gate fill:#fdeaea,stroke:#b04a4a,color:#3d1414
+    classDef slowc fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    classDef ok fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    class OA,OB,NA,NB step
+    class OW gate
+    class OC,NC,ON,NC2 slowc
+    class OR,NA2,NB2 ok
+```
+
+C moves at the same speed in both halves — the difference is only whether A
+and B are made to wait for it.
+
 ### The current design: continuous pipelining
 
 ```rust

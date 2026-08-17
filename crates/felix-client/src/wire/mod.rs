@@ -1,5 +1,5 @@
 // Wire helpers for felix-wire framing, ack handling, and telemetry logging.
-pub(crate) use self::ack::maybe_wait_for_ack_with_limit;
+pub(crate) use self::ack::wait_for_ack;
 pub(crate) use self::bench_ts::{
     maybe_append_publish_ts, maybe_append_publish_ts_batch, record_e2e_latency,
 };

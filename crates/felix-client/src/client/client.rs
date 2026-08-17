@@ -72,6 +72,44 @@ pub struct Client {
     runtime_config: ClientRuntimeConfig,
 }
 
+/// Periodic path stats for client-side connections, mirroring the broker's
+/// `FELIX_CONN_STATS_MS` logging. The client is the sender on the publish path,
+/// so its cwnd/rtt is invisible from broker-side stats. Off unless set.
+fn spawn_conn_stats_logger(connection: &QuicConnection, role: &'static str) {
+    let Some(interval_ms) = std::env::var("FELIX_CONN_STATS_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+    else {
+        return;
+    };
+    let connection = connection.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
+        loop {
+            ticker.tick().await;
+            if connection.close_reason().is_some() {
+                break;
+            }
+            let stats = connection.stats();
+            tracing::info!(
+                role,
+                conn = connection.info().id.0,
+                mtu = stats.path.current_mtu,
+                cwnd = stats.path.cwnd,
+                rtt_us = stats.path.rtt.as_micros() as u64,
+                congestion_events = stats.path.congestion_events,
+                lost_packets = stats.path.lost_packets,
+                udp_tx_bytes = stats.udp_tx.bytes,
+                udp_tx_datagrams = stats.udp_tx.datagrams,
+                tx_data_blocked = stats.frame_tx.data_blocked,
+                tx_stream_data_blocked = stats.frame_tx.stream_data_blocked,
+                "client quic connection path stats"
+            );
+        }
+    });
+}
+
 impl Client {
     pub async fn connect(
         addr: SocketAddr,
@@ -114,6 +152,7 @@ impl Client {
         for _ in 0..publish_pool_size {
             let connection = publish_client.connect(addr, server_name).await?;
             debug!("client established publish connection");
+            spawn_conn_stats_logger(&connection, "publish");
             publish_connections.push(connection);
         }
         let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
@@ -131,6 +170,11 @@ impl Client {
                 .await?;
                 debug!(server_flags, "client publish stream authenticated");
                 let (tx, rx) = mpsc::channel(publish_queue_depth);
+                // Not colocated with the transport drivers (unlike the
+                // subscription read pump): publisher writers block in
+                // `write_all` against a full send window, and parking them on
+                // the I/O thread starves the drivers they wait on (measured 5x
+                // throughput loss).
                 let handle = tokio::spawn(run_publisher_writer_with_limit(
                     send,
                     recv,
@@ -395,6 +439,7 @@ impl Client {
         .increment(1);
         Ok(Subscription::spawn_pipeline(SubscriptionPipelineConfig {
             recv,
+            connection: connection.clone(),
             queue_capacity: self.runtime_config.client_sub_queue_capacity.max(1),
             queue_policy: self.runtime_config.client_sub_queue_policy,
             subscription_id,

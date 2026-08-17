@@ -223,33 +223,40 @@ sequenceDiagram
 | TLS resumption | 500-800 µs |
 | 0-RTT (future) | 0 µs (data in first packet) |
 
-**Single message round-trip** (publish + ack):
+**Single message round-trip** (publish + ack, macOS loopback, median of 5–10
+trials):
 
 | Workload | p50 | p99 |
 |----------|-----|-----|
-| Small payload (100B) | 150 µs | 300 µs |
-| Medium payload (1KB) | 200 µs | 400 µs |
-| Large payload (4KB) | 300 µs | 600 µs |
+| Empty payload | 119 µs | 165 µs |
+| 256 B | 109 µs | 138 µs |
+| 1 KiB | 111 µs | 140 µs |
+| 4 KiB | 136 µs | 176 µs |
 
 ### Throughput
 
-**Single connection throughput**:
+Measured figures live in one place — [Benchmarks](/felix/features/benchmarks/) —
+so they cannot drift page to page. Summarising the sustained pub/sub rates at
+fanout 1:
 
-- **Publish**: 50-100k msg/sec (single publishes)
-- **Publish batch**: 150-250k msg/sec (batch=64)
-- **Event delivery**: 200-300k msg/sec per subscriber
-- **Cache operations**: 125-185k ops/sec
+| Payload | Delivered | Payload rate |
+|---|---:|---:|
+| 1 KiB | ~450 K msg/s | ~461 MB/s |
+| 4 KiB | ~124 K msg/s | ~508 MB/s |
+| 16 KiB | ~31 K msg/s | ~503 MB/s |
 
-**Scaling with connection pools**:
+:::caution[Connection count is not a throughput multiplier]
+An earlier version of this page claimed throughput scales "nearly linearly"
+with connection count, up to millions of msg/s at 16 connections. That is not
+what the transport does, and measurement contradicts it in both directions:
+before the I/O-runtime work, publisher concurrency was flat from 1 to 16
+connections (78.3 → 73.8 MB/s); after it, additional connections help only
+until the I/O runtime saturates, because each endpoint's driver is a single
+task on a single runtime.
 
-Throughput scales nearly linearly with connection count (up to CPU/network limits):
-
-| Connections | Publish Throughput | Event Delivery |
-|-------------|-------------------|----------------|
-| 1 | 150k msg/sec | 250k msg/sec |
-| 4 | 580k msg/sec | 950k msg/sec |
-| 8 | 1.1M msg/sec | 1.8M msg/sec |
-| 16 | 2.0M msg/sec | 3.2M msg/sec |
+Add connections to isolate workloads and avoid head-of-line blocking, not to
+multiply throughput. Measure your own shape with `latency-demo` before sizing.
+:::
 
 ### Packet Loss Resilience
 
@@ -394,21 +401,26 @@ Memory ≈ (256MB × 8) + (64MB × 10 × 8) = 2GB + 5.1GB = 7.1GB
 
 ### Congestion Control
 
-QUIC uses modern congestion control algorithms:
+Felix uses quinn's default congestion controller, **CUBIC** (RFC 8312),
+loss-based and safe on shared networks. Two Felix-level knobs sit on top:
 
-**BBR** (Bottleneck Bandwidth and RTT):
-- Default in quinn QUIC implementation
-- Optimizes for throughput and latency
-- Adapts to network conditions
+- `FELIX_INITIAL_CWND` — optional initial-window override for trusted
+  low-loss paths (skips the slow-start ramp). Measured workloads did not
+  benefit, so the RFC default stands.
+- **ACK frequency** — between quinn peers Felix negotiates the QUIC
+  ACK-frequency extension: 2 ms max ACK delay (instead of 25 ms) and an ACK
+  at most every 20 ack-eliciting packets (instead of every other). Delayed
+  ACKs stall window-limited senders, and every reverse-path ACK costs a
+  datagram plus its wakeup chain; the tuned cadence measured ~+15% sustained
+  throughput. Override with `FELIX_ACK_ELICITING_THRESHOLD`, or disable the
+  extension with `FELIX_ACK_FREQ_DISABLE=1`.
 
-**CUBIC**:
-- Alternative congestion control
-- More conservative than BBR
-- Better for shared networks
-
-:::tip[Tuning Congestion Control]
-For dedicated networks (data center, cloud VPC), BBR provides better performance. For shared networks, CUBIC may be more friendly to competing traffic.
-:::
+Just as important as the algorithm is *where the transport runs*: quinn's
+driver tasks execute on dedicated single-threaded I/O runtimes
+(`FELIX_IO_RUNTIME_THREADS`), isolated from application tasks, because their
+scheduler re-poll latency — not congestion control — was the measured
+throughput ceiling. See
+[Concurrency internals](/felix/development/internals-concurrency/#the-quic-io-runtime).
 ## Monitoring and Observability
 
 ### QUIC Metrics

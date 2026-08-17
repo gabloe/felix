@@ -25,7 +25,7 @@ Numbers are only useful if they are honest. The harness enforces:
 
 - **Truthful delivery windows.** Delivered throughput is computed from publish
   start to the instant the *last event actually arrived* — not to when drain
-  tasks give up. Idle-timeout waits never inflate the denominator.
+  tasks are joined. Trailing bookkeeping never inflates the denominator.
 - **Lossless backpressure in both profiles.** The throughput profile
   (batch > 1) runs with blocking queues end-to-end and bounded ingress waits
   (`pub_ingress_wait`), so the publisher is paced to the pipeline's sustainable
@@ -33,8 +33,10 @@ Numbers are only useful if they are honest. The harness enforces:
   per-subscriber queue and the client's own subscriber channel, not just the
   writer-lane queue below them — both defaulted to `DropNew` and could drop
   warmup/measurement messages under load before that was tightened. In both
-  profiles **every message is delivered** (`delivery drops 0`). A number
-  measured while shedding is not a throughput or latency number.
+  profiles **every message is delivered** (`unaccounted 0`). A subscriber that
+  times out now fails the run rather than abandoning its remaining events, so a
+  shortfall cannot be quietly reported as shedding. A number measured while
+  shedding is not a throughput or latency number.
 - **Latency mode measures per-message RTT.** The latency profile (batch = 1)
   publishes with per-message acks, measuring full round-trip behavior rather
   than fire-and-forget enqueue rates.
@@ -43,14 +45,112 @@ Numbers are only useful if they are honest. The harness enforces:
 - **Fanout counted honestly.** `delivered throughput` counts every
   subscriber delivery; `per-sub throughput` divides by fanout.
 
+### A run must exceed the send window
+
+The single easiest way to publish a wrong throughput number: any batched run
+whose total volume fits inside the 64 MiB QUIC connection send window is
+absorbed by buffers before backpressure appears, so the harness reports
+buffer-fill rate rather than sustained throughput. A 1 KiB run once appeared to
+do 358 MB/s and actually sustained 74.9 MB/s.
+
+Two guards now exist. `latency-demo` prints a warning when a `batch > 1` run's
+volume is within ~2× the send window, and the matrix runner scales message
+count per payload so every throughput cell clears it. Rule of thumb when
+running by hand: **`payload × total` should comfortably exceed 128 MiB.**
+
+### One session at a time
+
+`data/raw/latency_demo_runs.jsonl` is append-only, so it accumulates every run
+ever performed on the machine — across commits, branches, and code states.
+Each matrix invocation therefore stamps a `session_id`, and
+`normalize_and_aggregate.py` derives from the **latest session only** by
+default. Pass `--session all` to include history, or `--session <id-prefix>`
+to pick one. Without this the derived CSVs and every chart built from them mix
+unrelated code states, which previously produced charts holding a single bar
+with every other payload marked "no data".
+
 ## Results
 
-Measured on the same Apple Silicon host using native macOS and a Linux
-devcontainer, loopback, release build, TLS 1.3 enabled (QUIC always encrypts),
-defaults — no environment tuning. Linux can use UDP GSO/GRO, so the comparison
-also shows how strongly kernel batching affects QUIC throughput.
+Measured on an Apple M4 Max (macOS, APFS, loopback), release build, TLS 1.3
+enabled — QUIC always encrypts, so per-packet crypto is inside every number
+here. All runs are sized past the 64 MiB QUIC send window, so these are
+sustained rates rather than buffer-fill (see
+[methodology](#a-run-must-exceed-the-send-window)).
 
 ### Latency profile (batch = 1, per-message ack)
+
+Table: medians of 5–10 trials per cell from the full matrix. Charts: refreshed
+from the post-fix `task perf:fast` session (3 trials per cell); the two agree
+within noise.
+
+| Payload | Fanout 1 (p50 / p99 / p999) | Fanout 10 (p50 / p99 / p999) |
+|---|---|---|
+| 0 B | 127 / 165 / 214 µs | 184 / 278 / 340 µs |
+| 256 B | 128 / 166 / 204 µs | 237 / 327 / 369 µs |
+| 1 KiB | 131 / 176 / 251 µs | 247 / 351 / 417 µs |
+| 4 KiB | 136 / 176 / 216 µs | 269 / 399 / 483 µs |
+
+![Latency profile p50 by payload and publisher preset, fanout 1](/felix/charts/latency_demo/balanced/f1_b1_json_a8b3321b_p50.svg)
+
+![Latency profile p99 by payload and publisher preset, fanout 10](/felix/charts/latency_demo/balanced/f10_b1_json_a8b3321b_p99.svg)
+
+Fanout-10 tails improved sharply with the transport scheduling work: p99 went
+from ~1.05–1.13 ms to 278–399 µs, and p999 from 1.32–2.09 ms to 340–483 µs —
+roughly **3–4× better tail latency** at fanout 10, with fanout 1 also improving
+(p99 199–212 µs → 165–176 µs). This profile is stable: 85% of cells hold a
+p90/p10 trial spread under 1.5×.
+
+### Throughput profile (batch = 64, binary, lossless, zero drops)
+
+Seven trials per payload at fanout 1, fresh process per trial, idle machine,
+default publisher pool (4 connections × 2 streams).
+
+| Payload | Median | Payload rate | Slowest trial | Spread |
+|---|---:|---:|---:|---:|
+| 256 B | 1,400,008 msg/s | **358 MB/s** | 1,361,493 | 1.05× |
+| 1 KiB | 450,455 msg/s | **461 MB/s** | 425,703 | 1.12× |
+| 4 KiB | 124,004 msg/s | **508 MB/s** | 121,968 | 1.03× |
+| 16 KiB | 30,707 msg/s | **503 MB/s** | 30,120 | 1.04× |
+
+Against the pre-fix ceiling of ~73 MB/s — which was flat across every payload
+size — that is roughly a **7× improvement**, and the byte rate now rises with
+payload size instead of pinning to a constant.
+
+:::note[Formerly: "throughput runs are bimodal"]
+Earlier versions of this table carried a warning that roughly one run in
+three landed 5–6× slower, with spreads up to 5.9×. That instability was
+diagnosed and fixed: a congestive loss burst during ramp-up could trip QUIC's
+MTU black-hole detector and pin the connection at a 1200-byte MTU for the
+rest of the run — a ~13× datagram (and syscall) multiplier that looked
+exactly like a scheduling defect. Loopback connections now run at a
+guaranteed 16 KiB MTU, which also roughly doubled the 256 B row by removing
+the MTU discovery ramp from short runs. The diagnosis is written up in the
+[case study](/felix/features/performance-case-study/).
+
+Medians of several trials remain the standard for anything published here —
+that policy is what exposed the defect in the first place.
+:::
+
+![Delivered payload MB/s by payload and publisher preset, fanout 1](/felix/charts/latency_demo/balanced/f1_b64_binary_a8b3321b_delivered_mb_per_s.svg)
+
+![Delivered payload MB/s by payload and publisher preset, fanout 10](/felix/charts/latency_demo/balanced/f10_b64_binary_a8b3321b_delivered_mb_per_s.svg)
+
+The charts come from the same post-fix matrix session as the latency charts
+above (3 trials per cell, fresh session, run-size floor past the QUIC send
+window). Publisher presets are within a few percent of each other at every
+payload — connection count is not a throughput lever, as the
+[QUIC transport page](/felix/features/quic-transport/) explains.
+
+### Historical cross-platform comparison
+
+:::note[These predate the transport fix and are kept for context only]
+The tables below were measured before the scheduling work and on a mix of
+macOS and a Linux devcontainer. Several macOS throughput rows are also
+**buffer-absorption artifacts** — runs whose total volume fit inside the
+64 MiB send window, so they report buffer-fill rate rather than sustained
+throughput. Do not compare them against the numbers above; the Linux figures
+in particular have not been re-measured on the fixed pipeline.
+:::
 
 | Payload | Fanout | macOS p50 / p99 / p999 | Linux p50 / p99 / p999 |
 |---|---:|---|---|
@@ -61,11 +161,7 @@ also shows how strongly kernel batching affects QUIC throughput.
 | 256 B | 10 | 447 µs / 1.13 / 2.09 ms | 99 / 148 / 181 µs |
 | 1 KiB | 10 | 444 µs / 1.05 / 1.32 ms | 142 / 720 µs / 4.96 ms |
 
-Both platforms stay sub-millisecond at fanout 1. Linux substantially improves
-most fanout-10 percentiles, although the 1 KiB p999 shows an isolated
-low-single-digit-ms tail.
-
-### Throughput profile (batch = 64, lossless, zero drops)
+#### Historical throughput (pre-fix, mixed platforms)
 
 | Payload | Fanout | macOS JSON | Linux JSON | Linux binary |
 |---|---:|---:|---:|---:|
@@ -103,11 +199,15 @@ macOS JSON rate. For the representative 1 KiB × fanout 10 binary workload,
 system time. System time therefore fell by about 90%, flipping the workload
 from roughly 5.5:1 system-dominated to 3.7:1 user-dominated.
 
-This Linux workload is no longer syscall-bound. The next optimization target is
-user-space scheduling and synchronization, not an `io_uring` transport rewrite.
-A CPU flamegraph is still required to distinguish lock/map contention from
-channel handoff and wakeup costs before committing to a thread-per-core design;
-the measured 11,002 voluntary context switches alone cannot separate them.
+This Linux workload is no longer syscall-bound. The "user-space scheduling and
+synchronization" target this paragraph used to predict has since been
+confirmed and fixed: throughput was clocked by scheduler wakeup latency on the
+QUIC driver tasks — roughly one cross-thread wakeup chain per datagram — and
+isolating those drivers onto dedicated single-threaded runtimes (plus pump
+colocation and ACK-frequency tuning) raised sustained macOS loopback
+throughput ~7.5×. See
+[Concurrency internals](/felix/development/internals-concurrency/#the-quic-io-runtime)
+for how that placement works.
 
 ## The transport levers that matter
 
@@ -121,6 +221,8 @@ These findings came out of profiling the QUIC path and are wired into
 | `FELIX_INITIAL_CWND` | Quinn RFC default | Optional initial congestion-window override for trusted low-loss paths. Quinn raises its minimum window to two datagrams when path-MTU discovery finds a larger MTU; the measured default workloads did not benefit from a larger initial burst. |
 | `FELIX_UDP_SEND_BUFFER` / `FELIX_UDP_RECV_BUFFER` | 8 MiB | Socket buffers absorb bursts; kernel-level drops surface as QUIC retransmits and tail-latency spikes. Applied best-effort (halved until the OS accepts). |
 | `FELIX_MAX_UDP_PAYLOAD` | 65527 | Receive-side datagram cap. Must exceed the peer's discovered MTU or large datagrams are silently rejected. |
+| `FELIX_IO_RUNTIME_THREADS` | CPU parallelism | Quinn's driver tasks run on a pool of dedicated single-threaded runtimes (one endpoint per runtime), isolated from application tasks. Driver re-poll latency is the transport's throughput ceiling, and this isolation is the single largest lever found (~7.5× sustained on macOS loopback). `0` restores the old shared-runtime behavior. In-process multi-endpoint setups prefer a small pool; `latency-demo` pins `2`. |
+| `FELIX_ACK_ELICITING_THRESHOLD` | 20 | ACK-frequency extension (quinn peers): ACK at most every N ack-eliciting packets instead of every other, with a 2 ms max ACK delay. Each reverse-path ACK costs a datagram plus its wakeup chain; ~+15% throughput measured. `FELIX_ACK_FREQ_DISABLE=1` restores stock quinn ACK behavior. |
 
 Broker-side levers (see [Configuration](/felix/reference/configuration/)):
 `pub_inflight_bytes` (ingress byte budget), `pub_ingress_wait` (lossless
@@ -132,8 +234,14 @@ publish worker and lane feeders run on a dedicated core-pinned runtime
 +27% on a 4-stream × fanout-4 workload (1.24M → 1.59M msg/s, unpinned macOS);
 on Linux (devcontainer), +25% single-stream (1 KiB × fanout 10: 1.63M → 2.04M
 msg/s) and parity-to-2.5× multi-stream with high environment variance — never
-below baseline in any run. Opt-in until bare-metal numbers tighten the
-multi-stream claim.
+below baseline in any run. **Caveat:** the 2026-08 investigation found these
+`core_shards` gains were likely measured under the buffer-absorption artifact
+(run volumes inside the send window). Re-measured on the fixed pipeline in
+the workload the feature targets (4 streams × fanout 4 × 1 KiB × batch 64,
+five fresh runs per arm, macOS): shards 0 median 661 K msg/s delivered,
+shards 4 median 668 K — **+1%, within run-to-run variance**. The off-by-default
+setting stands; treat `core_shards` as a placement experiment to validate on
+your own hardware, not a general throughput lever.
 
 ## Saturation behavior
 

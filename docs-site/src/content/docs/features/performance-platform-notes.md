@@ -10,6 +10,29 @@ Felix performance tuning is currently optimized for Linux-first deployments.
 - At `batch=1`, tail latency is often dominated by scheduler wakeups and UDP/QUIC receive-path behavior, not broker business logic.
 - On macOS and other desktop OSes, expect higher jitter in `p99`/`p999` for the same benchmark profile.
 
+## Transport scheduling defaults
+
+The performance-critical transport defaults are on out of the box — no
+environment tuning is required to get sustained-throughput behavior:
+
+- QUIC driver tasks run on dedicated single-threaded I/O runtimes
+  (`FELIX_IO_RUNTIME_THREADS`; `0` disables), with transport-facing pump
+  tasks colocated on the same threads.
+- The ACK-frequency extension is negotiated between quinn peers (2 ms max
+  ACK delay, ACK every 20th packet; `FELIX_ACK_ELICITING_THRESHOLD` /
+  `FELIX_ACK_FREQ_DISABLE`).
+- Path-MTU discovery probes up to 16 KiB and UDP socket buffers request
+  8 MiB.
+
+Together these raised sustained macOS loopback throughput ~7.5×: driver
+isolation was the dominant term, since per-datagram scheduler wakeup latency
+had been the byte-rate ceiling. Single-process setups that host many endpoints
+(like `latency-demo`) perform best with a small I/O pool; the demo pins
+`FELIX_IO_RUNTIME_THREADS=2` itself. A minority of in-process benchmark runs
+can still start in a degraded scheduling mode — rerun rather than tune if a
+single run lands far below the numbers in
+[Benchmarks](/felix/features/benchmarks/).
+
 ## Recommended perf environment
 
 - Prefer a Linux host (or a Linux VM pinned to dedicated CPU resources).

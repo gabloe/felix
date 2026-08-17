@@ -127,6 +127,7 @@ def chart_group(
     footer,
     cap_percentile=None,
     scale=None,
+    log_y=False,
 ):
     payload_positions = list(range(len(payloads)))
     group_width = 0.82
@@ -145,7 +146,14 @@ def chart_group(
     if cap_percentile is not None and raw_values:
         cap_value = percentile(raw_values, cap_percentile)
 
+    # A figure where every bar is absent is worse than no figure: it looks like
+    # a measurement of zero, or like the chart is broken. Refuse to emit one.
+    if not raw_values:
+        print(f"  skipping {output_path.name}: no data for {metric_key}")
+        return
+
     fig, ax = plt.subplots(figsize=(10, 5))
+    all_values: list = []
 
     for idx, preset in enumerate(presets):
         heights = []
@@ -175,6 +183,7 @@ def chart_group(
             else:
                 values.append(value / scale if scale else value)
                 clipped.append(False)
+        all_values.extend(v for v in values if v == v)  # drop NaN
         positions = [p + offsets[idx] for p in payload_positions]
         bars = ax.bar(positions, values, width=bar_width * 0.95, label=preset)
 
@@ -206,6 +215,14 @@ def chart_group(
                     rotation=90,
                     color="0.5",
                 )
+
+    # Message rate spans orders of magnitude across payload sizes (a 0 B run
+    # does millions/s, a 16 KiB run tens of thousands), so on a linear axis the
+    # large-payload bars round to nothing and read as "no throughput" when they
+    # are in fact the highest *byte* rates on the chart. Log scale keeps every
+    # bar legible; the MB/s companion chart is what to read for actual capacity.
+    if log_y and all_values and min(all_values) > 0:
+        ax.set_yscale("log")
 
     ax.set_xticks(payload_positions)
     ax.set_xticklabels([str(p) for p in payloads])
@@ -268,6 +285,10 @@ def main():
         profile, fanout, batch, binary, key_git_sha, key_hostname = key
         warmup = unique_or_mixed([r.get("warmup") for r in group_rows])
         total = unique_or_mixed([r.get("total") for r in group_rows])
+        if total == "mixed" and isinstance(batch, int) and batch > 1:
+            # Throughput runs scale message count per payload so run volume
+            # exceeds the QUIC send window (see run_latency_matrix.py).
+            total = "volume-scaled"
         trials = unique_or_mixed([r.get("trial_count") for r in group_rows])
         git_sha = key_git_sha
 
@@ -358,6 +379,31 @@ def main():
                 footer,
                 cap_percentile,
                 scale,
+                log_y=True,
+            )
+
+        # Byte rate, the only cross-payload-comparable throughput number.
+        # Message rate necessarily falls as payloads grow, so a msg/s chart
+        # makes large payloads look like a regression when they are usually
+        # moving the most data. 0 B carries no payload bytes and is excluded
+        # rather than drawn as a zero bar.
+        byte_payloads = [p for p in payloads if p > 0]
+        if byte_payloads:
+            for row in group_rows:
+                delivered = row.get("delivered_throughput_median")
+                payload = row.get("payload_bytes")
+                if delivered is not None and payload:
+                    row["delivered_mb_per_s"] = delivered * payload / 1e6
+            chart_group(
+                group_rows,
+                "delivered_mb_per_s",
+                "delivered payload (MB/s)",
+                f"{title_prefix} - delivered payload byte rate",
+                base_name.with_name(base_name.name + "_delivered_mb_per_s"),
+                presets,
+                byte_payloads,
+                footer,
+                cap_percentile,
             )
 
 

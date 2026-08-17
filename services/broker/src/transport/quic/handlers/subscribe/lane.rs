@@ -218,17 +218,26 @@ impl WriterLaneManager {
     pub(super) fn ensure_connection_writer(
         &self,
         connection_id: u64,
+        connection: Option<&felix_transport::QuicConnection>,
     ) -> mpsc::Sender<ConnectionCommand> {
         match self.connection_writers.entry(connection_id) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
                 let (tx, rx) = mpsc::channel(self.connection_queue_capacity.max(1));
                 entry.insert(tx.clone());
-                tokio::spawn(run_connection_writer(
-                    connection_id,
-                    rx,
-                    self.max_bytes_per_write,
-                ));
+                let writer = run_connection_writer(connection_id, rx, self.max_bytes_per_write);
+                // Colocate with the connection's transport drivers (`spawn_pump`)
+                // so per-write wakeups stay on-thread. Register always creates
+                // the writer; the `None` arm only covers a delivery racing
+                // ahead of its registration.
+                match connection {
+                    Some(connection) => {
+                        connection.spawn_pump(writer);
+                    }
+                    None => {
+                        tokio::spawn(writer);
+                    }
+                }
                 tx
             }
         }
@@ -239,7 +248,11 @@ impl WriterLaneManager {
         connection_id: u64,
         cmd: ConnectionCommand,
     ) -> std::result::Result<(), ()> {
-        let sender = self.ensure_connection_writer(connection_id);
+        let connection = match &cmd {
+            ConnectionCommand::Register { connection, .. } => Some(connection.clone()),
+            _ => None,
+        };
+        let sender = self.ensure_connection_writer(connection_id, connection.as_ref());
         let conn_label = connection_id.to_string();
         let wait_start = Instant::now();
         let is_control = matches!(

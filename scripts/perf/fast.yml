@@ -1,6 +1,7 @@
 {
+  "_comment": "Fast chart pass: one profile, a representative preset subset, 3 trials. Run via `task perf:fast`, which invokes the matrix twice under one FELIX_PERF_SESSION_ID -- --filter 'batch=1,binary=False' (acked latency, the published headline configuration) and --filter 'batch=64,binary=True' (sustained throughput) -- so both halves aggregate as one session. This covers everything the published charts consume, and none of the cross-checking the full presets.yml matrix exists for (second profile, both encodings per batch shape, extra presets, 5 trials). Use the full matrix for anything surprising: 3 trials is enough to spot an outlier, not to characterize one.",
   "defaults": {
-    "trials": 5
+    "trials": 3
   },
   "workload": {
     "fanout": [
@@ -19,7 +20,6 @@
     ],
     "warmup": 2000,
     "total": 20000,
-    "_comment_binary": "Both encodings, deliberately. latency-demo enables per-message acks only when batch<=1 && !binary, so a binary-only sweep never measures the request-latency configuration the published headline number comes from -- and comparing the two shows a ~2x regression that does not exist.",
     "binary": [
       true,
       false
@@ -37,18 +37,6 @@
         "FELIX_EVENT_SEND_WINDOW": "268435456",
         "FELIX_EVENT_BATCH_MAX_DELAY_US": "250",
         "FELIX_PUBLISH_CHUNK_BYTES": "16384",
-        "FELIX_CACHE_CONN_POOL": "8",
-        "FELIX_CACHE_STREAMS_PER_CONN": "4"
-      }
-    },
-    "high_memory": {
-      "env": {
-        "FELIX_EVENT_CONN_POOL": "8",
-        "FELIX_EVENT_CONN_RECV_WINDOW": "536870912",
-        "FELIX_EVENT_STREAM_RECV_WINDOW": "134217728",
-        "FELIX_EVENT_SEND_WINDOW": "536870912",
-        "FELIX_EVENT_BATCH_MAX_DELAY_US": "250",
-        "FELIX_PUBLISH_CHUNK_BYTES": "32768",
         "FELIX_CACHE_CONN_POOL": "8",
         "FELIX_CACHE_STREAMS_PER_CONN": "4"
       }
@@ -103,18 +91,6 @@
         "hash_stream"
       ]
     },
-    "P8_hash_1stream": {
-      "args": [
-        "--pub-conns",
-        "4",
-        "--pub-streams-per-conn",
-        "2",
-        "--pub-stream-count",
-        "1",
-        "--pub-sharding",
-        "hash_stream"
-      ]
-    },
     "P8_rr": {
       "args": [
         "--pub-conns",
@@ -126,18 +102,6 @@
         "--pub-sharding",
         "rr"
       ]
-    },
-    "P8_rrN": {
-      "args": [
-        "--pub-conns",
-        "4",
-        "--pub-streams-per-conn",
-        "2",
-        "--pub-stream-count",
-        "8",
-        "--pub-sharding",
-        "rr"
-      ]
     }
   },
   "preset_order": [
@@ -145,9 +109,7 @@
     "P2_hash",
     "P4_hash",
     "P8_hash",
-    "P8_hash_1stream",
-    "P8_rr",
-    "P8_rrN"
+    "P8_rr"
   ],
   "chart_outlier_cap_percentile": 0.95
 }

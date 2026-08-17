@@ -102,6 +102,7 @@ export default defineConfig({
             { label: 'Performance Tuning', slug: 'features/performance' },
             { label: 'Performance & Platform Notes', slug: 'features/performance-platform-notes' },
             { label: 'Benchmarks', slug: 'features/benchmarks' },
+            { label: 'Case Study: Throughput Ceiling', slug: 'features/performance-case-study' },
             { label: 'Observability', slug: 'features/observability' },
             { label: 'Security', slug: 'features/security' },
           ],

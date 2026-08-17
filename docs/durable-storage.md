@@ -84,7 +84,37 @@ Each module owns one decision:
 
 ## The publish path
 
-Ordering is the whole design, so it is worth stating plainly:
+```mermaid
+flowchart LR
+    C(["Client"]) e1@--> P["publish"]
+    P e2@--> L[("durable log<br/><small>append + assign offsets</small>")]
+    L e3@--> D{{"fsync<br/><small>OnCommit only</small>"}}
+    D e4@--> F["fanout"]
+    F e5@--> S1(["Subscriber"])
+    F e6@--> S2(["Subscriber"])
+    D e7@--> A(["ack to client"])
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+    e5@{ animate: true }
+    e6@{ animate: true }
+    e7@{ animate: true }
+
+    classDef store fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    classDef gate fill:#fbe9d6,stroke:#b07d3a,color:#3d2a12
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef edge fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    class L store
+    class D gate
+    class P,F step
+    class C,S1,S2,A edge
+```
+
+Nothing downstream of the log observes a record before it is durable: fanout
+and the acknowledgement both hang off the flush, not off the append. Ordering
+is the whole design, so the same path is worth spelling out step by step:
 
 ```mermaid
 sequenceDiagram
@@ -158,6 +188,11 @@ loss. That distinction is the reason it is a useful setting at all.
 `OnCommit` would be unaffordable without it. An `fsync` flushes the whole file,
 not one caller's bytes, so when N appends are in flight one flush can satisfy all
 N:
+
+![Group commit: four concurrent appends queue in the page cache, a single fsync runs, and all four are acknowledged together](assets/storage/group-commit.svg)
+
+The lock protocol behind that picture — who flushes, and what the others find
+when they wake:
 
 ```mermaid
 sequenceDiagram

@@ -34,9 +34,8 @@ type DemoAuthResult = Result<(Arc<broker::auth::BrokerAuth>, Option<(String, Str
 /// Counts measured deliveries and remembers when the last one landed.
 ///
 /// Delivery duration must end at the moment the final event arrived, not when
-/// drain tasks give up: a drain task waiting out its idle timeout on dropped
-/// events would otherwise inflate the measured delivery window (and deflate
-/// reported throughput) by the entire timeout.
+/// drain tasks finish: trailing bookkeeping would otherwise inflate the
+/// measured delivery window and deflate reported throughput.
 #[derive(Clone)]
 struct DeliveryTracker {
     delivered: Arc<AtomicUsize>,
@@ -90,6 +89,7 @@ struct DemoConfig {
     sub_delivery_shaping: bool,
     pub_yield_every_batches: usize,
     sub_dedicated_thread: bool,
+    log_capacity: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -101,7 +101,13 @@ struct DemoResult {
     batch_size: usize,
     binary: bool,
     received: usize,
-    dropped: usize,
+    /// Events expected but never observed (`expected - delivered`). This is a
+    /// *shortfall*, not a queue-drop counter: the broker's and client's real
+    /// drop counters are `metrics` counters and are not collected here. Because
+    /// a subscriber that times out now fails the run, this must be 0 on any
+    /// successful run -- a non-zero value means the accounting is wrong, not
+    /// that queues shed.
+    unaccounted: usize,
     delivered_total: usize,
     p50: Duration,
     p99: Duration,
@@ -319,8 +325,33 @@ async fn run_smoke(_base: DemoConfig) -> Result<()> {
     anyhow::bail!("--smoke requires telemetry feature");
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Runtime width is a first-class perf variable here: this harness runs the
+    // broker and its clients in one process, so every extra worker thread is
+    // another candidate for a cross-core wakeup on the publish/deliver chain.
+    // Defaults to tokio's own choice (one worker per CPU).
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(threads) = std::env::var("FELIX_WORKER_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+    {
+        builder.worker_threads(threads);
+    }
+    builder.build()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    // Off unless RUST_LOG asks for it, so benchmark output stays clean. Exists so
+    // broker-side diagnostics (notably FELIX_CONN_STATS_MS path stats) are
+    // reachable from this harness at all.
+    if std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
+    }
     let (config, matrix, payloads, fanouts, all, smoke, compare_sub_delivery_shaping) =
         parse_args();
     if compare_sub_delivery_shaping {
@@ -354,6 +385,9 @@ where
         .unwrap_or(1);
     let mut sub_writer_lanes = None;
     let mut sub_lane_shard = None;
+    let mut log_capacity: Option<usize> = std::env::var("FELIX_DEMO_LOG_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse().ok());
     let mut pub_yield_every_batches = 0usize;
     let mut sub_dedicated_thread = std::env::var("FELIX_SUB_DEDICATED_THREAD")
         .ok()
@@ -439,6 +473,11 @@ where
                 if let Some(value) = args.next() {
                     idle_ms = value.parse().unwrap_or(idle_ms);
                     idle_set = true;
+                }
+            }
+            "--log-capacity" => {
+                if let Some(value) = args.next() {
+                    log_capacity = value.parse().ok();
                 }
             }
             "--pub-conns" => {
@@ -577,6 +616,7 @@ where
             sub_delivery_shaping,
             pub_yield_every_batches,
             sub_dedicated_thread,
+            log_capacity,
         },
         matrix,
         payloads,
@@ -653,6 +693,20 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         config.sub_delivery_shaping
     );
     println!("{}", expectation_note(&config));
+    // A throughput run absorbed by the QUIC send window (64 MiB) reports
+    // buffer-fill rate, not sustained throughput. Warn instead of refusing so
+    // deliberate short runs stay possible, but the artifact can't pass silently.
+    // Empty payloads move no bytes, so the send window cannot absorb them and
+    // the check is meaningless there -- those cases are message-rate bound.
+    let run_bytes = config.payload_bytes.saturating_mul(config.total);
+    if config.payload_bytes > 0 && config.batch_size > 1 && run_bytes < 128 * 1024 * 1024 {
+        println!(
+            "WARNING: run volume {} MB is within ~2x the 64 MiB QUIC send window; \
+             reported throughput may be buffer-fill rate, not sustained rate. \
+             Raise --total so payload x total comfortably exceeds 128 MiB.",
+            run_bytes / (1024 * 1024)
+        );
+    }
     let use_ack = config.batch_size <= 1 && !config.binary;
     let disable_timings = std::env::var("FELIX_DISABLE_TIMINGS")
         .ok()
@@ -673,10 +727,13 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     broker_publish_timings::set_enabled(collect_timings);
 
     let total_events = config.warmup + config.total;
+    let log_capacity = config
+        .log_capacity
+        .unwrap_or_else(|| total_events.saturating_add(1));
     let broker = Arc::new(
         Broker::new(EphemeralCache::new().into())
             .with_topic_capacity(total_events.saturating_add(1))?
-            .with_log_capacity(total_events.saturating_add(1))?
+            .with_log_capacity(log_capacity)?
             .with_subscriber_queue_policy(felix_broker::SubQueuePolicy::Block),
     );
     broker.register_tenant("t1").await?;
@@ -746,6 +803,20 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         broker_config.event_batch_max_events = 1;
         broker_config.event_batch_max_bytes = 1024;
         broker_config.event_batch_max_delay_us = 0;
+    }
+    // The profiles above pin egress sizing, so explicit env overrides would be
+    // silently ignored without re-applying them here.
+    if let Ok(value) = std::env::var("FELIX_EVENT_BATCH_MAX_BYTES")
+        && let Ok(bytes) = value.parse::<usize>()
+        && bytes > 0
+    {
+        broker_config.event_batch_max_bytes = bytes;
+    }
+    if let Ok(value) = std::env::var("FELIX_SUB_MAX_BYTES_PER_WRITE")
+        && let Ok(bytes) = value.parse::<usize>()
+        && bytes > 0
+    {
+        broker_config.subscriber_max_bytes_per_write = bytes;
     }
     if let Some(lanes) = config.sub_writer_lanes {
         broker_config.subscriber_writer_lanes = lanes.max(1);
@@ -844,7 +915,13 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                 let next = tokio::time::timeout(idle_timeout, sub.next_event()).await;
                 let event = match next {
                     Ok(result) => result,
-                    Err(_) => break,
+                    Err(_) => {
+                        anyhow::bail!(
+                            "primary subscriber timed out after {} of {} measured events",
+                            results.len(),
+                            primary_total
+                        );
+                    }
                 };
                 match event {
                     Ok(Some(event)) => {
@@ -868,7 +945,13 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                             metrics::histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
                         }
                     }
-                    Ok(None) => break,
+                    Ok(None) => {
+                        anyhow::bail!(
+                            "primary subscriber closed after {} of {} measured events",
+                            results.len(),
+                            primary_total
+                        );
+                    }
                     Err(err) => {
                         return Err(anyhow::anyhow!("primary subscriber failed: {err}"));
                     }
@@ -893,11 +976,23 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
                 let next = tokio::time::timeout(idle_timeout, rx.recv()).await;
                 match next {
                     Ok(Some(latency)) => results.push(latency),
-                    Ok(None) => break,
-                    Err(_) => break,
+                    Ok(None) => {
+                        return Err(format!(
+                            "dedicated delivery channel closed after {} of {} measured events",
+                            results.len(),
+                            primary_total
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "dedicated delivery channel timed out after {} of {} measured events",
+                            results.len(),
+                            primary_total
+                        ));
+                    }
                 }
             }
-            results
+            Ok(results)
         }))
     } else {
         None
@@ -946,7 +1041,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     let mut latencies = if let Some(task) = recv_task {
         task.await.expect("join")?
     } else if let Some(task) = dedicated_recv_task {
-        task.await.expect("join")
+        task.await.expect("join").map_err(anyhow::Error::msg)?
     } else if let Some(handle) = dedicated_handle.take() {
         handle.finish().await?;
         Vec::new()
@@ -958,17 +1053,14 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
     let expected_delivered_total = config.total * config.fanout;
     publisher.finish().await?;
-    for mut task in drain_tasks {
-        tokio::select! {
-            _ = &mut task => {}
-            _ = tokio::time::sleep(idle_timeout) => {
-                task.abort();
-            }
-        }
+    for task in drain_tasks {
+        tokio::time::timeout(idle_timeout, task)
+            .await
+            .context("subscriber drain task did not finish before idle timeout")?
+            .context("subscriber drain task panicked")??;
     }
-    // End the delivery window at the last event that actually arrived. Drain
-    // tasks sit out an idle timeout when events were dropped; counting that
-    // wait would misreport delivered throughput by the full timeout.
+    // End the delivery window at the last event that actually arrived, not when
+    // the drain tasks were joined.
     let delivery_elapsed = delivery_tracker
         .last_delivery_at()
         .and_then(|at| at.checked_duration_since(start))
@@ -1004,7 +1096,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
             batch_size: config.batch_size,
             binary: config.binary,
             received,
-            dropped: expected_delivered_total.saturating_sub(delivered_total),
+            unaccounted: expected_delivered_total.saturating_sub(delivered_total),
             delivered_total,
             p50: percentile(&latencies, 0.50),
             p99: percentile(&latencies, 0.99),
@@ -1067,7 +1159,10 @@ async fn setup_subscribers(
     delivery_tracker: DeliveryTracker,
     reserve_primary_slot: bool,
     idle_timeout: Duration,
-) -> Result<(Option<Subscription>, Vec<tokio::task::JoinHandle<()>>)> {
+) -> Result<(
+    Option<Subscription>,
+    Vec<tokio::task::JoinHandle<Result<()>>>,
+)> {
     let mut drain_tasks = Vec::new();
     let mut primary_sub = None;
     let mut primary_slot_reserved = reserve_primary_slot;
@@ -1093,14 +1188,10 @@ async fn setup_subscribers(
                 primary_sub = Some(sub);
             } else {
                 let mut sub = sub;
-                // Must use the same configurable idle timeout as the primary
-                // subscriber. This was hardcoded to 2s, which deadlocked the whole
-                // run under the Block subscriber queue policy: a drain subscriber
-                // that gave up here stopped consuming, its broker-side queue filled,
-                // and Block then stalled fanout for *every* subscriber -- including
-                // the primary, which then failed its own (longer) timeout. More
-                // fanout meant more drain subscribers and better odds one tripped
-                // the 2s bound, which is why the failure scaled with fanout.
+                // Use the same configurable liveness bound as the primary
+                // subscriber, but fail the run if it expires. Silently abandoning
+                // this subscription makes `expected - observed` look like queue
+                // shedding even though every delivery queue is configured Block.
                 let tracker = delivery_tracker.clone();
                 drain_tasks.push(tokio::spawn(async move {
                     let mut remaining = per_stream_total;
@@ -1115,11 +1206,24 @@ async fn setup_subscribers(
                                 }
                                 seen += 1;
                             }
-                            Ok(Ok(None)) => break,
-                            Ok(Err(_)) => break,
-                            Err(_) => break,
+                            Ok(Ok(None)) => {
+                                anyhow::bail!(
+                                    "subscriber stream {stream} closed with {remaining} events remaining"
+                                );
+                            }
+                            Ok(Err(err)) => {
+                                return Err(err).with_context(|| {
+                                    format!("subscriber stream {stream} failed")
+                                });
+                            }
+                            Err(_) => {
+                                anyhow::bail!(
+                                    "subscriber stream {stream} timed out with {remaining} events remaining"
+                                );
+                            }
                         }
                     }
+                    Ok(())
                 }));
             }
         }
@@ -1338,7 +1442,9 @@ fn spawn_dedicated_primary_subscriber(
                         let latency = decode_latency(event.payload.as_ref());
                         let enqueue_start = Instant::now();
                         if delivery_tx.send(latency).await.is_err() {
-                            break;
+                            return Err(
+                                "dedicated delivery receiver closed before completion".to_string()
+                            );
                         }
                         seen += 1;
                         let wait_ns = enqueue_start.elapsed().as_nanos() as u64;
@@ -1360,7 +1466,12 @@ fn spawn_dedicated_primary_subscriber(
                             metrics::histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
                         }
                     }
-                    Ok(None) => break,
+                    Ok(None) => {
+                        return Err(format!(
+                            "dedicated subscriber closed after {seen} of {} events",
+                            primary_warmup + primary_total
+                        ));
+                    }
                     Err(err) => {
                         return Err(format!("dedicated subscriber receive failed: {err}"));
                     }
@@ -1448,11 +1559,11 @@ fn per_stream_events(total: usize, stream_count: usize, stream_index: usize) -> 
 
 fn print_result(result: &DemoResult) {
     println!(
-        "Results (publish n = {}, sampled {}, received {}, delivery drops {}) payload={}B fanout={} batch={} publish_fastpath={}:",
+        "Results (publish n = {}, sampled {}, received {}, unaccounted {}) payload={}B fanout={} batch={} publish_fastpath={}:",
         result.publish_total,
         result.sample_total,
         result.received,
-        result.dropped,
+        result.unaccounted,
         result.payload_bytes,
         result.fanout,
         result.batch_size,
@@ -1463,6 +1574,20 @@ fn print_result(result: &DemoResult) {
         println!("  p50  = n/a (no received samples)");
         println!("  p99  = n/a (no received samples)");
         println!("  p999 = n/a (no received samples)");
+    } else if result.batch_size > 1 {
+        // A batched run is paced by lossless backpressure, so a message waits
+        // for its batch to fill and then behind everything already queued.
+        // These percentiles therefore scale with run length and say nothing
+        // about per-message latency -- label them so they are not read as a
+        // regression when a longer run reports a bigger number. The batch=1
+        // profile below is the one that measures request latency.
+        println!(
+            "  queueing delay (NOT per-message latency; batch={} run, grows with --total):",
+            result.batch_size
+        );
+        println!("    p50  = {}", format_duration(result.p50));
+        println!("    p99  = {}", format_duration(result.p99));
+        println!("    p999 = {}", format_duration(result.p999));
     } else {
         println!("  p50  = {}", format_duration(result.p50));
         println!("  p99  = {}", format_duration(result.p99));
@@ -1712,6 +1837,17 @@ fn print_sanity_checks(
             expected_delivered, result.delivered_total
         );
     }
+    // Subscribers now fail the run on timeout rather than abandoning their
+    // remaining events, so a shortfall can no longer be explained away as
+    // "the queues shed". Either the queue policy really is lossy or the
+    // accounting is wrong; both invalidate the numbers above.
+    if result.unaccounted > 0 {
+        println!(
+            "  sanity: INVALID RUN -- {} of {} expected deliveries never observed. \
+             This is a shortfall, not a measured queue drop; throughput above is not meaningful.",
+            result.unaccounted, expected_delivered
+        );
+    }
     if use_ack {
         if client.ack_items_in_ok == 0 {
             println!("  sanity: ack_items_in_ok expected > 0 (acks enabled)");
@@ -1919,6 +2055,40 @@ fn expectation_note(config: &DemoConfig) -> String {
     }
 }
 
+/// Message count for a batched throughput case in the `--all` sweep.
+///
+/// Balances two things. A run that fits inside the 64 MiB QUIC send window is
+/// absorbed by buffers and reports buffer-fill rate rather than sustained
+/// throughput, so every case wants volume. But fanout multiplies delivered
+/// work, and this is a 20-case demo sweep, so every case also wants to stay
+/// about a second.
+///
+/// The window floor wins whenever it is affordable, because a case that warns
+/// about being undersized is a case that measured the wrong thing. Only the
+/// combinations where clearing the window would cost millions of deliveries
+/// (small payloads at high fanout) fall back to the time cap and warn. Use
+/// `task perf:latency-matrix` for throughput numbers worth quoting -- it sizes
+/// every case past the window with no wall-clock cap and medians five trials.
+fn throughput_total(payload_bytes: usize, fanout: usize) -> usize {
+    const TARGET_RUN_BYTES: usize = 192 * 1024 * 1024;
+    // Comfortably past the 128 MiB the undersized-run warning checks for.
+    const WINDOW_FLOOR_BYTES: usize = 136 * 1024 * 1024;
+    const MAX_DELIVERIES: usize = 1_500_000;
+    if payload_bytes == 0 {
+        // No payload bytes, so the send window is irrelevant; bound by work.
+        return (MAX_DELIVERIES / fanout.max(1)).clamp(5_000, 200_000);
+    }
+    let fanout = fanout.max(1);
+    let by_volume = TARGET_RUN_BYTES.div_ceil(payload_bytes);
+    let by_time = MAX_DELIVERIES / fanout;
+    let window_floor = WINDOW_FLOOR_BYTES.div_ceil(payload_bytes);
+    if window_floor * fanout <= MAX_DELIVERIES {
+        by_volume.min(by_time).max(window_floor)
+    } else {
+        by_volume.min(by_time).max(5_000)
+    }
+}
+
 async fn run_all(base: DemoConfig) -> Result<()> {
     let fast = std::env::var("FELIX_LATENCY_DEMO_FAST")
         .ok()
@@ -1960,7 +2130,11 @@ async fn run_all_with_mode(base: DemoConfig, fast: bool) -> Result<()> {
                 case.batch_size = 64;
                 case.binary = binary;
                 case.warmup = if fast { 1 } else { 200 };
-                case.total = if fast { 5 } else { 5000 };
+                case.total = if fast {
+                    5
+                } else {
+                    throughput_total(payload, fanout)
+                };
                 let (result, summary) = run_case(case.clone()).await?;
                 print_result(&result);
                 print_timing_summary(summary);
@@ -1975,7 +2149,11 @@ async fn run_all_with_mode(base: DemoConfig, fast: bool) -> Result<()> {
     baseline.batch_size = 64;
     baseline.binary = base.binary;
     baseline.warmup = if fast { 1 } else { 200 };
-    baseline.total = if fast { 5 } else { 5000 };
+    baseline.total = if fast {
+        5
+    } else {
+        throughput_total(baseline.payload_bytes, baseline.fanout)
+    };
     baseline.pub_conns = 1;
     baseline.pub_streams_per_conn = 1;
     let (result, summary) = run_case(baseline.clone()).await?;
@@ -2139,6 +2317,7 @@ mod tests {
             sub_delivery_shaping: true,
             pub_yield_every_batches: 0,
             sub_dedicated_thread: false,
+            log_capacity: None,
         }
     }
 
@@ -2163,6 +2342,7 @@ mod tests {
             sub_delivery_shaping: true,
             pub_yield_every_batches: 0,
             sub_dedicated_thread: false,
+            log_capacity: None,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -2193,6 +2373,7 @@ mod tests {
             sub_delivery_shaping: true,
             pub_yield_every_batches: 0,
             sub_dedicated_thread: false,
+            log_capacity: None,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -2281,6 +2462,7 @@ mod tests {
                 sub_delivery_shaping: true,
                 pub_yield_every_batches: 0,
                 sub_dedicated_thread: false,
+                log_capacity: None,
             })
             .contains("latency-focused")
         );
@@ -2303,6 +2485,7 @@ mod tests {
                 sub_delivery_shaping: true,
                 pub_yield_every_batches: 0,
                 sub_dedicated_thread: false,
+                log_capacity: None,
             })
             .contains("throughput-focused")
         );
@@ -2352,6 +2535,7 @@ mod tests {
             sub_delivery_shaping: true,
             pub_yield_every_batches: 1,
             sub_dedicated_thread: true,
+            log_capacity: None,
         };
         tokio::time::timeout(
             Duration::from_secs(20),
@@ -2381,6 +2565,7 @@ mod tests {
             sub_delivery_shaping: true,
             pub_yield_every_batches: 0,
             sub_dedicated_thread: true,
+            log_capacity: None,
         };
         tokio::time::timeout(
             Duration::from_secs(15),
@@ -2407,7 +2592,7 @@ mod tests {
             .context("binary fanout timeout")??;
         assert_eq!(result.received, 1000);
         assert_eq!(result.delivered_total, 10_000);
-        assert_eq!(result.dropped, 0);
+        assert_eq!(result.unaccounted, 0);
         Ok(())
     }
 
@@ -2512,7 +2697,7 @@ mod tests {
             batch_size: 1,
             binary: false,
             received: 0,
-            dropped: 1,
+            unaccounted: 1,
             delivered_total: 3,
             p50: Duration::from_micros(1),
             p99: Duration::from_micros(2),

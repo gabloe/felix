@@ -33,21 +33,53 @@ Felix is a brokered messaging and caching system:
 
 The current pub/sub data path is:
 
-```text
-application
-  -> felix-client Publisher
-  -> client publish admission and worker queue
-  -> QUIC bidirectional stream
-  -> broker frame decoder and authorization
-  -> broker publish admission and global worker queue
-  -> felix-broker StreamState
-  -> per-subscriber broker-core queue
-  -> subscription lane
-  -> per-connection writer
-  -> QUIC unidirectional event stream
-  -> client event router and subscription queues
-  -> application
+```mermaid
+flowchart LR
+    subgraph pubproc["Publisher process"]
+        direction TB
+        APP1(["application"]) e1@--> PUB["felix-client<br/>Publisher"]
+        PUB e2@--> CADM["publish admission<br/><small>+ worker queue</small>"]
+    end
+
+    subgraph broker["Broker"]
+        direction TB
+        DEC["frame decode<br/><small>+ authorization</small>"] e4@--> BADM["publish admission<br/><small>+ stream-sharded worker</small>"]
+        BADM e5@--> ST[("felix-broker StreamState<br/><small>append, assign offsets</small>")]
+        ST e6@--> SQ["per-subscriber<br/>broker-core queue"]
+        SQ e7@--> LANE["subscription lane<br/><small>encode once</small>"]
+        LANE e8@--> CW["per-connection writer"]
+    end
+
+    subgraph subproc["Subscriber process"]
+        direction TB
+        ROUTER["event router<br/><small>+ subscription queue</small>"] e10@--> APP2(["application"])
+    end
+
+    CADM e3@-->|"QUIC bidirectional stream"| DEC
+    CW e9@-->|"QUIC unidirectional event stream"| ROUTER
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+    e5@{ animate: true }
+    e6@{ animate: true }
+    e7@{ animate: true }
+    e8@{ animate: true }
+    e9@{ animate: true }
+    e10@{ animate: true }
+
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef store fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    classDef endpoint fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    class PUB,CADM,DEC,BADM,LANE,CW,ROUTER step
+    class ST,SQ store
+    class APP1,APP2 endpoint
 ```
+
+Every hop above is a real, named thing in the code — the sections that follow
+walk the same path in order, and §9 and §11 cover the publish and subscribe
+halves in full detail.
 
 The important architectural boundary is:
 

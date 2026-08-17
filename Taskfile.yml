@@ -196,5 +196,18 @@ tasks:
         "$PY" scripts/perf/normalize_and_aggregate.py
         "$PY" scripts/perf/make_charts.py
         "$PY" scripts/perf/render_markdown_snippets.py
+  perf:fast:
+    desc: "Fast chart pass (~15-20 min vs hours): one profile, 5 presets, 3 trials; only the two chart-bearing shapes (acked-latency json batch=1, sustained-throughput binary batch=64)"
+    cmds:
+      - |
+        PY=$([ -x .venv-perf/bin/python ] && echo .venv-perf/bin/python || echo python3)
+        # One shared session id so both filtered halves aggregate together;
+        # normalize_and_aggregate keeps only the latest session by default.
+        export FELIX_PERF_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
+        "$PY" scripts/perf/run_latency_matrix.py --config scripts/perf/fast.yml --filter 'batch=1,binary=False'
+        "$PY" scripts/perf/run_latency_matrix.py --config scripts/perf/fast.yml --filter 'batch=64,binary=True'
+        "$PY" scripts/perf/normalize_and_aggregate.py
+        "$PY" scripts/perf/make_charts.py --config scripts/perf/fast.yml
+        "$PY" scripts/perf/render_markdown_snippets.py --config scripts/perf/fast.yml
   conformance:
     cmds: ["cargo run -p felix-conformance"]

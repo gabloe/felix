@@ -358,7 +358,9 @@ regulatory or compliance purposes until it ships.
 - **CPU:** More cores for parallel stream processing
 - **Memory:** Larger buffers and cache capacity
 - **Network:** Higher bandwidth for fanout
-- **Typical:** 10k-50k msg/s on modern hardware
+- **Measured:** hundreds of thousands to millions of msg/s on a single node,
+  depending entirely on payload size and fanout — see
+  [Benchmarks](/felix/features/benchmarks/) rather than any single figure here
 
 ### Horizontal Scaling (Multi-Node)
 
@@ -366,7 +368,9 @@ regulatory or compliance purposes until it ships.
 - **Connection pooling:** Reuse connections across shards
 - **Control plane:** RAFT quorum for metadata (3-5 nodes)
 - **Data plane:** Many broker nodes for capacity
-- **Target:** 100k-1M+ msg/s per cluster
+
+Multi-node is not implemented, so no cluster-level throughput figure is
+claimed here.
 
 ## Next Steps
 
