@@ -76,6 +76,22 @@ pub enum SubQueuePolicy {
 }
 ```
 
+:::caution[Lossless needs checkpoint 4 too, not just 5 and 6]
+Setting `Block` on the subscriber queue (5), the lane queue (6) *and* the
+client's own subscriber channel still does **not** give you lossless
+delivery. Checkpoint 4 — the broker's publish ingress queue, depth 64 —
+defaults to `Drop`, and unacked publishes have nothing pacing them, so a
+burst that outruns the broker core is shed before it ever reaches a
+subscriber queue. Measured: a 400-message unacked burst on a 4-CPU host
+dropped 77 publishes with every downstream queue set to `Block`.
+
+Lossless mode is `Block` on 5 and 6 **plus** `pub_ingress_wait: true`
+(checkpoint 4 → `Backpressure`). The symptom of getting this wrong is
+delivery that appears to stall — the missing events were never published,
+so nothing downstream is waiting on anything. `felix_broker_ingress_dropped_total`
+is the counter that tells you which it is.
+:::
+
 Production defaults are `drop_new` at both checkpoints: overload becomes a
 counted, bounded-latency event (`felix_subscribe_dropped_total`,
 `felix_sub_queue_dropped_total`) instead of an ever-growing backlog with
