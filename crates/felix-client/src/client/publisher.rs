@@ -739,131 +739,124 @@ struct PendingAck {
     item_count: u64,
 }
 
-/// Upper bound on acked publishes in flight per stream. The byte budget
-/// (`PublishAdmission`) is the real limit; this only bounds the queue's
-/// memory when payloads are tiny.
-const MAX_PENDING_ACKS: usize = 1024;
-
-/// Resolve broker acks for pipelined acked publishes, in write order.
-///
-/// Runs beside the writer so an acked publish costs a queue hop instead of
-/// stalling the stream for a full round trip: when the writer awaited each
-/// ack inline, acked throughput per stream was capped at one request per RTT.
-/// Acks arrive strictly in request order, so pendings resolve FIFO. Any ack
-/// failure — timeout, decode error, broker `PublishError` — is fatal for the
-/// worker exactly as it was inline; requests already queued behind the
-/// failure are failed with the same message.
-async fn run_publish_ack_reader(
-    mut recv: RecvStream,
-    mut pending_rx: mpsc::Receiver<PendingAck>,
-    max_frame_bytes: usize,
-) -> (RecvStream, Result<()>) {
-    let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
-    while let Some(pending) = pending_rx.recv().await {
-        match wait_for_ack(
-            &mut recv,
-            pending.request_id,
-            &mut ack_scratch,
-            max_frame_bytes,
-        )
-        .await
-        {
-            Ok(()) => {
-                #[cfg(feature = "telemetry")]
-                {
-                    let counters = frame_counters();
-                    counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
-                    counters
-                        .pub_batches_out_ok
-                        .fetch_add(pending.batch_count, Ordering::Relaxed);
-                    counters
-                        .pub_items_out_ok
-                        .fetch_add(pending.item_count, Ordering::Relaxed);
-                }
-                let _ = pending.response.send(Ok(()));
-            }
-            Err(err) => {
-                #[cfg(feature = "telemetry")]
-                {
-                    let counters = frame_counters();
-                    counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
-                    counters
-                        .pub_batches_out_err
-                        .fetch_add(pending.batch_count, Ordering::Relaxed);
-                    counters
-                        .pub_items_out_err
-                        .fetch_add(pending.item_count, Ordering::Relaxed);
-                }
-                let message = err.to_string();
-                let _ = pending.response.send(Err(err));
-                pending_rx.close();
-                while let Some(stale) = pending_rx.recv().await {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let counters = frame_counters();
-                        counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
-                        counters
-                            .pub_batches_out_err
-                            .fetch_add(stale.batch_count, Ordering::Relaxed);
-                        counters
-                            .pub_items_out_err
-                            .fetch_add(stale.item_count, Ordering::Relaxed);
-                    }
-                    let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
-                }
-                return (recv, Err(anyhow::anyhow!(message)));
-            }
-        }
-    }
-    (recv, Ok(()))
-}
-
 pub(crate) async fn run_publisher_writer_with_limit(
     mut send: SendStream,
-    recv: RecvStream,
+    mut recv: RecvStream,
     mut rx: mpsc::Receiver<PublishRequest>,
     _chunk_bytes: usize,
     max_frame_bytes: usize,
 ) -> Result<()> {
     // Single writer: serialize publish requests over one bi-directional
-    // stream. Acked publishes are pipelined — written back to back and
-    // resolved by the ack reader as the broker answers — so the ordering
-    // guarantee costs a queue hop per request instead of a round trip.
-    let (pending_tx, pending_rx) = mpsc::channel::<PendingAck>(MAX_PENDING_ACKS);
-    let mut reader = tokio::spawn(run_publish_ack_reader(recv, pending_rx, max_frame_bytes));
+    // stream. Acked publishes pipeline — written back to back, their acks
+    // resolved in order once the write queue drains — so concurrent
+    // publishers on a stream are not capped at one request per round trip.
+    //
+    // Pending acks are held here rather than handed to a reader task: a
+    // publisher that awaits each publish before issuing the next has nothing
+    // to pipeline, and a channel hop plus a task wakeup on that path is pure
+    // latency (~2-3% of a loopback RTT). With the queue in-task, the serial
+    // case resolves its ack inline exactly as it did before pipelining, and
+    // only a caller with work actually queued behind it pays for batching.
+    //
+    // Depth is bounded by the publisher's in-flight byte budget
+    // (`publish_inflight_bytes`), since each entry holds its admission permit
+    // until the broker answers.
+    let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
     let mut json_scratch = BytesMut::with_capacity(64 * 1024);
-    // On any failure the worker tears down: fail the current caller, fail
-    // everything the reader still holds, then drain the request queue with
-    // the same message so later callers see why.
+    let mut pending: VecDeque<PendingAck> = VecDeque::new();
+
+    // Resolve every outstanding ack, in the order the requests were written.
+    // Any failure is fatal for this worker, exactly as the inline wait was:
+    // the caller sees it, so does everything queued behind it.
+    macro_rules! resolve_pending {
+        () => {{
+            while let Some(entry) = pending.pop_front() {
+                match wait_for_ack(
+                    &mut recv,
+                    entry.request_id,
+                    &mut ack_scratch,
+                    max_frame_bytes,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_batches_out_ok
+                                .fetch_add(entry.batch_count, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_ok
+                                .fetch_add(entry.item_count, Ordering::Relaxed);
+                        }
+                        let _ = entry.response.send(Ok(()));
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_batches_out_err
+                                .fetch_add(entry.batch_count, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_err
+                                .fetch_add(entry.item_count, Ordering::Relaxed);
+                        }
+                        let message = err.to_string();
+                        let _ = entry.response.send(Err(err));
+                        for stale in pending.drain(..) {
+                            let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
+                        }
+                        drain_publish_queue(&mut rx, &message).await;
+                        return Err(anyhow::anyhow!(message));
+                    }
+                }
+            }
+        }};
+    }
+    // On a write failure: fail the caller, then everything already written
+    // and everything still queued, with the same message.
     macro_rules! fail_worker {
         ($message:expr) => {{
             let message: String = $message;
-            drop(pending_tx);
-            let _ = (&mut reader).await;
+            for stale in pending.drain(..) {
+                let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
+            }
             drain_publish_queue(&mut rx, &message).await;
             return Err(anyhow::anyhow!(message));
         }};
     }
-    // Hand a written acked request to the ack reader; fatal if the reader is
-    // gone (it only exits early after an ack failure, which is fatal anyway).
     macro_rules! submit_pending {
         ($pending:expr) => {{
-            if let Err(send_err) = pending_tx.send($pending).await {
-                let message = match (&mut reader).await {
-                    Ok((_recv, Err(reader_err))) => reader_err.to_string(),
-                    _ => "publish ack reader stopped".to_string(),
-                };
-                let _ = send_err
-                    .0
-                    .response
-                    .send(Err(anyhow::anyhow!(message.clone())));
-                drain_publish_queue(&mut rx, &message).await;
-                return Err(anyhow::anyhow!(message));
-            }
+            pending.push_back($pending);
         }};
     }
     let mut finish_response: Option<oneshot::Sender<Result<()>>> = None;
-    while let Some(request) = rx.recv().await {
+    loop {
+        let request = if pending.is_empty() {
+            match rx.recv().await {
+                Some(request) => request,
+                None => break,
+            }
+        } else {
+            // Acks outstanding: keep writing while work is immediately
+            // available (that is what pipelining buys), otherwise settle up
+            // before parking.
+            match rx.try_recv() {
+                Ok(request) => request,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    resolve_pending!();
+                    continue;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    resolve_pending!();
+                    break;
+                }
+            }
+        };
         match request {
             PublishRequest::Message {
                 message,
@@ -1181,35 +1174,31 @@ pub(crate) async fn run_publisher_writer_with_limit(
                 }
             }
             PublishRequest::Finish { response } => {
+                // Settle what is already written before closing, so those
+                // callers get their acks rather than a stream teardown.
+                resolve_pending!();
                 finish_response = Some(response);
                 break;
             }
         }
     }
-    // Graceful shutdown: close our send side, then let the ack reader resolve
-    // every pending ack and hand `recv` back so the stream can be drained to
-    // EOF — the same close protocol `finish_publisher_stream` implements for
-    // the non-pipelined paths.
-    drop(pending_tx);
+    // Graceful shutdown: close our send side, then drain the peer's side to
+    // EOF — the same close protocol `finish_publisher_stream` implements.
     let finish_result = send.finish().map_err(anyhow::Error::from);
-    let result = match reader.await.context("join publish ack reader") {
-        Ok((mut recv, reader_result)) => {
-            let drain_result = async {
-                reader_result?;
-                let mut buf = [0u8; 8192];
-                loop {
-                    match recv.read(&mut buf).await {
-                        Ok(Some(_)) => continue,
-                        Ok(None) => break,
-                        Err(err) => return Err(err.into()),
-                    }
+    let result = {
+        let drain_result = async {
+            let mut buf = [0u8; 8192];
+            loop {
+                match recv.read(&mut buf).await {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => break,
+                    Err(err) => return Err(err.into()),
                 }
-                Ok(())
             }
-            .await;
-            finish_result.and(drain_result)
+            Ok(())
         }
-        Err(err) => finish_result.and(Err(err)),
+        .await;
+        finish_result.and(drain_result)
     };
     if let Some(response) = finish_response {
         let _ = response.send(match &result {
