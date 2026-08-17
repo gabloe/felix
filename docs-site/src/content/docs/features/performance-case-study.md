@@ -109,6 +109,17 @@ Three changes, all in Felix, using only official quinn APIs:
 The latency profile was unaffected by design — these changes alter transport
 acking and task placement, not request round trips.
 
+:::caution[Driver isolation is macOS-only today]
+Every number on this page was measured on macOS, and the dedicated I/O
+runtime pool is enabled there only. On Linux, isolating the drivers loses a
+delivery wakeup — the receiver's QUIC layer accepts and acknowledges a stream
+frame the application is never woken to read — so that platform keeps the
+shared-runtime behaviour by default (`FELIX_IO_RUNTIME_THREADS=0`) until the
+defect is resolved. Pump colocation and ACK-frequency tuning were each ruled
+out by A/B; the wakeup defect is specific to the drivers' runtime placement,
+and is the open item from this investigation.
+:::
+
 ## Defect 2: one run in three, 5–6× slower
 
 ### The symptom

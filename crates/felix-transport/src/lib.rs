@@ -54,10 +54,22 @@ fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
         // at 6 runtimes before endpoints were grouped by role: slow mode on
         // every run. Two is what the roles need: servers on one, clients on the
         // other.
+        // Default on only where this is validated. On Linux, running quinn's
+        // drivers on a dedicated runtime loses a delivery wakeup: the client's
+        // QUIC layer receives and ACKs a stream frame that the application is
+        // never woken to read, and the connection sits idle until it times
+        // out. Reproduced deterministically on a current-thread app runtime
+        // and intermittently (1 in 3) on a multi-threaded one; every other
+        // subsystem was ruled out by A/B (pump colocation off, ACK frequency
+        // off, MTU pinned) and it never occurs with the pool disabled. The
+        // measured gain is macOS-only so far, so the unvalidated platform
+        // keeps the stock behaviour rather than trading correctness for an
+        // unmeasured speedup. `FELIX_IO_RUNTIME_THREADS` opts in anywhere.
+        let default_threads = if cfg!(target_os = "macos") { 2 } else { 0 };
         let threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(2);
+            .unwrap_or(default_threads);
         (0..threads)
             .filter_map(|index| {
                 tokio::runtime::Builder::new_multi_thread()
@@ -870,6 +882,62 @@ mod tests {
         send.finish()?;
         let response = recv.read_to_end(1024).await?;
         assert_eq!(response, b"ping");
+
+        server_task.await.context("server task join")??;
+        Ok(())
+    }
+
+    /// Minimal reproduction of the delivery pattern Felix's subscription path
+    /// uses: a sender writing many small chunks to one uni stream, and a
+    /// reader colocated with the connection's drivers forwarding each item
+    /// through a bounded channel. Isolating quinn's drivers onto a dedicated
+    /// runtime lost a wakeup here on Linux — the receiver ACKed bytes it never
+    /// delivered to the application — so this covers that path without the
+    /// broker or client in the picture.
+    #[tokio::test]
+    async fn many_small_frames_reach_a_colocated_reader() -> Result<()> {
+        const N: u64 = 400;
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let mut send = connection.open_uni().await?;
+            for i in 0..N {
+                send.write_all(&i.to_be_bytes()).await?;
+                // One write per item, as the delivery writer does.
+                tokio::task::yield_now().await;
+            }
+            send.finish()?;
+            let _ = send.stopped().await;
+            Result::<()>::Ok(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let mut recv = connection.accept_uni().await?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(64);
+        connection.spawn_pump(async move {
+            let mut buf = [0u8; 8];
+            loop {
+                if recv.read_exact(&mut buf).await.is_err() {
+                    break;
+                }
+                if tx.send(u64::from_be_bytes(buf)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        for expected in 0..N {
+            let value = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+                .await
+                .with_context(|| format!("delivery stalled waiting for item {expected}"))?
+                .with_context(|| format!("stream ended early at item {expected}"))?;
+            assert_eq!(value, expected);
+        }
 
         server_task.await.context("server task join")??;
         Ok(())

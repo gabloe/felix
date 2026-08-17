@@ -869,11 +869,15 @@ export FELIX_MAX_UDP_PAYLOAD="65527"
 
 ### `FELIX_IO_RUNTIME_THREADS`
 
-**Description**: Size of the dedicated QUIC I/O runtime pool. Quinn's driver tasks (endpoint receive loop, per-connection transmit/ACK loops) do a bounded slice of work per poll and reschedule themselves, so their scheduler re-poll latency is the transport's throughput ceiling. Felix therefore runs them on a pool of single-threaded runtimes isolated from application tasks, assigned by role: server endpoints spread across every runtime but the last, client endpoints share the last. `0` disables the isolation and runs drivers on the application runtime (the pre-fix behavior). A larger pool cannot make a single endpoint faster — an endpoint's driver is one task on one runtime — and it splits endpoints that talk to each other onto separate threads, which measured 5–6× slower.
+**Description**: Size of the dedicated QUIC I/O runtime pool. Quinn's driver tasks (endpoint receive loop, per-connection transmit/ACK loops) do a bounded slice of work per poll and reschedule themselves, so their scheduler re-poll latency is the transport's throughput ceiling. Felix therefore runs them on a pool of single-threaded runtimes isolated from application tasks, assigned by role: server endpoints spread across every runtime but the last, client endpoints share the last. `0` disables the isolation and runs drivers on the application runtime. A larger pool cannot make a single endpoint faster — an endpoint's driver is one task on one runtime — and it splits endpoints that talk to each other onto separate threads, which measured 5–6× slower.
+
+:::caution[Enabled by default on macOS only]
+On Linux, isolating quinn's drivers onto a dedicated runtime currently loses a delivery wakeup: the receiving side's QUIC layer accepts and acknowledges a stream frame that the application is never woken to read, and the connection stalls until it times out. It reproduces deterministically on a current-thread application runtime and intermittently on a multi-threaded one. The measured throughput gain is macOS-only so far, so non-macOS platforms default to `0` rather than trade delivery correctness for an unmeasured speedup. Setting this variable opts in anywhere — treat a non-zero value on Linux as experimental until that defect is resolved.
+:::
 
 **Type**: Non-negative integer
 
-**Default**: `2`
+**Default**: `2` on macOS, `0` elsewhere
 
 ```bash
 export FELIX_IO_RUNTIME_THREADS="2"

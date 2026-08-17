@@ -1299,6 +1299,97 @@ reproduction is still the right next move — a real broker has one endpoint and
 its clients are separate processes, so if the residual does not reproduce
 there, it is a property of the single-process harness rather than of Felix.
 
+## Round 16: the I/O runtime pool loses a delivery wakeup on Linux
+
+CI (ubuntu runners) failed on the branch that was green on macOS:
+`publish_sharding_preserves_stream_order` timed out, and the perf job
+reported 18 regressions with 10/10 throughput trials exiting non-zero.
+
+### What it is
+
+Reproduced in a Linux container (`--cpus 4`, stock `net.core.rmem_max`):
+
+| Tree | Result |
+|---|---|
+| PR base `a36c52c` | passes 4/4 in **0.4 s** |
+| This branch | hangs 30 s, **fails 4/4** — in isolation, not just under suite load |
+| This branch, `FELIX_IO_RUNTIME_THREADS=0` | passes 3/3 |
+
+A `quinn_proto=trace` capture pinpoints it. The last activity before a
+29.8 s gap is on the client's event connection:
+
+```
+drive{id=2}: got stream frame id=server unidirectional stream 0 offset=1081 len=256 fin=false
+drive{id=2}: max ack delay reached -> ACK ArrayRangeSet([27..32])
+<29.8 s of nothing, then Idle timeouts close every connection>
+```
+
+**The data arrives and is acknowledged at the receiver's QUIC layer, and the
+application is never woken to read it.** `gdb` confirms the shape: every
+thread parked (`epoll_pwait`, `futex_wait`), nothing runnable — a lost
+wakeup, not a livelock or starvation. Broker-side `FELIX_CONN_STATS_MS`
+tickers stop firing at the same instant, so no timer is pending anywhere.
+
+### What it is not
+
+Each ruled out by A/B on Linux, same binary:
+
+| Hypothesis | Result |
+|---|---|
+| Pump colocation | `FELIX_PUMP_COLOCATE=0` still hangs |
+| ACK frequency | `FELIX_ACK_FREQ_DISABLE=1` still hangs |
+| Loopback MTU / cwnd work | `FELIX_INITIAL_MTU=1200` still hangs; the buffer gate already disables that path on stock Linux |
+| Black-hole cooldown | `..._COOLDOWN_MS=60000` still hangs |
+| Pool size / role split | pool 1, 2, and 3 all hang; only `0` passes |
+| Test-harness artifact | a `multi_thread` app runtime still fails 1 in 3 |
+
+So it is specific to quinn's driver tasks running on a dedicated runtime,
+and it affects production-shaped multi-threaded runtimes too — less often,
+which is consistent with the CI perf job's failures rather than a clean
+timeout.
+
+### Disposition
+
+The pool now defaults to `2` on macOS (where its ~7× gain is measured and
+where no stall has ever been observed across hundreds of runs) and `0`
+elsewhere; `FELIX_IO_RUNTIME_THREADS` opts in anywhere. Trading delivery
+correctness for an unmeasured speedup on an unvalidated platform is not a
+trade worth making, and the measurement that would justify enabling it on
+Linux has not been taken.
+
+### Where the stall actually is
+
+Further narrowing, all on Linux with the pool forced on:
+
+- **A minimal transport-level reproduction does _not_ reproduce it.** Sender
+  writing 400 small items to one uni stream, reader colocated via
+  `spawn_pump`, forwarded through a bounded channel — passes 3/3 at pool 0,
+  1 and 2 (`many_small_frames_reach_a_colocated_reader`, kept as a
+  regression test). So quinn drivers on a dedicated runtime, plus a
+  colocated reader, is not sufficient to trigger it.
+- **The client is not the stalled party.** Instrumenting the subscription
+  pipeline shows the last frame decoded into a 64-event batch with the event
+  channel reporting **256 free slots** — no backpressure anywhere — and then
+  no further frames arrive.
+- **The broker stops producing.** Instrumenting the per-connection delivery
+  writer shows its `rx.recv()` never returns again: the last command it
+  handled wrote 28 bytes, and nothing is enqueued afterwards. Both
+  connections' writers go idle with their queues empty.
+
+So the stall is **upstream of the connection writer, inside the broker's
+delivery chain** (broker-core fanout → lane feeder → writer lane), and the
+earlier reading — "the receiver ACKs bytes the app is never woken to read" —
+was the downstream symptom of the broker simply not sending the rest. The
+ACKed-but-undelivered frame seen in the quinn trace is the last batch that
+*was* produced.
+
+**Open.** The remaining question is which handoff in that chain loses its
+wakeup, and why isolating quinn's drivers changes it — the feeder and lane
+tasks run on the application runtime while the connection writer runs on the
+pool runtime, so the chain crosses runtimes exactly once. The next step is
+to instrument the broker-core subscriber queue and `run_lane_feeder` to see
+whether the feeder stops being woken or stops being fed.
+
 ## Everything changed this session
 
 All uncommitted. Grouped by what would make sensible commits.
