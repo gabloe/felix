@@ -17,8 +17,7 @@ use crate::counters::frame_counters;
 #[cfg(feature = "telemetry")]
 use crate::timings;
 use crate::wire::{
-    maybe_append_publish_ts, maybe_append_publish_ts_batch, maybe_wait_for_ack_with_limit,
-    write_frame_parts,
+    maybe_append_publish_ts, maybe_append_publish_ts_batch, wait_for_ack, write_frame_parts,
 };
 
 use super::sharding::PublishSharding;
@@ -725,6 +724,21 @@ pub(crate) async fn run_publisher_writer(
     .await
 }
 
+/// A publish that has been written to the stream but whose broker ack has not
+/// arrived yet. The admission permit rides along so the in-flight byte budget
+/// stays reserved until the broker answers, not merely until the frame is
+/// written.
+struct PendingAck {
+    request_id: u64,
+    response: oneshot::Sender<Result<()>>,
+    _permit: OwnedSemaphorePermit,
+    // Read only by the telemetry counters in the ack reader.
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    batch_count: u64,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    item_count: u64,
+}
+
 pub(crate) async fn run_publisher_writer_with_limit(
     mut send: SendStream,
     mut recv: RecvStream,
@@ -732,10 +746,117 @@ pub(crate) async fn run_publisher_writer_with_limit(
     _chunk_bytes: usize,
     max_frame_bytes: usize,
 ) -> Result<()> {
-    // Single writer: serialize publish requests over one bi-directional stream.
+    // Single writer: serialize publish requests over one bi-directional
+    // stream. Acked publishes pipeline — written back to back, their acks
+    // resolved in order once the write queue drains — so concurrent
+    // publishers on a stream are not capped at one request per round trip.
+    //
+    // Pending acks are held here rather than handed to a reader task: a
+    // publisher that awaits each publish before issuing the next has nothing
+    // to pipeline, and a channel hop plus a task wakeup on that path is pure
+    // latency (~2-3% of a loopback RTT). With the queue in-task, the serial
+    // case resolves its ack inline exactly as it did before pipelining, and
+    // only a caller with work actually queued behind it pays for batching.
+    //
+    // Depth is bounded by the publisher's in-flight byte budget
+    // (`publish_inflight_bytes`), since each entry holds its admission permit
+    // until the broker answers.
     let mut ack_scratch = BytesMut::with_capacity(64 * 1024);
     let mut json_scratch = BytesMut::with_capacity(64 * 1024);
-    while let Some(request) = rx.recv().await {
+    let mut pending: VecDeque<PendingAck> = VecDeque::new();
+
+    // Resolve every outstanding ack, in the order the requests were written.
+    // Any failure is fatal for this worker, exactly as the inline wait was:
+    // the caller sees it, so does everything queued behind it.
+    macro_rules! resolve_pending {
+        () => {{
+            while let Some(entry) = pending.pop_front() {
+                match wait_for_ack(
+                    &mut recv,
+                    entry.request_id,
+                    &mut ack_scratch,
+                    max_frame_bytes,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_batches_out_ok
+                                .fetch_add(entry.batch_count, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_ok
+                                .fetch_add(entry.item_count, Ordering::Relaxed);
+                        }
+                        let _ = entry.response.send(Ok(()));
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .pub_batches_out_err
+                                .fetch_add(entry.batch_count, Ordering::Relaxed);
+                            counters
+                                .pub_items_out_err
+                                .fetch_add(entry.item_count, Ordering::Relaxed);
+                        }
+                        let message = err.to_string();
+                        let _ = entry.response.send(Err(err));
+                        for stale in pending.drain(..) {
+                            let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
+                        }
+                        drain_publish_queue(&mut rx, &message).await;
+                        return Err(anyhow::anyhow!(message));
+                    }
+                }
+            }
+        }};
+    }
+    // On a write failure: fail the caller, then everything already written
+    // and everything still queued, with the same message.
+    macro_rules! fail_worker {
+        ($message:expr) => {{
+            let message: String = $message;
+            for stale in pending.drain(..) {
+                let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
+            }
+            drain_publish_queue(&mut rx, &message).await;
+            return Err(anyhow::anyhow!(message));
+        }};
+    }
+    macro_rules! submit_pending {
+        ($pending:expr) => {{
+            pending.push_back($pending);
+        }};
+    }
+    let mut finish_response: Option<oneshot::Sender<Result<()>>> = None;
+    loop {
+        let request = if pending.is_empty() {
+            match rx.recv().await {
+                Some(request) => request,
+                None => break,
+            }
+        } else {
+            // Acks outstanding: keep writing while work is immediately
+            // available (that is what pipelining buys), otherwise settle up
+            // before parking.
+            match rx.try_recv() {
+                Ok(request) => request,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    resolve_pending!();
+                    continue;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    resolve_pending!();
+                    break;
+                }
+            }
+        };
         match request {
             PublishRequest::Message {
                 message,
@@ -830,7 +951,10 @@ pub(crate) async fn run_publisher_writer_with_limit(
                         timings::record_write_ns(write_ns);
                         t_histogram!("felix_client_write_ns").record(write_ns as f64);
                     }
-                    let result = match write_result {
+                    let item_count = payloads.len() as u64;
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = item_count;
+                    match write_result {
                         Ok(()) => {
                             #[cfg(feature = "telemetry")]
                             {
@@ -840,32 +964,30 @@ pub(crate) async fn run_publisher_writer_with_limit(
                                     .bytes_out
                                     .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                             }
-                            maybe_wait_for_ack_with_limit(
-                                &mut recv,
-                                ack,
-                                request_id,
-                                &mut ack_scratch,
-                                max_frame_bytes,
-                            )
-                            .await
-                        }
-                        Err(err) => Err(err),
-                    };
-                    let item_count = payloads.len() as u64;
-                    #[cfg(not(feature = "telemetry"))]
-                    let _ = item_count;
-                    match result {
-                        Ok(()) => {
-                            #[cfg(feature = "telemetry")]
-                            {
-                                let counters = frame_counters();
-                                counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
-                                counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
-                                counters
-                                    .pub_items_out_ok
-                                    .fetch_add(item_count, Ordering::Relaxed);
+                            if ack == AckMode::None {
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    let counters = frame_counters();
+                                    counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                    counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
+                                    counters
+                                        .pub_items_out_ok
+                                        .fetch_add(item_count, Ordering::Relaxed);
+                                }
+                                let _ = response.send(Ok(()));
+                            } else if let Some(request_id) = request_id {
+                                submit_pending!(PendingAck {
+                                    request_id,
+                                    response,
+                                    _permit,
+                                    batch_count: 1,
+                                    item_count,
+                                });
+                            } else {
+                                let message = "missing request_id for acked publish".to_string();
+                                let _ = response.send(Err(anyhow::anyhow!(message.clone())));
+                                fail_worker!(message);
                             }
-                            let _ = response.send(Ok(()));
                         }
                         Err(err) => {
                             #[cfg(feature = "telemetry")]
@@ -879,8 +1001,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                             }
                             let message = err.to_string();
                             let _ = response.send(Err(err));
-                            drain_publish_queue(&mut rx, &message).await;
-                            return Err(anyhow::anyhow!(message));
+                            fail_worker!(message);
                         }
                     }
                 }
@@ -911,19 +1032,6 @@ pub(crate) async fn run_publisher_writer_with_limit(
                         timings::record_write_ns(write_ns);
                         t_histogram!("felix_client_write_ns").record(write_ns as f64);
                     }
-                    let result = match write_result {
-                        Ok(()) => {
-                            maybe_wait_for_ack_with_limit(
-                                &mut recv,
-                                ack,
-                                request_id,
-                                &mut ack_scratch,
-                                max_frame_bytes,
-                            )
-                            .await
-                        }
-                        Err(err) => Err(err),
-                    };
                     let (batch_count, item_count) = match &other {
                         Message::Publish { .. } => (1u64, 1u64),
                         Message::PublishBatch { payloads, .. } => (1u64, payloads.len() as u64),
@@ -931,22 +1039,36 @@ pub(crate) async fn run_publisher_writer_with_limit(
                     };
                     #[cfg(not(feature = "telemetry"))]
                     let _ = (batch_count, item_count);
-                    match result {
+                    match write_result {
                         Ok(()) => {
-                            #[cfg(feature = "telemetry")]
-                            {
-                                let counters = frame_counters();
-                                counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
-                                if batch_count > 0 {
-                                    counters
-                                        .pub_batches_out_ok
-                                        .fetch_add(batch_count, Ordering::Relaxed);
-                                    counters
-                                        .pub_items_out_ok
-                                        .fetch_add(item_count, Ordering::Relaxed);
+                            if ack == AckMode::None {
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    let counters = frame_counters();
+                                    counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                    if batch_count > 0 {
+                                        counters
+                                            .pub_batches_out_ok
+                                            .fetch_add(batch_count, Ordering::Relaxed);
+                                        counters
+                                            .pub_items_out_ok
+                                            .fetch_add(item_count, Ordering::Relaxed);
+                                    }
                                 }
+                                let _ = response.send(Ok(()));
+                            } else if let Some(request_id) = request_id {
+                                submit_pending!(PendingAck {
+                                    request_id,
+                                    response,
+                                    _permit,
+                                    batch_count,
+                                    item_count,
+                                });
+                            } else {
+                                let message = "missing request_id for acked publish".to_string();
+                                let _ = response.send(Err(anyhow::anyhow!(message.clone())));
+                                fail_worker!(message);
                             }
-                            let _ = response.send(Ok(()));
                         }
                         Err(err) => {
                             #[cfg(feature = "telemetry")]
@@ -964,8 +1086,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                             }
                             let message = err.to_string();
                             let _ = response.send(Err(err));
-                            drain_publish_queue(&mut rx, &message).await;
-                            return Err(anyhow::anyhow!(message));
+                            fail_worker!(message);
                         }
                     }
                 }
@@ -989,22 +1110,6 @@ pub(crate) async fn run_publisher_writer_with_limit(
                     .write_all(&bytes)
                     .await
                     .context("write binary batch frame");
-                // For an acked frame the request is not complete until the broker's
-                // ack arrives, so the wait belongs inside the writer task: it owns
-                // the stream, and acks are answered strictly in request order.
-                let result = match write_result {
-                    Ok(()) => {
-                        maybe_wait_for_ack_with_limit(
-                            &mut recv,
-                            ack,
-                            request_id,
-                            &mut ack_scratch,
-                            max_frame_bytes,
-                        )
-                        .await
-                    }
-                    Err(err) => Err(err),
-                };
                 #[cfg(feature = "telemetry")]
                 if let Some(start) = chunk_start {
                     let await_ns = start.elapsed().as_nanos() as u64;
@@ -1017,22 +1122,40 @@ pub(crate) async fn run_publisher_writer_with_limit(
                     timings::record_write_ns(write_ns);
                     t_histogram!("felix_client_write_ns").record(write_ns as f64);
                 }
-                match result {
+                match write_result {
                     Ok(()) => {
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
-                            counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
-                            counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
-                            counters
-                                .pub_items_out_ok
-                                .fetch_add(item_count as u64, Ordering::Relaxed);
                             counters.frames_out_ok.fetch_add(1, Ordering::Relaxed);
                             counters
                                 .bytes_out
                                 .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                         }
-                        let _ = response.send(Ok(()));
+                        if ack == AckMode::None {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
+                                counters.pub_batches_out_ok.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .pub_items_out_ok
+                                    .fetch_add(item_count as u64, Ordering::Relaxed);
+                            }
+                            let _ = response.send(Ok(()));
+                        } else if let Some(request_id) = request_id {
+                            submit_pending!(PendingAck {
+                                request_id,
+                                response,
+                                _permit,
+                                batch_count: 1,
+                                item_count: item_count as u64,
+                            });
+                        } else {
+                            let message = "missing request_id for acked publish".to_string();
+                            let _ = response.send(Err(anyhow::anyhow!(message.clone())));
+                            fail_worker!(message);
+                        }
                     }
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
@@ -1046,30 +1169,47 @@ pub(crate) async fn run_publisher_writer_with_limit(
                         }
                         let message = err.to_string();
                         let _ = response.send(Err(err));
-                        drain_publish_queue(&mut rx, &message).await;
-                        return Err(anyhow::anyhow!(message));
+                        fail_worker!(message);
                     }
                 }
             }
             PublishRequest::Finish { response } => {
-                let result = finish_publisher_stream(&mut send, &mut recv).await;
-                match result {
-                    Ok(()) => {
-                        let _ = response.send(Ok(()));
-                        return Ok(());
-                    }
-                    Err(err) => {
-                        let message = err.to_string();
-                        let _ = response.send(Err(err));
-                        return Err(anyhow::anyhow!(message));
-                    }
-                }
+                // Settle what is already written before closing, so those
+                // callers get their acks rather than a stream teardown.
+                resolve_pending!();
+                finish_response = Some(response);
+                break;
             }
         }
     }
-    finish_publisher_stream(&mut send, &mut recv).await
+    // Graceful shutdown: close our send side, then drain the peer's side to
+    // EOF — the same close protocol `finish_publisher_stream` implements.
+    let finish_result = send.finish().map_err(anyhow::Error::from);
+    let result = {
+        let drain_result = async {
+            let mut buf = [0u8; 8192];
+            loop {
+                match recv.read(&mut buf).await {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => break,
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            Ok(())
+        }
+        .await;
+        finish_result.and(drain_result)
+    };
+    if let Some(response) = finish_response {
+        let _ = response.send(match &result {
+            Ok(()) => Ok(()),
+            Err(err) => Err(anyhow::anyhow!(err.to_string())),
+        });
+    }
+    result
 }
 
+#[cfg(test)]
 pub(crate) async fn finish_publisher_stream(
     send: &mut SendStream,
     recv: &mut RecvStream,
@@ -1400,6 +1540,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn acked_publishes_pipeline_without_waiting_per_ack() -> Result<()> {
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        // The server refuses to ack anything until all three publish frames
+        // have arrived. A writer that awaits each ack inline can never send
+        // frame 2 before frame 1 is acked, so it deadlocks here (and this
+        // test times out); the pipelined writer sends all three back to back.
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            let mut scratch = BytesMut::with_capacity(4096);
+            let mut request_ids = Vec::new();
+            for _ in 0..3 {
+                let frame = crate::wire::read_frame_into_with_limit(
+                    &mut recv,
+                    &mut scratch,
+                    false,
+                    1 << 20,
+                )
+                .await?
+                .context("publish stream closed before all frames arrived")?;
+                match Message::decode(frame).context("decode publish frame")? {
+                    Message::PublishBatch { request_id, .. } => {
+                        request_ids.push(request_id.context("acked batch missing request_id")?);
+                    }
+                    other => anyhow::bail!("unexpected message: {other:?}"),
+                }
+            }
+            for request_id in request_ids {
+                let frame = Message::PublishOk { request_id }.encode()?;
+                send.write_all(&frame.encode()).await.context("write ack")?;
+            }
+            // Close like the broker does: finish the ack side so the client's
+            // EOF drain completes, then wait out the client's own finish.
+            send.finish()?;
+            let _ = recv.read_to_end(1024).await;
+            let _ = send.stopped().await;
+            Result::<()>::Ok(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (send, recv) = connection.open_bi().await?;
+        let (tx, rx) = mpsc::channel(8);
+        let worker = tokio::spawn(run_publisher_writer(send, recv, rx, 16 * 1024));
+
+        let admission = Arc::new(Semaphore::new(1 << 20));
+        let mut responses = Vec::new();
+        for request_id in 1..=3u64 {
+            let permit = admission
+                .clone()
+                .acquire_many_owned(64)
+                .await
+                .context("admission")?;
+            let (response_tx, response_rx) = oneshot::channel();
+            tx.send(PublishRequest::Message {
+                message: Message::PublishBatch {
+                    tenant_id: "t".into(),
+                    namespace: "ns".into(),
+                    stream: "s".into(),
+                    payloads: vec![b"x".to_vec()],
+                    request_id: Some(request_id),
+                    ack: Some(AckMode::PerBatch),
+                },
+                ack: AckMode::PerBatch,
+                request_id: Some(request_id),
+                _permit: permit,
+                response: response_tx,
+            })
+            .await
+            .context("queue publish")?;
+            responses.push(response_rx);
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            for response in responses {
+                response.await.context("worker dropped response")??;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("acked publishes did not pipeline (inline ack wait deadlocks this server)")??;
+
+        let (finish_tx, finish_rx) = oneshot::channel();
+        tx.send(PublishRequest::Finish {
+            response: finish_tx,
+        })
+        .await
+        .context("queue finish")?;
+        finish_rx.await.context("finish dropped")??;
+        worker.await.context("join worker")??;
+        server_task.await.context("join server")??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn finish_publisher_stream_drains_recv() -> Result<()> {
         let (server_config, cert) = make_server_config()?;
         let transport = TransportConfig::default();
@@ -1592,6 +1831,11 @@ mod tests {
             send.write_all(&frame.encode()).await.context("write ack")?;
             send.finish().context("finish ack")?;
             let _ = recv.read_to_end(1024 * 1024).await;
+            // A pipelined client sends its whole flight (and FIN) up front, so
+            // reaching EOF here no longer implies the ack was transmitted.
+            // Dropping the connection discards untransmitted data; wait until
+            // the client has read the ack stream to completion.
+            let _ = send.stopped().await;
             Ok::<(), anyhow::Error>(())
         });
 
@@ -1656,6 +1900,11 @@ mod tests {
         let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
         let addr = server.local_addr()?;
 
+        // The connection must outlive the assertions: a pipelined client sends
+        // its whole flight (and FIN) up front, so server-side EOF no longer
+        // implies the client has consumed the ack, and dropping the connection
+        // races the client's read of buffered stream data.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
             let connection = server.accept().await?;
             let (mut send, mut recv) = connection.accept_bi().await?;
@@ -1676,6 +1925,7 @@ mod tests {
             send.write_all(&frame.encode()).await.context("write ack")?;
             send.finish().context("finish ack")?;
             let _ = recv.read_to_end(1024 * 1024).await;
+            let _ = shutdown_rx.await;
             Ok::<(), anyhow::Error>(())
         });
 
@@ -1729,6 +1979,7 @@ mod tests {
 
         let writer_err = writer_task.await.context("writer join")?;
         assert!(writer_err.is_err());
+        let _ = shutdown_tx.send(());
         server_task.await.context("server join")??;
         Ok(())
     }

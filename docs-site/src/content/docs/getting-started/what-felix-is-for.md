@@ -149,18 +149,21 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 
 Single host, loopback, release build, TLS 1.3 on, defaults, zero delivery drops:
 
-- **Latency (batch = 1, per-message ack, JSON framing):** p50 82–128 µs,
-  p999 175–329 µs at fanout 1 across 0 B–1 KiB payloads.
+- **Latency (batch = 1, per-message ack, JSON framing):** p50 109–136 µs,
+  p99 138–176 µs at fanout 1 across 0 B–4 KiB payloads; p50 236–269 µs,
+  p99 278–399 µs at fanout 10.
 
   The framing matters and is easy to get wrong. `latency-demo` enables
   per-message acks only when `batch <= 1 && !binary`, so passing `--binary`
   silently measures a different thing — fire-and-forget delivery rather than a
-  request round trip. On the same machine that produced the figures above, the
-  binary path measures ~256 µs p50. That is not a regression against them; it
-  is a different configuration, and the two are not comparable.
-- **Throughput (batch = 64, lossless):** up to 2.92 M deliveries/s for 0 B at
-  fanout 10; ~1.57 M/s at 1 KiB × fanout 10; ~2.3 GB/s of payload at 4 KiB ×
-  fanout 10 on Linux.
+  request round trip. Those two are not comparable.
+- **Throughput (batch = 64, lossless, fanout 1):** ~461 MB/s at 1 KiB,
+  ~508 MB/s at 4 KiB, ~503 MB/s at 16 KiB of payload.
+
+  A minority of runs land several times lower — a known open issue in the
+  transport's scheduling, documented under
+  [Benchmarks](/felix/features/benchmarks/). Take a median of several runs;
+  a single run is not a measurement.
 
 Full methodology and per-platform tables are in [Benchmarks](/felix/features/benchmarks/).
 These are **single-node loopback numbers at fanout ≤ 10**. They are not evidence

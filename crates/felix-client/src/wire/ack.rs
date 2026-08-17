@@ -1,7 +1,9 @@
 // Ack parsing and publish ack handling helpers.
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use felix_wire::{AckMode, Message};
+#[cfg(test)]
+use felix_wire::AckMode;
+use felix_wire::Message;
 use quinn::RecvStream;
 
 #[cfg(feature = "telemetry")]
@@ -84,6 +86,7 @@ pub(crate) async fn maybe_wait_for_ack(
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn maybe_wait_for_ack_with_limit(
     recv: &mut RecvStream,
     ack: AckMode,
@@ -97,7 +100,21 @@ pub(crate) async fn maybe_wait_for_ack_with_limit(
     }
     let request_id =
         request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
-    // Bound the wait. The publisher writer task blocks here, so an ack that never
+    wait_for_ack(recv, request_id, frame_scratch, max_frame_bytes).await
+}
+
+/// Wait for the broker's ack to the publish sent as `request_id`.
+///
+/// Acks arrive on the publish stream strictly in request order, so the next
+/// ack frame must correlate to `request_id` — a mismatch is a protocol error,
+/// not an out-of-order arrival to wait through.
+pub(crate) async fn wait_for_ack(
+    recv: &mut RecvStream,
+    request_id: u64,
+    frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
+) -> Result<()> {
+    // Bound the wait. The ack reader blocks here, so an ack that never
     // arrives wedges that stream's publishes indefinitely rather than failing.
     // This is a real possibility whenever the broker cannot answer — it is
     // overloaded, the stream broke, or (before capability negotiation) it

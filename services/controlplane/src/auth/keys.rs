@@ -1,38 +1,20 @@
-//! Signing key generation helpers for Felix tenant JWTs.
+//! Generation of tenant Ed25519 signing keys for Felix JWTs.
 //!
-//! Produce tenant-scoped Ed25519 signing keys that the control-plane stores and
-//! later exposes (public parts only) via JWKS for broker verification.
+//! Ed25519 only, and it has to stay that way: signing is constant-time by
+//! design, which sidesteps the RSA timing pitfalls, and Felix verification
+//! rejects every other algorithm anyway.
 //!
-//! This module is the single source of truth for Felix tenant signing key
-//! generation. It is invoked by control-plane provisioning and rotation flows
-//! and feeds downstream JWKS publication and broker verification.
+//! The private key is a raw 32-byte seed, *not* PKCS8 DER, and the public key is
+//! derived from that seed rather than stored alongside it -- a stored pair can
+//! drift, a derived one cannot. `kid` is random, used for rotation and cache
+//! lookup, and is not a secret.
 //!
-//! - Control-plane tenant provisioning and rotation logic.
-//! - Tests that need deterministic key material for Felix JWTs.
+//! Generation is pure and stateless, so it is safe to call concurrently. The
+//! private material it returns must never be serialized or logged outside the
+//! control-plane store; only public keys cross the boundary, via JWKS.
 //!
-//! - Keys are always Ed25519 and must remain that way for Felix-issued tokens.
-//! - The private key is a raw 32-byte Ed25519 seed (not PKCS8 DER), and the
-//!   public key is derived from that seed to avoid mismatches.
-//! - Private key material must never be serialized or logged outside storage.
-//!
-//! Pure, stateless key generation with no shared mutable state; safe to call
-//! concurrently from multiple async tasks.
-//!
-//! # Security boundary
-//! This module generates private key material and must only be used inside the
-//! control-plane trust boundary. Public keys may cross the boundary via JWKS,
-//! but private keys must never leave storage.
-//!
-//! # Security model and threat assumptions
-//! - We assume attackers can observe tokens and JWKS but cannot read the
-//!   control-plane's private key storage.
-//! - Ed25519 is used to avoid RSA timing pitfalls and because it is constant-time
-//!   by design for signing, reducing side-channel risk.
-//! - Key IDs (`kid`) are random and used for rotation and cache lookups, not as
-//!   a secret.
-//!
-//! Call [`generate_signing_keys`] during tenant provisioning or key rotation and
-//! persist the returned [`TenantSigningKeys`] in the control-plane store.
+//! Call [`generate_signing_keys`] during provisioning or rotation and persist
+//! the returned [`TenantSigningKeys`].
 use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 use anyhow::Result;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;

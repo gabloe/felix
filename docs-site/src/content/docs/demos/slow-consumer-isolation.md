@@ -2,6 +2,34 @@
 title: "Demo: Slow-consumer Isolation"
 ---
 
+```mermaid
+flowchart LR
+    P["Publisher"] e0@--> B["Broker<br/><small>one shared encoded batch</small>"]
+    B e1@--> Q1["queue"] e2@--> S1(["dashboard A<br/><small>draining</small>"])
+    B e3@--> Q2["queue"] e4@--> S2(["dashboard B<br/><small>draining</small>"])
+    B e5@--> Q3["queue<br/><b>full</b>"] -.->|"dropped"| S3(["dashboard C<br/><small>stalled</small>"])
+
+    e0@{ animate: true }
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+    e5@{ animate: true }
+
+    classDef ok fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    classDef bad fill:#fdeaea,stroke:#b04a4a,color:#3d1414
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    class P,B step
+    class Q1,Q2,S1,S2 ok
+    class Q3,S3 bad
+```
+
+The animated edges are the ones still moving. Traffic keeps flowing to A and B
+at full rate while C's bounded queue overflows and its events are dropped —
+the publisher is never slowed by the slowest consumer. The drop is counted and
+surfaced to C rather than hidden, so a lagging subscriber learns it fell behind
+instead of silently receiving a gap.
+
 ## What this shows
 
 - One slow consumer does not degrade the healthy ones — the property in Felix's

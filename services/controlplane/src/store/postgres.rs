@@ -212,16 +212,6 @@ impl PostgresStore {
     ///
     /// - Avoid logging `pg.url` as it may contain credentials.
     /// - Use TLS and least-privilege DB roles in production.
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use controlplane::config::PostgresConfig;
-    /// use controlplane::store::{StoreConfig, postgres::PostgresStore};
-    ///
-    /// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
-    ///     let _ = PostgresStore::connect(&pg, cfg).await;
-    /// }
-    /// ```
     pub async fn connect(pg: &PostgresConfig, config: StoreConfig) -> StoreResult<Self> {
         #[cfg(any(test, feature = "pg-tests"))]
         let _ = Self::connect_without_migrations;

@@ -2,7 +2,175 @@
 use anyhow::{Context, Result, anyhow};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Whether an endpoint accepts connections or makes them.
+///
+/// Assignment is not round-robin across both: a server endpoint multiplexes
+/// every connection and drives traffic in both directions, so it gets a
+/// runtime to itself, while client endpoints share the rest. Letting a client
+/// endpoint land on the server's runtime measured **5-6x slower** — the two
+/// halves of a request/response ping-pong end up serialized on one thread. In
+/// a standalone broker or a standalone client this is a no-op; it matters when
+/// both live in one process, as in the benchmark harness and the in-process
+/// client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointRole {
+    Server,
+    Client,
+}
+
+/// Dedicated runtimes for quinn's driver tasks. Drivers do bounded work per
+/// poll and reschedule themselves, so their re-poll latency is the pipeline's
+/// byte-rate ceiling; on a runtime shared with app tasks that latency grows
+/// with load, and because wakeups scale with datagram count it caps throughput
+/// per *byte* (measured ~7.5x below capacity). Each endpoint gets a
+/// single-threaded runtime so driver self-wakes re-poll immediately and never
+/// migrate cores; see [`EndpointRole`] for which endpoints share one.
+/// `FELIX_IO_RUNTIME_THREADS` sets the pool size (default: 2); `0` restores
+/// drivers to the app runtime.
+fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usize {
+    if pool_len <= 1 {
+        return 0;
+    }
+    match role {
+        // The final runtime is permanently reserved for clients. Server
+        // creation history must never let a server drift onto it.
+        EndpointRole::Server => sequence % (pool_len - 1),
+        EndpointRole::Client => pool_len - 1,
+    }
+}
+
+fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static IO_RUNTIMES: OnceLock<Vec<tokio::runtime::Runtime>> = OnceLock::new();
+    static NEXT_SERVER: AtomicUsize = AtomicUsize::new(0);
+    static NEXT_CLIENT: AtomicUsize = AtomicUsize::new(0);
+    let pool = IO_RUNTIMES.get_or_init(|| {
+        // Two, not one per core. A bigger pool cannot make a single endpoint
+        // faster -- an endpoint's driver is one task on one runtime -- and it
+        // actively hurts, because endpoints that talk to each other end up on
+        // different threads and every message pays cross-thread wakes. Measured
+        // at 6 runtimes before endpoints were grouped by role: slow mode on
+        // every run. Two is what the roles need: servers on one, clients on the
+        // other.
+        // Driver isolation is a macOS optimization; on Linux it is a
+        // pessimization, so it is defaulted on only where it measures faster.
+        //
+        // The ~7.5x per-byte ceiling this pool was built to fix is specific to
+        // macOS: on Linux the same benchmark at the pre-fix baseline already
+        // sustains ~643 MB/s (628K msg/s x 1 KiB), above what macOS reaches
+        // even with every fix applied. Isolating drivers there only adds a
+        // cross-thread hop per datagram, and it measures that way — p50
+        // latency 86 us -> 152 us and fanout-10 throughput 1.48M -> 1.09M
+        // msg/s, consistent across pool sizes 1/2/4/8 and with pump
+        // colocation both on and off.
+        //
+        // `FELIX_IO_RUNTIME_THREADS` overrides on any platform.
+        let default_threads = if cfg!(target_os = "macos") { 2 } else { 0 };
+        let threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(default_threads);
+        (0..threads)
+            .filter_map(|index| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .thread_name(format!("felix-quic-io-{index}"))
+                    .on_thread_start(|| {
+                        // High QoS: OS demotion of these threads turns wakeup
+                        // latency directly into a throughput ceiling.
+                        #[cfg(target_os = "macos")]
+                        unsafe {
+                            libc::pthread_set_qos_class_self_np(
+                                libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE,
+                                0,
+                            );
+                        }
+                    })
+                    .enable_all()
+                    .build()
+                    .map_err(|err| {
+                        tracing::warn!(error = %err, "failed to build QUIC I/O runtime; drivers will share the app runtime");
+                        err
+                    })
+                    .ok()
+            })
+            .collect()
+    });
+    if pool.is_empty() {
+        return None;
+    }
+    // Keep the role partition stable for the life of the process. In
+    // particular, repeated in-process benchmark cases create many sequential
+    // server endpoints; creation history must not eventually place one on the
+    // client runtime and recreate the measured 5-6x lockstep mode.
+    let seq = match role {
+        EndpointRole::Server => NEXT_SERVER.fetch_add(1, Ordering::Relaxed),
+        EndpointRole::Client => {
+            // Every client endpoint shares one runtime, deliberately. A client's
+            // publish and event endpoints carry the two halves of the same
+            // request/response flow, so splitting them across threads makes each
+            // message pay two cross-thread wakes and the pipeline drops into
+            // lockstep. Measured on the benchmark harness: co-located clients
+            // ~123K msg/s, spread across 6 runtimes ~21K on every single run.
+            NEXT_CLIENT.fetch_add(1, Ordering::Relaxed)
+        }
+    };
+    let index = io_runtime_index(role, seq, pool.len());
+    // Which endpoints share a runtime decides whether their drivers hand off
+    // in-thread or pay a cross-thread wake per datagram, so this assignment is
+    // load-bearing for throughput, not just bookkeeping.
+    tracing::debug!(
+        ?role,
+        endpoint_seq = seq,
+        io_runtime = index,
+        pool = pool.len(),
+        "assigned QUIC endpoint to I/O runtime"
+    );
+    Some(pool[index].handle().clone())
+}
+
+/// `quinn::Runtime` that runs driver tasks on the dedicated I/O runtime.
+/// Timers and the UDP socket are created in that runtime's context so they
+/// register with its reactor; application-facing stream futures are unaffected.
+#[derive(Debug)]
+struct IoRuntime {
+    handle: tokio::runtime::Handle,
+}
+
+impl quinn::Runtime for IoRuntime {
+    fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
+        let _guard = self.handle.enter();
+        quinn::TokioRuntime.new_timer(i)
+    }
+
+    fn spawn(&self, future: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) {
+        self.handle.spawn(future);
+    }
+
+    fn wrap_udp_socket(
+        &self,
+        t: std::net::UdpSocket,
+    ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
+        let _guard = self.handle.enter();
+        quinn::TokioRuntime.wrap_udp_socket(t)
+    }
+}
+
+/// The quinn runtime new endpoints should use, honouring the isolation switch.
+/// Also returns the chosen handle so the endpoint can offer it to pump tasks.
+fn quinn_runtime(role: EndpointRole) -> (Arc<dyn quinn::Runtime>, Option<tokio::runtime::Handle>) {
+    match io_runtime_handle(role) {
+        Some(handle) => (
+            Arc::new(IoRuntime {
+                handle: handle.clone(),
+            }),
+            Some(handle),
+        ),
+        None => (Arc::new(quinn::TokioRuntime), None),
+    }
+}
 
 /// Transport-level configuration defaults.
 ///
@@ -100,8 +268,73 @@ impl Default for TransportConfig {
     }
 }
 
+// Largest UDP payload that fits a 16 KiB loopback interface MTU (macOS lo0 is
+// 16384; Linux lo is 65536) after IPv6 headers (48 bytes; IPv4 needs only 28).
+const LOOPBACK_UDP_PAYLOAD: u16 = 16336;
+
 impl TransportConfig {
+    /// The initial MTU to use for a connection whose peer is a loopback
+    /// address, or `None` to keep the configured default.
+    ///
+    /// Running at the real loopback MTU matters beyond skipping the discovery
+    /// ramp: quinn's black-hole detector can misread a congestive loss burst
+    /// (all lost packets full-MTU, which is what overflowing the peer's UDP
+    /// socket buffer looks like at high rate) as an MTU black hole and drop
+    /// the path MTU to `min_mtu` (1200 by default). Recovery probes are only
+    /// sent when the connection has nothing else to transmit, so a busy
+    /// connection that collapses stays collapsed — measured on loopback as
+    /// ~13x the datagrams per byte and a 5-6x throughput drop for the life of
+    /// the load. Guaranteeing the loopback MTU (see
+    /// [`Self::quinn_transport_config_for_loopback`]) leaves the detector
+    /// nothing to collapse to, which removes the failure mode on the one path
+    /// where it was both most likely and least recoverable. An explicit
+    /// `FELIX_INITIAL_MTU` wins over this.
+    ///
+    /// `effective_buffer_bytes` is the smaller of the socket's *achieved*
+    /// send/receive buffers, and gates the whole guarantee: full-size
+    /// datagrams are only safe when the kernel buffers hold a real burst of
+    /// them. Linux silently clamps `SO_RCVBUF` to `net.core.rmem_max`
+    /// (~208 KB on stock hosts and CI runners) — roughly 26 jumbo datagrams
+    /// of headroom, which sustained load overflows catastrophically, and the
+    /// pinned `min_mtu` would then also forbid the one thing that helps a
+    /// tiny buffer: smaller datagrams. Below the threshold the connection
+    /// keeps the stock RFC-safe path (initial 1200, normal discovery, short
+    /// black-hole cooldown).
+    fn loopback_initial_mtu(&self, effective_buffer_bytes: usize) -> Option<u16> {
+        if env_u64("FELIX_INITIAL_MTU").is_some() {
+            return None;
+        }
+        let target = LOOPBACK_UDP_PAYLOAD
+            .min(self.mtu_discovery_upper_bound)
+            .min(self.max_udp_payload_size);
+        // 64 full-size datagrams of burst headroom (~1 MiB at 16336). Hosts
+        // tuned per docs/storage-performance.md sysctl guidance qualify;
+        // stock-limit Linux hosts do not.
+        if effective_buffer_bytes < usize::from(target).saturating_mul(64) {
+            return None;
+        }
+        (target > self.initial_mtu).then_some(target)
+    }
+
     fn quinn_transport_config(&self) -> quinn::TransportConfig {
+        self.quinn_transport_config_inner(self.initial_mtu, None)
+    }
+
+    /// Loopback variant: start at `initial_mtu` and also *guarantee* it via
+    /// quinn's `min_mtu`. The guarantee is what defuses the black-hole
+    /// detector — its reset target is `min_mtu`, not `initial_mtu`, so
+    /// raising only the start size still collapses to 1200 on a false
+    /// verdict. Loopback is the one path where the larger payload size is
+    /// guaranteed by construction; never set `min_mtu` for a real network.
+    fn quinn_transport_config_for_loopback(&self, mtu: u16) -> quinn::TransportConfig {
+        self.quinn_transport_config_inner(mtu, Some(mtu))
+    }
+
+    fn quinn_transport_config_inner(
+        &self,
+        initial_mtu: u16,
+        guaranteed_mtu: Option<u16>,
+    ) -> quinn::TransportConfig {
         // Translate Felix defaults into Quinn transport settings.
         let mut config = quinn::TransportConfig::default();
         let streams = quinn::VarInt::from_u32(self.max_streams as u32);
@@ -115,14 +348,58 @@ impl TransportConfig {
         config.send_window(self.send_window);
         // Path MTU: start safe, probe high. Fewer, larger datagrams directly
         // reduce per-byte syscall and crypto costs on high-MTU paths.
-        let initial_mtu = self.initial_mtu.clamp(1200, self.max_udp_payload_size);
+        let initial_mtu = initial_mtu.clamp(1200, self.max_udp_payload_size);
         config.initial_mtu(initial_mtu);
-        let mtu_bound = self
-            .mtu_discovery_upper_bound
-            .clamp(initial_mtu, self.max_udp_payload_size);
+        if let Some(guaranteed) = guaranteed_mtu {
+            config.min_mtu(guaranteed.clamp(1200, initial_mtu));
+        }
+        // With a guaranteed MTU there is nothing above it to discover, so pin
+        // the probe bound to it. This is load-bearing, not an optimization: a
+        // probe is full-MTU, bypasses the congestion check, and counts against
+        // the window once in flight — on a quiet connection at the two-segment
+        // initial window, a doomed probe toward a higher bound starves every
+        // ordinary small send behind it ("blocked by congestion control")
+        // until its retransmits exhaust, and the search then starts over.
+        let mtu_bound = match guaranteed_mtu {
+            Some(_) => initial_mtu,
+            None => self
+                .mtu_discovery_upper_bound
+                .clamp(initial_mtu, self.max_udp_payload_size),
+        };
         let mut mtud = quinn::MtuDiscoveryConfig::default();
         mtud.upper_bound(mtu_bound);
+        // Quinn's MTU black-hole detector cannot tell "large packets are being
+        // silently eaten by the path" from "a congestive loss burst dropped a
+        // window of large packets". When a sender overruns the receiver's UDP
+        // socket buffer (easy at high rate: the standing queue sits within a
+        // couple MB of the buffer size, so one scheduling stall overflows it),
+        // every lost packet is full-MTU, the detector calls it a black hole,
+        // and the path MTU collapses to `initial_mtu`. With quinn's default
+        // 60 s cooldown the connection then pays ~13x the datagrams (and
+        // syscalls) per byte for a minute — measured as a 5-6x throughput
+        // collapse that is indistinguishable from a scheduling defect. A short
+        // cooldown re-probes within seconds and restores the discovered MTU;
+        // on a genuine black-hole path the extra cost is one loss-tolerant
+        // probe packet per cooldown.
+        let cooldown_ms = env_u64("FELIX_MTU_BLACK_HOLE_COOLDOWN_MS")
+            .map(|value| value.max(100))
+            .unwrap_or(2_000);
+        mtud.black_hole_cooldown(std::time::Duration::from_millis(cooldown_ms));
         config.mtu_discovery_config(Some(mtud));
+        // ACK frequency extension (quinn peers only): cap ACK delay well below
+        // the RFC's 25 ms — a window-limited sender resumes only on an ACK, so
+        // delayed ACKs stall the whole pipeline — and ACK less often than every
+        // other packet, since each reverse-path ACK costs a datagram plus its
+        // wakeup chain (+15% throughput measured at threshold 20).
+        if env_u64("FELIX_ACK_FREQ_DISABLE").is_none() {
+            let mut ack_frequency = quinn::AckFrequencyConfig::default();
+            ack_frequency.max_ack_delay(Some(std::time::Duration::from_millis(2)));
+            let threshold = env_u64("FELIX_ACK_ELICITING_THRESHOLD").unwrap_or(20);
+            ack_frequency.ack_eliciting_threshold(
+                quinn::VarInt::from_u64(threshold.min(u32::MAX as u64)).expect("threshold fits"),
+            );
+            config.ack_frequency_config(Some(ack_frequency));
+        }
         // Quinn follows RFC 9002 by default and raises the minimum window to
         // two datagrams when path-MTU discovery finds a larger MTU. Keep that
         // safe default unless a trusted low-loss deployment explicitly opts
@@ -130,6 +407,17 @@ impl TransportConfig {
         if let Some(window) = self.initial_congestion_window_bytes {
             let mut cubic = quinn::congestion::CubicConfig::default();
             cubic.initial_window(window);
+            config.congestion_controller_factory(Arc::new(cubic));
+        } else if u64::from(initial_mtu) * 2 > 14_720 {
+            // Quinn's default initial congestion window is a flat 14,720 bytes
+            // (RFC 9002's constant, sized for ~1200-byte datagrams) and its
+            // send path reserves a full segment per datagram — so an initial
+            // MTU larger than the window deadlocks the connection before the
+            // first packet ("blocked by congestion control", forever). Scale
+            // the window with the datagram size using RFC 9002's own formula.
+            let mtu = u64::from(initial_mtu);
+            let mut cubic = quinn::congestion::CubicConfig::default();
+            cubic.initial_window(14_720u64.clamp(2 * mtu, 10 * mtu));
             config.congestion_controller_factory(Arc::new(cubic));
         }
         config
@@ -171,6 +459,17 @@ impl TransportConfig {
             .context("set UDP socket nonblocking")?;
         Ok(socket.into())
     }
+}
+
+/// The smaller of the socket's achieved send/receive buffers. Read back from
+/// the socket rather than taken from config: Linux accepts an oversized
+/// `SO_RCVBUF`/`SO_SNDBUF` and silently clamps it to `net.core.rmem_max` /
+/// `wmem_max`, so the configured size says nothing about what was granted.
+fn effective_udp_buffer_bytes(socket: &std::net::UdpSocket) -> usize {
+    let socket = socket2::SockRef::from(socket);
+    let send = socket.send_buffer_size().unwrap_or(0);
+    let recv = socket.recv_buffer_size().unwrap_or(0);
+    send.min(recv)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -223,6 +522,12 @@ pub struct QuicServer {
     endpoint: Endpoint,
     // Retain for debugging/metrics; Quinn owns the active config.
     _transport: TransportConfig,
+    // Variant of the server config used for loopback peers; see
+    // [`TransportConfig::loopback_initial_mtu`].
+    loopback_config: Option<Arc<ServerConfig>>,
+    // I/O runtime for this endpoint's quinn drivers (None when isolation is
+    // disabled); handed to each connection for pump colocation.
+    io_handle: Option<tokio::runtime::Handle>,
 }
 
 impl QuicServer {
@@ -231,32 +536,52 @@ impl QuicServer {
         mut server_config: ServerConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
-        // Apply transport defaults before binding the endpoint.
-        let quinn_transport = transport.quinn_transport_config();
-        server_config.transport_config(Arc::new(quinn_transport));
+        // Apply transport defaults before binding the endpoint. The socket is
+        // bound first: the loopback MTU guarantee depends on the buffer sizes
+        // the OS actually granted it.
         let socket = transport.bind_udp_socket(addr)?;
+        let quinn_transport = transport.quinn_transport_config();
+        let loopback_config = transport
+            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .map(|mtu| {
+                let mut config = server_config.clone();
+                config
+                    .transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
+                Arc::new(config)
+            });
+        server_config.transport_config(Arc::new(quinn_transport));
+        let (runtime, io_handle) = quinn_runtime(EndpointRole::Server);
         let endpoint = Endpoint::new(
             transport.quinn_endpoint_config(),
             Some(server_config),
             socket,
-            Arc::new(quinn::TokioRuntime),
+            runtime,
         )
         .context("bind QUIC server")?;
         Ok(Self {
             endpoint,
             _transport: transport,
+            loopback_config,
+            io_handle,
         })
     }
 
     pub async fn accept(&self) -> Result<QuicConnection> {
         // Block until a client connects and finishes the handshake.
-        let connecting = self
+        let incoming = self
             .endpoint
             .accept()
             .await
             .ok_or_else(|| anyhow!("no incoming QUIC connections"))?;
-        let connection = connecting.await.context("accept QUIC connection")?;
-        Ok(QuicConnection::new(connection))
+        let connection = match &self.loopback_config {
+            Some(config) if incoming.remote_address().ip().is_loopback() => incoming
+                .accept_with(Arc::clone(config))
+                .context("accept loopback QUIC connection")?
+                .await
+                .context("accept QUIC connection")?,
+            _ => incoming.await.context("accept QUIC connection")?,
+        };
+        Ok(QuicConnection::new(connection, self.io_handle.clone()))
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
@@ -287,6 +612,11 @@ pub struct QuicClient {
     endpoint: Endpoint,
     // Retain for debugging/metrics; Quinn owns the active config.
     _transport: TransportConfig,
+    // Variant of the client config used when connecting to a loopback peer;
+    // see [`TransportConfig::loopback_initial_mtu`].
+    loopback_config: Option<ClientConfig>,
+    // See `QuicServer::io_handle`.
+    io_handle: Option<tokio::runtime::Handle>,
 }
 
 impl QuicClient {
@@ -295,32 +625,46 @@ impl QuicClient {
         mut client_config: ClientConfig,
         transport: TransportConfig,
     ) -> Result<Self> {
-        // Apply transport defaults before binding the endpoint.
-        let quinn_transport = transport.quinn_transport_config();
-        client_config.transport_config(Arc::new(quinn_transport));
+        // Apply transport defaults before binding the endpoint. The socket is
+        // bound first: the loopback MTU guarantee depends on the buffer sizes
+        // the OS actually granted it.
         let socket = transport.bind_udp_socket(addr)?;
-        let mut endpoint = Endpoint::new(
-            transport.quinn_endpoint_config(),
-            None,
-            socket,
-            Arc::new(quinn::TokioRuntime),
-        )
-        .context("bind QUIC client")?;
+        let quinn_transport = transport.quinn_transport_config();
+        let loopback_config = transport
+            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .map(|mtu| {
+                let mut config = client_config.clone();
+                config
+                    .transport_config(Arc::new(transport.quinn_transport_config_for_loopback(mtu)));
+                config
+            });
+        client_config.transport_config(Arc::new(quinn_transport));
+        let (runtime, io_handle) = quinn_runtime(EndpointRole::Client);
+        let mut endpoint = Endpoint::new(transport.quinn_endpoint_config(), None, socket, runtime)
+            .context("bind QUIC client")?;
         endpoint.set_default_client_config(client_config);
         Ok(Self {
             endpoint,
             _transport: transport,
+            loopback_config,
+            io_handle,
         })
     }
 
     pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<QuicConnection> {
         // Initiate and await a QUIC handshake.
-        let connecting = self
-            .endpoint
-            .connect(addr, server_name)
-            .context("initiate QUIC connection")?;
+        let connecting = match &self.loopback_config {
+            Some(config) if addr.ip().is_loopback() => self
+                .endpoint
+                .connect_with(config.clone(), addr, server_name)
+                .context("initiate loopback QUIC connection")?,
+            _ => self
+                .endpoint
+                .connect(addr, server_name)
+                .context("initiate QUIC connection")?,
+        };
         let connection = connecting.await.context("establish QUIC connection")?;
-        Ok(QuicConnection::new(connection))
+        Ok(QuicConnection::new(connection, self.io_handle.clone()))
     }
 }
 
@@ -340,10 +684,12 @@ pub struct QuicConnection {
     inner: Connection,
     // Stable id and peer metadata for tracing.
     info: ConnectionInfo,
+    // The I/O runtime this connection's quinn drivers run on, if isolated.
+    io_handle: Option<tokio::runtime::Handle>,
 }
 
 impl QuicConnection {
-    fn new(connection: Connection) -> Self {
+    fn new(connection: Connection, io_handle: Option<tokio::runtime::Handle>) -> Self {
         // Quinn exposes a stable connection id for logging.
         let info = ConnectionInfo {
             id: ConnectionId(u64::try_from(connection.stable_id()).expect("stable id fits u64")),
@@ -352,6 +698,7 @@ impl QuicConnection {
         Self {
             inner: connection,
             info,
+            io_handle,
         }
     }
 
@@ -359,8 +706,39 @@ impl QuicConnection {
         &self.info
     }
 
+    /// Spawn a task colocated with this connection's quinn drivers.
+    ///
+    /// For pump tasks woken by the transport per datagram or per write (stream
+    /// readers, connection writers): same-thread wakeups are task switches
+    /// instead of cross-core kernel round trips, and that latency is the
+    /// pipeline's clock under smooth arrival. Falls back to `tokio::spawn`
+    /// when driver isolation is disabled.
+    pub fn spawn_pump<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        static COLOCATE: OnceLock<bool> = OnceLock::new();
+        let colocate = *COLOCATE.get_or_init(|| {
+            std::env::var("FELIX_PUMP_COLOCATE")
+                .map(|value| value != "0")
+                .unwrap_or(true)
+        });
+        match (&self.io_handle, colocate) {
+            (Some(handle), true) => handle.spawn(future),
+            _ => tokio::spawn(future),
+        }
+    }
+
     pub fn stats(&self) -> quinn::ConnectionStats {
         self.inner.stats()
+    }
+
+    /// Why the connection closed, or `None` while it is still live. Lets a
+    /// task holding a clone notice the close and exit instead of keeping the
+    /// handle alive forever.
+    pub fn close_reason(&self) -> Option<quinn::ConnectionError> {
+        self.inner.close_reason()
     }
 
     /// Close the connection, telling the peer why.
@@ -511,6 +889,115 @@ mod tests {
         Ok(())
     }
 
+    /// Minimal reproduction of the delivery pattern Felix's subscription path
+    /// uses: a sender writing many small chunks to one uni stream, and a
+    /// reader colocated with the connection's drivers forwarding each item
+    /// through a bounded channel. Isolating quinn's drivers onto a dedicated
+    /// runtime lost a wakeup here on Linux — the receiver ACKed bytes it never
+    /// delivered to the application — so this covers that path without the
+    /// broker or client in the picture.
+    /// Same delivery pattern, but the reader runs on the application runtime
+    /// while the connection's drivers run on the dedicated I/O runtime — the
+    /// arrangement every broker-side stream reader uses. This is the
+    /// configuration that stalls on Linux.
+    #[tokio::test]
+    async fn many_small_frames_reach_an_app_runtime_reader() -> Result<()> {
+        const N: u64 = 400;
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let mut send = connection.open_uni().await?;
+            for i in 0..N {
+                send.write_all(&i.to_be_bytes()).await?;
+                tokio::task::yield_now().await;
+            }
+            send.finish()?;
+            let _ = send.stopped().await;
+            Result::<()>::Ok(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let mut recv = connection.accept_uni().await?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(64);
+        // Plain spawn: application runtime, not the connection's I/O runtime.
+        tokio::spawn(async move {
+            let mut buf = [0u8; 8];
+            loop {
+                if recv.read_exact(&mut buf).await.is_err() {
+                    break;
+                }
+                if tx.send(u64::from_be_bytes(buf)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        for expected in 0..N {
+            let value = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+                .await
+                .with_context(|| format!("delivery stalled waiting for item {expected}"))?
+                .with_context(|| format!("stream ended early at item {expected}"))?;
+            assert_eq!(value, expected);
+        }
+
+        server_task.await.context("server task join")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn many_small_frames_reach_a_colocated_reader() -> Result<()> {
+        const N: u64 = 400;
+        let (server_config, cert) = make_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let mut send = connection.open_uni().await?;
+            for i in 0..N {
+                send.write_all(&i.to_be_bytes()).await?;
+                // One write per item, as the delivery writer does.
+                tokio::task::yield_now().await;
+            }
+            send.finish()?;
+            let _ = send.stopped().await;
+            Result::<()>::Ok(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let mut recv = connection.accept_uni().await?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(64);
+        connection.spawn_pump(async move {
+            let mut buf = [0u8; 8];
+            loop {
+                if recv.read_exact(&mut buf).await.is_err() {
+                    break;
+                }
+                if tx.send(u64::from_be_bytes(buf)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        for expected in 0..N {
+            let value = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+                .await
+                .with_context(|| format!("delivery stalled waiting for item {expected}"))?
+                .with_context(|| format!("stream ended early at item {expected}"))?;
+            assert_eq!(value, expected);
+        }
+
+        server_task.await.context("server task join")??;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn quic_uni_stream_smoke() -> Result<()> {
         let (server_config, cert) = make_server_config()?;
@@ -551,6 +1038,60 @@ mod tests {
         assert_eq!(config.receive_window, 128 * 1024 * 1024);
         assert_eq!(config.stream_receive_window, 32 * 1024 * 1024);
         assert_eq!(config.send_window, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn io_runtime_assignment_keeps_roles_disjoint() {
+        for sequence in 0..32 {
+            assert_eq!(io_runtime_index(EndpointRole::Server, sequence, 2), 0);
+            assert_eq!(io_runtime_index(EndpointRole::Client, sequence, 2), 1);
+        }
+
+        let server_indices: Vec<_> = (0..6)
+            .map(|sequence| io_runtime_index(EndpointRole::Server, sequence, 4))
+            .collect();
+        assert_eq!(server_indices, vec![0, 1, 2, 0, 1, 2]);
+        assert_eq!(io_runtime_index(EndpointRole::Client, 99, 4), 3);
+        assert_eq!(io_runtime_index(EndpointRole::Server, 99, 1), 0);
+        assert_eq!(io_runtime_index(EndpointRole::Client, 99, 1), 0);
+    }
+
+    #[test]
+    fn loopback_initial_mtu_respects_configured_bounds() {
+        // Plenty of socket buffer: a typical macOS 8 MiB grant.
+        const BIG_BUFFER: usize = 8 * 1024 * 1024;
+        // A stock-Linux clamp (net.core.rmem_max ~208 KB, doubled by the
+        // kernel): far too little burst headroom for jumbo datagrams.
+        const CLAMPED_BUFFER: usize = 416 * 1024;
+
+        // Default config: loopback connections start at the loopback payload
+        // size instead of the RFC-safe 1200.
+        let config = TransportConfig::default();
+        assert_eq!(
+            config.loopback_initial_mtu(BIG_BUFFER),
+            Some(LOOPBACK_UDP_PAYLOAD)
+        );
+
+        // A clamped socket buffer disables the guarantee entirely: 26 jumbo
+        // datagrams of headroom overflow under sustained load, and the pinned
+        // min_mtu would forbid falling back to smaller datagrams.
+        assert_eq!(config.loopback_initial_mtu(CLAMPED_BUFFER), None);
+
+        // A lowered discovery bound caps the loopback start size with it (and
+        // shrinks the buffer headroom it needs).
+        let config = TransportConfig {
+            mtu_discovery_upper_bound: 4096,
+            ..TransportConfig::default()
+        };
+        assert_eq!(config.loopback_initial_mtu(BIG_BUFFER), Some(4096));
+        assert_eq!(config.loopback_initial_mtu(CLAMPED_BUFFER), Some(4096));
+
+        // No boost when the configured initial MTU is already at least as big.
+        let config = TransportConfig {
+            initial_mtu: 16354,
+            ..TransportConfig::default()
+        };
+        assert_eq!(config.loopback_initial_mtu(8 * 1024 * 1024), None);
     }
 
     #[test]

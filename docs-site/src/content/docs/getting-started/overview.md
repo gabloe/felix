@@ -50,6 +50,51 @@ Felix does **not** reimplement scheduling or node membership—it leverages what
 
 ## Core Components
 
+Five crates, and the boundaries between them are the design. Everything below
+the dotted line is transport-independent: the broker core has no idea QUIC
+exists, which is what makes it testable in-process.
+
+```mermaid
+flowchart TB
+    subgraph app["Your application"]
+        direction LR
+        A1(["publisher"])
+        A2(["subscriber"])
+        A3(["cache client"])
+    end
+
+    SDK["felix-client<br/><small>publisher / subscription / cache APIs,<br/>connection + stream pools</small>"]
+    WIRE["felix-wire<br/><small>frame header, JSON control messages,<br/>binary data-plane frames</small>"]
+    TRANS["felix-transport<br/><small>QUIC endpoints, streams, flow control,<br/>dedicated I/O runtimes</small>"]
+    BRK["felix-broker<br/><small>stream registry, log, subscriber<br/>registry, fanout</small>"]
+    SVC["services/broker<br/><small>network service: handlers, auth,<br/>metrics, control-plane sync</small>"]
+    CP["services/controlplane<br/><small>tenants, namespaces, streams,<br/>tokens, RBAC</small>"]
+
+    A1 e1@--> SDK
+    A2 e2@--> SDK
+    A3 e3@--> SDK
+    SDK e4@--> WIRE
+    WIRE e5@--> TRANS
+    TRANS e6@-->|"QUIC + TLS 1.3"| SVC
+    SVC e7@--> BRK
+    SVC e8@-.->|"seeds metadata at startup"| CP
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+    e5@{ animate: true }
+    e6@{ animate: true }
+    e7@{ animate: true }
+
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef core fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    classDef endpoint fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    class SDK,WIRE,TRANS,SVC step
+    class BRK,CP core
+    class A1,A2,A3 endpoint
+```
+
 ### Felix Wire Protocol (`felix-wire`)
 
 Language-neutral framed protocol over QUIC:
@@ -146,28 +191,29 @@ Felix provides **tunable consistency** configured per stream:
 
 Current implementation for development and testing:
 
-```
-┌─────────────┐
-│   Broker    │
-│  (in-proc)  │
-│             │
-│ • Pub/Sub   │
-│ • Cache     │
-│ • Ephemeral │
-└─────────────┘
+```mermaid
+flowchart TB
+    BROKER["Broker (in-process)<br/><br/>Pub/Sub<br/>Cache<br/>Ephemeral"]
 ```
 
 ### Multi-Node Cluster (Planned)
 
-```
-     Control Plane          Data Plane
-    ┌──────────────┐      ┌──────────┐
-    │ RAFT Quorum  │──────│ Broker A │
-    │              │      │ Broker B │
-    │ • Metadata   │      │ Broker C │
-    │ • Placement  │      └──────────┘
-    │ • Health     │
-    └──────────────┘
+```mermaid
+flowchart LR
+    subgraph CONTROL["Control Plane"]
+        RAFT["RAFT Quorum<br/><br/>Metadata<br/>Placement<br/>Health"]
+    end
+
+    subgraph DATA["Data Plane"]
+        direction TB
+        A["Broker A"]
+        B["Broker B"]
+        C["Broker C"]
+    end
+
+    RAFT --- A
+    RAFT --- B
+    RAFT --- C
 ```
 
 See [Deployment Guides](/felix/deployment/local/) for detailed instructions.

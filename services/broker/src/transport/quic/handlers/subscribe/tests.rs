@@ -1103,8 +1103,10 @@ async fn run_event_writer_flushes_on_channel_close() -> Result<()> {
     let (server_task, connection) = spawn_event_writer(rx, config).await?;
     tx.send(make_payload(b"closed")).await?;
     drop(tx);
-    drop(connection);
+    // Keep the client connection open until the writer has flushed: dropping it
+    // first races CONNECTION_CLOSE against the flush and fails intermittently.
     server_task.await.context("server join")??;
+    drop(connection);
     Ok(())
 }
 
@@ -1336,7 +1338,7 @@ async fn concurrent_lanes_share_one_connection_writer() {
         let barrier = Arc::clone(&barrier);
         tasks.push(tokio::spawn(async move {
             barrier.wait().await;
-            manager.ensure_connection_writer(42)
+            manager.ensure_connection_writer(42, None)
         }));
     }
 

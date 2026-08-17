@@ -21,7 +21,10 @@ RAW_JSONL = RAW_DIR / "latency_demo_runs.jsonl"
 DURATION_RE = re.compile(r"^([0-9]*\.?[0-9]+)\s*(us|ms)$")
 RESULTS_RE = re.compile(
     r"Results \(publish n = (?P<publish>\d+), sampled (?P<sampled>\d+), received (?P<received>\d+), "
-    r"(?:dropped|delivery drops) (?P<dropped>\d+)\) payload=(?P<payload>\d+)B "
+    # `unaccounted` is the current name (an expected-minus-observed shortfall,
+    # not a queue-drop counter); `dropped`/`delivery drops` are accepted so the
+    # parser can still read stdout captured before the rename.
+    r"(?:dropped|delivery drops|unaccounted) (?P<dropped>\d+)\) payload=(?P<payload>\d+)B "
     r"fanout=(?P<fanout>\d+) batch=(?P<batch>\d+) "
     r"(?:binary|publish_fastpath)=(?P<binary>true|false):"
 )
@@ -183,6 +186,28 @@ def matches_filter(filters: dict, item: dict) -> bool:
     return True
 
 
+def effective_total(workload: dict, batch: int, payload: int) -> int:
+    """Scale message count so throughput runs measure sustained rate.
+
+    A batch>1 run whose total payload volume fits inside the QUIC connection
+    send window (64 MiB) measures buffer-fill rate, not throughput — the whole
+    run is absorbed before backpressure appears, and the harness stops its
+    clock when the last event arrives. Latency runs (batch<=1, acked) are
+    paced per message and unaffected.
+
+    `min_run_bytes` (default 256 MiB) and `max_total` (default 500k, which
+    caps the blow-up for tiny payloads whose runs are per-message-bound
+    anyway) are configurable per config file.
+    """
+    total = workload["total"]
+    if batch <= 1:
+        return total
+    min_run_bytes = workload.get("min_run_bytes", 256 * 1024 * 1024)
+    max_total = workload.get("max_total", 500_000)
+    needed = -(-min_run_bytes // max(payload, 1))  # ceil div
+    return max(total, min(needed, max_total))
+
+
 def build_matrix(config: dict, trials: int, binary_override=None):
     workload = config["workload"]
     profiles = config["profiles"]
@@ -217,7 +242,7 @@ def build_matrix(config: dict, trials: int, binary_override=None):
                                     "batch": batch,
                                     "payload_bytes": payload,
                                     "warmup": workload["warmup"],
-                                    "total": workload["total"],
+                                    "total": effective_total(workload, batch, payload),
                                     "binary": bool(binary),
                                     "preset": preset_name,
                                     "preset_args": preset.get("args", []),
@@ -225,6 +250,14 @@ def build_matrix(config: dict, trials: int, binary_override=None):
                                 }
                             )
     return matrix
+
+
+# One id per matrix invocation, stamped on every record it writes.
+# FELIX_PERF_SESSION_ID overrides it so several filtered invocations (e.g. the
+# fast pass's latency and throughput halves) land in one session and
+# normalize_and_aggregate.py keeps them together instead of discarding all but
+# the last invocation as stale.
+SESSION_ID = os.environ.get("FELIX_PERF_SESSION_ID") or str(uuid.uuid4())
 
 
 def main():
@@ -410,6 +443,12 @@ def main():
 
                 record = {
                     "run_id": run_id,
+                    # Identifies this matrix invocation. `git_sha` cannot do it:
+                    # the interesting changes are usually uncommitted, so several
+                    # sessions share one sha with `git_dirty: true`. The raw JSONL
+                    # is append-only, so without this the derived data silently
+                    # mixes every run ever performed.
+                    "session_id": SESSION_ID,
                     "timestamp": timestamp,
                     "git_sha": git_sha,
                     "git_dirty": bool(git_dirty),

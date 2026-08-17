@@ -17,7 +17,53 @@ Felix performance is determined by several interconnected factors:
 
 ## Performance Profiles
 
-Felix provides three pre-configured profiles as starting points.
+Felix provides three pre-configured profiles as starting points. They are the
+same pipeline with one dial turned — how long a message is allowed to wait for
+company before being sent:
+
+```mermaid
+flowchart LR
+    subgraph lat["Latency-optimized"]
+        direction TB
+        L1(["message"]) l1@--> L2["send immediately<br/><small>batch ≈ 1, shallow queues,<br/>block instead of drop</small>"]
+        L2 l2@--> L3(["lowest p99<br/><small>fewest messages per syscall</small>"])
+    end
+
+    subgraph bal["Balanced (default)"]
+        direction TB
+        B1(["message"]) b1@--> B2["brief coalescing window<br/><small>moderate batching + pools</small>"]
+        B2 b2@--> B3(["sub-ms latency at<br/>useful throughput"])
+    end
+
+    subgraph thr["Throughput-optimized"]
+        direction TB
+        T1(["message"]) t1@--> T2["fill the batch<br/><small>deep queues, large windows,<br/>lossless pacing</small>"]
+        T2 t2@--> T3(["most bytes per second<br/><small>latency includes batch fill</small>"])
+    end
+
+    l1@{ animation: fast }
+    l2@{ animation: fast }
+    b1@{ animate: true }
+    b2@{ animate: true }
+    t1@{ animation: slow }
+    t2@{ animation: slow }
+
+    classDef step fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
+    classDef ok fill:#e9f5ec,stroke:#4a8a5e,color:#16301f
+    classDef warm fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
+    class L2,B2,T2 step
+    class L1,B1,T1 ok
+    class L3,B3 ok
+    class T3 warm
+```
+
+:::note[Read the trade-off, not the ranking]
+None of these is "faster" in the abstract. Batching raises bytes per second and
+raises per-message latency at the same time, because a batched message waits for
+the batch. That is why the [benchmark harness](/felix/features/benchmarks/)
+reports batch-1 and batch-64 as separate profiles and never compares their
+latency percentiles to each other.
+:::
 
 ### Balanced Profile (Default)
 
@@ -166,10 +212,11 @@ publish_chunk_bytes: 32768
 ```
 
 **Expected performance**: the throughput-focused profile in
-[Benchmarks](/felix/features/benchmarks/) (batch = 64, lossless, zero drops) measures this
-shape directly — millions of msg/s for small payloads, hundreds of
-thousands for 1-4 KiB payloads at fanout 10, scaling further with
-`core_shards` on multi-stream workloads.
+[Benchmarks](/felix/features/benchmarks/) (batch = 64, lossless, zero drops)
+measures this shape directly. Message rate falls and byte rate rises as
+payloads grow, so read the byte rate when comparing payload sizes.
+`core_shards` may help multi-stream workloads, but its published gains predate
+the transport scheduling work and need re-validation.
 
 :::note[Lossless pacing is an explicit trade-off]
 `block` queues + `pub_ingress_wait: true` mean producers slow down
@@ -464,11 +511,11 @@ Disable telemetry in production for maximum throughput. Enable only for profilin
 ### Sizing Guidelines
 
 :::note[These bands are illustrative, not measured]
-Single-broker measurements in [Benchmarks](/felix/features/benchmarks/) reach into the
-millions of msg/s for small payloads on a single dev machine — well past
-the "large deployment" band below. Use these YAML shapes as starting
-points for connection/queue sizing, not as a throughput ceiling; run your
-own workload through `latency-demo` before sizing hardware.
+Single-broker measurements in [Benchmarks](/felix/features/benchmarks/)
+comfortably exceed the "large deployment" band below on one dev machine. Use
+these YAML shapes as starting points for connection/queue sizing, not as a
+throughput ceiling; run your own workload through `latency-demo` before sizing
+hardware.
 :::
 **Small deployment**:
 

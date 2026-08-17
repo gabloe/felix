@@ -7,3 +7,4 @@ matplotlib>=3.8
 # Optional: enables parquet output alongside CSV in normalize_and_aggregate.py.
 # Silently skipped if not installed.
 pandas>=2.2
+pyarrow>=25.0.0

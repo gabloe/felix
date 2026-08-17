@@ -296,10 +296,62 @@ pub(crate) async fn handle_connection_with_shutdown(
     // Tracks the per-stream handler tasks so shutdown can wait for in-flight
     // work instead of dropping it.
     let streams = TaskTracker::new();
+
+    // Periodic path stats for a *healthy* connection. The close-path logs below
+    // only fire once the connection is already going away, which is too late to
+    // see how path MTU, loss and congestion evolved under load — the numbers that
+    // decide whether a throughput problem is transport-side or above it.
+    // Off unless `FELIX_CONN_STATS_MS` is set, so it costs nothing in production.
+    // Driven from the accept loop rather than a spawned task so it cannot outlive
+    // the connection it reports on.
+    let stats_interval_ms = std::env::var("FELIX_CONN_STATS_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|ms| *ms > 0);
+    let mut stats_ticker =
+        stats_interval_ms.map(|ms| tokio::time::interval(Duration::from_millis(ms)));
     loop {
         // Accept both bidirectional control streams and uni-directional publish streams.
         tokio::select! {
             biased;
+            // `udp_tx.ios` vs `udp_tx.datagrams` separates syscall count from
+            // datagram count (they diverge only where GSO applies), and
+            // `udp_tx.bytes / udp_tx.datagrams` is the effective datagram size —
+            // which is what tells you whether path MTU is actually being used.
+            _ = async { stats_ticker.as_mut().expect("ticker present").tick().await },
+                if stats_ticker.is_some() =>
+            {
+                let stats = connection.stats();
+                tracing::info!(
+                    conn = connection.info().id.0,
+                    mtu = stats.path.current_mtu,
+                    // A small cwnd here is a send-rate cap no queue or
+                    // topology change can lift.
+                    cwnd = stats.path.cwnd,
+                    rtt_us = stats.path.rtt.as_micros() as u64,
+                    sent_packets = stats.path.sent_packets,
+                    lost_packets = stats.path.lost_packets,
+                    congestion_events = stats.path.congestion_events,
+                    black_holes = stats.path.black_holes_detected,
+                    udp_tx_datagrams = stats.udp_tx.datagrams,
+                    udp_tx_bytes = stats.udp_tx.bytes,
+                    udp_tx_ios = stats.udp_tx.ios,
+                    udp_rx_datagrams = stats.udp_rx.datagrams,
+                    udp_rx_bytes = stats.udp_rx.bytes,
+                    udp_rx_ios = stats.udp_rx.ios,
+                    // Non-zero *_blocked means this endpoint had bytes to send and
+                    // was denied credit by the peer -- i.e. the peer is not
+                    // consuming fast enough. Zero means flow control is not the
+                    // constraint and the sender simply had nothing more to send.
+                    tx_data_blocked = stats.frame_tx.data_blocked,
+                    tx_stream_data_blocked = stats.frame_tx.stream_data_blocked,
+                    rx_data_blocked = stats.frame_rx.data_blocked,
+                    rx_stream_data_blocked = stats.frame_rx.stream_data_blocked,
+                    tx_max_data = stats.frame_tx.max_data,
+                    rx_max_data = stats.frame_rx.max_data,
+                    "quic connection path stats"
+                );
+            }
             _ = shutdown.cancelled() => {
                 tracing::info!(
                     stats = ?connection.stats(),

@@ -1,35 +1,21 @@
-//! Felix JWT token minting and verification helpers.
+//! Minting and verification of Felix JWTs -- tenant-scoped access tokens the
+//! broker and control-plane APIs accept.
 //!
-//! Define claim structures and helpers for signing/verifying tenant-scoped
-//! access tokens used by the broker and control-plane APIs.
+//! Felix tokens are **always EdDSA (Ed25519)**, never RSA or HS variants, and
+//! verification rejects anything else outright. That is a deliberate narrowing:
+//! an attacker supplies the token, so accepting a second algorithm means
+//! accepting whichever is weakest. `iss`, `aud` and `tid` are mandatory and
+//! checked before a token is trusted.
 //!
-//! Centralizes Felix token semantics (claims, issuer/audience, EdDSA signing)
-//! and key caching to ensure consistent verification across services.
+//! A signing key is a 32-byte Ed25519 seed with its derived public key and a
+//! `kid` for rotation. `kid` is not a secret; the seed is, and it must not
+//! leave the control-plane trust boundary or reach a log. Public keys are
+//! published via JWKS elsewhere.
 //!
-//! - Token exchange handler mints Felix tokens.
-//! - Broker and control-plane components verify Felix tokens.
-//! - Tests that assert EdDSA-only behavior and key rotation logic.
-//!
-//! - Felix tokens are always EdDSA (Ed25519) and never RSA/HS variants.
-//! - `iss`, `aud`, and `tid` claims are mandatory and validated.
-//! - The private key is a 32-byte Ed25519 seed; the public key must match it.
-//!
-//! Thread-safe key cache protected by `RwLock`; safe for concurrent reads and
-//! rare writes when keys rotate or are first used.
-//!
-//! # Security boundary
-//! This module handles private key material and must only be used within the
-//! control-plane trust boundary. Public keys may be exported via JWKS elsewhere.
-//!
-//! # Security model and threat assumptions
-//! - Attackers may supply arbitrary JWTs; we validate algorithm, issuer,
-//!   audience, and tenant ID before accepting.
-//! - Ed25519 is chosen for constant-time signing and smaller keys to reduce
-//!   side-channel risk compared to RSA.
-//! - Key IDs (`kid`) are used for rotation but are not secrets.
-//!
-//! Use [`mint_token`] to issue a Felix token and [`verify_token`] to validate it
-//! against a tenant's signing keys, including rotation handling.
+//! Verification tries the tenant's current key and then its previous ones, so a
+//! rotation does not invalidate tokens already in flight. The key cache is
+//! behind an `RwLock`: many concurrent reads, writes only on rotation or first
+//! use.
 //!
 //! # Examples
 //! ```rust
@@ -51,13 +37,6 @@
 //! };
 //! let _ = mint_token(&keys, "tenant-a", "principal", vec![], Duration::from_secs(60));
 //! ```
-//!
-//! # Common pitfalls
-//! - Using mismatched issuer/audience values across services.
-//! - Forgetting to validate rotated keys before issuing or verifying tokens.
-//!
-//! # Future work
-//! - Add structured key rotation metadata for safe rollout/rollback.
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
@@ -366,46 +345,14 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
     }
 }
 
-/// Mint a Felix EdDSA token for a tenant and principal.
+/// Mint a Felix EdDSA token for `tenant_id` / `principal_id`, valid for `ttl`.
 ///
-/// Builds Felix claims, enforces key validity, and signs using Ed25519.
-///
-/// - `keys`: Tenant signing keys, including current key for signing.
-/// - `tenant_id`: Tenant identifier to embed in `tid`.
-/// - `principal_id`: Subject identifier to embed in `sub`.
-/// - `perms`: Permission strings granted to the token.
-/// - `ttl`: Time-to-live for the token.
-///
-/// - `Ok(String)` containing the signed JWT.
+/// The algorithm is pinned to EdDSA and the claims always carry `iss`, `aud`
+/// and `tid`. Uses a cached encoding key so repeated mints do not redo the
+/// PKCS8 conversion. Never log the returned token.
 ///
 /// # Errors
-/// - `TokenError::Key` if key validation fails.
-/// - `TokenError::Jwt` if encoding fails.
-/// # Examples
-/// ```rust
-/// use controlplane::auth::felix_token::{mint_token, SigningKey, TenantSigningKeys};
-/// use ed25519_dalek::SigningKey as Ed25519SigningKey;
-/// use jsonwebtoken::Algorithm;
-/// use std::time::Duration;
-///
-/// let seed = [1u8; 32];
-/// let signing_key = Ed25519SigningKey::from_bytes(&seed);
-/// let keys = TenantSigningKeys {
-///     current: SigningKey {
-///         kid: "k1".to_string(),
-///         alg: Algorithm::EdDSA,
-///         private_key: seed,
-///         public_key: signing_key.verifying_key().to_bytes(),
-///     },
-///     previous: vec![],
-/// };
-/// let _ = mint_token(&keys, "tenant-a", "principal", vec![], Duration::from_secs(60));
-/// ```
-///
-/// - The algorithm is pinned to EdDSA and the token includes `iss`, `aud`, `tid`.
-/// - Never log the resulting token in production logs.
-///
-/// - Uses a cached encoding key to avoid repeated PKCS8 conversion.
+/// `TokenError::Key` if key validation fails, `TokenError::Jwt` if encoding does.
 pub fn mint_token(
     keys: &TenantSigningKeys,
     tenant_id: &str,

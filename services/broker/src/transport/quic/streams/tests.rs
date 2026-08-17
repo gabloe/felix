@@ -441,7 +441,20 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
 #[serial]
 // This test prevents regressions in `publish_sharding_preserves_stream_order` behavior.
 async fn publish_sharding_preserves_stream_order() -> Result<()> {
-    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    // Ordering assertion, not a latency assertion. The QUIC I/O runtime pool is
+    // process-global, so under `cargo test` parallelism dozens of concurrent
+    // brokers and clients share it; a tight per-event deadline then fails on
+    // scheduling pressure rather than on a real ordering defect. Generous
+    // enough that only a genuine stall trips it.
+    const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    // Asserts lossless in-order delivery, so every queue on the path must
+    // Block: the DropNew defaults may legally shed under a loaded test host,
+    // which reads as a gap here.
+    let broker = Arc::new(
+        Broker::new(EphemeralCache::new().into())
+            .with_subscriber_queue_policy(felix_broker::SubQueuePolicy::Block),
+    );
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
@@ -459,7 +472,18 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
     )?);
     let addr = server.local_addr()?;
 
-    let config = BrokerConfig::default();
+    let config = BrokerConfig {
+        subscriber_queue_policy: felix_broker::SubQueuePolicy::Block,
+        subscriber_lane_queue_policy: felix_broker::SubQueuePolicy::Block,
+        // Losslessness needs the *publish* side to block too. Checkpoint 4 (the
+        // per-worker ingress queue, depth 64) defaults to `Drop`, so an unacked
+        // burst that outruns the broker core is shed by design — measured here
+        // as 77 of 400 publishes dropped, which reads as a delivery stall
+        // because the events were never published at all. Blocking pins the
+        // whole path, which is what this test's ordering assertion assumes.
+        pub_ingress_wait: true,
+        ..BrokerConfig::default()
+    };
     let server_task = tokio::spawn(crate::transport::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
@@ -467,10 +491,12 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
         Arc::clone(&auth.auth),
     ));
 
+    let mut client_config = build_client_config(cert, &auth)?;
+    client_config.client_sub_queue_policy = felix_client::ClientSubQueuePolicy::Block;
     let client = felix_client::Client::connect_with_transport(
         addr,
         "localhost",
-        build_client_config(cert, &auth)?,
+        client_config,
         TransportConfig::default(),
     )
     .await?;
@@ -496,21 +522,26 @@ async fn publish_sharding_preserves_stream_order() -> Result<()> {
             .await?;
     }
 
-    for i in 0..total {
-        let next = timeout(Duration::from_secs(2), sub_alpha.next_event()).await??;
+    let mut alpha_seen = Vec::with_capacity(total as usize);
+    for _ in 0..total {
+        let next = timeout(EVENT_TIMEOUT, sub_alpha.next_event()).await??;
         let event = next.expect("alpha event");
         let mut raw = [0u8; 8];
         raw.copy_from_slice(&event.payload[..8]);
-        assert_eq!(u64::from_be_bytes(raw), i);
+        alpha_seen.push(u64::from_be_bytes(raw));
     }
+    let expected: Vec<u64> = (0..total).collect();
+    assert_eq!(alpha_seen, expected, "alpha sequence diverged");
 
-    for i in 0..total {
-        let next = timeout(Duration::from_secs(2), sub_beta.next_event()).await??;
+    let mut beta_seen = Vec::with_capacity(total as usize);
+    for _ in 0..total {
+        let next = timeout(EVENT_TIMEOUT, sub_beta.next_event()).await??;
         let event = next.expect("beta event");
         let mut raw = [0u8; 8];
         raw.copy_from_slice(&event.payload[..8]);
-        assert_eq!(u64::from_be_bytes(raw), i);
+        beta_seen.push(u64::from_be_bytes(raw));
     }
+    assert_eq!(beta_seen, expected, "beta sequence diverged");
 
     publisher.finish().await?;
     server_task.abort();

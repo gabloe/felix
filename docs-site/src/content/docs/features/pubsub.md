@@ -51,14 +51,19 @@ graph LR
 
 Felix excels at high-fanout workloads where one message must be delivered to many subscribers.
 
-**Fanout efficiency**:
+**Fanout efficiency**: a publish is encoded once and the encoded frame is
+shared by every subscriber, so fanout costs delivery work rather than
+re-encoding. Measured latency at fanout 1 and 10 (macOS loopback, per-message
+ack, median of 5–10 trials):
 
-| Fanout | Throughput (msg/sec) | p99 Latency |
-|--------|---------------------|-------------|
-| 1 | 200k | 2.5 ms |
-| 10 | 180k | 3.8 ms |
-| 100 | 140k | 6.2 ms |
-| 1000 | 85k | 12.5 ms |
+| Fanout | p50 | p99 |
+|--------|-----|-----|
+| 1 | 109–136 µs | 138–176 µs |
+| 10 | 236–269 µs | 278–399 µs |
+
+Fanout above 10 has not been benchmarked; see
+[Benchmarks](/felix/features/benchmarks/) for methodology and the full tables.
+Treat behaviour at hundreds or thousands of subscribers as unmeasured.
 
 **Fanout isolation**: Slow subscribers never block fast subscribers.
 
@@ -114,6 +119,21 @@ publisher
 | 32 | 12x | 250 µs |
 | 64 | 18x | 350 µs |
 | 128 | 22x | 600 µs |
+
+#### Acked Publishes Are Pipelined
+
+Acked publishes (`AckMode::PerMessage` / `AckMode::PerBatch`) do not stall
+the stream for the broker's round trip. The client writes acked requests back
+to back and resolves each caller's future as the matching ack arrives, in
+order — so concurrent publishers on the same stream share the stream's full
+bandwidth instead of taking turns paying a round trip each. In-flight acked
+data is bounded by the publisher's byte budget (`publish_inflight_bytes`,
+4 MiB by default): a request holds its budget until the broker's ack, not
+merely until the frame is written.
+
+A single caller that awaits each publish before issuing the next still
+experiences one round trip per publish, by construction — batch, or publish
+concurrently, to amortize it.
 
 #### Broker-Side Batching
 
@@ -399,10 +419,10 @@ let config = ClientConfig {
 };
 ```
 
-**Expected performance**:
-- p50 latency: 200-400 µs
-- p99 latency: 800-1200 µs
-- Throughput: 50-80k msg/sec per connection
+**What to expect**: lowest per-message latency, least batching. See the
+latency profile in [Benchmarks](/felix/features/benchmarks/) for measured
+percentiles; throughput per connection depends on payload size and is not a
+single number.
 
 ### Throughput-Optimized Configuration
 
@@ -438,10 +458,10 @@ let config = ClientConfig {
 };
 ```
 
-**Expected performance**:
-- p50 latency: 1-3 ms
-- p99 latency: 5-10 ms
-- Throughput: 200-300k msg/sec per connection
+**What to expect**: highest byte rate, with per-message latency dominated by
+batch fill and queueing. See the throughput profile in
+[Benchmarks](/felix/features/benchmarks/) — and note that its latency
+percentiles measure queueing, not request latency.
 
 ### Balanced Configuration (Default)
 
@@ -465,10 +485,8 @@ let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig::optimized_defaults(quinn);  // Uses balanced defaults
 ```
 
-**Expected performance**:
-- p50 latency: 400-800 µs
-- p99 latency: 2-4 ms
-- Throughput: 150-200k msg/sec per connection
+**What to expect**: sub-millisecond latency at useful throughput. This is the
+configuration [Benchmarks](/felix/features/benchmarks/) measures by default.
 
 ## Advanced Patterns
 

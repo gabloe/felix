@@ -808,14 +808,26 @@ export FELIX_MTU_UPPER_BOUND="4096"   # small-message optimized
 
 ### `FELIX_INITIAL_MTU`
 
-**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (loopback, jumbo-frame LAN) skips the discovery ramp.
+**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (jumbo-frame LAN) skips the discovery ramp. Connections to a loopback peer automatically start at the loopback MTU (16,336-byte payloads, capped by `FELIX_MTU_UPPER_BOUND`) — that path is known-good by construction, and starting at full size also makes the MTU immune to spurious black-hole collapse (see `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`). The loopback fast path additionally requires the socket's *granted* UDP buffers to hold ~64 full-size datagrams (~1 MiB): hosts where Linux silently clamps `SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB) lack the burst headroom that makes jumbo datagrams safe, and keep the RFC-safe default instead — raise `rmem_max`/`wmem_max` to enable it. Setting `FELIX_INITIAL_MTU` explicitly disables the loopback special case and applies to every path.
 
 **Type**: Positive integer (bytes, clamped to 1200–65527)
 
-**Default**: `1200`
+**Default**: `1200` (loopback peers: `16336`)
 
 ```bash
 export FELIX_INITIAL_MTU="1200"
+```
+
+### `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`
+
+**Description**: How long a connection waits after an MTU black-hole verdict before re-probing for a larger MTU. Quinn's black-hole detector cannot distinguish a path that silently drops large packets from a congestive loss burst that happened to contain only full-MTU packets (which is what overflowing the peer's UDP socket buffer looks like at high rate). A false verdict collapses the path MTU to the initial value, multiplying datagram and syscall counts per byte by ~13× on a 16 KiB-MTU path; quinn's stock 60-second cooldown then pins that state. Felix shortens the cooldown so a spurious collapse re-probes at the connection's next idle gap. Note that quinn only sends recovery probes when the connection has nothing else to transmit, so a sender with a continuous backlog cannot recover until its load has a gap regardless of this setting — which is why loopback connections start at full MTU instead (see `FELIX_INITIAL_MTU`).
+
+**Type**: Positive integer (milliseconds, minimum 100)
+
+**Default**: `2000`
+
+```bash
+export FELIX_MTU_BLACK_HOLE_COOLDOWN_MS="2000"
 ```
 
 ### `FELIX_INITIAL_CWND`
@@ -853,6 +865,67 @@ export FELIX_UDP_RECV_BUFFER="8388608"
 
 ```bash
 export FELIX_MAX_UDP_PAYLOAD="65527"
+```
+
+### `FELIX_IO_RUNTIME_THREADS`
+
+**Description**: Size of the dedicated QUIC I/O runtime pool. Quinn's driver tasks (endpoint receive loop, per-connection transmit/ACK loops) do a bounded slice of work per poll and reschedule themselves, so their scheduler re-poll latency is the transport's throughput ceiling. Felix therefore runs them on a pool of single-threaded runtimes isolated from application tasks, assigned by role: server endpoints spread across every runtime but the last, client endpoints share the last. `0` disables the isolation and runs drivers on the application runtime (the pre-fix behavior). A larger pool cannot make a single endpoint faster — an endpoint's driver is one task on one runtime — and it splits endpoints that talk to each other onto separate threads, which measured 5–6× slower.
+
+:::caution[A macOS optimization; off by default elsewhere]
+The ceiling this pool removes is specific to macOS. On Linux the same
+benchmark already sustains ~643 MB/s (628 K msg/s × 1 KiB) *without* it —
+more than macOS reaches even with the pool — and isolating the drivers there
+only adds a cross-thread hop per datagram. Measured on Linux: p50 latency
+86 µs → 152 µs and fanout-10 throughput 1.48 M → 1.09 M msg/s, consistent
+across pool sizes 1/2/4/8 and with pump colocation on or off. Non-macOS
+platforms therefore default to `0`; set the variable explicitly to
+experiment.
+:::
+
+**Type**: Non-negative integer
+
+**Default**: `2` on macOS, `0` elsewhere
+
+```bash
+export FELIX_IO_RUNTIME_THREADS="2"
+export FELIX_IO_RUNTIME_THREADS="0"   # disable driver isolation
+```
+
+### `FELIX_ACK_ELICITING_THRESHOLD`
+
+**Description**: How many ack-eliciting packets a peer may receive before it must send an ACK (QUIC ACK-frequency extension; applies between quinn peers). The RFC default of every other packet costs a reverse-path datagram — plus its wakeup chain — per ~2 datagrams of data; the higher default trades a little loss-detection latency (bounded by the 2 ms `max_ack_delay` Felix also negotiates) for measurably less per-byte wakeup traffic (~+15% throughput on loopback).
+
+**Type**: Positive integer (packets)
+
+**Default**: `20`
+
+```bash
+export FELIX_ACK_ELICITING_THRESHOLD="20"
+export FELIX_ACK_ELICITING_THRESHOLD="1"   # RFC-like cadence
+```
+
+### `FELIX_ACK_FREQ_DISABLE`
+
+**Description**: Set to any value to skip negotiating the ACK-frequency extension entirely, restoring stock quinn ACK behavior (25 ms max ack delay, ACK every other packet).
+
+**Type**: Presence toggle
+
+**Default**: unset (extension negotiated)
+
+```bash
+export FELIX_ACK_FREQ_DISABLE="1"
+```
+
+### `FELIX_CONN_STATS_MS`
+
+**Description**: Log live `quinn::ConnectionStats` (path MTU, cwnd, rtt, loss, congestion events, blocked-frame counters, UDP datagram/byte/io counts) for every connection on this interval, on both the broker and the client. The client-side log is the only place the publish path's sender-side congestion state is visible. Diagnostic; off unless set.
+
+**Type**: Positive integer (milliseconds)
+
+**Default**: unset (disabled)
+
+```bash
+export FELIX_CONN_STATS_MS="1000"
 ```
 
 ## Performance and Monitoring

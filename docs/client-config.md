@@ -2,6 +2,12 @@
 
 This document describes the `felix-client` configuration options and how they are loaded.
 
+Transport-level tuning (QUIC I/O runtimes, ACK frequency, MTU discovery, UDP
+buffers) is process-wide and env-driven rather than part of `ClientConfig` —
+see the "QUIC Transport Tuning" section of
+[Environment Variables](../docs-site/src/content/docs/reference/environment-variables.md).
+The performance-critical defaults are already on; no tuning is required.
+
 ## Loading Order
 
 `ClientConfig::from_env_or_yaml(quinn, config_path)` uses:
@@ -36,6 +42,9 @@ let cfg = ClientConfig::from_env_or_yaml(quinn, Some("client.yml"))?;
 - `publish_inflight_bytes` (env: `FELIX_PUBLISH_INFLIGHT_BYTES`)
   - Shared byte budget across all publish workers. Default: `4194304` (4 MiB).
   - Publishers wait for budget before enqueueing and reject a single publish larger than the limit.
+  - An acked publish holds its budget until the broker's ack arrives (acked
+    publishes are pipelined on the stream), so the budget also caps acked
+    data in flight — not just data queued for writing.
 - `publish_sharding` (env: `FELIX_PUB_SHARDING`)
   - Sharding mode across publish streams.
   - Values: `rr` or `hash_stream`.

@@ -46,6 +46,7 @@ def flatten_run(run: dict) -> dict:
     host = run.get("host_info") or {}
     row = {
         "run_id": run.get("run_id"),
+        "session_id": run.get("session_id"),
         "timestamp": run.get("timestamp"),
         "git_sha": run.get("git_sha"),
         "git_dirty": run.get("git_dirty"),
@@ -242,13 +243,80 @@ def write_parquet(rows: list, path: Path):
         print("Skipping parquet write (pyarrow/pandas not available).")
 
 
+def select_session(runs: list, selector: str):
+    """Narrow the append-only raw log to one matrix invocation.
+
+    `data/raw/latency_demo_runs.jsonl` accumulates every run ever performed, so
+    without this the derived CSVs and every chart built from them silently mix
+    unrelated code states. That is not a cosmetic problem: it produced charts
+    holding a single bar with every other payload absent, because an old session
+    had only ever run a subset of the matrix.
+
+    Sessions are keyed by `session_id`. Records written before that field
+    existed fall back to (git_sha, git_dirty, hostname), which is coarser --
+    several dirty-tree sessions on one commit collapse together -- so those are
+    reported as legacy.
+    """
+    def key(run):
+        sid = run.get("session_id")
+        if sid:
+            return ("session", sid)
+        host = (run.get("host_info") or {}).get("hostname")
+        return ("legacy", f"{run.get('git_sha')}|{run.get('git_dirty')}|{host}")
+
+    groups = {}
+    for run in runs:
+        groups.setdefault(key(run), []).append(run)
+    if not groups:
+        return runs, []
+    # Newest first, by the latest timestamp seen in each group.
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: max(r.get("timestamp") or "" for r in kv[1]),
+        reverse=True,
+    )
+
+    if selector == "all":
+        chosen = ordered
+    elif selector == "latest":
+        chosen = ordered[:1]
+    else:
+        chosen = [(k, v) for k, v in ordered if k[1].startswith(selector)]
+        if not chosen:
+            raise SystemExit(f"no session matches {selector!r}")
+
+    chosen_keys = {k for k, _ in chosen}
+    kept = [r for r in runs if key(r) in chosen_keys]
+    skipped = [(k, len(v)) for k, v in ordered if k not in chosen_keys]
+
+    for kind, ident in (k for k, _ in chosen):
+        label = "session" if kind == "session" else "legacy group"
+        count = len(groups[(kind, ident)])
+        print(f"Using {label} {ident} ({count} runs)")
+    if skipped:
+        total = sum(n for _, n in skipped)
+        print(
+            f"Excluded {total} stale run(s) across {len(skipped)} earlier "
+            f"session(s); pass --session all to include them."
+        )
+    return kept, skipped
+
+
 def main():
     parser = argparse.ArgumentParser(description="Normalize and aggregate latency_demo JSONL.")
     parser.add_argument("--input", default=str(RAW_JSONL))
+    parser.add_argument(
+        "--session",
+        default="latest",
+        help="Which matrix invocation to derive from: 'latest' (default), "
+        "'all', or a session id prefix. The raw log is append-only, so "
+        "'all' mixes code states and is almost never what you want.",
+    )
     args = parser.parse_args()
 
     raw_path = Path(args.input)
     runs = load_runs(raw_path)
+    runs, _ = select_session(runs, args.session)
     rows = [flatten_run(r) for r in runs]
     write_csv(RUNS_CSV, rows)
     write_parquet(rows, RUNS_CSV.with_suffix(".parquet"))
