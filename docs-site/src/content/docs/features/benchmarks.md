@@ -120,19 +120,17 @@ These are macOS figures. The transport work behind them is platform-neutral
 and enabled everywhere, but Linux has not been re-measured on the fixed
 pipeline, so no Linux numbers are published here yet.
 
-:::note[Formerly: "throughput runs are bimodal"]
-Earlier versions of this table carried a warning that roughly one run in
-three landed 5–6× slower, with spreads up to 5.9×. That instability was
-diagnosed and fixed: a congestive loss burst during ramp-up could trip QUIC's
-MTU black-hole detector and pin the connection at a 1200-byte MTU for the
-rest of the run — a ~13× datagram (and syscall) multiplier that looked
-exactly like a scheduling defect. Loopback connections now run at a
-guaranteed 16 KiB MTU, which also roughly doubled the 256 B row by removing
-the MTU discovery ramp from short runs. The diagnosis is written up in the
-[case study](/felix/features/performance-case-study/).
+:::note[Why the spread column is tight]
+Trial-to-trial spread this narrow is itself a result of the path-MTU fix in
+the [case study](/felix/features/performance-case-study/). Before it, a
+congestive loss burst during ramp-up could trip QUIC's MTU black-hole
+detector and pin a connection at a 1200-byte MTU for the rest of the run — a
+~13× datagram (and syscall) multiplier that made roughly one run in three
+land 5–6× low. Removing it also roughly doubled the 256 B row, by taking the
+MTU discovery ramp out of short runs.
 
 Medians of several trials remain the standard for anything published here —
-that policy is what exposed the defect in the first place.
+that policy is what exposed the defect rather than averaging it away.
 :::
 
 ![Delivered payload MB/s by payload and publisher preset, fanout 1](/felix/charts/latency_demo/balanced/f1_b64_binary_a8b3321b_delivered_mb_per_s.svg)
