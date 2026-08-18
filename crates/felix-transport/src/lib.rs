@@ -272,6 +272,15 @@ impl Default for TransportConfig {
 // 16384; Linux lo is 65536) after IPv6 headers (48 bytes; IPv4 needs only 28).
 const LOOPBACK_UDP_PAYLOAD: u16 = 16336;
 
+// Pinning `min_mtu` above 4 KiB stalls delivery outright on Linux; macOS is
+// unaffected and 4096 is also Linux's fastest. Mitigation, not a root-cause
+// fix -- see round 18 of docs/perf-investigation-throughput.md.
+const LOOPBACK_PINNED_MTU_CAP: u16 = if cfg!(target_os = "macos") {
+    LOOPBACK_UDP_PAYLOAD
+} else {
+    4096
+};
+
 impl TransportConfig {
     /// The initial MTU to use for a connection whose peer is a loopback
     /// address, or `None` to keep the configured default.
@@ -291,15 +300,9 @@ impl TransportConfig {
     /// `FELIX_INITIAL_MTU` wins over this.
     ///
     /// `effective_buffer_bytes` is the smaller of the socket's *achieved*
-    /// send/receive buffers, and gates the whole guarantee: full-size
-    /// datagrams are only safe when the kernel buffers hold a real burst of
-    /// them. Linux silently clamps `SO_RCVBUF` to `net.core.rmem_max`
-    /// (~208 KB on stock hosts and CI runners) — roughly 26 jumbo datagrams
-    /// of headroom, which sustained load overflows catastrophically, and the
-    /// pinned `min_mtu` would then also forbid the one thing that helps a
-    /// tiny buffer: smaller datagrams. Below the threshold the connection
-    /// keeps the stock RFC-safe path (initial 1200, normal discovery, short
-    /// black-hole cooldown).
+    /// send/receive buffers. It gates the guarantee as a proxy for "this host
+    /// was tuned": Linux clamps `SO_RCVBUF` to `net.core.rmem_max` (~208 KB
+    /// stock), and an untuned host keeps the RFC-safe path instead.
     fn loopback_initial_mtu(&self, effective_buffer_bytes: usize) -> Option<u16> {
         if env_u64("FELIX_INITIAL_MTU").is_some() {
             return None;
@@ -307,12 +310,12 @@ impl TransportConfig {
         let target = LOOPBACK_UDP_PAYLOAD
             .min(self.mtu_discovery_upper_bound)
             .min(self.max_udp_payload_size);
-        // 64 full-size datagrams of burst headroom (~1 MiB at 16336). Hosts
-        // tuned per docs/storage-performance.md sysctl guidance qualify;
-        // stock-limit Linux hosts do not.
+        // Measured before the cap, so lowering the pinned size cannot newly
+        // enable this path on a host that is working today.
         if effective_buffer_bytes < usize::from(target).saturating_mul(64) {
             return None;
         }
+        let target = target.min(LOOPBACK_PINNED_MTU_CAP);
         (target > self.initial_mtu).then_some(target)
     }
 
@@ -1061,20 +1064,19 @@ mod tests {
         // Plenty of socket buffer: a typical macOS 8 MiB grant.
         const BIG_BUFFER: usize = 8 * 1024 * 1024;
         // A stock-Linux clamp (net.core.rmem_max ~208 KB, doubled by the
-        // kernel): far too little burst headroom for jumbo datagrams.
+        // kernel), i.e. a host nobody has tuned.
         const CLAMPED_BUFFER: usize = 416 * 1024;
 
-        // Default config: loopback connections start at the loopback payload
-        // size instead of the RFC-safe 1200.
-        let config = TransportConfig::default();
-        assert_eq!(
-            config.loopback_initial_mtu(BIG_BUFFER),
-            Some(LOOPBACK_UDP_PAYLOAD)
-        );
+        // What the guarantee pins where it applies: the full loopback payload
+        // on macOS, the platform cap elsewhere.
+        const EXPECTED: u16 = LOOPBACK_PINNED_MTU_CAP;
 
-        // A clamped socket buffer disables the guarantee entirely: 26 jumbo
-        // datagrams of headroom overflow under sustained load, and the pinned
-        // min_mtu would forbid falling back to smaller datagrams.
+        // Default config: loopback connections start above the RFC-safe 1200.
+        let config = TransportConfig::default();
+        assert_eq!(config.loopback_initial_mtu(BIG_BUFFER), Some(EXPECTED));
+
+        // An untuned host keeps the stock path on every platform: the gate is
+        // evaluated at the jumbo size, before the cap.
         assert_eq!(config.loopback_initial_mtu(CLAMPED_BUFFER), None);
 
         // A lowered discovery bound caps the loopback start size with it (and
@@ -1092,6 +1094,25 @@ mod tests {
             ..TransportConfig::default()
         };
         assert_eq!(config.loopback_initial_mtu(8 * 1024 * 1024), None);
+    }
+
+    /// Arithmetic only — the Linux stall this guards needs a sustained batch
+    /// run on a tuned host, which nothing in this workspace performs.
+    #[test]
+    fn loopback_guarantee_is_capped_off_macos() {
+        const BIG_BUFFER: usize = 8 * 1024 * 1024;
+        let pinned = TransportConfig::default()
+            .loopback_initial_mtu(BIG_BUFFER)
+            .expect("tuned host takes the loopback path");
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(pinned, LOOPBACK_UDP_PAYLOAD);
+        } else {
+            assert!(
+                pinned <= 4096,
+                "pinning min_mtu at {pinned} collapses throughput on Linux"
+            );
+        }
     }
 
     #[test]

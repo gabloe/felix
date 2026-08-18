@@ -123,8 +123,15 @@ macOS reaches with every fix applied. The dedicated I/O runtime pool is
 therefore enabled on macOS only; on Linux it measures slower (see
 `FELIX_IO_RUNTIME_THREADS` in the
 [environment variable reference](/felix/reference/environment-variables/)).
-A proper Linux benchmark run has not been done, so no Linux table is
-published here yet.
+Linux has since been measured on real hardware (Azure `D16ads_v5`, 8 physical
+EPYC cores, Ubuntu 24.04): **1.17 GB/s** at 4 KiB × batch 64 × fanout 1, about
+2.3× the macOS figure above at the same shape. That run also uncovered a
+delivery-stalling defect in the loopback MTU guarantee on Linux, now fixed by
+capping the guaranteed size at 4 KiB off macOS. No Linux table is published
+here yet: those numbers came from direct harness invocations rather than a full
+`run_latency_matrix.py` session, so they lack the per-run provenance every row
+on this page carries. Round 18 of `docs/perf-investigation-throughput.md` has
+the measurements and their caveats.
 
 :::note[Why the spread column is tight]
 Trial-to-trial spread this narrow is itself a result of the path-MTU fix in

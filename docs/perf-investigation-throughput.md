@@ -5,13 +5,15 @@ throughput, particularly at larger payload sizes. Records what was measured,
 what was concluded, and — importantly — which hypotheses turned out to be
 wrong.
 
-**Status: resolved for macOS, open for Linux.** Main ceiling fixed (rounds
-7–10); residual bimodality was a path-MTU black-hole collapse (round 15); the
+**Status: resolved for macOS; Linux benchmarked in round 18, one open defect.** 
+Main ceiling fixed (rounds 7–10); residual bimodality was a path-MTU black-hole collapse (round 15); the
 Linux CI failure was publish-side shedding in an under-configured test (round
 16). Round 17 then established that **the ceiling itself is macOS-specific** —
 Linux is faster at the pre-fix baseline than macOS is after every fix — and
-that the I/O runtime pool must stay off there. Everything measured in rounds
-1–16 is macOS; Linux has never been properly benchmarked.
+that the I/O runtime pool must stay off there. Round 18 finally benchmarked Linux on real
+hardware: the pool verdict holds, Linux reaches **1.17 GB/s** (2.3x macOS), and
+the round-15 loopback MTU guarantee is a **hard delivery stall** there whenever
+the documented sysctl tuning is applied — unfixed as of that round.
 The ceiling was scheduling, not any Felix
 stage: quinn's driver tasks do a bounded slice of work per poll and reschedule
 themselves, so sustained throughput is that slice divided by scheduler re-poll
@@ -1456,6 +1458,163 @@ published in `benchmarks.md` is macOS. Before any further transport tuning,
 the matrix should be run on a real Linux host to establish where its ceiling
 actually is — the optimization targets there are likely entirely different
 from the ones rounds 1–15 chased.
+
+## Round 18: the loopback MTU guarantee collapses sustained throughput on Linux
+
+First measurements on a real Linux host (Azure `D16ads_v5`, AMD EPYC 7763,
+16 vCPU = **8 physical cores** + SMT, 31 GiB, Ubuntu 24.04, kernel 6.17,
+`net.core.{r,w}mem_max` raised to 25 MiB). Rounds 1–16 were macOS; round 17
+used a 4-CPU container.
+
+### The I/O runtime pool verdict holds on real hardware
+
+Latency, 1 KiB, batch 1, acked, fanout 1 (median of 3):
+
+| `FELIX_IO_RUNTIME_THREADS` | p50 | p99 |
+|---|---:|---:|
+| **0** (Linux default) | **118 µs** | 163 µs |
+| 2 | 173 µs | 213 µs |
+| 4 | 180 µs | 211 µs |
+
+Same direction as round 17, smaller magnitude (+47% vs +88%). The Linux
+default of `0` is correct and needs no change.
+
+![Latency by I/O runtime pool size on Linux](assets/linux-round18/io-runtime-pool-latency.png)
+
+### Every sustained-throughput run failed
+
+`4 KiB x batch 64 x fanout 1` died with `dedicated delivery channel timed out
+after 0 of 16384 measured events` — **zero** events delivered, not slow
+delivery. Batch-1 latency runs on the same host passed. The trigger is the
+loopback jumbo-MTU guarantee from round 15, which had never actually executed
+on Linux: CI runners are stock-clamped so the round-16 buffer gate disables it
+there, and macOS was the only platform where it ever engaged. Raising the
+sysctls — which `installation.md` tells Linux users to do — turns it on.
+
+### What it is not
+
+| Hypothesis | Test | Verdict |
+|---|---|---|
+| Jumbo datagrams fail on Linux | `FELIX_INITIAL_MTU=16336` (no pin) | **Wrong** — 507–671 MB/s, `lost_packets=23/76282` |
+| Scaled initial cwnd (RFC 9002) | `INITIAL_MTU=16336` + `INITIAL_CWND=163360` | **Wrong** — 621 MB/s, faster than default cwnd |
+| ACK-frequency tuning | `FELIX_ACK_FREQ_DISABLE=1` | **Wrong** — still fails |
+| Socket-buffer overflow | `/proc/net/snmp` before/after | **Wrong** — `RcvbufErrors=0 SndbufErrors=0 InErrors=0` |
+
+That last row matters most, and it contradicts the theory the round-16 gate was
+built on. The kernel drops nothing. quinn reports `lost_packets=155037` of
+`226986` datagrams (68%) with `congestion_events=18674` on packets the kernel
+delivered — the loss is **spurious**, declared by quinn's loss detector, and it
+collapses cwnd until the sender stalls and the connection is lost. Raising
+buffers further cannot help.
+
+### What it is: pinning `min_mtu` above ~4 KiB
+
+`min_mtu` is the only variable that separates the working and failing cases at
+identical MTU. Pinned size determines the outcome (4 KiB, batch 64, fanout 1):
+
+| pinned `min_mtu` | result |
+|---|---|
+| 16336 (default loopback) | **FAIL** |
+| 8192 | **FAIL** |
+| 4096 | OK — 788 MB/s |
+| 2048 | OK — 575 MB/s |
+
+Safe at <= 4096, fatal at >= 8192. The threshold sits between them; it was not
+bisected further.
+
+![Delivered throughput by pinned min_mtu, with the two stalling sizes marked](assets/linux-round18/min-mtu-pin-ladder.png)
+
+### The mechanism is still unknown
+
+The trigger reproduces reliably; the *cause* does not follow from it, and two
+hypotheses have since been killed by reading quinn 0.11.11 / quinn-proto
+0.11.16 rather than by measurement:
+
+- **Not GRO receive-buffer truncation.** `quinn::endpoint` sizes its receive
+  buffer as `max_udp_payload_size.min(64 KiB) * gro_segments * BATCH_SIZE`, so
+  each slot holds ~64 KiB. A 16 KiB datagram fits with room to spare.
+- **Not a GSO send-side overflow that wedges.** `quinn-udp`'s `sendmsg` error
+  path disables segmentation offload and retries, so an oversized batch
+  degrades rather than stalling.
+
+More awkwardly for the isolation: **`min_mtu` cannot itself cause packet loss.**
+Every use of it in quinn-proto is inside `mtud.rs`, feeding black-hole
+*detection* — whether a loss burst looks suspicious, and what `current_mtu`
+resets to. Nothing in the send path, pacer, or congestion controller reads it.
+
+That reframes what the A/B actually showed. The most consistent reading of the
+evidence is that **both** configurations meet real congestive loss under
+sustained batch load on Linux, and they differ only in whether quinn has an
+escape hatch: with `min_mtu` at its 1200 default a black-hole verdict collapses
+the path MTU and relieves the overload, while a pinned `min_mtu` makes that
+verdict a no-op — which is precisely what round 15 designed it to be. The pin
+does not create the loss; it removes the only recovery from it.
+
+Two things still do not fit and should be resolved before anyone calls this
+understood:
+
+1. `/proc/net/snmp` shows `RcvbufErrors=0` across a failing run. Congestive
+   overflow of the receiver's socket buffer should increment it.
+2. In one failing run quinn reported 226,986 sent datagrams while the kernel
+   counted ~64.5 K on the interface — measured in different runs, so weak
+   evidence, but it points at datagrams never reaching the kernel at all.
+
+The experiment that would settle it: run the failing config under
+`strace -f -e trace=sendmsg,sendmmsg -c` and read the errno histogram, with
+`RUST_LOG=quinn_udp=debug` to catch the "halting segmentation offload" warning.
+That needs a tuned Linux host; the one used here was released before this
+question surfaced. Until then the cap below is a **validated mitigation, not a
+root-cause fix**.
+
+### The fix is also the fastest configuration measured
+
+Capping the guarantee at 4096 keeps round 15's black-hole immunity and wins
+outright (median of 5, `--pub-conns 8 --pub-streams-per-conn 2
+--pub-stream-count 16`, chunk 32768, pool off):
+
+| Config | fanout 1 | fanout 10 (per-sub) |
+|---|---:|---:|
+| explicit MTU 10240, no pin | 786 MB/s | 112 MB/s |
+| **pinned `min_mtu` = 4096** | **1166 MB/s** | **182 MB/s** |
+
+![Throughput with the guarantee capped at 4 KiB versus no pin](assets/linux-round18/fix-throughput.png)
+
+1.17 GB/s is 2.3x macOS's post-fix 508 MB/s at the same shape. Note the pin is
+worth far more than the same initial MTU without it (4096 unpinned measured
+513 MB/s): pinning also freezes the discovery bound, so no probe traffic and no
+black-hole verdict ever runs.
+
+**Recommended change:** cap the loopback guarantee in `loopback_initial_mtu`
+at 4096 on non-macOS. macOS keeps 16336, where it is measured good over
+hundreds of runs — but macOS should be re-measured at 4096 before assuming
+16336 is still its optimum there.
+
+The existing unit test only exercises the gate arithmetic and runs no traffic,
+so nothing in the suite could have caught this. A regression test needs to be a
+sustained batch run, not a config assertion.
+
+### Tuning, and how much of it to trust
+
+Greedy stage-wise sweep, 3 trials per point, 4 KiB / batch 64 / fanout 1:
+
+- **Publish parallelism is the one real lever**: 616 -> 669 -> 766 MB/s across
+  4, 8, 16 publish streams. Clean and monotonic; it is where the 8 physical
+  cores show up.
+![Throughput by publish stream count](assets/linux-round18/publish-parallelism.png)
+
+- **MTU and chunk-size picks are within noise.** Stage A read 512/515/518/616/527
+  across 4096–12288 — the 10240 "winner" is an isolated spike between two ~520
+  neighbours. Chunk size likewise (515/615/413/520). A greedy search with 3
+  trials locks onto noise peaks and carries them forward.
+- **`FELIX_EVENT_BATCH_MAX_DELAY_US` does nothing** here: 807.6 / 808.8 / 811.3
+  MB/s at 50 / 250 / 1000 µs.
+
+### Caveats
+
+Single host, 8 physical cores, one session. The macOS reference is an M4 Max,
+so the 2.3x is not a like-for-like core count. The numbers are loopback with
+broker and clients on one box. Nothing here has been re-run after a fix,
+because no fix has been written yet.
 
 ## Everything changed this session
 
