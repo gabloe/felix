@@ -1524,47 +1524,65 @@ bisected further.
 
 ![Delivered throughput by pinned min_mtu, with the two stalling sizes marked](assets/linux-round18/min-mtu-pin-ladder.png)
 
-### The mechanism is still unknown
+### The mechanism: Linux UDP GSO's 64 KiB aggregate limit
 
-The trigger reproduces reliably; the *cause* does not follow from it, and two
-hypotheses have since been killed by reading quinn 0.11.11 / quinn-proto
-0.11.16 rather than by measurement:
+Established by reading quinn 0.11.11 / quinn-proto 0.11.16 / quinn-udp 0.5.15,
+after two hypotheses died there first (it is not GRO receive-buffer truncation —
+`quinn::endpoint` sizes receive slots at ~64 KiB; and `min_mtu` cannot itself
+cause loss — every use in quinn-proto is inside `mtud.rs` feeding black-hole
+detection).
 
-- **Not GRO receive-buffer truncation.** `quinn::endpoint` sizes its receive
-  buffer as `max_udp_payload_size.min(64 KiB) * gro_segments * BATCH_SIZE`, so
-  each slot holds ~64 KiB. A 16 KiB datagram fits with room to spare.
-- **Not a GSO send-side overflow that wedges.** `quinn-udp`'s `sendmsg` error
-  path disables segmentation offload and retries, so an oversized batch
-  degrades rather than stalling.
+Linux `UDP_SEGMENT` lets one `sendmsg` carry N segments, but the aggregate is
+still one IP datagram: **`segment_size x N <= 65535`**. quinn sets
+`max_datagrams = min(socket.max_gso_segments(), MAX_TRANSMIT_SEGMENTS)`, and
+`MAX_TRANSMIT_SEGMENTS` is **10** (`quinn/src/connection.rs`). `poll_transmit`
+then uses `segment_size = path.current_mtu()` with no clamp against 65535. So
+the real ceiling is:
 
-More awkwardly for the isolation: **`min_mtu` cannot itself cause packet loss.**
-Every use of it in quinn-proto is inside `mtud.rs`, feeding black-hole
-*detection* — whether a loss burst looks suspicious, and what `current_mtu`
-resets to. Nothing in the send path, pacer, or congestion controller reads it.
+```
+65535 / 10 = 6553 bytes of MTU
+```
 
-That reframes what the A/B actually showed. The most consistent reading of the
-evidence is that **both** configurations meet real congestive loss under
-sustained batch load on Linux, and they differ only in whether quinn has an
-escape hatch: with `min_mtu` at its 1200 default a black-hole verdict collapses
-the path MTU and relieves the overload, while a pinned `min_mtu` makes that
-verdict a no-op — which is precisely what round 15 designed it to be. The pin
-does not create the loss; it removes the only recovery from it.
+| MTU | aggregate at N=10 | |
+|---|---:|---|
+| 4096 | 40,960 | fits |
+| 6553 | 65,530 | the boundary |
+| 8192 | 81,920 | **exceeds** |
+| 16336 | 163,360 | **exceeds** |
 
-Two things still do not fit and should be resolved before anyone calls this
-understood:
+The measured boundary — safe at <= 4096, fatal at >= 8192 — brackets 6553.
 
-1. `/proc/net/snmp` shows `RcvbufErrors=0` across a failing run. Congestive
-   overflow of the receiver's socket buffer should increment it.
-2. In one failing run quinn reported 226,986 sent datagrams while the kernel
-   counted ~64.5 K on the interface — measured in different runs, so weak
-   evidence, but it points at datagrams never reaching the kernel at all.
+**Why it never recovers.** `quinn-udp`'s `sendmsg` error path disables
+segmentation offload only on `EIO` or `EINVAL`. An oversized aggregate returns
+`EMSGSIZE`, which falls through that branch, so every subsequent batch fails
+identically. The transmit is dropped after quinn has counted it as sent.
 
-The experiment that would settle it: run the failing config under
-`strace -f -e trace=sendmsg,sendmmsg -c` and read the errno histogram, with
-`RUST_LOG=quinn_udp=debug` to catch the "halting segmentation offload" warning.
-That needs a tuned Linux host; the one used here was released before this
-question surfaced. Until then the cap below is a **validated mitigation, not a
-root-cause fix**.
+That resolves every anomaly the earlier reading could not:
+
+- **`RcvbufErrors=0`** — the datagrams are rejected at the syscall and never
+  enter any kernel buffer. Drop counters count packets the kernel accepted.
+- **quinn's 226,986 sent vs the kernel's ~64.5 K** — the difference is batches
+  quinn believes it sent and the kernel refused.
+- **68% loss is real, not spurious.** quinn's detector correctly observes that
+  those packets were never acknowledged.
+- **macOS is immune because it has no GSO.** Round 2 measured
+  `udp_tx_ios == udp_tx_datagrams` there — one syscall per datagram, no
+  aggregate, no 64 KiB ceiling. Nothing about scheduling or congestion explains
+  why the platform matters; this does.
+
+The `min_mtu` framing from the previous section survives in structure but not in
+cause: `initial_mtu = 16336` is what sizes packets into GSO-oversize territory,
+and pinning `min_mtu` removes the escape hatch, because unpinned a black-hole
+verdict drops the MTU to 1200 where `1200 x 10` fits comfortably. The pin does
+not create the loss; it prevents the only recovery from it — and that recovery
+was round 15's "misdiagnosis", which turns out to have been load-bearing on
+Linux.
+
+**Still unconfirmed:** the exact errno. The chain above requires it to be
+neither `EIO` nor `EINVAL`, which the sustained failure implies but does not
+prove. `strace -f -e trace=sendmsg,sendmmsg -c` on a tuned Linux host settles
+it; `TransportConfig::enable_segmentation_offload(false)` against the failing
+16336 config is the cheaper one-run A/B.
 
 ### The fix is also the fastest configuration measured
 
@@ -1588,6 +1606,21 @@ black-hole verdict ever runs.
 at 4096 on non-macOS. macOS keeps 16336, where it is measured good over
 hundreds of runs — but macOS should be re-measured at 4096 before assuming
 16336 is still its optimum there.
+
+Why 4096 rather than the exact 6553 the constraint allows: `MAX_TRANSMIT_SEGMENTS`
+is private to quinn, so the bound cannot be derived through its public API.
+Deriving it from `max_gso_segments()` instead does not work either — that is 64
+on Linux, and `65535 / 64 = 1023`, below QUIC's 1200 floor. 4096 is the value
+that keeps margin: it survives the segment count rising to 15, where 6553 breaks
+the moment it moves at all. The invariant is a comment, and no test can catch a
+regression in it, so the margin is doing real work.
+
+**Better, once it can be measured:** disable segmentation offload on this path
+(`TransportConfig::enable_segmentation_offload(false)`) and keep the full 16336.
+That reproduces macOS's proven configuration exactly — no GSO, jumbo datagrams —
+and removes the 64 KiB constraint rather than dodging it. On loopback, GSO's
+syscall amortisation is worth little when each datagram is already 16 KiB. It
+needs a tuned Linux host to validate before shipping.
 
 The existing unit test only exercises the gate arithmetic and runs no traffic,
 so nothing in the suite could have caught this. A regression test needs to be a
