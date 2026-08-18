@@ -808,11 +808,15 @@ export FELIX_MTU_UPPER_BOUND="4096"   # small-message optimized
 
 ### `FELIX_INITIAL_MTU`
 
-**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (jumbo-frame LAN) skips the discovery ramp. Connections to a loopback peer automatically start at the loopback MTU (16,336-byte payloads, capped by `FELIX_MTU_UPPER_BOUND`) — that path is known-good by construction, and starting at full size also makes the MTU immune to spurious black-hole collapse (see `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`). The loopback fast path additionally requires the socket's *granted* UDP buffers to hold ~64 full-size datagrams (~1 MiB): hosts where Linux silently clamps `SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB) lack the burst headroom that makes jumbo datagrams safe, and keep the RFC-safe default instead — raise `rmem_max`/`wmem_max` to enable it. Setting `FELIX_INITIAL_MTU` explicitly disables the loopback special case and applies to every path.
+**Description**: Starting datagram size before path-MTU discovery completes. The RFC-safe default works everywhere; raising it on known-good paths (jumbo-frame LAN) skips the discovery ramp. Connections to a loopback peer automatically start at the loopback MTU and *guarantee* it, which makes the path immune to spurious black-hole collapse (see `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`) and, because the guarantee also freezes the discovery bound, removes probe traffic entirely.
+
+The guaranteed size is **16,336 bytes on macOS and 4,096 elsewhere** (both capped by `FELIX_MTU_UPPER_BOUND`). The lower cap off macOS is not conservatism: pinning above ~4 KiB collapses sustained throughput on Linux outright — quinn's loss detector declares ~68% of datagrams lost on packets the kernel actually delivered, and delivery stalls to nothing. 4,096 is also the fastest configuration measured on Linux. See round 18 of `docs/perf-investigation-throughput.md`.
+
+The loopback path additionally requires the socket's *granted* UDP buffers to reach ~1 MiB. That threshold is a proxy for "this host has been tuned", not a burst-headroom calculation — hosts where Linux silently clamps `SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB) keep the RFC-safe default; raise `rmem_max`/`wmem_max` to enable it. Setting `FELIX_INITIAL_MTU` explicitly disables the loopback special case and applies to every path.
 
 **Type**: Positive integer (bytes, clamped to 1200–65527)
 
-**Default**: `1200` (loopback peers: `16336`)
+**Default**: `1200` (loopback peers: `16336` on macOS, `4096` elsewhere)
 
 ```bash
 export FELIX_INITIAL_MTU="1200"
