@@ -227,23 +227,48 @@ sides:
 
 - `initial_mtu = 16336` (fits IPv4/IPv6 headers within the 16 KiB loopback
   interface MTU), removing the discovery ramp;
-- `min_mtu = 16336`, which is the part that matters: the black-hole verdict
-  resets to `min_mtu`, so with the floor at the real MTU there is nothing to
-  collapse to, and a congestive loss burst is handled as ordinary congestion;
+- `min_mtu = 16336` on macOS (**4096 on every other platform** — see below),
+  which is the part that matters: the black-hole verdict resets to `min_mtu`,
+  so with the floor at the real MTU there is nothing to collapse to, and a
+  congestive loss burst is handled as ordinary congestion;
 - an initial congestion window scaled to the MTU per RFC 9002's formula —
   quinn's default window is a flat 14,720 bytes, smaller than one 16 KiB
   segment, which otherwise deadlocks the handshake outright.
 
-The guarantee is conditional on the socket buffers the OS actually granted:
-jumbo datagrams are only safe when the kernel buffers hold a real burst of
-them (~64 datagrams, about 1 MiB), so hosts where Linux silently clamps
-`SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB — about 26 jumbo
-datagrams) keep the RFC-safe default path instead. An explicit
-`FELIX_INITIAL_MTU` disables the special case. For non-loopback paths, where
+The guarantee is conditional on the socket buffers the OS actually granted
+(~1 MiB), which acts as a proxy for "this host has been tuned": hosts where
+Linux silently clamps `SO_RCVBUF` to a stock `net.core.rmem_max` (~208 KB)
+keep the RFC-safe default path instead. An explicit `FELIX_INITIAL_MTU`
+disables the special case. For non-loopback paths, where
 `min_mtu` must never be raised, the black-hole cooldown drops from 60 s to
 2 s (`FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`), so a spurious collapse on an
 intermittently loaded connection heals at the next idle gap instead of being
 pinned for a minute.
+
+### Why the guaranteed size is smaller off macOS
+
+Everything above was measured on macOS. Benchmarking Linux later showed the
+same guarantee stalling delivery completely there — zero events delivered,
+every sustained batch run — and the cause is a platform difference this fix
+had not accounted for.
+
+Linux UDP GSO carries a whole `sendmsg` batch inside one IP datagram, so
+`MTU × segments` must stay under 65,535. quinn batches up to 10 datagrams,
+which makes 6,553 bytes the real ceiling. A guaranteed 16,336 needs 163,360
+bytes per batch, the kernel refuses it, and quinn only falls back to
+non-offloaded sends on `EIO`/`EINVAL` — so the rejection repeats on every
+batch and the connection never recovers. macOS is immune because it has no
+GSO at all: one syscall per datagram, no aggregate, no ceiling.
+
+The guaranteed size is therefore capped at **4,096 off macOS**, which holds
+margin even if quinn's batch size grows, and which measured fastest on Linux
+regardless (1.17 GB/s at 4 KiB × batch 64 × fanout 1).
+
+There is a sharper irony here. The black-hole "misdiagnosis" this whole
+section treats as a bug is, on Linux, the only thing that recovers a
+GSO-oversized connection: collapsing the MTU to 1200 makes the batch fit
+again. Guaranteeing `min_mtu` removed that escape hatch. The pin did not
+create the loss — it prevented the recovery.
 
 ### The result
 

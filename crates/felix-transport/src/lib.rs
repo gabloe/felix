@@ -272,9 +272,12 @@ impl Default for TransportConfig {
 // 16384; Linux lo is 65536) after IPv6 headers (48 bytes; IPv4 needs only 28).
 const LOOPBACK_UDP_PAYLOAD: u16 = 16336;
 
-// Pinning `min_mtu` above 4 KiB stalls delivery outright on Linux; macOS is
-// unaffected and 4096 is also Linux's fastest. Mitigation, not a root-cause
-// fix -- see round 18 of docs/perf-investigation-throughput.md.
+// Linux UDP GSO puts a whole `sendmsg` batch in one IP datagram, so
+// `mtu * segments <= 65535`; quinn batches up to 10, making 6553 the true
+// ceiling. Above it the kernel rejects every batch, with an error quinn does not
+// treat as a GSO failure (it only falls back on EIO/EINVAL), so delivery stalls
+// and stays stalled. 4096 holds margin to 15 segments and is also Linux's
+// fastest. macOS has no GSO and no such limit.
 const LOOPBACK_PINNED_MTU_CAP: u16 = if cfg!(target_os = "macos") {
     LOOPBACK_UDP_PAYLOAD
 } else {

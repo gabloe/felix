@@ -130,8 +130,8 @@ delivery-stalling defect in the loopback MTU guarantee on Linux, now fixed by
 capping the guaranteed size at 4 KiB off macOS. No Linux table is published
 here yet: those numbers came from direct harness invocations rather than a full
 `run_latency_matrix.py` session, so they lack the per-run provenance every row
-on this page carries. Round 18 of `docs/perf-investigation-throughput.md` has
-the measurements and their caveats.
+on this page carries. The [performance case study](/felix/features/performance-case-study/)
+has the measurements and their caveats.
 
 :::note[Why the spread column is tight]
 Trial-to-trial spread this narrow is itself a result of the path-MTU fix in
