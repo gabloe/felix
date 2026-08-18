@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787030489346,
+  "lastUpdate": 1787031327683,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2340,6 +2340,58 @@ window.BENCHMARK_DATA = {
             "range": "9392.59",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 552598.00\nmean: 558525.88\nstdev: 9392.59\ncv: 1.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7006227666fbf3fbe01563412246c33679a931f",
+          "message": "fix: address Linux MTU black-hole issue and update performance documentation (#202)\n\n- Adjusted `LOOPBACK_PINNED_MTU_CAP` to prevent delivery stalls on Linux due to UDP GSO limits.\n- Updated benchmarks and performance case study to reflect changes in MTU handling and performance metrics.\n- Enhanced documentation on environment variables and performance platform notes to clarify MTU guarantees and their implications.",
+          "timestamp": "2026-08-17T22:33:09-07:00",
+          "tree_id": "394e0cc88ee8476d4753a80efcf95e96df12db66",
+          "url": "https://github.com/gabloe/felix/commit/b7006227666fbf3fbe01563412246c33679a931f"
+        },
+        "date": 1787031326491,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235496.86,
+            "range": "3647.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235496.86\nmean: 235709.64\nstdev: 3647.62\ncv: 1.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235496.86,
+            "range": "3647.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235496.86\nmean: 235709.64\nstdev: 3647.62\ncv: 1.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55792.21,
+            "range": "591.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55792.21\nmean: 56107.26\nstdev: 591.82\ncv: 1.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557922.11,
+            "range": "5918.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557922.11\nmean: 561072.58\nstdev: 5918.21\ncv: 1.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
