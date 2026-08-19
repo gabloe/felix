@@ -96,6 +96,15 @@ impl SealedEntry {
     }
 }
 
+/// What one retention pass reclaimed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionOutcome {
+    pub segments_deleted: usize,
+    pub bytes_reclaimed: u64,
+    /// Oldest offset still readable after the pass.
+    pub base_offset: Offset,
+}
+
 /// Everything on disk for one shard.
 #[derive(Debug)]
 pub struct SegmentSet {
@@ -445,6 +454,95 @@ impl SegmentSet {
             )?;
         }
         Ok(out)
+    }
+
+    /// Delete whole sealed segments from the head until the configured
+    /// retention bounds are satisfied.
+    ///
+    /// Head-only and whole-segment: partial segments are never rewritten, which
+    /// is what lets recovery keep trusting "valid bytes end at EOF". The active
+    /// segment is never a candidate, so a log always retains at least the
+    /// records written since the last roll.
+    ///
+    /// Advancing `base_offset` is a side effect of removing the head entry, and
+    /// both happen under the caller's write lock — so a reader either sees a
+    /// segment and can read it, or sees a raised base offset and gets
+    /// `Trimmed`. It never sees a descriptor whose file is gone.
+    pub fn enforce_retention(&mut self, now_micros: u64) -> Result<RetentionOutcome> {
+        let max_bytes = self.config.retention_bytes;
+        let max_age_micros = self
+            .config
+            .retention_age
+            .map(|age| age.as_micros().min(u128::from(u64::MAX)) as u64);
+        let mut outcome = RetentionOutcome::default();
+        if max_bytes.is_none() && max_age_micros.is_none() {
+            outcome.base_offset = self.base_offset();
+            return Ok(outcome);
+        }
+
+        let mut total_bytes: u64 = self
+            .sealed
+            .iter()
+            .map(|entry| entry.descriptor.size_bytes)
+            .sum::<u64>()
+            + self.active.size_bytes();
+
+        while let Some(head) = self.sealed.first() {
+            let id = head.descriptor.id;
+            let size = head.descriptor.size_bytes;
+
+            let over_size = max_bytes.is_some_and(|max| total_bytes > max);
+            let too_old = match max_age_micros {
+                // The newest record decides: a segment is only expired once
+                // every record in it is, so nothing younger than the bound goes.
+                Some(max_age) => match self.newest_timestamp(head)? {
+                    Some(newest) => now_micros.saturating_sub(newest) > max_age,
+                    // A sealed segment always holds a record; treat an
+                    // unreadable timestamp as "keep" rather than deleting on
+                    // missing evidence.
+                    None => false,
+                },
+                None => false,
+            };
+            if !over_size && !too_old {
+                break;
+            }
+
+            // Drop the entry first: it owns the reader's descriptor, and
+            // closing before unlinking keeps this correct on platforms that
+            // refuse to remove an open file.
+            self.sealed.remove(0);
+            self.remove_segment_files(id)?;
+            total_bytes = total_bytes.saturating_sub(size);
+            outcome.segments_deleted += 1;
+            outcome.bytes_reclaimed += size;
+        }
+
+        outcome.base_offset = self.base_offset();
+        if outcome.segments_deleted > 0 {
+            metrics::counter!(metrics_names::RETENTION_SEGMENTS_DELETED_TOTAL)
+                .increment(outcome.segments_deleted as u64);
+            metrics::counter!(metrics_names::RETENTION_BYTES_RECLAIMED_TOTAL)
+                .increment(outcome.bytes_reclaimed);
+            metrics::gauge!(metrics_names::SEGMENT_COUNT).set((self.sealed.len() + 1) as f64);
+        }
+        metrics::gauge!(metrics_names::RETENTION_BASE_OFFSET).set(outcome.base_offset as f64);
+        Ok(outcome)
+    }
+
+    /// Timestamp of the newest record in a sealed segment.
+    fn newest_timestamp(&self, entry: &SealedEntry) -> Result<Option<u64>> {
+        let mut out = Vec::new();
+        let mut budget = ReadBudget::new(usize::MAX, 1);
+        entry.reader.read_from(
+            &entry.index,
+            entry.descriptor.last_offset,
+            entry.descriptor.size_bytes,
+            &mut budget,
+            &self.label,
+            &mut out,
+        )?;
+        Ok(out.first().map(|record| record.timestamp_micros))
     }
 
     /// Drop every record at or after `offset`.

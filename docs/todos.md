@@ -36,9 +36,13 @@ durability, clustering, or advanced observability.
 - [X] Connection info + stream helpers (bi/uni)
 - [X] Graceful shutdown hooks (drain connections on SIGTERM) — see
       [Graceful Shutdown](../docs-site/src/content/docs/deployment/graceful-shutdown.md).
-      Readiness flip, bounded drain, and accept-loop cancellation are done; per-subsystem
-      cancellation (publish workers, ack waiters, subscription writers) and process-level
-      SIGTERM tests remain open under #139.
+      Readiness flip, accept-loop cancellation, and a bounded per-connection drain
+      (`TaskTracker` grace window, then the connection is closed) are done. Cancelling
+      each subsystem individually was deliberately *not* the design: publish and
+      subscribe streams are long-lived by construction, so waiting on them would hang
+      exactly as long as waiting on the connection. What is still untested is a real
+      signal: `run_with_shutdown` is driven by a synthetic future in tests, and nothing
+      sends an actual SIGTERM to a running process.
 - [ ] Backpressure defaults (caps per connection/subscription)
 
 ## Broker core (`felix-broker`)
@@ -90,6 +94,9 @@ durability, clustering, or advanced observability.
 - [X] Handle crash/recover of broker data-plane nodes (torn-tail repair on
       startup; loud failure on interior corruption). Control-plane recovery and
       re-sync from a new leader remain open.
+- [X] Enforce retention — sealed segments are deleted on age or size, `base_offset`
+      advances, and offsets below it report `Trimmed` / `CursorTooOld`. Off by
+      default. See [Durable Storage](durable-storage.md#retention).
 - [ ] Define requirements for tiered storage (hot/cold path, LCU?) — tracked as
       [#172](https://github.com/gabloe/felix/issues/172)
 - [ ] Implement tiered storage primitives. `TieredStore` and friends are declared
@@ -108,9 +115,10 @@ durability, clustering, or advanced observability.
    verified on every read and during recovery. See
    [the format spec](storage-format.md).
 2. ~~How should data file segmentation and garbage collection work to honor per-segment size caps? What is a sane segment cap? 512MB?~~
-   **Partly answered:** segments roll at `segment_size_bytes`, default 256 MiB —
-   chosen so a full scan of the active segment at startup stays under a second.
-   Garbage collection (retention) is still open.
+   **Answered:** segments roll at `segment_size_bytes`, default 256 MiB — chosen
+   so a full scan of the active segment at startup stays under a second.
+   Collection is whole-segment retention by age or size, off by default; see
+   [Durable Storage](durable-storage.md#retention).
 3. What is the delete policy? Should we retain the last *N* versions per key for rollbacks, or can we drop them immediately?
 4. ~~What crash recovery guarantees do we need? We can’t mark an entry as committed until the payload bytes are actually persisted.~~
    **Answered:** three policies with explicit windows — `OnCommit` acknowledges

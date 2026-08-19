@@ -158,9 +158,6 @@ async fn write_replay(
                 .read_durable(tenant_id, namespace, stream, at, HISTORY_PAGE_BYTES)
                 .await?;
             if records.is_empty() {
-                // The range is closed and was on disk when it was computed, so
-                // this only happens if retention trimmed underneath us. Stop
-                // rather than spin; the backlog still joins on cleanly.
                 break;
             }
             let mut batch = ReplayBatch::new(max_events, max_bytes);

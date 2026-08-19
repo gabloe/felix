@@ -153,11 +153,23 @@ impl StreamLog {
     }
 
     /// Replay persisted records from `start`, bounded by `max_bytes`.
+    ///
+    /// A read below the base offset is reported as `CursorTooOld`, not as an
+    /// opaque storage failure: "those records existed and retention discarded
+    /// them" is a resume outcome the caller can act on, and it is the same
+    /// condition `subscribe_from` reports up front. Translating it here is what
+    /// makes a trim landing *mid-replay* surface as well, rather than a short
+    /// history that looks complete.
     pub async fn read_from(&self, start: Offset, max_bytes: usize) -> Result<Vec<LogRecord>> {
         self.log
             .read_range(ReadRange { start, max_bytes })
             .await
-            .map_err(storage_error)
+            .map_err(|err| match err {
+                felix_storage::StorageError::Trimmed { requested, oldest } => {
+                    BrokerError::CursorTooOld { oldest, requested }
+                }
+                other => storage_error(other),
+            })
     }
 
     /// Offset the next published record will take.
@@ -172,6 +184,19 @@ impl StreamLog {
     /// reported rather than silently skipped.
     pub fn base_offset(&self) -> Offset {
         self.log.base_offset()
+    }
+
+    /// Run one retention pass now rather than waiting for the timer.
+    ///
+    /// Returns the number of segments deleted. Retention normally runs on its
+    /// own schedule; this exists so an operator can reclaim space immediately,
+    /// and so tests can observe a trim deterministically.
+    pub async fn enforce_retention_now(&self) -> Result<usize> {
+        self.log
+            .enforce_retention_now()
+            .await
+            .map(|outcome| outcome.segments_deleted)
+            .map_err(storage_error)
     }
 
     /// Exclusive bound on offsets that survive a crash right now.
