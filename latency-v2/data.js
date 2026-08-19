@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787031324778,
+  "lastUpdate": 1787099641240,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3036,6 +3036,72 @@ window.BENCHMARK_DATA = {
             "range": "354.58",
             "unit": "us",
             "extra": "trials: 5\nmedian: 559.00\nmean: 798.60\nstdev: 354.58\ncv: 44.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b328a792f6923d4eccc23550c5c878884358c34",
+          "message": "fix(deps): bump h2 to 0.4.16 for RUSTSEC-2026-0258 (#204)\n\nh2 accepted and queued empty DATA frames without limit; a stream that is\nnot actively drained could grow memory unboundedly, or panic on length\noverflow. Low severity, patched upstream in 0.4.16.\n\nReached only transitively -- hyper -> {axum, hyper-rustls, hyper-timeout}\n-- so nothing in Felix calls it directly, but the broker and control\nplane both serve HTTP through axum.\n\nDeliberately a two-line change. `cargo update -p h2`, even with\n`--precise`, also re-resolves windows-sys across errno, is-terminal,\nquinn-udp, rustix, rustls-platform-verifier, tempfile and winapi-util --\ndowngrading 0.61.2 to 0.52.0 and 0.48.0. That is an unrelated change to\nWindows bindings, and bundling it into a security patch would ship it\nunreviewed on a platform nothing in CI builds. The lockfile with only h2\nbumped passes `cargo metadata --locked`, so cargo agrees it is\ninternally consistent.\n\nVerified: `cargo deny check` reports advisories ok, and\n`cargo check --workspace --all-features --locked` is clean.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-18T17:31:35-07:00",
+          "tree_id": "0df96ed8c95f690e0c7a26bc63c278d9b1c7d452",
+          "url": "https://github.com/gabloe/felix/commit/5b328a792f6923d4eccc23550c5c878884358c34"
+        },
+        "date": 1787099639322,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 148,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 148.00\nmean: 147.60\nstdev: 0.89\ncv: 0.61%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 194,
+            "range": "5.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 194.00\nmean: 195.40\nstdev: 5.59\ncv: 2.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 233,
+            "range": "21.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 233.00\nmean: 236.40\nstdev: 21.76\ncv: 9.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 190,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 190.00\nmean: 190.60\nstdev: 1.52\ncv: 0.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 391,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 391.00\nmean: 389.20\nstdev: 3.27\ncv: 0.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 669,
+            "range": "89.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 669.00\nmean: 682.00\nstdev: 89.84\ncv: 13.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
