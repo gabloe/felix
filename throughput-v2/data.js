@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787031327683,
+  "lastUpdate": 1787099644303,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2392,6 +2392,58 @@ window.BENCHMARK_DATA = {
             "range": "5918.21",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557922.11\nmean: 561072.58\nstdev: 5918.21\ncv: 1.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b328a792f6923d4eccc23550c5c878884358c34",
+          "message": "fix(deps): bump h2 to 0.4.16 for RUSTSEC-2026-0258 (#204)\n\nh2 accepted and queued empty DATA frames without limit; a stream that is\nnot actively drained could grow memory unboundedly, or panic on length\noverflow. Low severity, patched upstream in 0.4.16.\n\nReached only transitively -- hyper -> {axum, hyper-rustls, hyper-timeout}\n-- so nothing in Felix calls it directly, but the broker and control\nplane both serve HTTP through axum.\n\nDeliberately a two-line change. `cargo update -p h2`, even with\n`--precise`, also re-resolves windows-sys across errno, is-terminal,\nquinn-udp, rustix, rustls-platform-verifier, tempfile and winapi-util --\ndowngrading 0.61.2 to 0.52.0 and 0.48.0. That is an unrelated change to\nWindows bindings, and bundling it into a security patch would ship it\nunreviewed on a platform nothing in CI builds. The lockfile with only h2\nbumped passes `cargo metadata --locked`, so cargo agrees it is\ninternally consistent.\n\nVerified: `cargo deny check` reports advisories ok, and\n`cargo check --workspace --all-features --locked` is clean.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-18T17:31:35-07:00",
+          "tree_id": "0df96ed8c95f690e0c7a26bc63c278d9b1c7d452",
+          "url": "https://github.com/gabloe/felix/commit/5b328a792f6923d4eccc23550c5c878884358c34"
+        },
+        "date": 1787099643424,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 238323.27,
+            "range": "5591.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238323.27\nmean: 235453.23\nstdev: 5591.34\ncv: 2.37%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 238323.27,
+            "range": "5591.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238323.27\nmean: 235453.23\nstdev: 5591.34\ncv: 2.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56447.14,
+            "range": "843.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56447.14\nmean: 55975.37\nstdev: 843.38\ncv: 1.51%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 564471.39,
+            "range": "8433.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 564471.39\nmean: 559753.69\nstdev: 8433.80\ncv: 1.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
