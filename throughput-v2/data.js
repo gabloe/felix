@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787099644303,
+  "lastUpdate": 1787101791439,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2444,6 +2444,58 @@ window.BENCHMARK_DATA = {
             "range": "8433.80",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 564471.39\nmean: 559753.69\nstdev: 8433.80\ncv: 1.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "494ac8be8841d10c17f2518412edc95a8b84a3fd",
+          "message": "feat(storage): enforce retention on durable logs (#198) (#203)\n\nA durable stream grew without bound: nothing ever deleted a segment.\n`truncate` removes a *suffix* for replication's benefit, so it drops the\nnewest records rather than the oldest.\n\nThe consequence was larger than disk. `CursorTooOld` and\n`StorageError::Trimmed` both read `base_offset`, and `base_offset` only\nrises when segments are deleted -- so on a durable stream every resume\nsucceeded and neither error could fire. Two documented contracts were\nunreachable code.\n\nStorage:\n- `LogConfig::retention_bytes` / `retention_age`, both optional and unset\n  by default, so an existing deployment is unchanged.\n- `SegmentSet::enforce_retention` deletes whole sealed segments from the\n  head. Never the active segment, so a log always retains at least what\n  was written since its last roll. Removing the head entry advances\n  `base_offset` under the same write lock, so a reader either reads a\n  segment or gets `Trimmed` -- never a descriptor whose file is gone.\n- Age comes from the records' own `timestamp_micros`, not file mtime, and\n  the *newest* record in a segment decides: nothing younger than the\n  bound is ever deleted.\n- Runs on its own timer (`retention_check_interval`, default 60s) on a\n  blocking thread. Retention is bulk file deletion and must not land on a\n  publish. The first tick is consumed so a sweep cannot race `open`.\n- Metrics: segments deleted, bytes reclaimed, base offset, failures.\n\nBroker:\n- `StreamLog::read_from` maps `Trimmed` to `CursorTooOld` instead of an\n  opaque `Storage(String)`. This is what makes a trim landing *mid-replay*\n  surface, rather than a paging loop ending early and delivering a short\n  history that looks complete.\n- `StreamLog::enforce_retention_now` for an operator (and for tests).\n- `FELIX_DURABLE_RETENTION_BYTES` / `_SECONDS` / `_INTERVAL_SECONDS`.\n\nTests: size and age retention, the active segment surviving an\nunsatisfiable bound, a segment kept because one record in it is fresh,\nreopening a trimmed directory whose first segment is not segment 0, and\nat broker level `CursorTooOld` on both subscribe and mid-replay read.\nThe mid-replay test fails against the old mapping\n(`Storage(\"offset 0 is no longer available...\")`) and passes with it.\n\nAlso corrects the graceful-shutdown entry in todos.md: it claimed\nper-subsystem cancellation was still open under #139, which is closed.\nThat approach was deliberately not taken -- publish and subscribe streams\nare long-lived, so the drain waits on a `TaskTracker` with a grace window\nand then closes the connection. What genuinely remains untested is a real\nSIGTERM against a running process.\n\nCloses #198.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-18T18:07:27-07:00",
+          "tree_id": "16eceeab42e63704e430cf266d67afb8c07a3c66",
+          "url": "https://github.com/gabloe/felix/commit/494ac8be8841d10c17f2518412edc95a8b84a3fd"
+        },
+        "date": 1787101790618,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 286989.11,
+            "range": "8248.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 286989.11\nmean: 285415.29\nstdev: 8248.35\ncv: 2.89%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 286989.11,
+            "range": "8248.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 286989.11\nmean: 285415.29\nstdev: 8248.35\ncv: 2.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 63895.11,
+            "range": "747.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 63895.11\nmean: 64091.62\nstdev: 747.03\ncv: 1.17%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 638951.11,
+            "range": "7470.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 638951.11\nmean: 640916.23\nstdev: 7470.27\ncv: 1.17%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
