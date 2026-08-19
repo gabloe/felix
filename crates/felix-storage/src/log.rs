@@ -117,6 +117,27 @@ pub struct LogConfig {
     /// an 8ms preparation overshoots by about 1%. Small segments are the case
     /// this cannot rescue — see the note on `segment_size_bytes`.
     pub max_overshoot_percent: u8,
+    /// Delete whole sealed segments from the head once the log exceeds this
+    /// many bytes. `None` (the default) never deletes anything.
+    ///
+    /// The active segment is never deleted, so a log settles at roughly
+    /// `retention_bytes` and never below `segment_size_bytes` regardless of how
+    /// small this is set.
+    pub retention_bytes: Option<u64>,
+    /// Delete whole sealed segments whose newest record is older than this.
+    /// `None` (the default) never deletes anything.
+    ///
+    /// Age comes from the records' own `timestamp_micros`, not file mtime, so a
+    /// restore or a copy does not reset it. The *newest* record in a segment
+    /// decides, which is the conservative end: nothing younger than the bound
+    /// is ever deleted.
+    pub retention_age: Option<Duration>,
+    /// How often retention is evaluated. Ignored unless a retention bound is
+    /// set.
+    ///
+    /// Retention is bulk file deletion and must not land on a publish, so it
+    /// runs on its own timer rather than being triggered by an append.
+    pub retention_check_interval: Duration,
     /// Checksum every record of every segment at open time.
     ///
     /// Off by default: startup would otherwise cost one full pass over all data
@@ -141,6 +162,9 @@ impl Default for LogConfig {
             max_overshoot_percent: 100,
             repair_checksum_tail: false,
             verify_all_on_open: false,
+            retention_bytes: None,
+            retention_age: None,
+            retention_check_interval: Duration::from_secs(60),
         }
     }
 }
@@ -167,6 +191,25 @@ impl LogConfig {
         if self.max_records_per_read == 0 {
             return Err(StorageError::InvalidConfig(
                 "max_records_per_read must be greater than zero",
+            ));
+        }
+        // Zero is not "retain nothing" — the active segment is never deleted, so
+        // it would be a bound the log can never satisfy, re-evaluated forever.
+        if self.retention_bytes == Some(0) {
+            return Err(StorageError::InvalidConfig(
+                "retention_bytes must be greater than zero; omit it to disable retention",
+            ));
+        }
+        if self.retention_age == Some(Duration::ZERO) {
+            return Err(StorageError::InvalidConfig(
+                "retention_age must be greater than zero; omit it to disable retention",
+            ));
+        }
+        if (self.retention_bytes.is_some() || self.retention_age.is_some())
+            && self.retention_check_interval.is_zero()
+        {
+            return Err(StorageError::InvalidConfig(
+                "retention_check_interval must be greater than zero",
             ));
         }
         if let FsyncMode::Periodic { interval } = self.fsync_mode

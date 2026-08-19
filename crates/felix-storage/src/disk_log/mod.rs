@@ -6,6 +6,7 @@
 // * `segments`  — the segment set: rollover, offset routing, truncation.
 // * `recovery`  — startup discovery, validation and torn-tail repair.
 // * `sync`      — fsync policy and group commit.
+// * `retention` — deleting the oldest segments once a bound is exceeded.
 //
 // This file is the seam between them and the async `AppendOnlyLog` trait.
 //
@@ -30,6 +31,7 @@
 
 pub mod layout;
 pub mod recovery;
+pub mod retention;
 pub mod segments;
 pub mod sync;
 
@@ -69,6 +71,7 @@ struct LogInner {
     durability: Durability,
     /// `None` unless the fsync policy is `Periodic`. Taken on shutdown.
     syncer: Mutex<Option<PeriodicSyncer>>,
+    retention: Mutex<Option<retention::RetentionTask>>,
     /// Where the background rollover is in its lifecycle. At most one runs at
     /// a time, and a failure is terminal for the log.
     roll_state: AtomicU8,
@@ -351,6 +354,21 @@ impl LogInner {
     }
 
     /// Wait until every offset below `target` is durable, flushing if needed.
+    /// One retention pass, on a blocking thread.
+    ///
+    /// Deleting files is a syscall per file and can block on a busy device, so
+    /// it never runs on a reactor worker — the same rule the rollover path
+    /// follows for its flushes.
+    async fn sweep_retention(self: Arc<Self>) -> Result<segments::RetentionOutcome> {
+        let inner = Arc::clone(&self);
+        tokio::task::spawn_blocking(move || {
+            let now = retention::now_micros();
+            inner.segments.write().enforce_retention(now)
+        })
+        .await
+        .map_err(|err| StorageError::Io(std::io::Error::other(err)))?
+    }
+
     async fn ensure_durable(self: &Arc<Self>, target: Offset) -> Result<()> {
         self.durability
             .ensure_durable(target, || Arc::clone(self).flush())
@@ -410,6 +428,7 @@ impl DiskLog {
             segments: RwLock::new(segments),
             durability: Durability::new(config.fsync_mode, durable_upto),
             syncer: Mutex::new(None),
+            retention: Mutex::new(None),
             roll_state: AtomicU8::new(RollState::Idle as u8),
             roll_failure: Mutex::new(None),
             #[cfg(test)]
@@ -432,6 +451,21 @@ impl DiskLog {
                 }
             })?;
             *inner.syncer.lock() = Some(syncer);
+        }
+
+        if config.retention_bytes.is_some() || config.retention_age.is_some() {
+            let weak = Arc::downgrade(&inner);
+            let task =
+                retention::RetentionTask::spawn(config.retention_check_interval, move || {
+                    let weak = weak.clone();
+                    async move {
+                        match weak.upgrade() {
+                            None => Ok(segments::RetentionOutcome::default()),
+                            Some(inner) => inner.sweep_retention().await,
+                        }
+                    }
+                })?;
+            *inner.retention.lock() = Some(task);
         }
 
         Ok(Self { inner })
@@ -497,6 +531,15 @@ impl DiskLog {
     }
 
     /// Force a flush regardless of the configured policy.
+    /// Run one retention pass now, instead of waiting for the timer.
+    ///
+    /// Exists so retention is testable deterministically and so an operator can
+    /// reclaim space without waiting out `retention_check_interval`. Returns
+    /// what the pass reclaimed; a no-op when no bound is configured.
+    pub async fn enforce_retention_now(&self) -> Result<segments::RetentionOutcome> {
+        Arc::clone(&self.inner).sweep_retention().await
+    }
+
     pub async fn sync(&self) -> Result<()> {
         self.inner
             .durability
@@ -511,6 +554,12 @@ impl DiskLog {
     /// mode can lose up to one interval of writes that a clean stop could have
     /// kept.
     pub async fn shutdown(&self) -> Result<()> {
+        // Retention first: it must not start deleting while the rest of
+        // shutdown is flushing, and it has nothing to finish on the way out.
+        let retention = self.inner.retention.lock().take();
+        if let Some(retention) = retention {
+            retention.shutdown().await;
+        }
         let syncer = self.inner.syncer.lock().take();
         if let Some(syncer) = syncer {
             syncer.shutdown().await;

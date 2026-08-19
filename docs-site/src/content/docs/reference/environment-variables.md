@@ -1160,6 +1160,63 @@ export FELIX_DURABLE_SEGMENT_BYTES="67108864"  # 64 MiB
 **Trade-off**: Smaller segments bound recovery time (only the active segment is
 fully scanned at startup) at the cost of more files and more rollovers.
 
+### `FELIX_DURABLE_RETENTION_BYTES`
+
+**Description**: Delete the oldest sealed segments once a stream's log exceeds
+this size. Unset means the log grows without bound, which is the default and the
+pre-retention behaviour.
+
+**Type**: Positive integer (bytes)
+
+**Default**: unset (no size bound)
+
+**Example**:
+```bash
+export FELIX_DURABLE_RETENTION_BYTES="10737418240"  # 10 GiB per stream shard
+```
+
+**Note**: The active segment is never deleted, so a log settles at roughly this
+size and never below `FELIX_DURABLE_SEGMENT_BYTES` regardless of how small this
+is set. Records below the retained range report `CursorTooOld` to a resuming
+subscriber, naming the oldest offset still available.
+
+### `FELIX_DURABLE_RETENTION_SECONDS`
+
+**Description**: Delete sealed segments whose newest record is older than this.
+Combines with `FELIX_DURABLE_RETENTION_BYTES`; either bound alone is enough to
+trigger a deletion.
+
+**Type**: Positive integer (seconds)
+
+**Default**: unset (no age bound)
+
+**Example**:
+```bash
+export FELIX_DURABLE_RETENTION_SECONDS="604800"  # 7 days
+```
+
+**Note**: Age comes from the records' own timestamps rather than file mtime, so
+restoring a backup does not reset it. A segment survives until its *newest*
+record has expired, so nothing younger than the bound is ever deleted.
+
+### `FELIX_DURABLE_RETENTION_INTERVAL_SECONDS`
+
+**Description**: How often retention is evaluated. Ignored unless a retention
+bound is set.
+
+**Type**: Positive integer (seconds)
+
+**Default**: `60`
+
+**Example**:
+```bash
+export FELIX_DURABLE_RETENTION_INTERVAL_SECONDS="300"
+```
+
+**Trade-off**: Retention is bulk file deletion and runs on its own timer so it
+never lands on a publish. A longer interval means disk usage overshoots the
+bound for longer between passes.
+
 ### `FELIX_DURABLE_INDEX_SPACING_BYTES`
 
 **Description**: Bytes of segment data between sparse index entries. A read

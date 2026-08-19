@@ -141,7 +141,7 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Control plane metadata service | ✅ Today | REST + OpenAPI, tenant/namespace/stream/cache CRUD, snapshot and changes feeds, in-memory or Postgres backing |
 | Prometheus metrics, health endpoints | ✅ Today | Plus opt-in `telemetry` feature for per-stage timings |
 | Durable streams | ✅ Today | Opt-in per stream via `durable: true`, and only when the broker runs with `FELIX_DURABLE_STORAGE_DIR`. Segmented crash-safe log: CRC-verified records, torn-tail recovery, group commit, three fsync policies. Single node, and nothing trims it |
-| Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; unbounded until retention exists |
+| Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; bounded by retention when it is configured, unbounded otherwise |
 | Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
 | Sharding | 🚧 Partial | Streams carry a shard count; ops are not yet directed to a shard leader |
 
@@ -188,9 +188,11 @@ for behavior at thousands of subscribers or across a network.
   was registered with `durable: true`, which persists each record before
   acknowledging it and replays it afterwards. Durable storage is opt-in per
   stream and off unless the broker is started with `FELIX_DURABLE_STORAGE_DIR`.
-  Retention and tiering are not implemented, so a durable stream grows without
-  bound today — which also means a resume never fails for having been trimmed
-  yet.
+  Retention is available but off by default (`FELIX_DURABLE_RETENTION_BYTES` /
+  `FELIX_DURABLE_RETENTION_SECONDS`): unset, a durable stream grows without
+  bound; set, the oldest records are discarded and a resume below them fails
+  with a typed error naming the oldest retained offset. Tiering is not
+  implemented.
 
 ---
 

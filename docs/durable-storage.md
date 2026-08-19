@@ -485,11 +485,12 @@ fail rather than print the wrong numbers.
 
 - **One log per stream.** `StreamMetadata::shards` is carried through to the
   shard key but the data path is not yet sharded, so every stream uses shard 0.
-- **No retention.** `truncate` exists for replication's benefit; nothing deletes
-  segments on age or size yet. So a durable stream grows without bound, and
-  `CursorTooOld` is currently only reachable for an in-memory stream whose replay
-  ring has evicted — the durable path will start returning it once retention
-  lands.
+- **Retention is off unless configured.** `retention_bytes` and `retention_age`
+  are both unset by default, so an existing deployment keeps growing without
+  bound exactly as before. Setting either bounds the log: whole sealed segments
+  are deleted from the head, `base_offset` rises, and offsets below it report
+  `Trimmed` (storage) or `CursorTooOld` (broker) rather than a short read. See
+  [Retention](#retention) below.
 - **No tiered storage.** [`tiered.rs`](../crates/felix-storage/src/tiered.rs) is
   still trait scaffolding — `TieredStore`, `OffloadedSegment`, `ColdCacheConfig`
   and `RetentionPolicy` are declared, and nothing implements them. There is no
@@ -498,6 +499,46 @@ fail rather than print the wrong numbers.
   below for what this milestone deliberately left in place for it.
 - **Single node.** Replication (M5) is what `seal`'s checksum and `read_range`'s
   bounded paging exist to serve.
+
+## Retention
+
+A durable log grows until something deletes from it. Two bounds, both optional
+and both off by default:
+
+| setting | meaning |
+| --- | --- |
+| `retention_bytes` | delete oldest sealed segments once the log exceeds this size |
+| `retention_age` | delete sealed segments whose newest record is older than this |
+| `retention_check_interval` | how often the bounds are evaluated (default 60s) |
+
+Four properties are worth knowing, because each rules out a class of surprise:
+
+- **Whole segments, from the head only.** Records are never rewritten, which is
+  what lets recovery keep trusting "valid bytes end at EOF". A partial segment is
+  never trimmed.
+- **The active segment is never deleted.** A log therefore retains at least the
+  records written since its last roll, no matter how small the bound. Setting
+  `retention_bytes` below `segment_size_bytes` does not empty the log; it just
+  cannot be satisfied.
+- **Age comes from the records, not the filesystem.** `timestamp_micros` on the
+  newest record in a segment decides, so restoring or copying a directory does
+  not reset the clock. The *newest* record is the one that counts, which is the
+  conservative end — a segment survives until everything in it has expired.
+- **It runs on its own timer, never on an append.** Retention is bulk file
+  deletion; putting it on the publish path would trade a bounded disk for an
+  unbounded p999.
+
+What a reader sees after a trim is the point of the feature. `read_range` below
+`base_offset` returns `StorageError::Trimmed { requested, oldest }`, which the
+broker translates to `BrokerError::CursorTooOld`. That distinction — "those
+records existed and are gone" versus "nothing here yet" — is what lets a
+resuming subscriber tell a real gap from an empty tail. A trim landing
+*mid-replay* surfaces the same way rather than silently ending the history
+early. `earliest` means the oldest record still retained, so it keeps working on
+a trimmed stream instead of becoming an error.
+
+An operator can force a pass with `StreamLog::enforce_retention_now` instead of
+waiting out the interval.
 
 ## Tiered storage: what M1 set up for it
 

@@ -56,6 +56,13 @@ impl DurableStorageConfig {
                 .unwrap_or(LogConfig::default().rollover_threshold_percent),
             max_overshoot_percent: parse_env("FELIX_DURABLE_MAX_OVERSHOOT_PERCENT")?
                 .unwrap_or(LogConfig::default().max_overshoot_percent),
+            // Unset means unbounded growth
+            retention_bytes: parse_env("FELIX_DURABLE_RETENTION_BYTES")?,
+            retention_age: parse_env::<u64>("FELIX_DURABLE_RETENTION_SECONDS")?
+                .map(Duration::from_secs),
+            retention_check_interval: parse_env::<u64>("FELIX_DURABLE_RETENTION_INTERVAL_SECONDS")?
+                .map(Duration::from_secs)
+                .unwrap_or(LogConfig::default().retention_check_interval),
         };
         // Fail at startup rather than at the first durable publish.
         log.validate()
@@ -76,8 +83,21 @@ impl DurableStorageConfig {
             }
             FsyncMode::OnCommit => "fsync before every acknowledgement".to_string(),
         };
+        let retention = match (self.log.retention_bytes, self.log.retention_age) {
+            (None, None) => " retention=off (log grows unbounded)".to_string(),
+            (bytes, age) => {
+                let mut parts = Vec::new();
+                if let Some(bytes) = bytes {
+                    parts.push(format!("{bytes}B"));
+                }
+                if let Some(age) = age {
+                    parts.push(format!("{}s", age.as_secs()));
+                }
+                format!(" retention={}", parts.join("/"))
+            }
+        };
         format!(
-            "root={} segment={}B index_spacing={}B {durability}",
+            "root={} segment={}B index_spacing={}B {durability}{retention}",
             self.root.display(),
             self.log.segment_size_bytes,
             self.log.index_spacing_bytes,

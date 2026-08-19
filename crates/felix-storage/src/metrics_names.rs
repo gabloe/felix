@@ -53,6 +53,17 @@ pub const SEGMENT_ROLL_DISCARDED_TOTAL: &str = "felix_storage_segment_roll_disca
 /// Segments currently on disk for a shard.
 pub const SEGMENT_COUNT: &str = "felix_storage_segment_count";
 
+/// Sealed segments deleted by retention.
+pub const RETENTION_SEGMENTS_DELETED_TOTAL: &str = "felix_storage_retention_segments_deleted_total";
+/// Bytes reclaimed by retention.
+pub const RETENTION_BYTES_RECLAIMED_TOTAL: &str = "felix_storage_retention_bytes_reclaimed_total";
+/// Oldest offset still readable. Rises only when retention deletes a segment,
+/// and is what `Trimmed` and `CursorTooOld` report as `oldest`.
+pub const RETENTION_BASE_OFFSET: &str = "felix_storage_retention_base_offset";
+/// Retention passes that failed. Non-fatal — the next pass retries — but a
+/// persistently non-zero value means the log is growing unbounded.
+pub const RETENTION_FAILURES_TOTAL: &str = "felix_storage_retention_failures_total";
+
 /// Records returned by range reads.
 pub const READ_RECORDS_TOTAL: &str = "felix_storage_read_records_total";
 /// Payload bytes returned by range reads.

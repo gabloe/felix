@@ -1305,3 +1305,130 @@ async fn backlog_entries_carry_their_own_offsets() {
         assert_eq!(String::from_utf8(payload.to_vec()).expect("utf8"), expected);
     }
 }
+
+// --- Retention -------------------------------------------------------------
+//
+// Retention is what makes `CursorTooOld` reachable on a durable stream. Before
+// it existed, `base_offset` never moved, so every durable resume succeeded and
+// the error path below could not be exercised at all.
+
+fn retention_log_config(retention_bytes: u64) -> LogConfig {
+    LogConfig {
+        retention_bytes: Some(retention_bytes),
+        // The tests drive retention explicitly; the timer must not race them.
+        retention_check_interval: Duration::from_secs(3600),
+        ..log_config(FsyncMode::None)
+    }
+}
+
+/// Publish past the in-memory replay ring, then trim the disk behind it.
+///
+/// Both halves matter. The ring (1024 entries) answers a resume without
+/// touching disk, so a trim is only *observable* to a subscriber once the ring
+/// has evicted the same records — until then the data is genuinely still
+/// available and reporting `CursorTooOld` would be a lie.
+async fn publish_and_trim(broker: &Broker, storage: &DurableStorage, stream: &str) -> u64 {
+    for i in 0..1600 {
+        broker
+            .publish("t1", "default", stream, payload(&format!("v{i:04}")))
+            .await
+            .expect("publish");
+    }
+    let log = storage
+        .open_stream("t1", "default", stream, 0)
+        .expect("stream log");
+    let deleted = log.enforce_retention_now().await.expect("retention");
+    assert!(deleted > 0, "expected retention to delete a segment");
+    log.base_offset()
+}
+
+#[tokio::test]
+async fn resuming_below_the_retained_range_reports_cursor_too_old() {
+    let dir = tempdir().expect("dir");
+    let storage =
+        DurableStorage::open(dir.path(), retention_log_config(8 * 1024)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage.clone());
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    register(&broker, "orders", true).await;
+
+    let base = publish_and_trim(&broker, &storage, "orders").await;
+    assert!(base > 0, "retention must have advanced the base offset");
+
+    // Offset 0 existed and is gone. That is a different answer from "nothing
+    // there yet", and it is the one a resuming client needs.
+    let err = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Offset(0))
+        .await
+        .expect_err("offset 0 has been trimmed");
+    match err {
+        BrokerError::CursorTooOld { oldest, requested } => {
+            assert_eq!(requested, 0);
+            assert_eq!(oldest, base);
+        }
+        other => panic!("expected CursorTooOld, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn earliest_resumes_from_the_oldest_retained_record() {
+    let dir = tempdir().expect("dir");
+    let storage =
+        DurableStorage::open(dir.path(), retention_log_config(8 * 1024)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage.clone());
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    register(&broker, "orders", true).await;
+
+    let base = publish_and_trim(&broker, &storage, "orders").await;
+
+    // `earliest` must mean "oldest still retained", not "offset 0" -- otherwise
+    // it is an error for every trimmed stream.
+    let resumed: ResumedSubscription = broker
+        .subscribe_from("t1", "default", "orders", StartPosition::Earliest)
+        .await
+        .expect("earliest still resumes after a trim");
+    if let Some(history) = &resumed.history {
+        assert!(
+            history.from_offset >= base,
+            "earliest resumed at {}, below the retained base {base}",
+            history.from_offset
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_trimmed_read_reports_cursor_too_old_rather_than_a_storage_error() {
+    let dir = tempdir().expect("dir");
+    let storage =
+        DurableStorage::open(dir.path(), retention_log_config(8 * 1024)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage.clone());
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    register(&broker, "orders", true).await;
+
+    let base = publish_and_trim(&broker, &storage, "orders").await;
+
+    // This is the mid-replay case: a paging replay whose next read lands below
+    // a base offset that moved underneath it. Reported, not silently short.
+    let err = broker
+        .read_durable("t1", "default", "orders", 0, 64 * 1024)
+        .await
+        .expect_err("reading trimmed offsets must fail");
+    match err {
+        BrokerError::CursorTooOld { oldest, requested } => {
+            assert_eq!(requested, 0);
+            assert_eq!(oldest, base);
+        }
+        other => panic!("expected CursorTooOld, got {other:?}"),
+    }
+}
