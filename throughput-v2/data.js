@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788139589386,
+  "lastUpdate": 1788139765028,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2548,6 +2548,58 @@ window.BENCHMARK_DATA = {
             "range": "8231.11",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 539606.77\nmean: 536291.10\nstdev: 8231.11\ncv: 1.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3558e4bd0be7e45749f341afe724761da06c1554",
+          "message": "chore(deps): bump bytes from 1.11.1 to 1.12.1 (#205)\n\nBumps [bytes](https://github.com/tokio-rs/bytes) from 1.11.1 to 1.12.1.\n- [Release notes](https://github.com/tokio-rs/bytes/releases)\n- [Changelog](https://github.com/tokio-rs/bytes/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/tokio-rs/bytes/compare/v1.11.1...v1.12.1)\n\n---\nupdated-dependencies:\n- dependency-name: bytes\n  dependency-version: 1.12.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-30T18:23:35-07:00",
+          "tree_id": "1060394d1db06bc09b3d2261081dce703ebd3b29",
+          "url": "https://github.com/gabloe/felix/commit/3558e4bd0be7e45749f341afe724761da06c1554"
+        },
+        "date": 1788139763777,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230608.64,
+            "range": "3583.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230608.64\nmean: 230983.28\nstdev: 3583.30\ncv: 1.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230608.64,
+            "range": "3583.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230608.64\nmean: 230983.28\nstdev: 3583.30\ncv: 1.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55306.91,
+            "range": "6307.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55306.91\nmean: 52966.87\nstdev: 6307.31\ncv: 11.91%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553069.15,
+            "range": "63073.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553069.15\nmean: 529668.73\nstdev: 63073.09\ncv: 11.91%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
