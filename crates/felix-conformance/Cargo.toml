@@ -18,7 +18,7 @@ publish = false
 anyhow = { workspace = true }
 bytes = { workspace = true }
 broker = { path = "../../services/broker", version = "0.1.1" }
-base64 = "0.22"
+base64 = "0.23"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 felix-authz = { path = "../felix-authz", version = "0.1.1" }
 felix-broker = { path = "../felix-broker", version = "0.1.1" }
