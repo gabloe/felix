@@ -14,7 +14,7 @@ categories = ["network-programming", "authentication"]
 [dependencies]
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
-base64 = "0.22"
+base64 = "0.23"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
