@@ -40,7 +40,7 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 async-trait = "0.1"
 thiserror = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 casbin = { version = "2.20.0", default-features = false, features = ["runtime-tokio", "logging", "incremental"] }
 dashmap = "6"
 base64 = "0.22"
@@ -55,7 +55,7 @@ rand = "0.10"
 tower = "0.5"
 tempfile = "3"
 serial_test = "3"
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 base64 = "0.22"
 testcontainers = "0.15"
 testcontainers-modules = { version = "0.3", features = ["postgres"] }
