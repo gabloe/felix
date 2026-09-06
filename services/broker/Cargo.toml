@@ -48,7 +48,7 @@ path = "src/bin/soak/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 felix-broker = { path = "../../crates/felix-broker", version = "0.1.1" }
 felix-common = { path = "../../crates/felix-common", version = "0.1.1", features = ["lifecycle"] }
 felix-client = { path = "../../crates/felix-client", version = "0.1.1" }
