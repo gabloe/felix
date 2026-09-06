@@ -344,11 +344,56 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn clear_felix_env() {
-        for (key, _) in env::vars() {
+    /// Names the pg-test harness uses to find its database.
+    ///
+    /// `FELIX_CONTROLPLANE_POSTGRES_URL` and `DATABASE_URL` are also real
+    /// configuration, so they are cleared like anything else and restored on
+    /// drop. `FELIX_TEST_DATABASE_URL` is only ever harness plumbing, so
+    /// clearing it would be wrong even momentarily.
+    const HARNESS_ONLY_ENV: &str = "FELIX_TEST_DATABASE_URL";
+
+    /// Clears the config environment for the life of the returned guard.
+    ///
+    /// Restoring matters beyond tidiness: these tests share a process with the
+    /// pg-test helpers, which read `FELIX_TEST_DATABASE_URL` and friends to find
+    /// their database. Clearing without restoring left every pg test that
+    /// happened to run afterwards silently falling back to spawning a Docker
+    /// container -- flaky, and it leaked the container.
+    #[must_use]
+    fn clear_felix_env() -> EnvRestore {
+        let mut cleared = Vec::new();
+        for (key, value) in env::vars() {
+            if key == HARNESS_ONLY_ENV {
+                continue;
+            }
             if key.starts_with("FELIX_") || key == "DATABASE_URL" {
                 unsafe {
-                    env::remove_var(key);
+                    env::remove_var(&key);
+                }
+                cleared.push((key, value));
+            }
+        }
+        EnvRestore { cleared }
+    }
+
+    /// Puts back everything [`clear_felix_env`] removed, and anything the test
+    /// set afterwards is removed for the same reason.
+    struct EnvRestore {
+        cleared: Vec<(String, String)>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, _) in env::vars() {
+                if key != HARNESS_ONLY_ENV && (key.starts_with("FELIX_") || key == "DATABASE_URL") {
+                    unsafe {
+                        env::remove_var(&key);
+                    }
+                }
+            }
+            for (key, value) in &self.cleared {
+                unsafe {
+                    env::set_var(key, value);
                 }
             }
         }
@@ -357,7 +402,7 @@ mod tests {
     #[serial]
     #[test]
     fn from_env_uses_defaults() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let config = ControlPlaneConfig::from_env().expect("from_env");
         assert_eq!(config.bind_addr.to_string(), "0.0.0.0:8443");
         assert_eq!(config.metrics_bind.to_string(), "0.0.0.0:8080");
@@ -365,13 +410,13 @@ mod tests {
         assert_eq!(config.changes_limit, DEFAULT_CHANGES_LIMIT);
         assert_eq!(config.oidc_allowed_algorithms, vec![Algorithm::ES256]);
         assert!(matches!(config.storage, StorageBackend::Memory));
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_respects_env_vars() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         unsafe {
             env::set_var("FELIX_CONTROLPLANE_BIND", "127.0.0.1:9443");
             env::set_var("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:9090");
@@ -393,25 +438,25 @@ mod tests {
             vec![Algorithm::ES256, Algorithm::RS256, Algorithm::PS256]
         );
 
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_rejects_invalid_socket_addr() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         unsafe {
             env::set_var("FELIX_CONTROLPLANE_BIND", "not-a-valid-address");
         }
         let result = ControlPlaneConfig::from_env();
         assert!(result.is_err());
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_activates_postgres_when_url_present() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         unsafe {
             env::set_var(
                 "FELIX_CONTROLPLANE_POSTGRES_URL",
@@ -421,23 +466,23 @@ mod tests {
         let config = ControlPlaneConfig::from_env().expect("from_env");
         assert!(matches!(config.storage, StorageBackend::Postgres));
         assert!(config.postgres.is_some());
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_or_yaml_no_file_uses_defaults() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let config = ControlPlaneConfig::from_env_or_yaml().expect("from_env_or_yaml");
         assert_eq!(config.bind_addr.to_string(), "0.0.0.0:8443");
         assert_eq!(config.region_id, "local");
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_or_yaml_file_not_found_fails() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let tmpdir = TempDir::new().unwrap();
         let nonexistent = tmpdir.path().join("nonexistent.yml");
         unsafe {
@@ -445,13 +490,13 @@ mod tests {
         }
         let result = ControlPlaneConfig::from_env_or_yaml();
         assert!(result.is_err());
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_or_yaml_overrides_with_valid_yaml() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let tmpdir = TempDir::new().unwrap();
         let config_path = tmpdir.path().join("config.yml");
         fs::write(
@@ -481,13 +526,13 @@ storage:
             vec![Algorithm::ES256, Algorithm::RS384, Algorithm::PS512]
         );
 
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_or_yaml_invalid_yaml_fails() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let tmpdir = TempDir::new().unwrap();
         let config_path = tmpdir.path().join("bad.yml");
         fs::write(&config_path, "this is not: valid: yaml:").unwrap();
@@ -498,13 +543,13 @@ storage:
         let result = ControlPlaneConfig::from_env_or_yaml();
         assert!(result.is_err());
 
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_or_yaml_invalid_socket_in_yaml_fails() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         let tmpdir = TempDir::new().unwrap();
         let config_path = tmpdir.path().join("config.yml");
         fs::write(&config_path, "bind_addr: \"not-a-socket\"").unwrap();
@@ -515,13 +560,13 @@ storage:
         let result = ControlPlaneConfig::from_env_or_yaml();
         assert!(result.is_err());
 
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 
     #[serial]
     #[test]
     fn from_env_rejects_invalid_oidc_algorithm() {
-        clear_felix_env();
+        let _env = clear_felix_env();
         unsafe {
             env::set_var(
                 "FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS",
@@ -530,6 +575,6 @@ storage:
         }
         let result = ControlPlaneConfig::from_env();
         assert!(result.is_err());
-        clear_felix_env();
+        let _env = clear_felix_env();
     }
 }
