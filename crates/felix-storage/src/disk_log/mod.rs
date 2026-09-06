@@ -68,6 +68,14 @@ struct LogInner {
     /// write lock serialises appends, which must assign offsets in order
     /// anyway.
     segments: RwLock<SegmentSet>,
+    /// Held shared by appends, exclusively by an inline rollover.
+    ///
+    /// `segments` is synchronous, so a publisher queued on it parks a Tokio
+    /// worker instead of yielding it — for the two device flushes a rollover
+    /// holds it across, that stalls the whole runtime. Waiting on this gate
+    /// instead yields. Layered above `segments` rather than replacing it so
+    /// the uncontended append stays a `try_read`.
+    roll_gate: tokio::sync::RwLock<()>,
     durability: Durability,
     /// `None` unless the fsync policy is `Periodic`. Taken on shutdown.
     syncer: Mutex<Option<PeriodicSyncer>>,
@@ -104,6 +112,12 @@ struct LogInner {
     /// Forces the next seal to fail, so the failure path can be tested.
     #[cfg(test)]
     fail_seal: std::sync::atomic::AtomicBool,
+    /// Milliseconds an inline rollover holds the segment lock, for tests.
+    #[cfg(test)]
+    slow_inline_roll_millis: std::sync::atomic::AtomicU64,
+    /// Set while a stretched inline rollover holds the segment lock.
+    #[cfg(test)]
+    inline_roll_active: std::sync::atomic::AtomicBool,
 }
 
 /// Lifecycle of the background rollover.
@@ -232,6 +246,24 @@ impl LogInner {
             RollState::Preparing | RollState::Sealing
         )
     }
+
+    /// Stretches an inline rollover to the length a real one's flushes take,
+    /// which a temp-dir test does not otherwise reproduce, and marks the window
+    /// so a test can see what the runtime managed to do during it.
+    #[cfg(test)]
+    fn before_inline_roll(&self) {
+        let millis = self.slow_inline_roll_millis.load(Ordering::Acquire);
+        if millis == 0 {
+            return;
+        }
+        self.inline_roll_active.store(true, Ordering::Release);
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+        self.inline_roll_active.store(false, Ordering::Release);
+    }
+
+    #[cfg(not(test))]
+    #[inline]
+    fn before_inline_roll(&self) {}
 
     /// Seal the retired segment, with a hook tests use to force a failure.
     fn seal_retired(&self, retired: &mut crate::segment::SegmentWriter) -> Result<()> {
@@ -426,6 +458,7 @@ impl DiskLog {
             label,
             config: config.clone(),
             segments: RwLock::new(segments),
+            roll_gate: tokio::sync::RwLock::new(()),
             durability: Durability::new(config.fsync_mode, durable_upto),
             syncer: Mutex::new(None),
             retention: Mutex::new(None),
@@ -433,6 +466,10 @@ impl DiskLog {
             roll_failure: Mutex::new(None),
             #[cfg(test)]
             fail_seal: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            slow_inline_roll_millis: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            inline_roll_active: std::sync::atomic::AtomicBool::new(false),
             roll_task: Mutex::new(None),
             pending_seal: Mutex::new(None),
         });
@@ -606,11 +643,22 @@ impl DiskLog {
             return Err(StorageError::InvalidRange);
         }
         inner.check_roll_state()?;
+        // Shared with the rollover re-check, which runs on a blocking thread;
+        // cloning it there would copy the batch once per retry.
+        let records = Arc::new(records);
 
         // The hard-limit fallback. A background roll normally replaces the
         // segment well before this, so reaching here means the log filled
         // faster than a replacement could be built — rare, and still correct.
         for attempt in 0..MAX_ROLL_ATTEMPTS {
+            // Taken before anything touches `segments`, the read below
+            // included: a rollover holds the synchronous lock, so a publisher
+            // that reaches it at all parks a worker either way.
+            let mut gate = match inner.roll_gate.try_read() {
+                Ok(gate) => gate,
+                Err(_) => inner.roll_gate.read().await,
+            };
+
             // While a background rollover is building the replacement, the
             // segment is allowed to grow past its configured size rather than
             // blocking here. That headroom is what gives the preparation time
@@ -621,26 +669,37 @@ impl DiskLog {
                 .read()
                 .would_roll_within(&records, roll_pending)
             {
+                drop(gate);
+                // Exclusive, so no append can be queued on `segments` while
+                // the rollover flushes.
+                let exclusive = inner.roll_gate.write().await;
                 let roller = Arc::clone(&inner);
-                let batch = records.clone();
+                let batch = Arc::clone(&records);
                 tokio::task::spawn_blocking(move || {
                     let mut segments = roller.segments.write();
                     // Re-checked under the write lock: another publisher may
                     // have rolled already, and rolling twice leaves an empty
                     // segment behind.
                     if segments.would_roll_within(&batch, roller.roll_pending()) {
+                        roller.before_inline_roll();
                         segments.roll()?;
                     }
                     Ok::<(), StorageError>(())
                 })
                 .await
                 .map_err(|err| StorageError::Io(std::io::Error::other(err)))??;
+                // Downgraded rather than released: the gate is fair, so
+                // releasing it would let every publisher queued behind this
+                // rollover refill the segment before the one that paid for it
+                // appends, which the retry budget does not cover.
+                gate = exclusive.downgrade();
             }
 
             let mut segments = inner.segments.write();
             if segments.would_roll_within(&records, inner.roll_pending()) {
                 // Filled again in the gap. Drop the lock and roll off-thread.
                 drop(segments);
+                drop(gate);
                 debug_assert!(attempt + 1 < MAX_ROLL_ATTEMPTS, "rollover retry starved");
                 continue;
             }
@@ -648,6 +707,7 @@ impl DiskLog {
             let durable_target = segments.tail_offset();
             let prepare_roll = segments.should_prepare_roll();
             drop(segments);
+            drop(gate);
 
             // Start the replacement while the current segment still has room,
             // so the flushes it costs never land on an append. `Idle ->
