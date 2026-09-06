@@ -30,6 +30,7 @@ use crate::model::{
     NamespaceKey, RetentionPolicy, Stream, StreamKey, StreamKind, StreamPatchRequest, Tenant,
 };
 use serial_test::serial;
+use sqlx::AssertSqlSafe;
 use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -155,7 +156,11 @@ async fn ensure_schema(base_url: &str) -> Result<String, sqlx::Error> {
         .get_or_try_init(|| async move {
             let mut conn = sqlx::PgConnection::connect(base_url).await?;
             let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
-            sqlx::query(&create_sql).execute(&mut conn).await?;
+            // A schema name cannot be a bind parameter, and this one is generated from our own
+            // pid and clock in `test_schema_name` — it never carries external input.
+            sqlx::query(AssertSqlSafe(create_sql))
+                .execute(&mut conn)
+                .await?;
             Ok::<_, sqlx::Error>(())
         })
         .await?;
@@ -201,7 +206,12 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
          {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
          {schema_ident}.tenant_signing_keys, {schema_ident}.tenants RESTART IDENTITY CASCADE",
     );
-    sqlx::query(&truncate).execute(&pool).await.map(|_| ())
+    // Same as `ensure_schema`: the interpolated identifier is our own generated schema name,
+    // which cannot be passed as a bind parameter.
+    sqlx::query(AssertSqlSafe(truncate))
+        .execute(&pool)
+        .await
+        .map(|_| ())
 }
 
 #[tokio::test]

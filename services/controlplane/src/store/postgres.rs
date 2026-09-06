@@ -312,30 +312,39 @@ impl PostgresStore {
 /// - For predictable performance, `seq` should be indexed (typically via the primary key) so deletes
 ///   and `MAX(seq)` are efficient even as tables grow.
 fn spawn_retention_task(pool: PgPool, max_rows: i64) {
-    let tables = [
-        "tenant_changes",
-        "namespace_changes",
-        "stream_changes",
-        "cache_changes",
+    // Delete all rows older than the newest `max_rows` entries.
+    //
+    // The inner SELECT computes the cutoff seq: MAX(seq) - max_rows + 1. If the table is empty,
+    // COALESCE returns 0 and the DELETE is a no-op.
+    //
+    // The table name is baked into each statement at compile time rather than formatted in at
+    // runtime, so no caller can reach this query text — that is also what lets sqlx accept these
+    // as `&'static str` without an injection-audit escape hatch.
+    macro_rules! retention_delete {
+        ($table:literal) => {
+            concat!(
+                "DELETE FROM ",
+                $table,
+                " WHERE seq < (SELECT COALESCE(MAX(seq) - $1 + 1, 0) FROM ",
+                $table,
+                ")"
+            )
+        };
+    }
+
+    const RETENTION_DELETES: [&str; 4] = [
+        retention_delete!("tenant_changes"),
+        retention_delete!("namespace_changes"),
+        retention_delete!("stream_changes"),
+        retention_delete!("cache_changes"),
     ];
+
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(RETENTION_TICK);
         loop {
             ticker.tick().await;
-            for table in tables {
-                // Delete all rows older than the newest `max_rows` entries.
-                //
-                // The inner SELECT computes the cutoff seq:
-                //   MAX(seq) - max_rows + 1
-                // If the table is empty, COALESCE returns 0 and DELETE is a no-op.
-                //
-                // NOTE: `format!` is used to inject the table name. This is safe here because `table`
-                // comes from a hard-coded allowlist (`tables` array above). Do NOT pass user input
-                // into this format string.
-                let query = format!(
-                    "DELETE FROM {table} WHERE seq < (SELECT COALESCE(MAX(seq) - $1 + 1, 0) FROM {table})"
-                );
-                let _ = sqlx::query(&query).bind(max_rows).execute(&pool).await;
+            for stmt in RETENTION_DELETES {
+                let _ = sqlx::query(stmt).bind(max_rows).execute(&pool).await;
             }
         }
     });
