@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788726561509,
+  "lastUpdate": 1788729055645,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3498,6 +3498,72 @@ window.BENCHMARK_DATA = {
             "range": "695.51",
             "unit": "us",
             "extra": "trials: 5\nmedian: 560.00\nmean: 846.00\nstdev: 695.51\ncv: 82.21%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c477f51a43256eea1d24cc11bf38f1cfc9fa6844",
+          "message": "fix(storage): stop an inline rollover parking every Tokio worker (#217)\n\n* fix(storage): stop an inline rollover parking every Tokio worker\n\n`segments` is a `parking_lot` lock, so a publisher queued on it parks its\nworker rather than yielding. An append holds it for microseconds, which is\nfine; an inline rollover holds it across two device flushes, which is not.\nOnce as many publishers are queued as the runtime has workers, nothing else\nruns until the rollover finishes -- including work that never touches this log.\n\nAdds `roll_gate`, an async RwLock layered above `segments`: appends hold it\nshared, an inline rollover holds it exclusively. A publisher that arrives\nduring a rollover now awaits and yields its worker. The gate is taken before\nthe `would_roll_within` pre-check too, since that read parks a worker just as\nthe write does.\n\nThe rolling publisher downgrades rather than releases. The gate is fair, so\nreleasing would let every publisher queued behind the rollover refill the\nsegment before the one that paid for it appends, which MAX_ROLL_ATTEMPTS does\nnot cover.\n\nThis does not make a rollover cheaper -- the flushes are unchanged, and an\nappend that needs the new segment still waits for it. It stops that wait from\nbeing charged to the whole runtime.\n\nThe uncontended path is a `try_read`, so it stays off the wait queue.\n\nRefs #195\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs(storage): record what a rollover no longer costs\n\nMeasured on the fix: appends rejected under rollover contention went from 6\nruns in 20 to 0 in 20 (128 KiB segments, 16 publishers on one shard, 4\nworkers). The flush cost itself is unchanged, so the segment-size table stands.\n\nAlso drops the \"Retention and log trimming | Target | Nothing deletes segments\"\nrow, which #198 made stale and which contradicted the paragraph above it on the\nsame page.\n\nRefs #195\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T14:08:42-07:00",
+          "tree_id": "d73e42613a8c4f214c9ee131f91853ed4770771b",
+          "url": "https://github.com/gabloe/felix/commit/c477f51a43256eea1d24cc11bf38f1cfc9fa6844"
+        },
+        "date": 1788729053273,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "5.54",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 158.20\nstdev: 5.54\ncv: 3.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 204,
+            "range": "9.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 208.40\nstdev: 9.42\ncv: 4.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 236,
+            "range": "183.53",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 236.00\nmean: 314.00\nstdev: 183.53\ncv: 58.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.40\nstdev: 0.55\ncv: 0.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 409,
+            "range": "9.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 409.00\nmean: 407.40\nstdev: 9.10\ncv: 2.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 990,
+            "range": "1086.01",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 990.00\nmean: 1326.00\nstdev: 1086.01\ncv: 81.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
