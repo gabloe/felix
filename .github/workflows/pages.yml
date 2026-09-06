@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -46,7 +46,7 @@ jobs:
         run: npm run build --prefix docs-site
 
       - name: Checkout benchmark dashboards
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: benchmark-data
           path: benchmark-data
