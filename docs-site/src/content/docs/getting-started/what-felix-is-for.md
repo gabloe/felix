@@ -207,7 +207,6 @@ ship rather than being marked off here.
 | Log-backed cache (one core log, many semantics) | 🎯 Target | Cache is a separate storage handle, not a projection over the stream log |
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
-| Retention and log trimming | 🎯 Target | Nothing deletes segments on age or size, so a durable stream grows without bound |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
 | Multi-node clustering and replication | 🎯 Target | Not started |
 | Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
