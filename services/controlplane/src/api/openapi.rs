@@ -33,7 +33,8 @@ use crate::auth::jwks::{self, JwksResponse};
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, ConsistencyLevel,
-    DeliveryGuarantee, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey,
+    DeliveryGuarantee, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey, Node,
+    NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus,
     RetentionPolicy, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind,
     StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
 };
@@ -131,6 +132,14 @@ use utoipa::OpenApi;
         RetentionPolicy,
         ConsistencyLevel,
         DeliveryGuarantee,
+        Node,
+        NodeSpec,
+        NodeStatus,
+        NodeCapacity,
+        NodeLifecycle,
+        NodePatchRequest,
+        NodeChange,
+        NodeChangeOp,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,
@@ -151,3 +160,62 @@ use utoipa::OpenApi;
     )
 )]
 pub struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A model that is not registered here is absent from the published schema
+    /// and from every generated client, and nothing else would catch it.
+    #[test]
+    fn the_node_model_reaches_the_generated_schema() {
+        let doc = serde_json::to_value(ApiDoc::openapi()).expect("serialize openapi");
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("schemas object");
+
+        for name in [
+            "Node",
+            "NodeSpec",
+            "NodeStatus",
+            "NodeCapacity",
+            "NodeLifecycle",
+            "NodePatchRequest",
+            "NodeChange",
+            "NodeChangeOp",
+        ] {
+            assert!(
+                schemas.contains_key(name),
+                "{name} is missing from the schema"
+            );
+        }
+    }
+
+    /// The split only holds on the wire if the patch schema has no observed
+    /// field to send.
+    #[test]
+    fn the_node_patch_schema_exposes_no_observed_field() {
+        let doc = serde_json::to_value(ApiDoc::openapi()).expect("serialize openapi");
+        let properties = doc["components"]["schemas"]["NodePatchRequest"]["properties"]
+            .as_object()
+            .expect("patch properties");
+
+        // Guards against the negative assertions below passing on an empty map.
+        for settable in ["region", "labels", "capacity", "lifecycle"] {
+            assert!(
+                properties.contains_key(settable),
+                "{settable} should be patchable",
+            );
+        }
+        for observed in [
+            "last_heartbeat_at_millis",
+            "registered_at_millis",
+            "incarnation",
+        ] {
+            assert!(
+                !properties.contains_key(observed),
+                "{observed} must not be patchable",
+            );
+        }
+    }
+}
