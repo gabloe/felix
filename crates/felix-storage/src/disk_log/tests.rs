@@ -912,3 +912,85 @@ async fn zero_retention_bounds_are_rejected_at_open() {
         .is_err()
     );
 }
+
+/// An inline rollover must not park every Tokio worker in the runtime.
+///
+/// The publisher that rolls is on a blocking thread; the ones behind it queue
+/// on `segments`, which is synchronous. Once as many are queued as there are
+/// workers, nothing else in the runtime can run until the rollover finishes.
+/// The longest stall an unrelated task sees is what measures that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inline_rollover_does_not_park_every_worker() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Instant;
+
+    const ROLL_MILLIS: u64 = 500;
+    const WORKERS: usize = 2;
+
+    let dir = tempdir().expect("dir");
+    // The 100 default for `rollover_threshold_percent` keeps the background
+    // rollover out of this; the inline hard-limit path is under test.
+    let log = Arc::new(open(&dir, FsyncMode::None));
+
+    // Fill the segment so the next appends are the ones that must roll.
+    for i in 0..8 {
+        log.append(&records(&[&format!("fill-{i}")]))
+            .await
+            .expect("fill");
+    }
+
+    log.inner
+        .slow_inline_roll_millis
+        .store(ROLL_MILLIS, Ordering::Release);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let max_stall_micros = Arc::new(AtomicU64::new(0));
+
+    // Touches nothing the log owns; it only needs a worker to run on.
+    let ticker = tokio::spawn({
+        let stop = Arc::clone(&stop);
+        let max_stall_micros = Arc::clone(&max_stall_micros);
+        async move {
+            let mut last = Instant::now();
+            while !stop.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+                let now = Instant::now();
+                max_stall_micros.fetch_max((now - last).as_micros() as u64, Ordering::Release);
+                last = now;
+            }
+        }
+    });
+
+    // Several times the worker count: one publisher is inside the rollover on
+    // a blocking thread, and it takes only two of the rest arriving together to
+    // park both workers. Oversubscribing makes that certain rather than likely.
+    let publishers: Vec<_> = (0..WORKERS * 4)
+        .map(|p| {
+            let log = Arc::clone(&log);
+            tokio::spawn(async move {
+                for i in 0..4 {
+                    log.append(&records(&[&format!("p{p}-{i}")]))
+                        .await
+                        .expect("append");
+                }
+            })
+        })
+        .collect();
+
+    for publisher in publishers {
+        publisher.await.expect("publisher");
+    }
+    stop.store(true, Ordering::Release);
+    ticker.await.expect("ticker");
+
+    // A fifth of one rollover: far above the scheduling noise a yielding task
+    // sees even on a loaded box, and far below the full-length stall that
+    // parking every worker produces.
+    let stall = Duration::from_micros(max_stall_micros.load(Ordering::Acquire));
+    assert!(
+        stall < Duration::from_millis(ROLL_MILLIS / 5),
+        "an unrelated task stalled for {stall:?} during a {ROLL_MILLIS}ms rollover: \
+         appends parked their workers on the synchronous segment lock",
+    );
+}

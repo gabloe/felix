@@ -198,6 +198,26 @@ tail latency is dominated by rollover flushes rather than by appends. Prefer the
 default unless restart time is genuinely the binding constraint, and if it is,
 measure the tail rather than assuming recovery is the only thing that moved.
 
+#### What a rollover no longer costs
+
+Those numbers are the flushes themselves, and they are irreducible. Two things
+that used to ride along with them are not:
+
+* **A rollover no longer stalls the runtime.** The segment set is behind a
+  synchronous lock, so a publisher queued on it parked a Tokio worker rather
+  than yielding it. Held across a rollover's two device flushes, that stalled
+  everything else on the runtime — other shards, subscriber fanout, the accept
+  loop — once as many publishers were queued as there were workers. Appends now
+  wait on an async gate and yield.
+* **Rollover contention no longer rejects appends.** An append that lost the
+  race for the new segment `MAX_ROLL_ATTEMPTS` times returned `Unsupported`.
+  With 128 KiB segments, 16 publishers on one shard and 4 workers, that was
+  6 runs in 20. It is 0 in 20 now: the gate admits one rollover at a time, and
+  the publisher that rolls appends under the same gate rather than re-entering
+  the race it just won.
+
+Neither makes a rollover cheaper, so the table above still stands.
+
 ### Rolling segments in the background does not help
 
 The obvious fix for the table above is to stop doing rollover work on the append
