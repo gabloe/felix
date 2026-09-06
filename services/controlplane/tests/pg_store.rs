@@ -10,6 +10,7 @@ use controlplane::model::{
     StreamKind, StreamPatchRequest, Tenant, TenantChangeOp,
 };
 use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig, StoreError};
+use sqlx::AssertSqlSafe;
 use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -51,7 +52,11 @@ async fn ensure_schema(base_url: &str) -> Result<String, sqlx::Error> {
         .get_or_try_init(|| async move {
             let mut conn = sqlx::PgConnection::connect(base_url).await?;
             let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
-            sqlx::query(&create_sql).execute(&mut conn).await?;
+            // The schema name is generated from our own pid and clock, never from external
+            // input, and an identifier cannot be a bind parameter.
+            sqlx::query(AssertSqlSafe(create_sql))
+                .execute(&mut conn)
+                .await?;
             Ok::<_, sqlx::Error>(())
         })
         .await?;
@@ -97,7 +102,11 @@ async fn reset_postgres(url: &str, schema: &str) -> Result<(), sqlx::Error> {
          {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
          {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.tenants RESTART IDENTITY",
     );
-    sqlx::query(&truncate).execute(&pool).await.map(|_| ())
+    // Same generated-schema identifier as `ensure_schema`; it cannot be bound as a parameter.
+    sqlx::query(AssertSqlSafe(truncate))
+        .execute(&pool)
+        .await
+        .map(|_| ())
 }
 
 async fn pg_store() -> Option<Arc<controlplane::store::postgres::PostgresStore>> {
@@ -888,7 +897,10 @@ async fn pg_store_connect_runs_migrations() {
         }
     };
     let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema);
-    if let Err(err) = sqlx::query(&create_sql).execute(&mut conn).await {
+    if let Err(err) = sqlx::query(AssertSqlSafe(create_sql))
+        .execute(&mut conn)
+        .await
+    {
         eprintln!("skipping pg-tests: cannot create schema: {err}");
         return;
     }

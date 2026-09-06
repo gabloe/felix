@@ -43,6 +43,7 @@ use controlplane::{config, store};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use serde_json::json;
 use serial_test::serial;
+use sqlx::AssertSqlSafe;
 use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -163,7 +164,11 @@ async fn ensure_schema(
         .get_or_try_init(|| async move {
             let mut conn = sqlx::PgConnection::connect(base_url).await?;
             let create_sql = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, schema_clone);
-            sqlx::query(&create_sql).execute(&mut conn).await?;
+            // The schema name is generated from our own pid and clock, never from external
+            // input, and an identifier cannot be a bind parameter.
+            sqlx::query(AssertSqlSafe(create_sql))
+                .execute(&mut conn)
+                .await?;
             Ok::<_, sqlx::Error>(())
         })
         .await?;
@@ -215,7 +220,8 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
          {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
          {schema_ident}.tenant_signing_keys, {schema_ident}.tenants RESTART IDENTITY CASCADE",
     );
-    sqlx::query(&truncate).execute(&pool).await?;
+    // Same generated-schema identifier as `ensure_schema`; it cannot be bound as a parameter.
+    sqlx::query(AssertSqlSafe(truncate)).execute(&pool).await?;
 
     pool.close().await;
     Ok(())
