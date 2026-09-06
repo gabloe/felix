@@ -4,18 +4,11 @@
 //! the main API server and (optionally) the bootstrap server.
 //!
 //! The `build_state` helper keeps wiring testable and minimizes main setup logic.
-mod api;
-mod app;
-mod auth;
-mod config;
-mod model;
-mod observability;
-mod store;
-
 use anyhow::Context;
-use api::types::{FeatureFlags, Region};
-use app::{AppState, build_bootstrap_router, build_router};
-use auth::oidc::UpstreamOidcValidator;
+use controlplane::api::types::{FeatureFlags, Region};
+use controlplane::app::{AppState, build_bootstrap_router, build_router};
+use controlplane::auth::oidc::UpstreamOidcValidator;
+use controlplane::{config, observability, store};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use std::future::{Future, IntoFuture};
 use std::sync::Arc;
