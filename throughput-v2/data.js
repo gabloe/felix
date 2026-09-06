@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788712088421,
+  "lastUpdate": 1788726563799,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2704,6 +2704,58 @@ window.BENCHMARK_DATA = {
             "range": "16050.20",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 536100.27\nmean: 529305.23\nstdev: 16050.20\ncv: 3.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57e59dbac01b8d662509133cd87c7e031adbff25",
+          "message": "chore(deps): bump sqlx from 0.8.6 to 0.9.0 (#215)\n\n* chore(deps): bump sqlx from 0.8.6 to 0.9.0\n\nBumps [sqlx](https://github.com/launchbadge/sqlx) from 0.8.6 to 0.9.0.\n- [Changelog](https://github.com/transact-rs/sqlx/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/launchbadge/sqlx/compare/v0.8.6...v0.9.0)\n\n---\nupdated-dependencies:\n- dependency-name: sqlx\n  dependency-version: 0.9.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* fix(controlplane): adapt to sqlx 0.9 SqlSafeStr\n\nsqlx 0.9 requires `sqlx::query` to take a `SqlSafeStr`, which only `&'static str`\nimplements, so every `format!`-built statement stopped compiling.\n\nThe retention task's four DELETEs already drew their table name from a hard-coded\nallowlist, so they become `concat!` literals — the allowlist is now enforced by the\ncompiler instead of by a comment, and no escape hatch is needed.\n\nThe pg-test helpers interpolate a generated schema name into DDL, which cannot be a\nbind parameter, so those use `AssertSqlSafe`. The names come from our own pid and\nclock, never from external input.\n\nAlso refreshes the demo lockfiles, which are outside the workspace and had drifted\nsince the base64 0.23 bump.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Gabriel Loewen <gabrielloewen@outlook.com>\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T13:27:07-07:00",
+          "tree_id": "c760e5c6d14c944f08ccfdf74807a2e9fb2d1ec2",
+          "url": "https://github.com/gabloe/felix/commit/57e59dbac01b8d662509133cd87c7e031adbff25"
+        },
+        "date": 1788726562924,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230353.71,
+            "range": "1467.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230353.71\nmean: 230463.09\nstdev: 1467.53\ncv: 0.64%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230353.71,
+            "range": "1467.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230353.71\nmean: 230463.09\nstdev: 1467.53\ncv: 0.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54404.41,
+            "range": "3080.43",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54404.41\nmean: 53023.50\nstdev: 3080.43\ncv: 5.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 544044.12,
+            "range": "30804.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 544044.12\nmean: 530234.97\nstdev: 30804.30\ncv: 5.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
