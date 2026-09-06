@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788729058707,
+  "lastUpdate": 1788730673543,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2808,6 +2808,58 @@ window.BENCHMARK_DATA = {
             "range": "8747.43",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544652.39\nmean: 547240.06\nstdev: 8747.43\ncv: 1.60%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88289ab7246ab85e7e6406595baf612f7f476e4c",
+          "message": "feat(controlplane): add the Node/Broker resource model (#218)\n\n* fix(controlplane): stop config tests clearing the pg-test database URL\n\n`clear_felix_env` removed every `FELIX_*` var from the process and never put\nthem back. `FELIX_TEST_DATABASE_URL` is one of them, so any pg test ordered\nafter a config test found no URL and fell back to spawning a Docker container\n-- which then failed on `does not expose port 5432`, and leaked, because the\nhelper leaks its testcontainers client so nothing ever tears it down.\n\nMeasured over 12 runs of the pg-test lib suite: 1 failure and 11 leaked\ncontainers before, 0 and 0 after.\n\nIt now restores what it cleared, and never touches `FELIX_TEST_DATABASE_URL`,\nwhich is only ever harness plumbing. `FELIX_CONTROLPLANE_POSTGRES_URL` and\n`DATABASE_URL` are real configuration, so those are still cleared -- and now\nrestored.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* refactor(controlplane): have the binary use the library crate\n\n`main.rs` re-declared every module, so the whole crate compiled twice and any\npublic item the binary did not happen to call was reported dead there. It only\never used the public API, so importing from `controlplane::` is enough.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(controlplane): add the Node/Broker resource model\n\nA node is a broker process in the cluster. The record splits in two: a\n`NodeSpec` an operator sets (advertise address, region, labels, capacity\nhints) and a `NodeStatus` the cluster observes (lifecycle, heartbeat,\nregistration, incarnation).\n\n`NodePatchRequest` reaches only the spec, plus the lifecycle transitions an\noperator is allowed to drive. It has no field for a heartbeat or an\nincarnation, so an admin call cannot claim a broker is alive -- asserted\nagainst the generated OpenAPI schema, not just the Rust type.\n\nLifecycle is Live, Draining, Down, or Left, with one rule: a node that is not\nserving cannot begin draining. Nothing is terminal, because a broker keeps its\nidentity across a restart and re-registering has to revive a record that\nreached Down or Left.\n\n`NodeCapacity` implements `Default` by hand. Deriving it would give weight 0\nwhile the serde default gives 1, so a spec that omitted `capacity` entirely\nwould have been silently given no share of placement.\n\nCluster-wide uniqueness of node_id and advertise_addr is documented on the\nmodel but enforced by the store, which is the only thing that can see it.\nNo shard state here: a node says where it is and how much it can hold, never\nwhat it currently holds.\n\nRefs #92\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T14:35:36-07:00",
+          "tree_id": "a46d251c2d6edb87a4793b694d703207658d8b71",
+          "url": "https://github.com/gabloe/felix/commit/88289ab7246ab85e7e6406595baf612f7f476e4c"
+        },
+        "date": 1788730672999,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 253311.63,
+            "range": "1268.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253311.63\nmean: 253494.35\nstdev: 1268.81\ncv: 0.50%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 253311.63,
+            "range": "1268.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253311.63\nmean: 253494.35\nstdev: 1268.81\ncv: 0.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59502.7,
+            "range": "1026.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59502.70\nmean: 59769.07\nstdev: 1026.67\ncv: 1.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 595027.01,
+            "range": "10266.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 595027.01\nmean: 597690.71\nstdev: 10266.75\ncv: 1.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
