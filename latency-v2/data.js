@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788729055645,
+  "lastUpdate": 1788730671370,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3564,6 +3564,72 @@ window.BENCHMARK_DATA = {
             "range": "1086.01",
             "unit": "us",
             "extra": "trials: 5\nmedian: 990.00\nmean: 1326.00\nstdev: 1086.01\ncv: 81.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88289ab7246ab85e7e6406595baf612f7f476e4c",
+          "message": "feat(controlplane): add the Node/Broker resource model (#218)\n\n* fix(controlplane): stop config tests clearing the pg-test database URL\n\n`clear_felix_env` removed every `FELIX_*` var from the process and never put\nthem back. `FELIX_TEST_DATABASE_URL` is one of them, so any pg test ordered\nafter a config test found no URL and fell back to spawning a Docker container\n-- which then failed on `does not expose port 5432`, and leaked, because the\nhelper leaks its testcontainers client so nothing ever tears it down.\n\nMeasured over 12 runs of the pg-test lib suite: 1 failure and 11 leaked\ncontainers before, 0 and 0 after.\n\nIt now restores what it cleared, and never touches `FELIX_TEST_DATABASE_URL`,\nwhich is only ever harness plumbing. `FELIX_CONTROLPLANE_POSTGRES_URL` and\n`DATABASE_URL` are real configuration, so those are still cleared -- and now\nrestored.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* refactor(controlplane): have the binary use the library crate\n\n`main.rs` re-declared every module, so the whole crate compiled twice and any\npublic item the binary did not happen to call was reported dead there. It only\never used the public API, so importing from `controlplane::` is enough.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(controlplane): add the Node/Broker resource model\n\nA node is a broker process in the cluster. The record splits in two: a\n`NodeSpec` an operator sets (advertise address, region, labels, capacity\nhints) and a `NodeStatus` the cluster observes (lifecycle, heartbeat,\nregistration, incarnation).\n\n`NodePatchRequest` reaches only the spec, plus the lifecycle transitions an\noperator is allowed to drive. It has no field for a heartbeat or an\nincarnation, so an admin call cannot claim a broker is alive -- asserted\nagainst the generated OpenAPI schema, not just the Rust type.\n\nLifecycle is Live, Draining, Down, or Left, with one rule: a node that is not\nserving cannot begin draining. Nothing is terminal, because a broker keeps its\nidentity across a restart and re-registering has to revive a record that\nreached Down or Left.\n\n`NodeCapacity` implements `Default` by hand. Deriving it would give weight 0\nwhile the serde default gives 1, so a spec that omitted `capacity` entirely\nwould have been silently given no share of placement.\n\nCluster-wide uniqueness of node_id and advertise_addr is documented on the\nmodel but enforced by the store, which is the only thing that can see it.\nNo shard state here: a node says where it is and how much it can hold, never\nwhat it currently holds.\n\nRefs #92\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T14:35:36-07:00",
+          "tree_id": "a46d251c2d6edb87a4793b694d703207658d8b71",
+          "url": "https://github.com/gabloe/felix/commit/88289ab7246ab85e7e6406595baf612f7f476e4c"
+        },
+        "date": 1788730669969,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 119,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 119.00\nmean: 119.40\nstdev: 0.55\ncv: 0.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 165,
+            "range": "2.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 165.00\nstdev: 2.24\ncv: 1.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 213,
+            "range": "13.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 205.40\nstdev: 13.58\ncv: 6.61%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 162.40\nstdev: 1.67\ncv: 1.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 337,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 337.00\nmean: 336.80\nstdev: 1.92\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 458,
+            "range": "243.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 458.00\nmean: 626.80\nstdev: 243.24\ncv: 38.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
