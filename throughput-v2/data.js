@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788726563799,
+  "lastUpdate": 1788729058707,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2756,6 +2756,58 @@ window.BENCHMARK_DATA = {
             "range": "30804.30",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544044.12\nmean: 530234.97\nstdev: 30804.30\ncv: 5.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c477f51a43256eea1d24cc11bf38f1cfc9fa6844",
+          "message": "fix(storage): stop an inline rollover parking every Tokio worker (#217)\n\n* fix(storage): stop an inline rollover parking every Tokio worker\n\n`segments` is a `parking_lot` lock, so a publisher queued on it parks its\nworker rather than yielding. An append holds it for microseconds, which is\nfine; an inline rollover holds it across two device flushes, which is not.\nOnce as many publishers are queued as the runtime has workers, nothing else\nruns until the rollover finishes -- including work that never touches this log.\n\nAdds `roll_gate`, an async RwLock layered above `segments`: appends hold it\nshared, an inline rollover holds it exclusively. A publisher that arrives\nduring a rollover now awaits and yields its worker. The gate is taken before\nthe `would_roll_within` pre-check too, since that read parks a worker just as\nthe write does.\n\nThe rolling publisher downgrades rather than releases. The gate is fair, so\nreleasing would let every publisher queued behind the rollover refill the\nsegment before the one that paid for it appends, which MAX_ROLL_ATTEMPTS does\nnot cover.\n\nThis does not make a rollover cheaper -- the flushes are unchanged, and an\nappend that needs the new segment still waits for it. It stops that wait from\nbeing charged to the whole runtime.\n\nThe uncontended path is a `try_read`, so it stays off the wait queue.\n\nRefs #195\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs(storage): record what a rollover no longer costs\n\nMeasured on the fix: appends rejected under rollover contention went from 6\nruns in 20 to 0 in 20 (128 KiB segments, 16 publishers on one shard, 4\nworkers). The flush cost itself is unchanged, so the segment-size table stands.\n\nAlso drops the \"Retention and log trimming | Target | Nothing deletes segments\"\nrow, which #198 made stale and which contradicted the paragraph above it on the\nsame page.\n\nRefs #195\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T14:08:42-07:00",
+          "tree_id": "d73e42613a8c4f214c9ee131f91853ed4770771b",
+          "url": "https://github.com/gabloe/felix/commit/c477f51a43256eea1d24cc11bf38f1cfc9fa6844"
+        },
+        "date": 1788729057755,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232604.66,
+            "range": "5515.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232604.66\nmean: 232232.71\nstdev: 5515.66\ncv: 2.38%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232604.66,
+            "range": "5515.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232604.66\nmean: 232232.71\nstdev: 5515.66\ncv: 2.38%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54465.24,
+            "range": "874.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54465.24\nmean: 54724.01\nstdev: 874.74\ncv: 1.60%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 544652.39,
+            "range": "8747.43",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 544652.39\nmean: 547240.06\nstdev: 8747.43\ncv: 1.60%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
