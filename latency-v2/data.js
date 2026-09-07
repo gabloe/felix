@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788797605635,
+  "lastUpdate": 1788798271546,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3894,6 +3894,72 @@ window.BENCHMARK_DATA = {
             "range": "1082.42",
             "unit": "us",
             "extra": "trials: 5\nmedian: 996.00\nmean: 1384.20\nstdev: 1082.42\ncv: 78.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2edf656fbb00065ab3f17cf351a2992f2ee7d659",
+          "message": "feat(observability): publish cluster membership metrics (#223)\n\nControl plane and broker both get a metrics module with the names in one place,\nfollowing the durable-log convention.\n\n`felix_node_count{lifecycle,region}` is published from the same store read the\nnode listing serves, so the dashboard and the API cannot disagree. It is a\ncensus rather than an accumulation, and a region that empties is written back to\nzero -- a gauge otherwise keeps its final value forever, which is the moment an\noperator most needs the truth.\n\n`felix_node_transitions_total{from,to}` separates a failure from a deploy:\n`live -> down` is a broker dying, `draining -> left` is a rollout. Identity\nmoves are skipped, so a repeated expiry sweep does not turn a steady state into\na rising failure rate.\n\nBroker-side failures split by kind, which needed the heartbeat path to carry a\ntyped error rather than anyhow. `rejected` means the control plane answered and\nsaid no, and retrying never fixes it; `unavailable` means nothing answered.\nCollapsed into one counter, a misconfigured broker looks exactly like a flaky\nnetwork. A 5xx counts as unavailable, since that is the control plane failing\nrather than refusing.\n\n`felix_broker_heartbeat_age_seconds` is published on failure as well as success.\nIt is the number that keeps rising while the control plane is unreachable, and\nthe only warning a broker gets that it is about to be declared down.\n\nEvery label is bounded and nothing carries node_id: the fleet view is the\ncontrol plane's gauge, and a broker's own view is its own series.\n\nRefs #97\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:22:16-07:00",
+          "tree_id": "caf7b3879ff55d331bf36508e1aa51961ec8ba37",
+          "url": "https://github.com/gabloe/felix/commit/2edf656fbb00065ab3f17cf351a2992f2ee7d659"
+        },
+        "date": 1788798269457,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "1.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 119.40\nstdev: 1.95\ncv: 1.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 165,
+            "range": "4.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 165.80\nstdev: 4.87\ncv: 2.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 202,
+            "range": "22.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 215.20\nstdev: 22.95\ncv: 10.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.20\nstdev: 1.10\ncv: 0.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 349,
+            "range": "26.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 349.00\nmean: 350.00\nstdev: 26.96\ncv: 7.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 955,
+            "range": "1027.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 955.00\nmean: 1338.40\nstdev: 1027.35\ncv: 76.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
