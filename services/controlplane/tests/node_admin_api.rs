@@ -24,6 +24,7 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
     heartbeat_interval_ms: 5_000,
     expiry_timeout_ms: 15_000,
     sweep_interval_ms: 2_000,
+    shard_reconcile_interval_ms: 5_000,
 };
 
 type App = axum::routing::RouterIntoService<Body, ()>;

@@ -20,6 +20,7 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
     heartbeat_interval_ms: 2_000,
     expiry_timeout_ms: 6_000,
     sweep_interval_ms: 500,
+    shard_reconcile_interval_ms: 5_000,
 };
 
 fn node(node_id: &str) -> Node {

@@ -23,6 +23,7 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
     heartbeat_interval_ms: 20,
     expiry_timeout_ms: 60,
     sweep_interval_ms: 10,
+    shard_reconcile_interval_ms: 5_000,
 };
 
 struct Cluster {

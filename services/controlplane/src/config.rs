@@ -23,6 +23,12 @@ pub const DEFAULT_NODE_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
 ///
 /// Three intervals: one lost heartbeat is a hiccup, three is a pattern.
 pub const DEFAULT_NODE_EXPIRY_TIMEOUT_MS: u64 = 15_000;
+/// How often shards are placed onto live brokers.
+///
+/// Placement is idempotent, so a pass over a settled cluster writes nothing;
+/// this only bounds how long a new stream waits for an owner, or a failed
+/// broker's shards wait to move.
+pub const DEFAULT_SHARD_RECONCILE_INTERVAL_MS: u64 = 5_000;
 /// How often the expiry sweep runs. Finer than the timeout so a node is marked
 /// down close to when it actually expires rather than a whole timeout later.
 pub const DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS: u64 = 2_000;
@@ -78,6 +84,8 @@ pub struct NodeLivenessConfig {
     pub expiry_timeout_ms: u64,
     /// How often the sweep looks for expired nodes.
     pub sweep_interval_ms: u64,
+    /// How often unplaced shards are assigned to live brokers.
+    pub shard_reconcile_interval_ms: u64,
 }
 
 impl Default for NodeLivenessConfig {
@@ -86,6 +94,7 @@ impl Default for NodeLivenessConfig {
             heartbeat_interval_ms: DEFAULT_NODE_HEARTBEAT_INTERVAL_MS,
             expiry_timeout_ms: DEFAULT_NODE_EXPIRY_TIMEOUT_MS,
             sweep_interval_ms: DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS,
+            shard_reconcile_interval_ms: DEFAULT_SHARD_RECONCILE_INTERVAL_MS,
         }
     }
 }
@@ -99,6 +108,11 @@ impl NodeLivenessConfig {
         }
         if self.sweep_interval_ms == 0 {
             return Err(anyhow!("node sweep_interval_ms must be greater than zero"));
+        }
+        if self.shard_reconcile_interval_ms == 0 {
+            return Err(anyhow!(
+                "shard_reconcile_interval_ms must be greater than zero"
+            ));
         }
         // A timeout at or below the interval expires brokers that are heartbeating
         // exactly as told to, which takes down a healthy cluster.
@@ -150,6 +164,7 @@ struct NodeLivenessOverride {
     heartbeat_interval_ms: Option<u64>,
     expiry_timeout_ms: Option<u64>,
     sweep_interval_ms: Option<u64>,
+    shard_reconcile_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +222,8 @@ impl ControlPlaneConfig {
                 .unwrap_or(DEFAULT_NODE_EXPIRY_TIMEOUT_MS),
             sweep_interval_ms: parse_positive_env("FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS")
                 .unwrap_or(DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS),
+            shard_reconcile_interval_ms: parse_positive_env("FELIX_SHARD_RECONCILE_INTERVAL_MS")
+                .unwrap_or(DEFAULT_SHARD_RECONCILE_INTERVAL_MS),
         };
         let shutdown_drain_timeout_ms = std::env::var("FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS")
             .ok()
@@ -307,6 +324,9 @@ impl ControlPlaneConfig {
                 }
                 if let Some(value) = liveness.sweep_interval_ms {
                     config.node_liveness.sweep_interval_ms = value;
+                }
+                if let Some(value) = liveness.shard_reconcile_interval_ms {
+                    config.node_liveness.shard_reconcile_interval_ms = value;
                 }
             }
             if let Some(value) = override_cfg.shutdown_drain_timeout_ms
@@ -500,6 +520,7 @@ mod tests {
             heartbeat_interval_ms: 5_000,
             expiry_timeout_ms: 5_000,
             sweep_interval_ms: 1_000,
+            shard_reconcile_interval_ms: 5_000,
         };
         let err = too_short.validate().expect_err("equal should be rejected");
         assert!(err.to_string().contains("must exceed"), "{err}");
@@ -526,6 +547,10 @@ mod tests {
             },
             NodeLivenessConfig {
                 sweep_interval_ms: 0,
+                ..NodeLivenessConfig::default()
+            },
+            NodeLivenessConfig {
+                shard_reconcile_interval_ms: 0,
                 ..NodeLivenessConfig::default()
             },
         ] {
