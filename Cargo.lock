@@ -293,6 +293,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bytes",
+ "controlplane",
  "dashmap",
  "ed25519-dalek",
  "felix-authz",

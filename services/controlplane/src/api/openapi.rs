@@ -20,9 +20,10 @@ use crate::api::{
         CacheChangesResponse, CacheCreateRequest, CacheListResponse, CacheSnapshotResponse,
         ErrorResponse, FeatureFlags, HealthStatus, ListRegionsResponse, NamespaceChangesResponse,
         NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse,
-        NodeHeartbeatRequest, NodeHeartbeatResponse, Region, StreamChangesResponse,
-        StreamCreateRequest, StreamListResponse, StreamSnapshotResponse, SystemInfo,
-        TenantChangesResponse, TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
+        NodeHeartbeatRequest, NodeHeartbeatResponse, NodeRegistrationRequest,
+        NodeRegistrationResponse, Region, StreamChangesResponse, StreamCreateRequest,
+        StreamListResponse, StreamSnapshotResponse, SystemInfo, TenantChangesResponse,
+        TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
     },
 };
 use crate::auth::admin;
@@ -87,7 +88,10 @@ use utoipa::OpenApi;
         caches::get_cache,
         caches::patch_cache,
         caches::delete_cache,
-        nodes::report_health
+        nodes::report_health,
+        nodes::register_node,
+        nodes::drain_node,
+        nodes::deregister_node
     ),
     components(schemas(
         FeatureFlags,
@@ -143,6 +147,8 @@ use utoipa::OpenApi;
         NodeChangeOp,
         NodeHeartbeatRequest,
         NodeHeartbeatResponse,
+        NodeRegistrationRequest,
+        NodeRegistrationResponse,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,

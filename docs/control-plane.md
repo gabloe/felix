@@ -81,6 +81,46 @@ Four rules, each of which exists for a reason:
 > health for any `node_id`. Authenticating broker identity is tracked in #126;
 > until then it is only safe on a trusted network.
 
+### Broker-side lifecycle
+
+A broker joins a cluster only when `FELIX_NODE_ID` is set. Membership is opt-in
+because a single-node broker has no cluster to join, and registering one would
+put a node in the catalog that placement would then try to use.
+
+| Env | Required | Meaning |
+| --- | --- | --- |
+| `FELIX_NODE_ID` | opt-in | Stable across restarts. This is the identity, not the process. |
+| `FELIX_NODE_ADVERTISE_ADDR` | with `FELIX_NODE_ID` | `host:port` peers reach this broker on. Not the bind address: a broker bound to `0.0.0.0` has to advertise something routable. |
+| `FELIX_CONTROLPLANE_URL` | with `FELIX_NODE_ID` | Where to register. |
+| `FELIX_REGION_ID` | no | Defaults to `local`. |
+
+Startup fails, rather than defaulting, when `FELIX_NODE_ID` is set without an
+advertised address or a control-plane URL, or when the address does not parse.
+A broker that guessed its own address would register something unreachable, and
+the failure would surface later as peers unable to connect to a node the catalog
+says is live.
+
+The sequence:
+
+1. **Register after the broker can serve.** Advertising a node placement may
+   route to before it can answer is worse than advertising it a moment late, so
+   registration waits for the initial catalog sync when readiness is gated on it.
+2. **Heartbeat** on the interval the control plane returns, with bounded
+   exponential backoff and jitter. A failure is visible
+   (`felix_broker_heartbeat_failures_total`) but never fatal: a control plane
+   that is briefly unreachable must not take down a broker that is serving fine.
+3. **Drain, then deregister** on SIGTERM, before connections are drained, so
+   nothing new is placed here while in-flight work finishes.
+
+A registration refused with a 4xx — a duplicate advertised address, say — stops
+the broker with a clear error instead of retrying. A wrong identity stays wrong,
+and retrying only hides the misconfiguration. An unreachable control plane is
+retried, because it may simply be starting.
+
+This is what separates a graceful shutdown from a crash: a broker that
+deregisters is `left`, and one that simply stops is found `down` by expiry. Both
+remove it from placement, but only the first is intentional.
+
 ### Configuration
 
 | Setting | Env | Default |

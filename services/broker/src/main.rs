@@ -34,6 +34,7 @@ mod observability;
 mod test_support;
 
 use anyhow::{Context, Result};
+use broker::membership;
 use broker::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
 use felix_broker::{Broker, DurableStorage};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
@@ -296,8 +297,49 @@ where
         });
     }
 
+    // Cluster membership, when this broker has an identity. Registration waits
+    // for `serving`, because advertising a node placement can route to before
+    // it can answer is worse than advertising it a moment late.
+    let membership_client = reqwest::Client::new();
+    let membership = match (&config.membership, &config.controlplane_url) {
+        (Some(membership_config), Some(base_url)) => {
+            let serving = if gate_readiness_on_sync {
+                seeded.clone()
+            } else {
+                // Nothing to wait for: the accept loop is already running.
+                let now = CancellationToken::new();
+                now.cancel();
+                now
+            };
+            Some(membership::spawn(
+                membership_client.clone(),
+                base_url.clone(),
+                membership_config.clone(),
+                serving,
+                sync_shutdown.clone(),
+            ))
+        }
+        _ => {
+            tracing::info!("cluster membership disabled (FELIX_NODE_ID not set)");
+            None
+        }
+    };
+
     // Block until the shutdown signal resolves so the process stays alive.
-    shutdown.await;
+    // A refused registration ends the process too: a broker that is not a
+    // cluster member should say so and stop, not serve traffic nobody routes.
+    let mut membership_rejected = false;
+    match &membership {
+        Some(task) => {
+            tokio::select! {
+                _ = shutdown => {}
+                _ = task.fatal.cancelled() => {
+                    membership_rejected = true;
+                }
+            }
+        }
+        None => shutdown.await,
+    }
 
     // Step 1: stop advertising readiness. Load balancers and the Kubernetes
     // endpoints controller drop this instance from rotation while it can still
@@ -330,6 +372,37 @@ where
         .await
     {
         accept_task.abort();
+    }
+
+    // Leave the cluster before draining connections, so nothing new is placed
+    // here while in-flight work finishes.
+    if let (Some(membership_config), Some(base_url)) =
+        (&config.membership, &config.controlplane_url)
+        && !membership_rejected
+    {
+        budget
+            .drain("membership_deregister", async {
+                membership::shutdown_membership(
+                    &membership_client,
+                    base_url,
+                    &membership_config.node_id,
+                )
+                .await;
+            })
+            .await;
+    }
+
+    let mut membership = membership;
+    if let Some(task) = &mut membership {
+        sync_shutdown.cancel();
+        if !budget
+            .drain("membership_heartbeat", async {
+                let _ = (&mut task.handle).await;
+            })
+            .await
+        {
+            task.handle.abort();
+        }
     }
 
     let mut controlplane_task = controlplane_task;
@@ -374,6 +447,12 @@ where
     }
 
     budget.report();
+    if membership_rejected {
+        tracing::error!("broker stopped: the control plane refused this node identity");
+        return Err(anyhow::anyhow!(
+            "control plane refused this node identity; check FELIX_NODE_ID and FELIX_NODE_ADVERTISE_ADDR"
+        ));
+    }
     tracing::info!("broker stopped");
     Ok(())
 }

@@ -10,6 +10,7 @@ pub mod config;
 pub mod controlplane;
 pub mod core_shards;
 pub mod durable_config;
+pub mod membership;
 pub mod quic;
 pub mod timings;
 pub mod transport;
