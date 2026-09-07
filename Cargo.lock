@@ -1044,6 +1044,7 @@ dependencies = [
 name = "felix-router"
 version = "0.2.0"
 dependencies = [
+ "arc-swap",
  "felix-common",
 ]
 
