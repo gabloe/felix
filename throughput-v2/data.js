@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788806713241,
+  "lastUpdate": 1788815639582,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3276,6 +3276,58 @@ window.BENCHMARK_DATA = {
             "range": "11028.72",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 589844.74\nmean: 587268.82\nstdev: 11028.72\ncv: 1.88%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "09897f2dca8a52ed61d16a7a9a8086eb09948f68",
+          "message": "feat: deliver shard ownership to brokers by snapshot and watch (#228)\n\n* feat(controlplane): place shards deterministically onto live brokers\n\nRendezvous hashing over the live nodes, as a pure function of a metadata\nsnapshot. Two control-plane instances reading the same rows reach the same\ndecision without coordinating, and the result does not depend on the order\nstreams, nodes, or existing assignments arrive in.\n\nThe hash is written out rather than taken from DefaultHasher, whose seeding is\nnot part of its contract: a placement decision that changed with the Rust\nversion, or differed between two instances, would be silently catastrophic.\n\nThe shard key and node id are hashed separately and then mixed. A single pass\nover the concatenation looked fine and was not: over 300 shards on four nodes it\nput 43 on one and 94 on another, a 43% deviation, against 8% for the split form.\nBoth converge given enough shards, but small samples are the only samples a real\ncluster has. The skew test measures this rather than assuming it.\n\nAn assignment whose leader is still live is kept, however uneven that leaves the\ncluster: moving a shard costs a log handoff that does not exist yet. So\nreconciliation is idempotent, and a pass over a settled cluster writes nothing\nrather than churning rows and flooding the changefeed.\n\n`weight` is deliberately ignored. Weighted rendezvous needs a logarithm, and\nfloating point that must agree bit-for-bit across every instance is a bad\nfoundation for a decision that has to be identical everywhere. `max_shards` is\nhonoured as a hard cap, and running out of capacity is reported differently from\nhaving no nodes, because they need different fixes.\n\nRefs #99\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat: deliver shard ownership to brokers by snapshot and watch\n\nAdds snapshot and changes endpoints for shard assignments, and the broker-side\nclient that follows them.\n\nThe contract is the one the other change feeds already use: apply the snapshot,\nthen poll from its next_seq, and the two together describe every committed\nchange exactly once. The work is in noticing when that stops holding.\n\nThree signals mean the checkpoint can no longer be honoured, and each forces a\nfresh snapshot rather than a silent skip: a first returned seq above where we\nasked, which means the changes between were evicted; an empty page while the log\nhas moved on, which means the whole span was evicted rather than being empty;\nand a next_seq below our checkpoint, which means the sequence reset under us.\n\nThe middle one is the subtle case. An empty page reads as \"nothing new\", and\ntreating it that way whenever it is empty drops everything that was evicted\nwhile the broker was away. `check_continuity` is split out from the polling loop\nprecisely because every branch in it is a way to lose an ownership change\nquietly, and that deserves to be tested directly.\n\nChanges apply by generation, not arrival. A change at or below the generation\nalready held is dropped, so a duplicate delivery is harmless and a reordered or\nretried poll cannot roll ownership backwards.\n\nThe control plane being unreachable is not a reason to stop serving what this\nbroker already owns: failures back off, the local view is kept, and the watch\nrecovers on its own.\n\nRefs #100\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T14:12:06-07:00",
+          "tree_id": "64cfae4a1f71ac7d168720bd5c45e1e80447a154",
+          "url": "https://github.com/gabloe/felix/commit/09897f2dca8a52ed61d16a7a9a8086eb09948f68"
+        },
+        "date": 1788815639088,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 382008.51,
+            "range": "10468.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 382008.51\nmean: 376938.72\nstdev: 10468.80\ncv: 2.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 382008.51,
+            "range": "10468.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 382008.51\nmean: 376938.72\nstdev: 10468.80\ncv: 2.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 84480.23,
+            "range": "2422.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 84480.23\nmean: 83551.33\nstdev: 2422.73\ncv: 2.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 844802.26,
+            "range": "24227.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 844802.26\nmean: 835513.27\nstdev: 24227.30\ncv: 2.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
