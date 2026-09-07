@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788801386978,
+  "lastUpdate": 1788806710709,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4092,6 +4092,72 @@ window.BENCHMARK_DATA = {
             "range": "99.67",
             "unit": "us",
             "extra": "trials: 5\nmedian: 638.00\nmean: 665.20\nstdev: 99.67\ncv: 14.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ce54617b8337052ab7083b44d4fbb208505b83f9",
+          "message": "feat(controlplane): place shards deterministically onto live brokers (#227)\n\n* feat(controlplane): place shards deterministically onto live brokers\n\nRendezvous hashing over the live nodes, as a pure function of a metadata\nsnapshot. Two control-plane instances reading the same rows reach the same\ndecision without coordinating, and the result does not depend on the order\nstreams, nodes, or existing assignments arrive in.\n\nThe hash is written out rather than taken from DefaultHasher, whose seeding is\nnot part of its contract: a placement decision that changed with the Rust\nversion, or differed between two instances, would be silently catastrophic.\n\nThe shard key and node id are hashed separately and then mixed. A single pass\nover the concatenation looked fine and was not: over 300 shards on four nodes it\nput 43 on one and 94 on another, a 43% deviation, against 8% for the split form.\nBoth converge given enough shards, but small samples are the only samples a real\ncluster has. The skew test measures this rather than assuming it.\n\nAn assignment whose leader is still live is kept, however uneven that leaves the\ncluster: moving a shard costs a log handoff that does not exist yet. So\nreconciliation is idempotent, and a pass over a settled cluster writes nothing\nrather than churning rows and flooding the changefeed.\n\n`weight` is deliberately ignored. Weighted rendezvous needs a logarithm, and\nfloating point that must agree bit-for-bit across every instance is a bad\nfoundation for a decision that has to be identical everywhere. `max_shards` is\nhonoured as a hard cap, and running out of capacity is reported differently from\nhaving no nodes, because they need different fixes.\n\nRefs #99\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): stop a cursor delivering a record it already passed\n\nA publish claims its disk offsets before the record reaches the replay ring.\n`cursor_tail` reads the durable log, so taken between those two points it named\nan offset the ring had not yet seen: the backlog came back empty, and the\nin-flight record then arrived *live*, below the position the caller was told to\nresume from. Anyone resuming from a checkpoint saw one record twice.\n\nNeither obvious fix works. The backlog cannot be widened to include the record,\nbecause it is not in the ring yet. The cursor cannot be clamped to the ring\neither: the ring also lags permanently when a cancelled publish consumes offsets\nit never delivers, and a cursor behind the ring's oldest entry is rejected as\ntoo old -- which is what `a_cancelled_publish_does_not_shift_cursor_identity`\nexists to hold.\n\nSo the record is dropped on arrival instead. Live deliveries already carry their\nbase offset, and a subscription now knows the offset it was told to resume from,\nso anything below it is discarded. A batch may straddle the resume point, so a\nprefix is dropped rather than the whole envelope, and the check retires itself\nonce a delivery lands at or above the cursor.\n\nFound by CI, on the coverage job only. The existing handoff test reported it as\n\"a record fell between the backlog snapshot and the live subscription\", but the\ndelivered range was shifted, not short: it began one record early and so ended\none early. Nothing was lost; something extra arrived.\n\nThe new test asserts the property directly -- the first record delivered from a\ncursor is never older than the cursor -- and fails 8 times in 8 without the fix.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T11:42:55-07:00",
+          "tree_id": "6414323a573f19053a251902cb491031e72ac743",
+          "url": "https://github.com/gabloe/felix/commit/ce54617b8337052ab7083b44d4fbb208505b83f9"
+        },
+        "date": 1788806709809,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 119.60\nstdev: 1.52\ncv: 1.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 163,
+            "range": "3.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.60\nstdev: 3.36\ncv: 2.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 211,
+            "range": "12.01",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 209.20\nstdev: 12.01\ncv: 5.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "7.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 165.60\nstdev: 7.50\ncv: 4.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 347,
+            "range": "232.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 347.00\nmean: 452.00\nstdev: 232.52\ncv: 51.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1140,
+            "range": "447.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1140.00\nmean: 1202.20\nstdev: 447.65\ncv: 37.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
