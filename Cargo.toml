@@ -54,9 +54,12 @@ codegen-units = 1
 [workspace.package]
 edition = "2024"
 # Single source of truth for member crate versions. Members opt in with
-# `version.workspace = true`; bumping a release means editing this line only.
-# Non-member demos under demos/ keep their own literal version.
-version = "0.1.1"
+# `version.workspace = true`.
+#
+# This line is not the whole bump: intra-workspace path dependencies also pin a
+# `version`, which Cargo requires to match, so they move with it. The standalone
+# demos under demos/ keep their own literal version and are independent.
+version = "0.2.0"
 # Fail-closed default: a new crate inherits the *restrictive* licence unless it
 # deliberately opts into Apache-2.0. The permissive crates (felix-wire,
 # felix-common, felix-transport, felix-client, felix-conformance) set
