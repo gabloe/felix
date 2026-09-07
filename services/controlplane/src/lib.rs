@@ -12,4 +12,5 @@ pub mod membership;
 pub mod membership_metrics;
 pub mod model;
 pub mod observability;
+pub mod placement;
 pub mod store;

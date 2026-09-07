@@ -8,7 +8,7 @@ use anyhow::Context;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router, build_router};
 use controlplane::auth::oidc::UpstreamOidcValidator;
-use controlplane::{config, membership, observability, store};
+use controlplane::{config, membership, observability, placement, store};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use std::future::{Future, IntoFuture};
 use std::sync::Arc;
@@ -54,6 +54,14 @@ where
     let expiry_task = membership::spawn_expiry_sweep(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         state.node_liveness.clone(),
+        api_shutdown.clone(),
+    );
+
+    // Shard placement runs on the API token like expiry: it stops admitting work
+    // at the same point the listener does.
+    let reconcile_task = placement::spawn_reconciler(
+        Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
+        Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
         api_shutdown.clone(),
     );
 
@@ -133,6 +141,16 @@ where
         .await
     {
         api_task.abort();
+    }
+
+    let mut reconcile_task = reconcile_task;
+    if !budget
+        .drain("shard_reconciler", async {
+            let _ = (&mut reconcile_task).await;
+        })
+        .await
+    {
+        reconcile_task.abort();
     }
 
     let mut expiry_task = expiry_task;

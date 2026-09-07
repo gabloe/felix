@@ -186,6 +186,49 @@ States are `assigning` (placement decided, the leader has not confirmed),
 shard someone is actually serving can drain, and a drained shard does not return
 to the same leader — placement writes a new assignment at a new generation.
 
+#### How shards get placed
+
+Rendezvous hashing: every eligible node is scored against the shard, and the
+highest wins. Chosen over a consistent-hash ring because it needs no ring state
+and no virtual-node tuning, distributes better at the handful-of-brokers scale a
+cluster starts at, and because removing a node moves only the shards that node
+held.
+
+Placement is a **pure function of a metadata snapshot**, so two control-plane
+instances reading the same rows reach the same decision without coordinating.
+It is independent of the order streams, nodes, or existing assignments arrive
+in.
+
+The hash is written out rather than taken from `DefaultHasher`, whose seeding is
+not part of its contract — a placement decision that changed with the Rust
+version, or differed between two instances, would be silently catastrophic. The
+shard key and the node id are hashed independently and then mixed, because a
+single pass over the concatenation is badly behaved at the size a cluster
+actually is: over 300 shards on four nodes it put 43 on one node and 94 on
+another, against a spread within 8% of even for the split form.
+
+Three deliberate omissions in v1:
+
+- **No online rebalancing.** An assignment whose leader is still live is kept,
+  however uneven that leaves the cluster. Moving a shard costs a log handoff
+  that does not exist yet.
+- **`NodeCapacity::weight` is ignored.** Weighted rendezvous needs a logarithm,
+  and floating point that must agree bit-for-bit across every instance is a bad
+  foundation for a decision that has to be identical everywhere. `max_shards` is
+  honoured, as a hard cap.
+- **No region or label affinity.** Streams carry no placement constraints to
+  filter on yet.
+
+Reconciliation is idempotent: a pass over a settled cluster writes nothing, so
+running it on a timer does not churn rows or flood the changefeed. A shard with
+no eligible leader is left unplaced and logged with the reason — an empty
+cluster and a full one are reported differently, because they need different
+fixes.
+
+| Setting | Env | Default |
+| --- | --- | --- |
+| `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |
+
 #### Referential integrity
 
 Two references, two different policies, chosen rather than inherited:
@@ -221,6 +264,9 @@ Control plane:
 | `felix_node_expiry_failures_total` | sweeps that failed; non-zero means liveness is stale |
 | `felix_node_changes_total{op}` | membership changes published to the changefeed |
 | `felix_shard_assignment_changes_total{op}` | shard ownership changes: `assigned`, `updated`, `unassigned` |
+| `felix_shards_placed_total` | shards given a leader by reconciliation |
+| `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
+| `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
 
 Broker:
 

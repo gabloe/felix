@@ -15,6 +15,7 @@ fn liveness() -> NodeLivenessConfig {
         heartbeat_interval_ms: INTERVAL_MS,
         expiry_timeout_ms: TIMEOUT_MS,
         sweep_interval_ms: 500,
+        shard_reconcile_interval_ms: 5_000,
     }
 }
 

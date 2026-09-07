@@ -30,6 +30,25 @@ pub struct Subscription {
     pub(crate) receiver: SubscriptionReceiver,
     pub(crate) guard: SubscriptionGuard,
     pub(crate) pending: VecDeque<Bytes>,
+    /// Live records below this offset are dropped.
+    ///
+    /// A publish claims its disk offsets before the record reaches the replay
+    /// ring, so a cursor taken from the durable tail can name an offset the ring
+    /// has not seen. Registering there yields an empty backlog and then delivers
+    /// that in-flight record *live*, below the position the caller was told to
+    /// resume from -- one record seen twice by anyone resuming from a
+    /// checkpoint.
+    ///
+    /// The backlog cannot be widened to include it (it is not in the ring yet)
+    /// and the cursor cannot be narrowed to exclude it (the ring can also lag
+    /// permanently, when a cancelled publish consumes offsets it never
+    /// delivers, and a cursor behind the ring's oldest entry is rejected as too
+    /// old). Dropping it on arrival is what closes the window without breaking
+    /// either.
+    ///
+    /// `None` for streams whose deliveries carry no offsets: an in-memory
+    /// stream's cursor comes from the ring itself and so cannot overshoot.
+    pub(crate) skip_below: Option<u64>,
 }
 
 impl Subscription {
@@ -38,7 +57,7 @@ impl Subscription {
             return Some(payload);
         }
         let envelope = self.receiver.recv().await?;
-        self.pending.extend(envelope.payloads().iter().cloned());
+        self.extend_pending(&envelope);
         self.pending.pop_front()
     }
 
@@ -47,10 +66,35 @@ impl Subscription {
             return Ok(payload);
         }
         let envelope = self.receiver.try_recv()?;
-        self.pending.extend(envelope.payloads().iter().cloned());
+        self.extend_pending(&envelope);
         self.pending
             .pop_front()
             .ok_or(mpsc::error::TryRecvError::Empty)
+    }
+
+    /// Queue an envelope's payloads, dropping any below the resume point.
+    ///
+    /// Deliveries arrive in offset order, so once one lands at or above the
+    /// cursor the filter has done its job and is retired -- the check costs
+    /// nothing for the rest of the subscription's life.
+    fn extend_pending(&mut self, envelope: &DeliveryEnvelope) {
+        let payloads = envelope.payloads();
+        match (self.skip_below, envelope.base_offset()) {
+            (Some(skip), Some(base)) if base < skip => {
+                // `skip - base` payloads of this batch precede the resume point.
+                // A batch can straddle it, so this drops a prefix rather than
+                // the whole envelope.
+                let drop = (skip - base).min(payloads.len() as u64) as usize;
+                self.pending.extend(payloads[drop..].iter().cloned());
+                if (base + payloads.len() as u64) > skip {
+                    self.skip_below = None;
+                }
+            }
+            _ => {
+                self.skip_below = None;
+                self.pending.extend(payloads.iter().cloned());
+            }
+        }
     }
 
     pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
