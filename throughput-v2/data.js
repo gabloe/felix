@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788748655222,
+  "lastUpdate": 1788755048332,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2912,6 +2912,58 @@ window.BENCHMARK_DATA = {
             "range": "51544.36",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 543129.65\nmean: 526153.56\nstdev: 51544.36\ncv: 9.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e1087f6ae4adbf70e95d0fcc5c6d116c3bb607b",
+          "message": "feat(controlplane): report broker health and expire silent nodes (#220)\n\nAdds `POST /v1/nodes/{node_id}/heartbeat`, a configurable expiry sweep, and the\nstore primitives behind both.\n\nNothing reports that a broker has stopped, so silence is the only signal. A\nsweep marks a node down once its last heartbeat is older than\n`expiry_timeout_ms`, defaulting to three intervals: one lost heartbeat is a\nhiccup, three is a pattern. Startup fails if the timeout does not exceed the\ninterval, since that expires brokers heartbeating exactly as configured.\n\nFour rules, each tested:\n\nThe recorded time is the control plane's clock. A broker that could supply it\ncould postpone its own expiry indefinitely.\n\nAn older incarnation is rejected. A heartbeat delayed past a restart belongs to\na process the broker has already replaced, and honouring it would report a dead\nincarnation as live.\n\nA heartbeat never revives a down node. It proves a process is running, not that\nit still owns the identity, so the broker must register again.\n\nA heartbeat publishes no change, because per-node per-interval events would\nevict every real membership change from the retention window.\n\nThe sweep is safe across control-plane instances: the Postgres UPDATE claims\nrows under lock and re-checks its predicate, so a concurrent sweep matches zero\nrows. Asserted with six racing sweepers over twelve nodes, not assumed.\n\nAuthentication is out of scope here and tracked in #126; the endpoint and the\ndocs both say so plainly.\n\nRefs #94\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T21:21:50-07:00",
+          "tree_id": "546dab3e94f726d73c4da846f7f78ce355d70548",
+          "url": "https://github.com/gabloe/felix/commit/5e1087f6ae4adbf70e95d0fcc5c6d116c3bb607b"
+        },
+        "date": 1788755047536,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235602.23,
+            "range": "3220.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235602.23\nmean: 234641.34\nstdev: 3220.05\ncv: 1.37%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235602.23,
+            "range": "3220.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235602.23\nmean: 234641.34\nstdev: 3220.05\ncv: 1.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55654.02,
+            "range": "1025.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55654.02\nmean: 55173.86\nstdev: 1025.17\ncv: 1.86%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 556540.15,
+            "range": "10251.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 556540.15\nmean: 551738.61\nstdev: 10251.71\ncv: 1.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
