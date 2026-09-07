@@ -1455,11 +1455,32 @@ impl ControlPlaneStore for PostgresStore {
         Ok(())
     }
 
-    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()> {
+    async fn record_node_heartbeat(
+        &self,
+        node_id: &str,
+        incarnation: u64,
+        at_millis: u64,
+    ) -> StoreResult<Node> {
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query_as::<_, DbNode>(NODE_SELECT_BY_ID_FOR_UPDATE)
+            .bind(node_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(node_from_db)
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+
+        if incarnation < existing.status.incarnation {
+            return Err(StoreError::Conflict(format!(
+                "heartbeat for incarnation {incarnation} of {node_id}, which is now at {}",
+                existing.status.incarnation
+            )));
+        }
+
         // GREATEST, not assignment: heartbeats from two connections can arrive
         // out of order, and the newest observation is the one that matters.
         // No change is emitted -- see the trait for why.
-        let updated = sqlx::query(
+        sqlx::query(
             r#"UPDATE nodes
                SET last_heartbeat_at_millis = GREATEST(last_heartbeat_at_millis, $2),
                    updated_at = now()
@@ -1467,12 +1488,44 @@ impl ControlPlaneStore for PostgresStore {
         )
         .bind(node_id)
         .bind(at_millis as i64)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        if updated.rows_affected() == 0 {
-            return Err(StoreError::NotFound("node".into()));
+
+        let mut updated = existing;
+        updated.status.last_heartbeat_at_millis =
+            updated.status.last_heartbeat_at_millis.max(at_millis);
+        tx.commit().await?;
+        Ok(updated)
+    }
+
+    async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>> {
+        let mut tx = self.pool.begin().await?;
+
+        // The UPDATE both selects and claims: it takes a row lock and re-checks
+        // the predicate, so a second control-plane instance running the same
+        // sweep concurrently matches zero rows and publishes nothing.
+        let rows = sqlx::query_as::<_, DbNode>(
+            r#"UPDATE nodes SET lifecycle = 'down', updated_at = now()
+               WHERE lifecycle IN ('live', 'draining') AND last_heartbeat_at_millis < $1
+               RETURNING node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation"#,
+        )
+        .bind(expiry_before_millis as i64)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut expired = Vec::with_capacity(rows.len());
+        for row in rows {
+            let node = node_from_db(row)?;
+            record_node_change(&mut tx, NodeChangeOp::Updated, &node.node_id, Some(&node)).await?;
+            expired.push(node);
         }
-        Ok(())
+        tx.commit().await?;
+
+        for _ in &expired {
+            metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+        }
+        expired.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        Ok(expired)
     }
 
     async fn set_node_lifecycle(

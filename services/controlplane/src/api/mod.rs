@@ -18,6 +18,7 @@ pub mod bootstrap;
 pub mod caches;
 pub mod error;
 pub mod namespaces;
+pub mod nodes;
 pub mod openapi;
 pub mod regions;
 pub mod streams;
@@ -115,6 +116,7 @@ mod tests {
             oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
             bootstrap_enabled: false,
             bootstrap_token: None,
+            node_liveness: Default::default(),
         }
     }
 

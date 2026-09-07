@@ -1766,6 +1766,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
         bootstrap_token: Some("token".to_string()),
+        node_liveness: Default::default(),
     };
     let bootstrap_app = app::build_bootstrap_router(state.clone());
     let body = json!({

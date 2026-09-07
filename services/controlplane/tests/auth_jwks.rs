@@ -61,6 +61,7 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app = build_router(state).into_service();
 
@@ -108,6 +109,7 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app = build_router(state).into_service();
 

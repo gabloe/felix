@@ -15,14 +15,14 @@
 //! # Security considerations
 //! - Avoid exposing internal-only endpoints in the public schema.
 use crate::api::{
-    caches, namespaces, regions, streams, system, tenants,
+    caches, namespaces, nodes, regions, streams, system, tenants,
     types::{
         CacheChangesResponse, CacheCreateRequest, CacheListResponse, CacheSnapshotResponse,
         ErrorResponse, FeatureFlags, HealthStatus, ListRegionsResponse, NamespaceChangesResponse,
-        NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse, Region,
-        StreamChangesResponse, StreamCreateRequest, StreamListResponse, StreamSnapshotResponse,
-        SystemInfo, TenantChangesResponse, TenantCreateRequest, TenantListResponse,
-        TenantSnapshotResponse,
+        NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse,
+        NodeHeartbeatRequest, NodeHeartbeatResponse, Region, StreamChangesResponse,
+        StreamCreateRequest, StreamListResponse, StreamSnapshotResponse, SystemInfo,
+        TenantChangesResponse, TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
     },
 };
 use crate::auth::admin;
@@ -86,7 +86,8 @@ use utoipa::OpenApi;
         caches::create_cache,
         caches::get_cache,
         caches::patch_cache,
-        caches::delete_cache
+        caches::delete_cache,
+        nodes::report_health
     ),
     components(schemas(
         FeatureFlags,
@@ -140,6 +141,8 @@ use utoipa::OpenApi;
         NodePatchRequest,
         NodeChange,
         NodeChangeOp,
+        NodeHeartbeatRequest,
+        NodeHeartbeatResponse,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,
@@ -156,7 +159,8 @@ use utoipa::OpenApi;
         (name = "tenants", description = "Tenant management"),
         (name = "namespaces", description = "Namespace management"),
         (name = "streams", description = "Stream management"),
-        (name = "caches", description = "Cache management")
+        (name = "caches", description = "Cache management"),
+        (name = "nodes", description = "Broker membership")
     )
 )]
 pub struct ApiDoc;

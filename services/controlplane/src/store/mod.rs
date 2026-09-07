@@ -20,7 +20,7 @@ pub mod memory;
 pub mod postgres;
 
 #[cfg(test)]
-mod node_contract;
+pub(crate) mod node_contract;
 #[cfg(test)]
 mod postgres_tests;
 
@@ -133,7 +133,29 @@ pub trait ControlPlaneStore: Send + Sync {
     /// changefeed would evict every real membership change from the retention
     /// window. Only a lifecycle move a heartbeat causes is worth publishing,
     /// and that is [`ControlPlaneStore::set_node_lifecycle`].
-    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()>;
+    ///
+    /// `incarnation` is the caller's own, and one older than the stored value
+    /// is rejected: it comes from a process the broker has already replaced,
+    /// and honouring it would report a dead incarnation as live.
+    ///
+    /// Never revives. A node the cluster marked `Down` stays down until it
+    /// registers again, because a heartbeat proves a process is running, not
+    /// that it still owns the identity.
+    ///
+    /// `at_millis` never moves the stored value backwards, so a delayed
+    /// heartbeat is a no-op rather than a regression.
+    async fn record_node_heartbeat(
+        &self,
+        node_id: &str,
+        incarnation: u64,
+        at_millis: u64,
+    ) -> StoreResult<Node>;
+    /// Mark every node whose last heartbeat predates `expiry_before_millis` as
+    /// down, and return the ones this call moved.
+    ///
+    /// Safe to run from several control-plane instances at once: each node is
+    /// moved by exactly one of them, and only that one publishes the change.
+    async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>>;
     /// Move a node's lifecycle from an observed signal rather than an operator.
     ///
     /// Unlike [`ControlPlaneStore::patch_node`] this may drive transitions an

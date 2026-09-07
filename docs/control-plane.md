@@ -42,7 +42,61 @@ On update:
 ## API Sketch (Control Plane)
 - `GetSnapshot()` -> full metadata view + version.
 - `WatchUpdates(from_version)` -> stream of incremental updates.
-- `ReportHealth(node_id, status)` -> node liveness signals.
+- `ReportHealth(node_id, status)` -> node liveness signals. **Implemented** as
+  `POST /v1/nodes/{node_id}/heartbeat`; see [Broker liveness](#broker-liveness).
+
+## Broker liveness
+
+A broker registers on boot and then reports health on an interval. Nothing
+reports that a broker has *stopped*, so silence is the only signal: a periodic
+sweep marks a node `down` once its last heartbeat is older than the timeout.
+
+### `POST /v1/nodes/{node_id}/heartbeat`
+
+Request carries the reporting process's own `incarnation`, from its last
+registration. The response returns the node's lifecycle as the cluster sees it,
+plus the cadence expected of it:
+
+```json
+{ "incarnation": 3 }
+{ "node_id": "broker-1", "lifecycle": "live",
+  "heartbeat_interval_ms": 5000, "expiry_timeout_ms": 15000 }
+```
+
+Four rules, each of which exists for a reason:
+
+- **The recorded time is the control plane's own clock.** A broker that could
+  supply it could postpone its own expiry indefinitely.
+- **An older `incarnation` is rejected with 409.** A heartbeat delayed past a
+  restart belongs to a process the broker has already replaced; counting it
+  would report a dead incarnation as live.
+- **A heartbeat never revives a `down` node.** It proves a process is running,
+  not that it still owns the identity. A broker that reads `"lifecycle": "down"`
+  must register again before it is eligible for placement.
+- **A heartbeat publishes no change.** Heartbeats arrive per node per interval;
+  putting each in the changefeed would evict every real membership change from
+  the retention window. Only the lifecycle move that expiry causes is published.
+
+> **Not yet authenticated.** Any caller that can reach this endpoint can report
+> health for any `node_id`. Authenticating broker identity is tracked in #126;
+> until then it is only safe on a trusted network.
+
+### Configuration
+
+| Setting | Env | Default |
+| --- | --- | --- |
+| `node_liveness.heartbeat_interval_ms` | `FELIX_NODE_HEARTBEAT_INTERVAL_MS` | 5000 |
+| `node_liveness.expiry_timeout_ms` | `FELIX_NODE_EXPIRY_TIMEOUT_MS` | 15000 |
+| `node_liveness.sweep_interval_ms` | `FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS` | 2000 |
+
+The timeout is three intervals: one lost heartbeat is a hiccup, three is a
+pattern. Startup fails if `expiry_timeout_ms` is not greater than
+`heartbeat_interval_ms` — a timeout at or below the interval expires brokers
+that are heartbeating exactly as told to.
+
+Running several control-plane instances is safe. Each node is claimed by exactly
+one sweep and only that instance publishes the change, so duplicate sweeps cost
+a query and produce no duplicate events.
 
 ## Evolution Plan
 1) Control plane RAFT for membership + placement only.

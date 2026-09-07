@@ -34,6 +34,7 @@ fn build_state(store: Arc<InMemoryStore>) -> AppState {
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     }
 }
 
