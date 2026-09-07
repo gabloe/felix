@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788797608428,
+  "lastUpdate": 1788798274131,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3068,6 +3068,58 @@ window.BENCHMARK_DATA = {
             "range": "56424.00",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 560202.68\nmean: 534436.33\nstdev: 56424.00\ncv: 10.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2edf656fbb00065ab3f17cf351a2992f2ee7d659",
+          "message": "feat(observability): publish cluster membership metrics (#223)\n\nControl plane and broker both get a metrics module with the names in one place,\nfollowing the durable-log convention.\n\n`felix_node_count{lifecycle,region}` is published from the same store read the\nnode listing serves, so the dashboard and the API cannot disagree. It is a\ncensus rather than an accumulation, and a region that empties is written back to\nzero -- a gauge otherwise keeps its final value forever, which is the moment an\noperator most needs the truth.\n\n`felix_node_transitions_total{from,to}` separates a failure from a deploy:\n`live -> down` is a broker dying, `draining -> left` is a rollout. Identity\nmoves are skipped, so a repeated expiry sweep does not turn a steady state into\na rising failure rate.\n\nBroker-side failures split by kind, which needed the heartbeat path to carry a\ntyped error rather than anyhow. `rejected` means the control plane answered and\nsaid no, and retrying never fixes it; `unavailable` means nothing answered.\nCollapsed into one counter, a misconfigured broker looks exactly like a flaky\nnetwork. A 5xx counts as unavailable, since that is the control plane failing\nrather than refusing.\n\n`felix_broker_heartbeat_age_seconds` is published on failure as well as success.\nIt is the number that keeps rising while the control plane is unreachable, and\nthe only warning a broker gets that it is about to be declared down.\n\nEvery label is bounded and nothing carries node_id: the fleet view is the\ncontrol plane's gauge, and a broker's own view is its own series.\n\nRefs #97\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:22:16-07:00",
+          "tree_id": "caf7b3879ff55d331bf36508e1aa51961ec8ba37",
+          "url": "https://github.com/gabloe/felix/commit/2edf656fbb00065ab3f17cf351a2992f2ee7d659"
+        },
+        "date": 1788798273092,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 253930.29,
+            "range": "2910.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253930.29\nmean: 252745.58\nstdev: 2910.09\ncv: 1.15%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 253930.29,
+            "range": "2910.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253930.29\nmean: 252745.58\nstdev: 2910.09\ncv: 1.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59767.07,
+            "range": "243.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59767.07\nmean: 59906.83\nstdev: 243.27\ncv: 0.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 597670.66,
+            "range": "2432.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 597670.66\nmean: 599068.32\nstdev: 2432.74\ncv: 0.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
