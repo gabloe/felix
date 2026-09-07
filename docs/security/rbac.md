@@ -23,6 +23,7 @@ Canonical actions:
 - `stream.subscribe`
 - `cache.read`
 - `cache.write`
+- `node.view` — cluster-scoped only; see [Cluster scope](#cluster-scope)
 
 ## Object Grammar
 
@@ -36,6 +37,29 @@ Allowed wildcards:
 - `namespace:{tenant_id}/*`
 - `stream:{tenant_id}/{namespace}/*`
 - `cache:{tenant_id}/{namespace}/*`
+
+### Cluster scope
+
+One object sits outside the tenant hierarchy:
+
+- Cluster: `cluster:*` — broker membership, liveness, and placement standing.
+
+It is an island in both directions, and that is the whole security property:
+
+- **No tenant scope contains it.** A policy write is admitted only when its
+  object is already inside the caller's scope, so a tenant admin cannot grant
+  themselves `cluster:*`. Nothing in the bootstrap seed grants it either.
+- **It contains no tenant object.** Cluster scope confers nothing inside a
+  tenant, so it is not a backdoor into tenant data.
+
+`node.view:cluster:*` is required by `GET /v1/nodes` and `GET /v1/nodes/{node_id}`.
+The tenant comes from the token's own `tid` claim rather than a path segment,
+because the cluster is not a tenant resource; that claim only selects which
+tenant's signing keys to verify against, exactly as `kid` selects a key without
+conferring one.
+
+`cluster:*` is the only accepted spelling. `cluster:nodes` and a bare `cluster:`
+are rejected, so a typo is refused rather than silently scoped.
 
 Rejected on writes:
 - `tenant:*`

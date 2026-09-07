@@ -238,6 +238,7 @@ After bootstrap, admin actions require explicit Felix permissions:
 - RBAC list: `rbac.view:<scoped object>`
 - RBAC policy writes: `rbac.policy.manage:<scoped object>`
 - RBAC assignment writes: `rbac.assignment.manage:<scoped object>`
+- Cluster membership reads: `node.view:cluster:*`
 
 ### RBAC Object Grammar and Delegation
 
@@ -246,6 +247,7 @@ Canonical RBAC object formats:
 - `namespace:{tenant_id}/{namespace}`
 - `stream:{tenant_id}/{namespace}/{stream_or_*}`
 - `cache:{tenant_id}/{namespace}/{cache_or_*}`
+- `cluster:*` — the cluster itself, outside the tenant hierarchy
 
 Write-time protections:
 - `tenant:*` is rejected
@@ -253,6 +255,22 @@ Write-time protections:
 - policy/assignment writes are rejected if target scope is broader than caller scope
 
 This prevents common privilege-escalation footguns when delegating namespace or stream admins.
+
+#### Cluster scope
+
+`cluster:*` covers broker membership: which brokers exist, whether they are
+alive, and whether placement can use them. It is an island in both directions,
+and that is the property it exists for:
+
+- **No tenant scope contains it.** Since a policy write is admitted only when
+  its object is already inside the caller's scope, a tenant admin cannot grant
+  themselves `cluster:*`. The bootstrap seed does not grant it either.
+- **It contains no tenant object.** Cluster scope is not a backdoor into tenant
+  data.
+
+Only `GET /v1/nodes` and `GET /v1/nodes/{node_id}` require it today. The
+endpoints brokers use to register and report health are **not yet
+authenticated** and are safe on a trusted network only.
 
 ### Supported Identity Providers
 

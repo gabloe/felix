@@ -208,7 +208,7 @@ ship rather than being marked off here.
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
-| Multi-node clustering and replication | 🎯 Target | Not started |
+| Multi-node clustering and replication | 🎯 Target | Brokers register with the control plane and their liveness is tracked, so the catalog knows which brokers exist. Nothing routes across them: no sharding, forwarding, replication, or failover |
 | Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
 | At-least-once / quorum acks | 🎯 Target | Not started |
