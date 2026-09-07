@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788797044169,
+  "lastUpdate": 1788797608428,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3016,6 +3016,58 @@ window.BENCHMARK_DATA = {
             "range": "7805.45",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553284.98\nmean: 555458.06\nstdev: 7805.45\ncv: 1.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7cb8ed360855f5b04e532c9b9ea9332d3afb35c7",
+          "message": "feat(controlplane): expose broker membership to operators (#222)\n\nAdds GET /v1/nodes and GET /v1/nodes/{node_id}, filtered by lifecycle, region,\nand labels, each answering why a node is or is not a placement candidate.\n\n`placement.reasons` is the point. \"This broker is registered but shards are not\nlanding on it\" is otherwise answered by reading a lifecycle string and doing\nheartbeat arithmetic by hand. A stale heartbeat is reported separately from the\nlifecycle, so the window between a heartbeat lapsing and the sweep noticing --\nwhere a node still reads live -- is visible rather than inferred.\n\nBoth reads require `node.view:cluster:*`. That needed a cluster-scoped object,\nbecause every existing RBAC object is tenant-scoped and the cluster belongs to\nno tenant. `ParsedObject::Cluster` is its own island in both directions: no\ntenant scope contains it, so `validate_new_rule_allowed` cannot admit a tenant\nadmin's attempt to grant it; and it contains no tenant object, so it is not a\nbackdoor into tenant data. Both directions are asserted, in the grammar and\nover HTTP.\n\nThe tenant comes from the token's own `tid` claim rather than a path segment,\nsince the cluster is not a tenant resource. That claim only selects which\ntenant's signing keys to verify against -- the signature is what grants trust,\nas `kid` selects a key without conferring one.\n\nUnpaginated, matching the other listings: a cluster has brokers in the tens, and\na cursor no caller needs is a cursor every caller has to handle.\n\nThe OpenAPI test now asserts routes, not just schemas. A route the document does\nnot describe is a route no generated client can call, and nothing else in the\nbuild would notice.\n\nRefs #96\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:11:10-07:00",
+          "tree_id": "d109b865bb92cf12083ef990f1cea2481e0c3027",
+          "url": "https://github.com/gabloe/felix/commit/7cb8ed360855f5b04e532c9b9ea9332d3afb35c7"
+        },
+        "date": 1788797607920,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 236858.15,
+            "range": "13626.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236858.15\nmean: 230600.81\nstdev: 13626.39\ncv: 5.91%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 236858.15,
+            "range": "13626.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236858.15\nmean: 230600.81\nstdev: 13626.39\ncv: 5.91%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56020.27,
+            "range": "5642.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56020.27\nmean: 53443.63\nstdev: 5642.40\ncv: 10.56%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 560202.68,
+            "range": "56424.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 560202.68\nmean: 534436.33\nstdev: 56424.00\ncv: 10.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
