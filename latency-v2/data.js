@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788798271546,
+  "lastUpdate": 1788798728225,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3960,6 +3960,72 @@ window.BENCHMARK_DATA = {
             "range": "1027.35",
             "unit": "us",
             "extra": "trials: 5\nmedian: 955.00\nmean: 1338.40\nstdev: 1027.35\ncv: 76.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25bb66aa0ed400aa3b35e49af26af0fce39096ff",
+          "message": "chore(release): 0.2.0 (#224)\n\nDurable streams: a durable stream persists every record before acknowledging it,\nreplays it after a restart, and lets a subscriber resume from an exact offset.\nNo wire-protocol break -- VERSION stays 1, because the new capabilities are\nnegotiated flag bits rather than a version bump.\n\nThe changelog says plainly what this is not. M2's membership endpoints are in\nthe release, so the entry documents them as a registry and states in Known\nlimitations that nothing routes across brokers, that a client still talks to one\nbroker, and that registration and heartbeat are unauthenticated. \"Cluster\nmembership shipped\" is exactly the phrase someone would misread as \"Felix\nclusters\".\n\nTwo things the bump exposed:\n\nThe workspace comment claimed a release was a one-line edit. Six crates pin a\n`version` on their intra-workspace path dependencies, which Cargo requires to\nmatch, so they move with it. Comment corrected rather than left to mislead the\nnext person.\n\nThe release workflow generated its notes from merged pull requests. Across five\nmonths that is mostly dependency bumps -- accurate about commits, poor about\nwhat changed. It now uses the changelog section, and fails closed when the entry\nfor a tag is missing rather than publishing an empty release.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:29:47-07:00",
+          "tree_id": "e6cd65ed1f2c495ab3e47de888aab68936ea438b",
+          "url": "https://github.com/gabloe/felix/commit/25bb66aa0ed400aa3b35e49af26af0fce39096ff"
+        },
+        "date": 1788798726854,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 120.20\nstdev: 0.84\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 165,
+            "range": "4.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 167.20\nstdev: 4.38\ncv: 2.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 215,
+            "range": "30.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 215.00\nmean: 223.00\nstdev: 30.17\ncv: 13.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 163.40\nstdev: 0.89\ncv: 0.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 347,
+            "range": "7.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 347.00\nmean: 342.80\nstdev: 7.98\ncv: 2.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1401,
+            "range": "745.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1401.00\nmean: 1196.80\nstdev: 745.98\ncv: 62.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
