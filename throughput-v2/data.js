@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788798730902,
+  "lastUpdate": 1788801389922,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3172,6 +3172,58 @@ window.BENCHMARK_DATA = {
             "range": "13560.52",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 591180.56\nmean: 592743.63\nstdev: 13560.52\ncv: 2.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "907175dc03001793e84c4215794aa438a44bb281",
+          "message": "feat(controlplane): add the persisted ShardAssignment resource (#226)\n\nOne assignment per (stream, shard), stored in both backends with an ordered\nchangefeed, plus an operator listing at GET /v1/shard-assignments.\n\n`generation` is owned by the store, never the caller, and increments on every\nwrite. A broker reports status against the generation it read, so a broker that\nwas slow, partitioned, or restarted cannot resurrect an ownership decision\nplacement already replaced. The contract sends a caller-chosen generation of 999\non every write and asserts it is ignored.\n\nTwo references, two policies, chosen rather than inherited. The stream is a\nforeign key with ON DELETE CASCADE: once a stream is gone its shards do not\nexist, and keeping ownership records for them leaves placement chasing ghosts.\nThe node deliberately has no foreign key -- deleting a node that still leads a\nshard is refused, because a cascade would erase the only record of where that\nshard's data lives, turning an operator's tidy-up into silent orphaning.\n\nConcurrent writes to one shard serialise on a FOR UPDATE row lock, so eight\nracing writers take eight distinct consecutive generations rather than several\nreading 0 and all storing 1. Verified in both directions: removing FOR UPDATE\nfails that case five times in five.\n\nStreams cannot be resized today -- StreamPatchRequest has no shards field -- so\nno assignment can be orphaned by a shrink. Documented for when it arrives.\n\nRefs #98\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T10:14:17-07:00",
+          "tree_id": "f88bcaa682d2e7db75acb2655b46f4ef14f2d71f",
+          "url": "https://github.com/gabloe/felix/commit/907175dc03001793e84c4215794aa438a44bb281"
+        },
+        "date": 1788801388924,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232496.06,
+            "range": "4644.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232496.06\nmean: 232511.54\nstdev: 4644.76\ncv: 2.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232496.06,
+            "range": "4644.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232496.06\nmean: 232511.54\nstdev: 4644.76\ncv: 2.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55351.46,
+            "range": "1077.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55351.46\nmean: 55215.51\nstdev: 1077.20\ncv: 1.95%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553514.57,
+            "range": "10771.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553514.57\nmean: 552155.10\nstdev: 10771.99\ncv: 1.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
