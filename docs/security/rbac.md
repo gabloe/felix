@@ -56,9 +56,6 @@ flowchart TB
 
     T x-.-x|"never contains"| CL
     CL x-.-x|"never contains"| T
-
-    style T fill:#e0f2fe,stroke:#334155,color:#111827
-    style CL fill:#fee2e2,stroke:#334155,color:#111827
 ```
 
 A permission is only writable when its object already sits inside the writer's

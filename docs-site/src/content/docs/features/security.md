@@ -205,11 +205,6 @@ flowchart LR
     e1@{ animate: true }
     e2@{ animate: true }
     e3@{ animate: true }
-
-    style A fill:#e0f2fe,stroke:#334155,color:#111827
-    style B fill:#fef9c3,stroke:#334155,color:#111827
-    style C fill:#dcfce7,stroke:#334155,color:#111827
-    style D fill:#ede9fe,stroke:#334155,color:#111827
 ```
 
 Felix never sees your IdP password, and the broker never calls the control plane
@@ -300,9 +295,6 @@ flowchart TB
 
     T x-.-x|"never contains"| CL
     CL x-.-x|"never contains"| T
-
-    style T fill:#e0f2fe,stroke:#334155,color:#111827
-    style CL fill:#fee2e2,stroke:#334155,color:#111827
 ```
 
 A permission is only writable when its object already sits inside the writer's
