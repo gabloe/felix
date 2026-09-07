@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788798274131,
+  "lastUpdate": 1788798730902,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3120,6 +3120,58 @@ window.BENCHMARK_DATA = {
             "range": "2432.74",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 597670.66\nmean: 599068.32\nstdev: 2432.74\ncv: 0.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25bb66aa0ed400aa3b35e49af26af0fce39096ff",
+          "message": "chore(release): 0.2.0 (#224)\n\nDurable streams: a durable stream persists every record before acknowledging it,\nreplays it after a restart, and lets a subscriber resume from an exact offset.\nNo wire-protocol break -- VERSION stays 1, because the new capabilities are\nnegotiated flag bits rather than a version bump.\n\nThe changelog says plainly what this is not. M2's membership endpoints are in\nthe release, so the entry documents them as a registry and states in Known\nlimitations that nothing routes across brokers, that a client still talks to one\nbroker, and that registration and heartbeat are unauthenticated. \"Cluster\nmembership shipped\" is exactly the phrase someone would misread as \"Felix\nclusters\".\n\nTwo things the bump exposed:\n\nThe workspace comment claimed a release was a one-line edit. Six crates pin a\n`version` on their intra-workspace path dependencies, which Cargo requires to\nmatch, so they move with it. Comment corrected rather than left to mislead the\nnext person.\n\nThe release workflow generated its notes from merged pull requests. Across five\nmonths that is mostly dependency bumps -- accurate about commits, poor about\nwhat changed. It now uses the changelog section, and fails closed when the entry\nfor a tag is missing rather than publishing an empty release.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:29:47-07:00",
+          "tree_id": "e6cd65ed1f2c495ab3e47de888aab68936ea438b",
+          "url": "https://github.com/gabloe/felix/commit/25bb66aa0ed400aa3b35e49af26af0fce39096ff"
+        },
+        "date": 1788798730302,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 248038.65,
+            "range": "7617.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 248038.65\nmean: 248658.36\nstdev: 7617.94\ncv: 3.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 248038.65,
+            "range": "7617.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 248038.65\nmean: 248658.36\nstdev: 7617.94\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59118.06,
+            "range": "1356.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59118.06\nmean: 59274.36\nstdev: 1356.05\ncv: 2.29%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 591180.56,
+            "range": "13560.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 591180.56\nmean: 592743.63\nstdev: 13560.52\ncv: 2.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
