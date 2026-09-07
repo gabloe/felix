@@ -258,6 +258,48 @@ resnapshots and carries on.
 
 Both endpoints require `node.view:cluster:*`.
 
+#### What a broker does about ownership
+
+The watch says who *should* own each shard. What a broker has actually done
+about it is a separate state, because becoming an owner is not instant: the
+durable log has to be opened and recovered first, and a broker serving writes in
+that window would acknowledge records it cannot yet persist.
+
+So ownership is two-phase in both directions:
+
+```
+unassigned -> opening -> active -> draining -> closed
+                  |
+                  +-> failed
+```
+
+A shard serves **only** in `active`, and only at the generation the control
+plane currently names. `opening` exists precisely so an assignment arriving is
+not the same event as the shard becoming servable.
+
+- **A new generation reopens.** The control plane moved the shard away and back;
+  local state is re-established rather than assumed.
+- **An older generation is ignored.** A duplicate delivery, a reordered poll, or
+  a snapshot replay is not news, so repeated events cost nothing.
+- **An open that finishes after a reassignment does not activate.** The shard
+  moved on while it was being recovered.
+- **A failed open is not retried by the same assignment arriving again.** Every
+  poll re-delivers it, and retrying each time buries the failure. A new
+  generation is what retries.
+- **A vanished assignment releases the shard**, exactly like one reassigned
+  away. A snapshot replaces the whole picture, so only the full set can say what
+  disappeared.
+- **A failed flush still gives up the shard.** Ownership has moved regardless,
+  and continuing to serve would be worse than an unflushed tail — but the error
+  is logged loudly.
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_shard_phase{phase}` | shards this broker holds, by phase |
+| `felix_broker_shard_transitions_total{from,to}` | local ownership moves |
+| `felix_broker_shard_stale_events_total` | events ignored for an old generation |
+| `felix_broker_shard_open_failures_total` | non-zero means a shard the cluster believes is placed here is not being served |
+
 #### Referential integrity
 
 Two references, two different policies, chosen rather than inherited:
