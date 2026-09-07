@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788755045865,
+  "lastUpdate": 1788797041591,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3762,6 +3762,72 @@ window.BENCHMARK_DATA = {
             "range": "626.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 873.00\nmean: 1099.60\nstdev: 626.04\ncv: 56.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "071b2ea6c0ffec1ecb9787020deaf1b7a7b9731b",
+          "message": "feat(broker): register, heartbeat, drain, and deregister as a cluster member (#221)\n\n* feat(broker): register, heartbeat, drain, and deregister as a cluster member\n\nAdds the control-plane endpoints a broker needs to join and leave -- POST\n/v1/nodes, /drain, /deregister -- and the broker-side client that drives them.\n\nMembership is opt-in on FELIX_NODE_ID. A single-node broker has no cluster to\njoin, and registering one would put a node in the catalog placement would then\ntry to use.\n\nRegistration waits until the broker can serve. Advertising a node placement may\nroute to before it can answer is worse than advertising it a moment late.\n\nA 4xx registration is terminal and stops the process with the reason; a wrong\nidentity stays wrong, and retrying only hides it. An unreachable control plane\nis retried with bounded backoff, because it may simply be starting. Startup also\nfails outright on a node id with no advertised address, no control-plane URL, or\nan address that does not parse -- a broker that guessed its own address would\nregister something unreachable, and that surfaces later as peers unable to\nconnect to a node the catalog calls live.\n\nHeartbeat failures are counted and logged but never fatal. A briefly unreachable\ncontrol plane must not take down a broker that is serving fine; if it stays\nunreachable, expiry reaches the correct conclusion without help.\n\nShutdown drains then deregisters before connections drain, so nothing new is\nplaced here while in-flight work finishes. That is what separates a graceful\nstop (left) from a crash (down).\n\nThe integration test drives the real control-plane router rather than a stub, so\na drift in the HTTP contract between the two services fails here instead of in a\ncluster.\n\nRefs #95\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(deps): pin the controlplane dev-dependency and clear the yanked chacha20\n\nTwo unrelated `cargo deny` problems.\n\nThe failure was mine: the `controlplane` dev-dependency added for the membership\nintegration test carried a path with no version, which `wildcards = \"deny\"`\nrejects. Every other path dependency in the workspace pins a version; this now\nmatches.\n\nThe yanked chacha20 was a separate pre-existing warning, not the failure --\n`advisories` passed throughout. 0.10.2 is a plain patch over the yanked 0.10.1\nand reaches us through rand, quinn-proto, and sqlx-postgres rather than any\ndirect dependency.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:01:19-07:00",
+          "tree_id": "167022bb0b375e2329717575bc6e02496bb9de34",
+          "url": "https://github.com/gabloe/felix/commit/071b2ea6c0ffec1ecb9787020deaf1b7a7b9731b"
+        },
+        "date": 1788797040000,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "3.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.80\nstdev: 3.49\ncv: 2.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "2.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 206.20\nstdev: 2.59\ncv: 1.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 252,
+            "range": "14.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 252.00\nmean: 254.20\nstdev: 14.18\ncv: 5.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 197.40\nstdev: 1.52\ncv: 0.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 398,
+            "range": "13.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 398.00\nmean: 401.60\nstdev: 13.61\ncv: 3.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 608,
+            "range": "381.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 608.00\nmean: 741.60\nstdev: 381.32\ncv: 51.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
