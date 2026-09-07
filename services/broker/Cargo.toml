@@ -97,7 +97,7 @@ rustls = "0.23"
 # The membership integration test drives the real control-plane router rather
 # than a stub, so a mismatch in the HTTP contract between the two services fails
 # here instead of in a cluster.
-controlplane = { path = "../controlplane" }
+controlplane = { path = "../controlplane", version = "0.1.1" }
 
 [features]
 default = []
