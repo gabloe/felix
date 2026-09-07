@@ -40,6 +40,32 @@ Allowed wildcards:
 
 ### Cluster scope
 
+```mermaid
+flowchart TB
+    subgraph tenant["Tenant scope - what a tenant admin can delegate"]
+        direction TB
+        T["tenant:t1"] --> N["namespace:t1/*"]
+        N --> S["stream:t1/ns/*"]
+        N --> K["cache:t1/ns/*"]
+    end
+
+    subgraph cluster["Cluster scope - operators only"]
+        direction TB
+        CL["cluster:*<br/>node.view"]
+    end
+
+    T x-.-x|"never contains"| CL
+    CL x-.-x|"never contains"| T
+
+    style T fill:#e0f2fe,stroke:#334155,color:#111827
+    style CL fill:#fee2e2,stroke:#334155,color:#111827
+```
+
+A permission is only writable when its object already sits inside the writer's
+own scope. The two crossed links are the whole security property: because no
+arrow runs between them, a tenant admin cannot write themselves `cluster:*`, and
+cluster scope cannot read tenant data.
+
 One object sits outside the tenant hierarchy:
 
 - Cluster: `cluster:*` — broker membership, liveness, and placement standing.

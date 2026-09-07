@@ -194,6 +194,28 @@ publisher
 
 Felix implements token-based authentication with upstream OIDC and tenant-scoped RBAC enforced by brokers using Felix tokens.
 
+The whole flow, end to end:
+
+```mermaid
+flowchart LR
+    A["Sign in<br/>OIDC token from your IdP"] e1@==> B["Exchange<br/>control plane checks the issuer"]
+    B e2@==> C["Felix token<br/>tenant + permissions, signed"]
+    C e3@==> D["Connect<br/>broker verifies and enforces"]
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+
+    style A fill:#e0f2fe,stroke:#334155,color:#111827
+    style B fill:#fef9c3,stroke:#334155,color:#111827
+    style C fill:#dcfce7,stroke:#334155,color:#111827
+    style D fill:#ede9fe,stroke:#334155,color:#111827
+```
+
+Felix never sees your IdP password, and the broker never calls the control plane
+on the request path: it verifies the signature against published JWKS and reads
+the permissions out of the token.
+
 ### Bootstrap Mode (Day-0)
 
 New tenants need IdP issuers, signing keys, and initial RBAC before any admin tokens exist. Felix provides a **one-time bootstrap mode** for operators:
@@ -261,6 +283,32 @@ This prevents common privilege-escalation footguns when delegating namespace or 
 `cluster:*` covers broker membership: which brokers exist, whether they are
 alive, and whether placement can use them. It is an island in both directions,
 and that is the property it exists for:
+
+```mermaid
+flowchart TB
+    subgraph tenant["Tenant scope - what a tenant admin can delegate"]
+        direction TB
+        T["tenant:t1"] --> N["namespace:t1/*"]
+        N --> S["stream:t1/ns/*"]
+        N --> K["cache:t1/ns/*"]
+    end
+
+    subgraph cluster["Cluster scope - operators only"]
+        direction TB
+        CL["cluster:*<br/>node.view"]
+    end
+
+    T x-.-x|"never contains"| CL
+    CL x-.-x|"never contains"| T
+
+    style T fill:#e0f2fe,stroke:#334155,color:#111827
+    style CL fill:#fee2e2,stroke:#334155,color:#111827
+```
+
+A permission is only writable when its object already sits inside the writer's
+own scope. The two crossed links are the whole security property: because no
+arrow runs between them, a tenant admin cannot write themselves `cluster:*`, and
+cluster scope cannot read tenant data.
 
 - **No tenant scope contains it.** Since a policy write is admitted only when
   its object is already inside the caller's scope, a tenant admin cannot grant
