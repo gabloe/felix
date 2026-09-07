@@ -23,7 +23,7 @@ use crate::api::error::{
 };
 use crate::api::types::{
     NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
-    NodeRegistrationRequest, NodeRegistrationResponse, NodeView,
+    NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ShardAssignmentListResponse,
 };
 use crate::app::AppState;
 use crate::auth::felix_token::verify_token;
@@ -515,4 +515,36 @@ fn unverified_tenant(token: &str) -> Result<String, ApiError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| api_unauthorized("token has no tenant claim"))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/shard-assignments",
+    tag = "nodes",
+    params(("leader" = Option<String>, Query, description = "Only shards this node leads")),
+    responses((status = 200, description = "List shard assignments", body = ShardAssignmentListResponse))
+)]
+/// List shard ownership.
+///
+/// Answers the two questions an operator has when placement looks wrong: who
+/// owns this shard, and what does this broker own. Requires the same
+/// `node.view:cluster:*` as the node listing, because ownership and membership
+/// are the same view of the cluster.
+///
+/// # Errors
+/// - 500 when the store cannot be read.
+pub(crate) async fn list_shard_assignments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<ShardAssignmentListResponse>, ApiError> {
+    require_cluster_node_view(&state, &headers).await?;
+
+    let items = match query.get("leader") {
+        Some(leader) => state.store.list_shard_assignments_for_node(leader).await,
+        None => state.store.list_shard_assignments().await,
+    }
+    .map_err(|ref err| api_internal("failed to list shard assignments", err))?;
+
+    Ok(Json(ShardAssignmentListResponse { items }))
 }

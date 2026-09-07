@@ -166,6 +166,43 @@ not a backdoor into tenant data.
 Note that the registration, heartbeat, drain, and deregister endpoints above are
 **not** authenticated yet (#126). Only the operator read endpoints are.
 
+### Shard ownership
+
+`GET /v1/shard-assignments` lists which broker leads each shard, and
+`?leader=<node_id>` narrows it to one broker. Requires the same
+`node.view:cluster:*` as the node listing, because ownership and membership are
+the same view of the cluster.
+
+There is **at most one assignment per (stream, shard)** — that is the primary
+key, and it is the invariant placement depends on.
+
+`generation` increments on every write and is owned by the store, never the
+caller. A broker reports status against the generation it read, so a broker that
+was slow, partitioned, or restarted cannot resurrect an ownership decision that
+placement has already replaced.
+
+States are `assigning` (placement decided, the leader has not confirmed),
+`active` (the leader is serving), and `draining` (ownership is moving). Only a
+shard someone is actually serving can drain, and a drained shard does not return
+to the same leader — placement writes a new assignment at a new generation.
+
+#### Referential integrity
+
+Two references, two different policies, chosen rather than inherited:
+
+- **Stream**: a foreign key with `ON DELETE CASCADE`. Deleting a stream removes
+  its assignments, because the shards no longer exist and keeping ownership
+  records for them leaves placement chasing ghosts.
+- **Node**: deliberately **no** foreign key. Deleting a node that still leads a
+  shard is **rejected**, not cascaded. A cascade would delete the only record of
+  where that shard's data lives, turning an operator's tidy-up into silent data
+  orphaning. Reassign the shard first.
+
+Shard numbers are validated against the stream's `shards` count on every write.
+Streams cannot currently be resized — `StreamPatchRequest` has no `shards` field
+— so no assignment can be orphaned by a shrink. When resize arrives, assignments
+above the new bound have to be removed in the same transaction.
+
 ### Metrics
 
 Every label below is bounded. Lifecycle has four values, region has as many as
@@ -183,6 +220,7 @@ Control plane:
 | `felix_node_expiry_total` | nodes the sweep marked down |
 | `felix_node_expiry_failures_total` | sweeps that failed; non-zero means liveness is stale |
 | `felix_node_changes_total{op}` | membership changes published to the changefeed |
+| `felix_shard_assignment_changes_total{op}` | shard ownership changes: `assigned`, `updated`, `unassigned` |
 
 Broker:
 

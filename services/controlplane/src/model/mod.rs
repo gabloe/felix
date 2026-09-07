@@ -5,6 +5,7 @@
 mod cache;
 mod namespace;
 mod node;
+mod shard;
 mod stream;
 mod tenant;
 
@@ -13,6 +14,10 @@ pub use namespace::{Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey}
 pub use node::{
     Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec,
     NodeStatus, NodeValidationError,
+};
+pub use shard::{
+    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardState,
+    ShardValidationError,
 };
 pub use stream::{
     ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, Stream, StreamChange, StreamChangeOp,

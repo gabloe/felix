@@ -33,9 +33,10 @@ use crate::config::PostgresConfig;
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle,
-    NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, RetentionPolicy, Stream,
-    StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest, Tenant, TenantChange,
-    TenantChangeOp,
+    NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, RetentionPolicy, ShardAssignment,
+    ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardState, ShardValidationError,
+    Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest, Tenant,
+    TenantChange, TenantChangeOp,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -1447,6 +1448,21 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn delete_node(&self, node_id: &str) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
+
+        // Refused rather than cascaded: deleting the assignment would erase the
+        // only record of where that shard's data lives. Deliberately not a
+        // foreign key, because a cascade is the behaviour being avoided.
+        let led: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM shard_assignments WHERE leader = $1")
+                .bind(node_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if led > 0 {
+            return Err(StoreError::Conflict(format!(
+                "node {node_id} still leads {led} shard(s); reassign them first"
+            )));
+        }
+
         let deleted = sqlx::query("DELETE FROM nodes WHERE node_id = $1")
             .bind(node_id)
             .execute(&mut *tx)
@@ -1627,6 +1643,231 @@ impl ControlPlaneStore for PostgresStore {
         Ok(ChangeSet { items, next_seq })
     }
 
+    async fn put_shard_assignment(
+        &self,
+        assignment: ShardAssignment,
+    ) -> StoreResult<ShardAssignment> {
+        assignment.validate().map_err(invalid_shard)?;
+        let mut tx = self.pool.begin().await?;
+
+        let shards: Option<i32> = sqlx::query_scalar(
+            "SELECT shards FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3",
+        )
+        .bind(&assignment.key.tenant_id)
+        .bind(&assignment.key.namespace)
+        .bind(&assignment.key.stream)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let shards = shards.ok_or_else(|| StoreError::NotFound("stream".into()))? as u32;
+        assignment.validate_within(shards).map_err(invalid_shard)?;
+
+        // Checked here rather than by a foreign key: the node reference has none
+        // deliberately, so deleting a node cannot cascade an assignment away.
+        for node_id in assignment.nodes() {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE node_id = $1)")
+                    .bind(node_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if !exists {
+                return Err(StoreError::NotFound(format!("node {node_id}")));
+            }
+        }
+
+        // `FOR UPDATE` so a concurrent write to the same shard waits rather than
+        // reading the row this transaction is about to replace.
+        let existing = sqlx::query_as::<_, DbShardAssignment>(
+            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+               FROM shard_assignments
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4
+               FOR UPDATE"#,
+        )
+        .bind(&assignment.key.tenant_id)
+        .bind(&assignment.key.namespace)
+        .bind(&assignment.key.stream)
+        .bind(assignment.key.shard as i32)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(shard_from_db)
+        .transpose()?;
+
+        let (op, generation) = match &existing {
+            Some(existing) => {
+                if !existing.state.can_transition_to(assignment.state) {
+                    return Err(invalid_shard(ShardValidationError::UnsupportedTransition {
+                        from: existing.state,
+                        to: assignment.state,
+                    }));
+                }
+                (
+                    ShardAssignmentChangeOp::Updated,
+                    existing.generation.saturating_add(1),
+                )
+            }
+            None => (ShardAssignmentChangeOp::Assigned, 0),
+        };
+
+        // Store-owned, so a caller cannot pin a generation and make its own
+        // stale report look current.
+        let stored = ShardAssignment {
+            generation,
+            ..assignment
+        };
+
+        sqlx::query(
+            r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, leader, replicas, generation, state)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (tenant_id, namespace, stream, shard) DO UPDATE SET
+                 leader = EXCLUDED.leader,
+                 replicas = EXCLUDED.replicas,
+                 generation = EXCLUDED.generation,
+                 state = EXCLUDED.state,
+                 updated_at = now()"#,
+        )
+        .bind(&stored.key.tenant_id)
+        .bind(&stored.key.namespace)
+        .bind(&stored.key.stream)
+        .bind(stored.key.shard as i32)
+        .bind(&stored.leader)
+        .bind(serde_json::to_value(&stored.replicas)?)
+        .bind(stored.generation as i64)
+        .bind(shard_state_to_str(stored.state))
+        .execute(&mut *tx)
+        .await?;
+
+        record_shard_change(&mut tx, op, &stored.key, Some(&stored)).await?;
+        tx.commit().await?;
+        metrics::counter!("felix_shard_assignment_changes_total", "op" => shard_op_to_str(op))
+            .increment(1);
+        Ok(stored)
+    }
+
+    async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
+        sqlx::query_as::<_, DbShardAssignment>(
+            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+               FROM shard_assignments
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4"#,
+        )
+        .bind(&key.tenant_id)
+        .bind(&key.namespace)
+        .bind(&key.stream)
+        .bind(key.shard as i32)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(shard_from_db)
+        .transpose()?
+        .ok_or_else(|| StoreError::NotFound("shard assignment".into()))
+    }
+
+    async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
+        let rows = sqlx::query_as::<_, DbShardAssignment>(
+            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(shard_from_db).collect()
+    }
+
+    async fn list_shard_assignments_for_node(
+        &self,
+        node_id: &str,
+    ) -> StoreResult<Vec<ShardAssignment>> {
+        let rows = sqlx::query_as::<_, DbShardAssignment>(
+            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+               FROM shard_assignments WHERE leader = $1
+               ORDER BY tenant_id, namespace, stream, shard"#,
+        )
+        .bind(node_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(shard_from_db).collect()
+    }
+
+    async fn delete_shard_assignment(&self, key: &ShardKey) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
+        let deleted = sqlx::query(
+            r#"DELETE FROM shard_assignments
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4"#,
+        )
+        .bind(&key.tenant_id)
+        .bind(&key.namespace)
+        .bind(&key.stream)
+        .bind(key.shard as i32)
+        .execute(&mut *tx)
+        .await?;
+        if deleted.rows_affected() == 0 {
+            return Err(StoreError::NotFound("shard assignment".into()));
+        }
+        record_shard_change(&mut tx, ShardAssignmentChangeOp::Unassigned, key, None).await?;
+        tx.commit().await?;
+        metrics::counter!("felix_shard_assignment_changes_total", "op" => "unassigned")
+            .increment(1);
+        Ok(())
+    }
+
+    async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
+        // REPEATABLE READ for the same reason as `node_snapshot`: under READ
+        // COMMITTED the two reads below see different snapshots, so an
+        // assignment committed between them is missing from `items` while
+        // already counted in `next_seq`.
+        let mut tx = self.pool.begin().await?;
+        begin_consistent_read(&mut tx).await?;
+        let rows = sqlx::query_as::<_, DbShardAssignment>(
+            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let items = rows
+            .into_iter()
+            .map(shard_from_db)
+            .collect::<StoreResult<Vec<_>>>()?;
+        let next_seq =
+            sqlx::query_scalar::<_, i64>("SELECT next_seq FROM shard_assignment_change_seq")
+                .fetch_one(&mut *tx)
+                .await? as u64;
+        tx.commit().await?;
+        Ok(Snapshot { items, next_seq })
+    }
+
+    async fn shard_assignment_changes(
+        &self,
+        since: u64,
+    ) -> StoreResult<ChangeSet<ShardAssignmentChange>> {
+        let mut tx = self.pool.begin().await?;
+        begin_consistent_read(&mut tx).await?;
+        let rows = sqlx::query_as::<_, ShardAssignmentChangeRow>(
+            r#"SELECT seq, op, tenant_id, namespace, stream, shard, payload
+               FROM shard_assignment_changes WHERE seq >= $1 ORDER BY seq ASC LIMIT $2"#,
+        )
+        .bind(since as i64)
+        .bind(self.limit())
+        .fetch_all(&mut *tx)
+        .await?;
+        let next_seq =
+            sqlx::query_scalar::<_, i64>("SELECT next_seq FROM shard_assignment_change_seq")
+                .fetch_one(&mut *tx)
+                .await? as u64;
+        tx.commit().await?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            items.push(ShardAssignmentChange {
+                seq: row.seq as u64,
+                op: parse_shard_op(&row.op)?,
+                key: ShardKey {
+                    tenant_id: row.tenant_id,
+                    namespace: row.namespace,
+                    stream: row.stream,
+                    shard: row.shard as u32,
+                },
+                assignment: row.payload.map(serde_json::from_value).transpose()?,
+            });
+        }
+        Ok(ChangeSet { items, next_seq })
+    }
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE tenant_id = $1)")
@@ -1719,6 +1960,119 @@ async fn record_node_change(
         .bind(node.map(serde_json::to_value).transpose()?)
         .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DbShardAssignment {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    shard: i32,
+    leader: String,
+    replicas: serde_json::Value,
+    generation: i64,
+    state: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct ShardAssignmentChangeRow {
+    seq: i64,
+    op: String,
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    shard: i32,
+    payload: Option<serde_json::Value>,
+}
+
+fn shard_from_db(row: DbShardAssignment) -> StoreResult<ShardAssignment> {
+    Ok(ShardAssignment {
+        key: ShardKey {
+            tenant_id: row.tenant_id,
+            namespace: row.namespace,
+            stream: row.stream,
+            shard: row.shard as u32,
+        },
+        leader: row.leader,
+        replicas: serde_json::from_value(row.replicas)?,
+        generation: row.generation as u64,
+        state: parse_shard_state(&row.state)?,
+    })
+}
+
+fn shard_state_to_str(state: ShardState) -> &'static str {
+    match state {
+        ShardState::Assigning => "assigning",
+        ShardState::Active => "active",
+        ShardState::Draining => "draining",
+    }
+}
+
+fn parse_shard_state(value: &str) -> StoreResult<ShardState> {
+    match value {
+        "assigning" => Ok(ShardState::Assigning),
+        "active" => Ok(ShardState::Active),
+        "draining" => Ok(ShardState::Draining),
+        other => Err(StoreError::Unexpected(anyhow!(
+            "unknown shard state: {other}"
+        ))),
+    }
+}
+
+fn shard_op_to_str(op: ShardAssignmentChangeOp) -> &'static str {
+    match op {
+        ShardAssignmentChangeOp::Assigned => "assigned",
+        ShardAssignmentChangeOp::Updated => "updated",
+        ShardAssignmentChangeOp::Unassigned => "unassigned",
+    }
+}
+
+fn parse_shard_op(value: &str) -> StoreResult<ShardAssignmentChangeOp> {
+    match value {
+        "assigned" => Ok(ShardAssignmentChangeOp::Assigned),
+        "updated" => Ok(ShardAssignmentChangeOp::Updated),
+        "unassigned" => Ok(ShardAssignmentChangeOp::Unassigned),
+        other => Err(StoreError::Unexpected(anyhow!(
+            "unknown shard change op: {other}"
+        ))),
+    }
+}
+
+fn invalid_shard(err: ShardValidationError) -> StoreError {
+    StoreError::Conflict(err.to_string())
+}
+
+/// Append a shard change, taking its `seq` from the locked counter.
+///
+/// Same construction as `record_node_change`: the row lock makes seq order equal
+/// commit order, which is what lets a consumer resume at `next_seq` without
+/// skipping a change. See 0006_shard_assignments.sql.
+async fn record_shard_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    op: ShardAssignmentChangeOp,
+    key: &ShardKey,
+    assignment: Option<&ShardAssignment>,
+) -> StoreResult<()> {
+    let seq = sqlx::query_scalar::<_, i64>(
+        "UPDATE shard_assignment_change_seq SET next_seq = next_seq + 1 RETURNING next_seq - 1",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        r#"INSERT INTO shard_assignment_changes (seq, op, tenant_id, namespace, stream, shard, payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+    )
+    .bind(seq)
+    .bind(shard_op_to_str(op))
+    .bind(&key.tenant_id)
+    .bind(&key.namespace)
+    .bind(&key.stream)
+    .bind(key.shard as i32)
+    .bind(assignment.map(serde_json::to_value).transpose()?)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

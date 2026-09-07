@@ -9,7 +9,10 @@ use controlplane::app::{AppState, build_router};
 use controlplane::auth::felix_token::{TenantSigningKeys, mint_token};
 use controlplane::auth::keys::generate_signing_keys;
 use controlplane::config::NodeLivenessConfig;
-use controlplane::model::{Node, NodeCapacity, NodeLifecycle, NodeSpec, NodeStatus};
+use controlplane::model::{
+    ConsistencyLevel, DeliveryGuarantee, Namespace, Node, NodeCapacity, NodeLifecycle, NodeSpec,
+    NodeStatus, RetentionPolicy, ShardAssignment, ShardKey, ShardState, Stream, StreamKind, Tenant,
+};
 use controlplane::store::memory::InMemoryStore;
 use controlplane::store::{AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig};
 use std::collections::BTreeMap;
@@ -333,4 +336,123 @@ async fn the_node_view_exposes_no_secrets() {
             "{forbidden} leaked: {rendered}"
         );
     }
+}
+
+async fn seed_shards(store: &InMemoryStore) {
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "T".to_string(),
+        })
+        .await
+        .expect("tenant");
+    store
+        .create_namespace(Namespace {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            display_name: "NS".to_string(),
+        })
+        .await
+        .expect("namespace");
+    store
+        .create_stream(Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 3,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtMostOnce,
+            durable: true,
+        })
+        .await
+        .expect("stream");
+
+    for (i, id) in ["broker-a", "broker-b"].iter().enumerate() {
+        store
+            .register_node(node(id, 7100 + i as u16, "us-west-2", "a1"))
+            .await
+            .expect("node");
+    }
+    for (shard, leader) in [(0u32, "broker-a"), (1, "broker-b"), (2, "broker-a")] {
+        store
+            .put_shard_assignment(ShardAssignment {
+                key: ShardKey {
+                    tenant_id: "t1".to_string(),
+                    namespace: "ns".to_string(),
+                    stream: "orders".to_string(),
+                    shard,
+                },
+                leader: leader.to_string(),
+                replicas: Vec::new(),
+                generation: 0,
+                state: ShardState::Active,
+            })
+            .await
+            .expect("assign");
+    }
+}
+
+#[tokio::test]
+async fn listing_shard_assignments_requires_cluster_scope() {
+    let (app, _store, _keys) = setup().await;
+    let response = app
+        .oneshot(get("/v1/shard-assignments", None))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Ownership and membership are the same view of the cluster, so a tenant
+/// scope must not open either.
+#[tokio::test]
+async fn a_tenant_scope_does_not_open_shard_assignments() {
+    let (app, _store, keys) = setup().await;
+    let response = app
+        .oneshot(get(
+            "/v1/shard-assignments",
+            Some(&token(&keys, vec!["tenant.manage:tenant:t1"])),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn shard_assignments_list_and_filter_by_leader() {
+    let (app, store, keys) = setup().await;
+    seed_shards(&store).await;
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+
+    let response = app
+        .clone()
+        .oneshot(get("/v1/shard-assignments", Some(&bearer)))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = read_json(response).await;
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 3);
+    // Ordered by stream then shard, so a listing reads the same way twice.
+    assert_eq!(items[0]["shard"], 0);
+    assert_eq!(items[0]["leader"], "broker-a");
+    assert_eq!(items[0]["state"], "active");
+
+    // The question an operator asks when a broker misbehaves.
+    let response = app
+        .oneshot(get("/v1/shard-assignments?leader=broker-a", Some(&bearer)))
+        .await
+        .expect("request");
+    let body: serde_json::Value = read_json(response).await;
+    let shards: Vec<u64> = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["shard"].as_u64().unwrap_or_default())
+        .collect();
+    assert_eq!(shards, vec![0, 2]);
 }

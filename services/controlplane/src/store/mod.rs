@@ -10,8 +10,8 @@ use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodePatchRequest, Stream, StreamChange, StreamKey, StreamPatchRequest,
-    Tenant, TenantChange,
+    Node, NodeChange, NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardKey, Stream,
+    StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -23,6 +23,8 @@ pub mod postgres;
 pub(crate) mod node_contract;
 #[cfg(test)]
 mod postgres_tests;
+#[cfg(test)]
+pub(crate) mod shard_contract;
 
 #[derive(Debug, Clone)]
 pub struct StoreConfig {
@@ -126,6 +128,13 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Apply an operator patch. Rejects a lifecycle transition the model
     /// disallows, and never touches heartbeat-derived fields.
     async fn patch_node(&self, node_id: &str, patch: NodePatchRequest) -> StoreResult<Node>;
+    /// Remove a node.
+    ///
+    /// Rejected while the node still leads a shard. Cascading instead would
+    /// delete the only record of where that shard's data lives, turning an
+    /// operator's tidy-up into silent data orphaning; refusing forces the shard
+    /// to be reassigned first. There is deliberately no foreign key doing this,
+    /// because a database-level cascade is exactly the behaviour being avoided.
     async fn delete_node(&self, node_id: &str) -> StoreResult<()>;
     /// Record liveness without emitting a change.
     ///
@@ -169,6 +178,38 @@ pub trait ControlPlaneStore: Send + Sync {
     ) -> StoreResult<Option<Node>>;
     async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>>;
     async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>>;
+
+    /// Write the assignment for one shard, replacing whatever it had.
+    ///
+    /// The caller supplies the assignment; the store owns `generation` and
+    /// increments it on every write, so a broker reporting against a generation
+    /// it read earlier can be told it is stale.
+    ///
+    /// Rejects a shard outside the stream's shard count, a leader or replica
+    /// that is not a registered node, and a state transition the model
+    /// disallows. Referential integrity is checked here rather than left to the
+    /// database because the node reference deliberately has no foreign key --
+    /// see [`ControlPlaneStore::delete_node`].
+    async fn put_shard_assignment(
+        &self,
+        assignment: ShardAssignment,
+    ) -> StoreResult<ShardAssignment>;
+    async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment>;
+    /// Every assignment, ordered by stream then shard.
+    async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>>;
+    /// Assignments a node currently leads. The question placement asks when a
+    /// node fails or is drained.
+    async fn list_shard_assignments_for_node(
+        &self,
+        node_id: &str,
+    ) -> StoreResult<Vec<ShardAssignment>>;
+    /// Remove one assignment, leaving the shard unowned.
+    async fn delete_shard_assignment(&self, key: &ShardKey) -> StoreResult<()>;
+    async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>>;
+    async fn shard_assignment_changes(
+        &self,
+        since: u64,
+    ) -> StoreResult<ChangeSet<ShardAssignmentChange>>;
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool>;
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool>;
