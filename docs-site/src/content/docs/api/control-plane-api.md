@@ -98,10 +98,40 @@ Canonical object grammar for RBAC policy payloads:
 - `namespace:{tenant_id}/{namespace}` or `namespace:{tenant_id}/*`
 - `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
 - `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
+- `cluster:*` — the cluster itself; see [Cluster membership](#cluster-membership)
 
 Rejected on write:
 - `tenant:*`
 - non-tenant-scoped wildcards such as `stream:*/*`
+- `cluster:*` from any tenant-scoped caller, since no tenant scope contains it
+
+### Cluster membership
+
+`GET /v1/nodes` lists registered brokers; `GET /v1/nodes/{node_id}` fetches one.
+Both require `node.view:cluster:*`.
+
+```http
+GET /v1/nodes?lifecycle=live&region=us-west-2&label=rack%3Da1
+Authorization: Bearer <felix-token>
+```
+
+Filters intersect, and repeating `label` requires all of them. Each entry pairs
+the node record with why it is or is not a placement candidate:
+
+```json
+{ "items": [ { "node": { "node_id": "broker-1", "spec": { "advertise_addr": "10.0.0.4:7000", "region": "us-west-2" },
+                         "status": { "lifecycle": "live", "incarnation": 3 } },
+               "placement": { "eligible": false, "heartbeat_age_ms": 41200,
+                              "reasons": ["last heartbeat was 41200ms ago, past the 15000ms timeout; expiry has not run yet"] } } ] }
+```
+
+`cluster:*` sits outside the tenant hierarchy and no tenant scope contains it,
+so a tenant admin cannot grant themselves cluster access. The tenant comes from
+the token's own `tid` claim rather than a path segment, and only selects which
+signing keys to verify against.
+
+The registration, heartbeat, drain, and deregister endpoints brokers use are
+**not yet authenticated**. They are safe on a trusted network only.
 
 ### Internal Bootstrap API (Day-0)
 

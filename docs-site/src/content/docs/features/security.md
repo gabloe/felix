@@ -194,6 +194,23 @@ publisher
 
 Felix implements token-based authentication with upstream OIDC and tenant-scoped RBAC enforced by brokers using Felix tokens.
 
+The whole flow, end to end:
+
+```mermaid
+flowchart LR
+    A["Sign in<br/>OIDC token from your IdP"] e1@==> B["Exchange<br/>control plane checks the issuer"]
+    B e2@==> C["Felix token<br/>tenant + permissions, signed"]
+    C e3@==> D["Connect<br/>broker verifies and enforces"]
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+```
+
+Felix never sees your IdP password, and the broker never calls the control plane
+on the request path: it verifies the signature against published JWKS and reads
+the permissions out of the token.
+
 ### Bootstrap Mode (Day-0)
 
 New tenants need IdP issuers, signing keys, and initial RBAC before any admin tokens exist. Felix provides a **one-time bootstrap mode** for operators:
@@ -238,6 +255,7 @@ After bootstrap, admin actions require explicit Felix permissions:
 - RBAC list: `rbac.view:<scoped object>`
 - RBAC policy writes: `rbac.policy.manage:<scoped object>`
 - RBAC assignment writes: `rbac.assignment.manage:<scoped object>`
+- Cluster membership reads: `node.view:cluster:*`
 
 ### RBAC Object Grammar and Delegation
 
@@ -246,6 +264,7 @@ Canonical RBAC object formats:
 - `namespace:{tenant_id}/{namespace}`
 - `stream:{tenant_id}/{namespace}/{stream_or_*}`
 - `cache:{tenant_id}/{namespace}/{cache_or_*}`
+- `cluster:*` — the cluster itself, outside the tenant hierarchy
 
 Write-time protections:
 - `tenant:*` is rejected
@@ -253,6 +272,45 @@ Write-time protections:
 - policy/assignment writes are rejected if target scope is broader than caller scope
 
 This prevents common privilege-escalation footguns when delegating namespace or stream admins.
+
+#### Cluster scope
+
+`cluster:*` covers broker membership: which brokers exist, whether they are
+alive, and whether placement can use them. It is an island in both directions,
+and that is the property it exists for:
+
+```mermaid
+flowchart TB
+    subgraph tenant["Tenant scope - what a tenant admin can delegate"]
+        direction TB
+        T["tenant:t1"] --> N["namespace:t1/*"]
+        N --> S["stream:t1/ns/*"]
+        N --> K["cache:t1/ns/*"]
+    end
+
+    subgraph cluster["Cluster scope - operators only"]
+        direction TB
+        CL["cluster:*<br/>node.view"]
+    end
+
+    T x-.-x|"never contains"| CL
+    CL x-.-x|"never contains"| T
+```
+
+A permission is only writable when its object already sits inside the writer's
+own scope. The two crossed links are the whole security property: because no
+arrow runs between them, a tenant admin cannot write themselves `cluster:*`, and
+cluster scope cannot read tenant data.
+
+- **No tenant scope contains it.** Since a policy write is admitted only when
+  its object is already inside the caller's scope, a tenant admin cannot grant
+  themselves `cluster:*`. The bootstrap seed does not grant it either.
+- **It contains no tenant object.** Cluster scope is not a backdoor into tenant
+  data.
+
+Only `GET /v1/nodes` and `GET /v1/nodes/{node_id}` require it today. The
+endpoints brokers use to register and report health are **not yet
+authenticated** and are safe on a trusted network only.
 
 ### Supported Identity Providers
 
