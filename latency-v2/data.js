@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788730671370,
+  "lastUpdate": 1788748652910,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3630,6 +3630,72 @@ window.BENCHMARK_DATA = {
             "range": "243.24",
             "unit": "us",
             "extra": "trials: 5\nmedian: 458.00\nmean: 626.80\nstdev: 243.24\ncv: 38.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3872f6050708957c01cbd87f0d37c787f2c6f272",
+          "message": "feat(controlplane): persist broker membership in both stores (#219)\n\nAdds node CRUD, snapshots, and an ordered changefeed to `ControlPlaneStore`,\nimplemented in Postgres and memory, with one contract suite both must pass.\n\nRegistration is create-or-revive: a `node_id` identifies a broker across\nrestarts, so re-registering keeps the original `registered_at_millis`, bumps\n`incarnation`, and takes the new spec. An `advertise_addr` another node holds\nis a conflict.\n\nHeartbeats deliberately publish no change. They arrive per node per interval,\nand putting each in the changefeed would evict every real membership change\nfrom the retention window. `set_node_lifecycle` is the observed-signal path and\nis idempotent, so a repeated expiry sweep publishes nothing.\n\nTwo things make snapshot-then-poll exactly-once, and both are tested rather\nthan assumed:\n\n`node_changes.seq` comes from a locked counter row, not the BIGSERIAL the other\nchange tables use. A sequence hands out numbers in request order, not commit\norder, so a snapshot taken while seq 4 is in flight and seq 5 has committed\nreads next_seq 6 and never delivers 4. The counter makes the second writer wait\nfor the first to commit.\n\nThe snapshot reads at REPEATABLE READ. Under the default READ COMMITTED its two\nstatements see different views, so a node committing between them is absent\nfrom `items` while already counted in `next_seq`. The concurrency test caught\nthis; it was not theoretical.\n\nRefs #93\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T19:35:24-07:00",
+          "tree_id": "3626a6b4fa5b4e0a2d0eeaba4db7feb8d7b6a321",
+          "url": "https://github.com/gabloe/felix/commit/3872f6050708957c01cbd87f0d37c787f2c6f272"
+        },
+        "date": 1788748652041,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 148,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 148.00\nmean: 148.20\nstdev: 1.30\ncv: 0.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 188,
+            "range": "2.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 188.00\nmean: 188.60\nstdev: 2.30\ncv: 1.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "10.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 235.80\nstdev: 10.71\ncv: 4.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 191,
+            "range": "6.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 191.00\nmean: 193.20\nstdev: 6.06\ncv: 3.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 404,
+            "range": "156.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 404.00\nmean: 464.20\nstdev: 156.18\ncv: 33.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1609,
+            "range": "673.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1609.00\nmean: 1298.80\nstdev: 673.33\ncv: 51.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
