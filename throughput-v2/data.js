@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788730673543,
+  "lastUpdate": 1788748655222,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2860,6 +2860,58 @@ window.BENCHMARK_DATA = {
             "range": "10266.75",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 595027.01\nmean: 597690.71\nstdev: 10266.75\ncv: 1.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3872f6050708957c01cbd87f0d37c787f2c6f272",
+          "message": "feat(controlplane): persist broker membership in both stores (#219)\n\nAdds node CRUD, snapshots, and an ordered changefeed to `ControlPlaneStore`,\nimplemented in Postgres and memory, with one contract suite both must pass.\n\nRegistration is create-or-revive: a `node_id` identifies a broker across\nrestarts, so re-registering keeps the original `registered_at_millis`, bumps\n`incarnation`, and takes the new spec. An `advertise_addr` another node holds\nis a conflict.\n\nHeartbeats deliberately publish no change. They arrive per node per interval,\nand putting each in the changefeed would evict every real membership change\nfrom the retention window. `set_node_lifecycle` is the observed-signal path and\nis idempotent, so a repeated expiry sweep publishes nothing.\n\nTwo things make snapshot-then-poll exactly-once, and both are tested rather\nthan assumed:\n\n`node_changes.seq` comes from a locked counter row, not the BIGSERIAL the other\nchange tables use. A sequence hands out numbers in request order, not commit\norder, so a snapshot taken while seq 4 is in flight and seq 5 has committed\nreads next_seq 6 and never delivers 4. The counter makes the second writer wait\nfor the first to commit.\n\nThe snapshot reads at REPEATABLE READ. Under the default READ COMMITTED its two\nstatements see different views, so a node committing between them is absent\nfrom `items` while already counted in `next_seq`. The concurrency test caught\nthis; it was not theoretical.\n\nRefs #93\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T19:35:24-07:00",
+          "tree_id": "3626a6b4fa5b4e0a2d0eeaba4db7feb8d7b6a321",
+          "url": "https://github.com/gabloe/felix/commit/3872f6050708957c01cbd87f0d37c787f2c6f272"
+        },
+        "date": 1788748654867,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233080.09,
+            "range": "5344.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233080.09\nmean: 231625.26\nstdev: 5344.75\ncv: 2.31%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233080.09,
+            "range": "5344.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233080.09\nmean: 231625.26\nstdev: 5344.75\ncv: 2.31%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54312.96,
+            "range": "5154.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54312.96\nmean: 52615.36\nstdev: 5154.44\ncv: 9.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 543129.65,
+            "range": "51544.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 543129.65\nmean: 526153.56\nstdev: 51544.36\ncv: 9.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
