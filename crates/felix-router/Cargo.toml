@@ -12,4 +12,4 @@ keywords = ["felix", "routing"]
 categories = ["network-programming"]
 
 [dependencies]
-felix-common = { path = "../felix-common", version = "0.1.1" }
+felix-common = { path = "../felix-common", version = "0.2.0" }

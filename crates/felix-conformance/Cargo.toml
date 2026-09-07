@@ -17,15 +17,15 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 bytes = { workspace = true }
-broker = { path = "../../services/broker", version = "0.1.1" }
+broker = { path = "../../services/broker", version = "0.2.0" }
 base64 = "0.23"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
-felix-authz = { path = "../felix-authz", version = "0.1.1" }
-felix-broker = { path = "../felix-broker", version = "0.1.1" }
-felix-client = { path = "../felix-client", version = "0.1.1" }
-felix-storage = { path = "../felix-storage", version = "0.1.1" }
-felix-transport = { path = "../felix-transport", version = "0.1.1" }
-felix-wire = { path = "../felix-wire", version = "0.1.1" }
+felix-authz = { path = "../felix-authz", version = "0.2.0" }
+felix-broker = { path = "../felix-broker", version = "0.2.0" }
+felix-client = { path = "../felix-client", version = "0.2.0" }
+felix-storage = { path = "../felix-storage", version = "0.2.0" }
+felix-transport = { path = "../felix-transport", version = "0.2.0" }
+felix-wire = { path = "../felix-wire", version = "0.2.0" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 quinn = "0.11"
 rcgen = "0.14"

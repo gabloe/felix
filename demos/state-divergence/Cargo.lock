@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "broker"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -922,7 +922,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "felix-authz"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "casbin",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "felix-broker"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "felix-common"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "felix-storage"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",

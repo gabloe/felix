@@ -70,13 +70,22 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
 
+      # The changelog entry, not auto-generated notes. A release spanning months
+      # generates a list that is mostly dependency bumps: accurate about commits,
+      # poor about what changed. Fails closed if the entry is missing.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          python3 scripts/changelog_section.py "${RELEASE_TAG}" > release-notes.md
+          echo "--- release notes ---"
+          cat release-notes.md
+
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Felix ${{ env.RELEASE_TAG }}
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
