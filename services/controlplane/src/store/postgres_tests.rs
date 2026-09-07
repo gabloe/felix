@@ -205,7 +205,8 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
          {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.idp_issuers, \
          {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
          {schema_ident}.tenant_signing_keys, {schema_ident}.nodes, \
-         {schema_ident}.node_changes, {schema_ident}.tenants RESTART IDENTITY CASCADE",
+         {schema_ident}.node_changes, {schema_ident}.shard_assignments, \
+         {schema_ident}.shard_assignment_changes, {schema_ident}.tenants RESTART IDENTITY CASCADE",
     );
     // Same as `ensure_schema`: the interpolated identifier is our own generated schema name,
     // which cannot be passed as a bind parameter.
@@ -275,6 +276,84 @@ async fn a_reconnected_store_still_sees_registered_nodes() -> anyhow::Result<()>
     // not forced to re-bootstrap.
     let changes = store.node_changes(0).await?;
     assert!(changes.items.iter().any(|c| c.node_id == "broker-a"));
+    Ok(())
+}
+
+/// Assignments are authoritative state, so a new store over the same database
+/// must find them exactly as they were, generation included.
+#[tokio::test]
+#[serial]
+async fn a_reconnected_store_still_sees_shard_assignments() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let pg_cfg = config::PostgresConfig {
+        url: url.clone(),
+        max_connections: 5,
+        connect_timeout_ms: 10_000,
+        acquire_timeout_ms: 10_000,
+    };
+    let store_config = StoreConfig {
+        changes_limit: config::DEFAULT_CHANGES_LIMIT,
+        change_retention_max_rows: None,
+    };
+
+    let before = {
+        let store =
+            PostgresStore::connect_without_migrations(&pg_cfg, store_config.clone()).await?;
+        let store = std::sync::Arc::new(store);
+        crate::store::shard_contract::seed_for_restart(store.as_ref()).await;
+        let assigned = crate::store::shard_contract::assign_for_restart(store.as_ref()).await;
+        drop(store);
+        assigned
+    };
+
+    // A different store handle over the same database: a control-plane restart.
+    let store = PostgresStore::connect_without_migrations(&pg_cfg, store_config).await?;
+    let after = store.get_shard_assignment(&before.key).await?;
+    assert_eq!(after, before, "the assignment survives unchanged");
+
+    // The changefeed survives too, so a broker resuming after the restart is not
+    // forced to re-bootstrap its ownership view.
+    let changes = store.shard_assignment_changes(0).await?;
+    assert!(changes.items.iter().any(|c| c.key == before.key));
+    Ok(())
+}
+
+/// The same shard suite the memory store runs, so parity is enforced.
+#[tokio::test]
+#[serial]
+async fn satisfies_the_shard_store_contract() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let store = PostgresStore::connect_without_migrations(
+        &config::PostgresConfig {
+            url,
+            max_connections: 5,
+            connect_timeout_ms: 10_000,
+            acquire_timeout_ms: 10_000,
+        },
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: None,
+        },
+    )
+    .await?;
+
+    let store = std::sync::Arc::new(store);
+    crate::store::shard_contract::run_shard_contract(store.clone()).await;
+    crate::store::shard_contract::run_shard_concurrency_contract(store).await;
     Ok(())
 }
 

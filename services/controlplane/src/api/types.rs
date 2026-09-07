@@ -220,3 +220,8 @@ pub struct NodeView {
 pub struct NodeListResponse {
     pub items: Vec<NodeView>,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardAssignmentListResponse {
+    pub items: Vec<crate::model::ShardAssignment>,
+}

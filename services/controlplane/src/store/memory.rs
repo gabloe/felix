@@ -39,8 +39,9 @@ use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
-    NodePatchRequest, Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant,
-    TenantChange, TenantChangeOp,
+    NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
+    Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    TenantChangeOp,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -95,6 +96,15 @@ fn invalid_node(err: crate::model::NodeValidationError) -> StoreError {
     StoreError::Conflict(err.to_string())
 }
 
+fn invalid_shard(err: crate::model::ShardValidationError) -> StoreError {
+    StoreError::Conflict(err.to_string())
+}
+
+/// Sort key giving a stable stream-then-shard order.
+fn shard_order(key: &ShardKey) -> (&str, &str, &str, u32) {
+    (&key.tenant_id, &key.namespace, &key.stream, key.shard)
+}
+
 fn invalid_transition(from: NodeLifecycle, to: NodeLifecycle) -> StoreError {
     invalid_node(crate::model::NodeValidationError::UnsupportedTransition { from, to })
 }
@@ -116,6 +126,29 @@ impl NodeState {
             op,
             node_id: node_id.to_string(),
             node,
+        });
+    }
+}
+
+/// Shard assignments and their change log under one lock.
+#[derive(Debug)]
+struct ShardState {
+    records: HashMap<ShardKey, ShardAssignment>,
+    changes: ChangeLog<ShardAssignmentChange>,
+}
+
+impl ShardState {
+    fn record(
+        &mut self,
+        op: ShardAssignmentChangeOp,
+        key: &ShardKey,
+        assignment: Option<ShardAssignment>,
+    ) {
+        self.changes.record(|seq| ShardAssignmentChange {
+            seq,
+            op,
+            key: key.clone(),
+            assignment,
         });
     }
 }
@@ -152,6 +185,9 @@ pub struct InMemoryStore {
     /// the records and the log position as one value, or a change committed
     /// between the two reads is missed by every consumer that resumes from it.
     nodes: Arc<RwLock<NodeState>>,
+    /// Shard ownership and its change log, under one lock for the same reason
+    /// as `nodes`: a snapshot must read records and log position as one value.
+    shards: Arc<RwLock<ShardState>>,
     /// Bounded change log for tenant changes.
     ///
     /// `next_seq` is per-entity-type (not a global sequence across all entities).
@@ -192,6 +228,10 @@ impl InMemoryStore {
             streams: Arc::new(RwLock::new(HashMap::new())),
             caches: Arc::new(RwLock::new(HashMap::new())),
             nodes: Arc::new(RwLock::new(NodeState {
+                records: HashMap::new(),
+                changes: ChangeLog::new(capacity),
+            })),
+            shards: Arc::new(RwLock::new(ShardState {
                 records: HashMap::new(),
                 changes: ChangeLog::new(capacity),
             })),
@@ -822,6 +862,22 @@ impl ControlPlaneStore for InMemoryStore {
     }
 
     async fn delete_node(&self, node_id: &str) -> StoreResult<()> {
+        // Refused rather than cascaded: deleting the assignment would erase the
+        // only record of where that shard's data lives.
+        let led = self
+            .shards
+            .read()
+            .await
+            .records
+            .values()
+            .filter(|assignment| assignment.leader == node_id)
+            .count();
+        if led > 0 {
+            return Err(StoreError::Conflict(format!(
+                "node {node_id} still leads {led} shard(s); reassign them first"
+            )));
+        }
+
         let mut state = self.nodes.write().await;
         if state.records.remove(node_id).is_none() {
             return Err(StoreError::NotFound("node".into()));
@@ -923,6 +979,145 @@ impl ControlPlaneStore for InMemoryStore {
 
     async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>> {
         let state = self.nodes.read().await;
+        let items = state
+            .changes
+            .items
+            .iter()
+            .filter(|item| item.seq >= since)
+            .take(self.limit())
+            .cloned()
+            .collect();
+        Ok(ChangeSet {
+            items,
+            next_seq: state.changes.next_seq,
+        })
+    }
+
+    async fn put_shard_assignment(
+        &self,
+        assignment: ShardAssignment,
+    ) -> StoreResult<ShardAssignment> {
+        assignment.validate().map_err(invalid_shard)?;
+
+        // The stream bounds the shard number, and it has to exist at all.
+        let stream = self
+            .streams
+            .read()
+            .await
+            .get(&assignment.key.stream_key())
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound("stream".into()))?;
+        assignment
+            .validate_within(stream.shards)
+            .map_err(invalid_shard)?;
+
+        // Checked here rather than by a foreign key: the node reference has none
+        // deliberately, so that deleting a node cannot cascade an assignment away.
+        {
+            let nodes = self.nodes.read().await;
+            for node_id in assignment.nodes() {
+                if !nodes.records.contains_key(node_id) {
+                    return Err(StoreError::NotFound(format!("node {node_id}")));
+                }
+            }
+        }
+
+        let mut state = self.shards.write().await;
+        let (op, generation) = match state.records.get(&assignment.key) {
+            Some(existing) => {
+                if !existing.state.can_transition_to(assignment.state) {
+                    return Err(invalid_shard(
+                        crate::model::ShardValidationError::UnsupportedTransition {
+                            from: existing.state,
+                            to: assignment.state,
+                        },
+                    ));
+                }
+                (
+                    ShardAssignmentChangeOp::Updated,
+                    existing.generation.saturating_add(1),
+                )
+            }
+            None => (ShardAssignmentChangeOp::Assigned, 0),
+        };
+
+        // Store-owned, so a caller cannot pin a generation and make its own
+        // stale report look current.
+        let stored = ShardAssignment {
+            generation,
+            ..assignment
+        };
+        state.records.insert(stored.key.clone(), stored.clone());
+        state.record(op, &stored.key, Some(stored.clone()));
+        metrics::counter!("felix_shard_assignment_changes_total", "op" => match op {
+            ShardAssignmentChangeOp::Assigned => "assigned",
+            ShardAssignmentChangeOp::Updated => "updated",
+            ShardAssignmentChangeOp::Unassigned => "unassigned",
+        })
+        .increment(1);
+        Ok(stored)
+    }
+
+    async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
+        self.shards
+            .read()
+            .await
+            .records
+            .get(key)
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound("shard assignment".into()))
+    }
+
+    async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
+        let mut items: Vec<ShardAssignment> =
+            self.shards.read().await.records.values().cloned().collect();
+        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
+        Ok(items)
+    }
+
+    async fn list_shard_assignments_for_node(
+        &self,
+        node_id: &str,
+    ) -> StoreResult<Vec<ShardAssignment>> {
+        let mut items: Vec<ShardAssignment> = self
+            .shards
+            .read()
+            .await
+            .records
+            .values()
+            .filter(|assignment| assignment.leader == node_id)
+            .cloned()
+            .collect();
+        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
+        Ok(items)
+    }
+
+    async fn delete_shard_assignment(&self, key: &ShardKey) -> StoreResult<()> {
+        let mut state = self.shards.write().await;
+        if state.records.remove(key).is_none() {
+            return Err(StoreError::NotFound("shard assignment".into()));
+        }
+        state.record(ShardAssignmentChangeOp::Unassigned, key, None);
+        metrics::counter!("felix_shard_assignment_changes_total", "op" => "unassigned")
+            .increment(1);
+        Ok(())
+    }
+
+    async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
+        let state = self.shards.read().await;
+        let mut items: Vec<ShardAssignment> = state.records.values().cloned().collect();
+        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
+        Ok(Snapshot {
+            items,
+            next_seq: state.changes.next_seq,
+        })
+    }
+
+    async fn shard_assignment_changes(
+        &self,
+        since: u64,
+    ) -> StoreResult<ChangeSet<ShardAssignmentChange>> {
+        let state = self.shards.read().await;
         let items = state
             .changes
             .items
@@ -1137,6 +1332,14 @@ mod tests {
         let store = std::sync::Arc::new(store_with_limits(100, 1000));
         crate::store::node_contract::run_node_contract(store.clone()).await;
         crate::store::node_contract::run_node_concurrency_contract(store).await;
+    }
+
+    /// The same suite Postgres runs.
+    #[tokio::test]
+    async fn satisfies_the_shard_store_contract() {
+        let store = std::sync::Arc::new(store_with_limits(100, 1000));
+        crate::store::shard_contract::run_shard_contract(store.clone()).await;
+        crate::store::shard_contract::run_shard_concurrency_contract(store).await;
     }
 
     fn store_with_limits(changes_limit: u64, retention: i64) -> InMemoryStore {

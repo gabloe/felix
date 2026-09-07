@@ -244,7 +244,7 @@ pub enum NodeChangeOp {
     Deregistered,
 }
 
-fn validate_node_id(node_id: &str) -> Result<(), NodeValidationError> {
+pub(crate) fn validate_node_id(node_id: &str) -> Result<(), NodeValidationError> {
     if node_id.is_empty() {
         return Err(NodeValidationError::EmptyNodeId);
     }

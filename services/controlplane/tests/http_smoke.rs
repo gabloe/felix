@@ -12,8 +12,8 @@ use controlplane::auth::idp_registry::IdpIssuerConfig;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodeLifecycle, NodePatchRequest, Stream, StreamChange, StreamKey,
-    StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodeLifecycle, NodePatchRequest, ShardAssignment, ShardAssignmentChange,
+    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
 use controlplane::store::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
@@ -985,6 +985,43 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn node_changes(&self, _since: u64) -> StoreResult<ChangeSet<NodeChange>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn put_shard_assignment(
+        &self,
+        _assignment: ShardAssignment,
+    ) -> StoreResult<ShardAssignment> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn get_shard_assignment(&self, _key: &ShardKey) -> StoreResult<ShardAssignment> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn list_shard_assignments_for_node(
+        &self,
+        _node_id: &str,
+    ) -> StoreResult<Vec<ShardAssignment>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn delete_shard_assignment(&self, _key: &ShardKey) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn shard_assignment_changes(
+        &self,
+        _since: u64,
+    ) -> StoreResult<ChangeSet<ShardAssignmentChange>> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
