@@ -114,6 +114,14 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::nodes::list_shard_assignments),
         )
         .route(
+            "/v1/shard-assignments/snapshot",
+            axum::routing::get(api::nodes::shard_assignment_snapshot),
+        )
+        .route(
+            "/v1/shard-assignments/changes",
+            axum::routing::get(api::nodes::shard_assignment_changes),
+        )
+        .route(
             "/v1/nodes/{node_id}/heartbeat",
             axum::routing::post(api::nodes::report_health),
         )

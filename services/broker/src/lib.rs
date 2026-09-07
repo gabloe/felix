@@ -13,6 +13,8 @@ pub mod durable_config;
 pub mod membership;
 pub mod membership_metrics;
 pub mod quic;
+pub mod shard_watch;
+pub mod shard_watch_metrics;
 pub mod timings;
 pub mod transport;
 
