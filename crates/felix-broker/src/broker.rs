@@ -465,6 +465,7 @@ impl Broker {
                 subscriber_id,
             },
             pending: VecDeque::new(),
+            skip_below: None,
         })
     }
 
@@ -526,6 +527,9 @@ impl Broker {
                     subscriber_id,
                 },
                 pending: VecDeque::new(),
+                // A publish that claimed this offset before the ring saw it
+                // will arrive live; the caller asked to resume at `next_seq`.
+                skip_below: Some(cursor.next_seq),
             },
         ))
     }
@@ -678,6 +682,7 @@ impl Broker {
                 receiver,
                 guard,
                 pending: VecDeque::new(),
+                skip_below: Some(requested),
             },
         })
     }

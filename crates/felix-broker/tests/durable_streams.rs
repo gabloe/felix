@@ -1432,3 +1432,70 @@ async fn a_trimmed_read_reports_cursor_too_old_rather_than_a_storage_error() {
         other => panic!("expected CursorTooOld, got {other:?}"),
     }
 }
+
+/// A cursor must never name a position past the live edge.
+///
+/// `cursor_tail` reads the durable log, and a publish claims its offsets before
+/// the record reaches the replay ring. Taken between those two points, the
+/// cursor named an offset the ring had not yet seen: the backlog came back
+/// empty, and the in-flight record then arrived *live* — below the cursor the
+/// caller was told to resume from. A subscriber resuming from a checkpoint saw
+/// one record twice.
+///
+/// Driven by publishing concurrently and sampling the seam repeatedly, because
+/// the window is exactly one publish wide.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cursor_never_points_past_the_live_edge() {
+    const TOTAL: u32 = 400;
+
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::None).await;
+    register(&broker, "orders", true).await;
+
+    let publishing = {
+        let broker = Arc::clone(&broker);
+        tokio::spawn(async move {
+            for i in 0..TOTAL {
+                broker
+                    .publish("t1", "default", "orders", payload(&format!("v{i:04}")))
+                    .await
+                    .expect("publish");
+            }
+        })
+    };
+
+    // Sample the seam repeatedly while publishing is in flight. Each sample
+    // asserts the property directly: the first record delivered from a cursor
+    // is the cursor's own position, never something older.
+    for _ in 0..250 {
+        let cursor = broker
+            .cursor_tail("t1", "default", "orders")
+            .await
+            .expect("cursor");
+        let from = cursor.next_seq();
+        let (backlog, mut sub) = broker
+            .subscribe_with_cursor("t1", "default", "orders", cursor)
+            .await
+            .expect("subscribe");
+
+        let first = match backlog.first() {
+            Some(bytes) => Some(bytes.clone()),
+            None => tokio::time::timeout(Duration::from_millis(50), sub.recv())
+                .await
+                .ok()
+                .flatten(),
+        };
+
+        if let Some(first) = first {
+            let text = String::from_utf8(first.to_vec()).expect("utf8");
+            let index: u32 = text.trim_start_matches('v').parse().expect("index");
+            assert!(
+                u64::from(index) >= from,
+                "resuming at {from} delivered {text} first, which is older than the cursor",
+            );
+        }
+        tokio::task::yield_now().await;
+    }
+
+    publishing.await.expect("join");
+}
