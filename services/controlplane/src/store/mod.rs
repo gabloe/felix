@@ -10,7 +10,8 @@ use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodePatchRequest, Stream, StreamChange, StreamKey, StreamPatchRequest,
+    Tenant, TenantChange,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -18,6 +19,8 @@ use thiserror::Error;
 pub mod memory;
 pub mod postgres;
 
+#[cfg(test)]
+mod node_contract;
 #[cfg(test)]
 mod postgres_tests;
 
@@ -108,6 +111,42 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn delete_cache(&self, key: &CacheKey) -> StoreResult<()>;
     async fn cache_snapshot(&self) -> StoreResult<Snapshot<Cache>>;
     async fn cache_changes(&self, since: u64) -> StoreResult<ChangeSet<CacheChange>>;
+
+    /// Register a node, or revive the record a restarting node already has.
+    ///
+    /// `node_id` identifies a broker across restarts, so registering an id that
+    /// already exists updates its spec and bumps `incarnation` rather than
+    /// conflicting. `registered_at_millis` is preserved from the first
+    /// registration; the caller's value is used only for a new node.
+    ///
+    /// Conflicts only when `advertise_addr` belongs to a different node.
+    async fn register_node(&self, node: Node) -> StoreResult<Node>;
+    async fn get_node(&self, node_id: &str) -> StoreResult<Node>;
+    async fn list_nodes(&self) -> StoreResult<Vec<Node>>;
+    /// Apply an operator patch. Rejects a lifecycle transition the model
+    /// disallows, and never touches heartbeat-derived fields.
+    async fn patch_node(&self, node_id: &str, patch: NodePatchRequest) -> StoreResult<Node>;
+    async fn delete_node(&self, node_id: &str) -> StoreResult<()>;
+    /// Record liveness without emitting a change.
+    ///
+    /// Heartbeats arrive per node per interval; putting each one in the
+    /// changefeed would evict every real membership change from the retention
+    /// window. Only a lifecycle move a heartbeat causes is worth publishing,
+    /// and that is [`ControlPlaneStore::set_node_lifecycle`].
+    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()>;
+    /// Move a node's lifecycle from an observed signal rather than an operator.
+    ///
+    /// Unlike [`ControlPlaneStore::patch_node`] this may drive transitions an
+    /// operator cannot, because liveness expiry and graceful shutdown are not
+    /// admin actions. Returns `Ok(None)` when the node is already there, so a
+    /// repeated sweep does not publish a change per pass.
+    async fn set_node_lifecycle(
+        &self,
+        node_id: &str,
+        lifecycle: crate::model::NodeLifecycle,
+    ) -> StoreResult<Option<Node>>;
+    async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>>;
+    async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>>;
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool>;
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool>;

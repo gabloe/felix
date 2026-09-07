@@ -32,8 +32,10 @@ use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::config::PostgresConfig;
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
-    NamespaceChangeOp, NamespaceKey, RetentionPolicy, Stream, StreamChange, StreamChangeOp,
-    StreamKey, StreamKind, StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
+    NamespaceChangeOp, NamespaceKey, Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle,
+    NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, RetentionPolicy, Stream,
+    StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest, Tenant, TenantChange,
+    TenantChangeOp,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -1304,6 +1306,265 @@ impl ControlPlaneStore for PostgresStore {
         Ok(ChangeSet { items, next_seq })
     }
 
+    async fn register_node(&self, node: Node) -> StoreResult<Node> {
+        node.validate().map_err(invalid_node)?;
+        let mut tx = self.pool.begin().await?;
+
+        let existing = sqlx::query_as::<_, DbNode>(NODE_SELECT_BY_ID_FOR_UPDATE)
+            .bind(&node.node_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(node_from_db)
+            .transpose()?;
+
+        let stored = match existing {
+            Some(existing) => {
+                if !existing
+                    .status
+                    .lifecycle
+                    .can_transition_to(node.status.lifecycle)
+                {
+                    return Err(invalid_node_transition(
+                        existing.status.lifecycle,
+                        node.status.lifecycle,
+                    ));
+                }
+                Node {
+                    status: NodeStatus {
+                        // The identity outlives the process, so its first
+                        // registration is what dates it.
+                        registered_at_millis: existing.status.registered_at_millis,
+                        incarnation: existing.status.incarnation + 1,
+                        ..node.status
+                    },
+                    ..node
+                }
+            }
+            None => Node {
+                status: NodeStatus {
+                    incarnation: 0,
+                    ..node.status
+                },
+                ..node
+            },
+        };
+
+        let upsert = sqlx::query(
+            r#"INSERT INTO nodes (node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (node_id) DO UPDATE SET
+                 advertise_addr = EXCLUDED.advertise_addr,
+                 region = EXCLUDED.region,
+                 labels = EXCLUDED.labels,
+                 capacity_max_shards = EXCLUDED.capacity_max_shards,
+                 capacity_weight = EXCLUDED.capacity_weight,
+                 lifecycle = EXCLUDED.lifecycle,
+                 last_heartbeat_at_millis = EXCLUDED.last_heartbeat_at_millis,
+                 registered_at_millis = EXCLUDED.registered_at_millis,
+                 incarnation = EXCLUDED.incarnation,
+                 updated_at = now()"#,
+        );
+        let upsert = bind_node(upsert, &stored).execute(&mut *tx).await;
+        if let Err(err) = upsert {
+            if is_unique_violation(&err) {
+                return Err(StoreError::Conflict(format!(
+                    "advertise_addr {} is already registered to another node",
+                    stored.spec.advertise_addr
+                )));
+            }
+            return Err(StoreError::Unexpected(err.into()));
+        }
+
+        record_node_change(
+            &mut tx,
+            NodeChangeOp::Registered,
+            &stored.node_id,
+            Some(&stored),
+        )
+        .await?;
+        tx.commit().await?;
+        metrics::counter!("felix_node_changes_total", "op" => "registered").increment(1);
+        Ok(stored)
+    }
+
+    async fn get_node(&self, node_id: &str) -> StoreResult<Node> {
+        sqlx::query_as::<_, DbNode>(NODE_SELECT_BY_ID)
+            .bind(node_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(node_from_db)
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound("node".into()))
+    }
+
+    async fn list_nodes(&self) -> StoreResult<Vec<Node>> {
+        let rows = sqlx::query_as::<_, DbNode>(NODE_SELECT_ALL)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(node_from_db).collect()
+    }
+
+    async fn patch_node(&self, node_id: &str, patch: NodePatchRequest) -> StoreResult<Node> {
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query_as::<_, DbNode>(NODE_SELECT_BY_ID_FOR_UPDATE)
+            .bind(node_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(node_from_db)
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+
+        let patched = patch.apply(&existing).map_err(invalid_node)?;
+
+        let update = sqlx::query(
+            r#"UPDATE nodes SET advertise_addr = $2, region = $3, labels = $4,
+                 capacity_max_shards = $5, capacity_weight = $6, lifecycle = $7,
+                 last_heartbeat_at_millis = $8, registered_at_millis = $9, incarnation = $10,
+                 updated_at = now()
+               WHERE node_id = $1"#,
+        );
+        let update = bind_node(update, &patched).execute(&mut *tx).await;
+        if let Err(err) = update {
+            if is_unique_violation(&err) {
+                return Err(StoreError::Conflict(format!(
+                    "advertise_addr {} is already registered to another node",
+                    patched.spec.advertise_addr
+                )));
+            }
+            return Err(StoreError::Unexpected(err.into()));
+        }
+
+        record_node_change(&mut tx, NodeChangeOp::Updated, node_id, Some(&patched)).await?;
+        tx.commit().await?;
+        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+        Ok(patched)
+    }
+
+    async fn delete_node(&self, node_id: &str) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
+        let deleted = sqlx::query("DELETE FROM nodes WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&mut *tx)
+            .await?;
+        if deleted.rows_affected() == 0 {
+            return Err(StoreError::NotFound("node".into()));
+        }
+        record_node_change(&mut tx, NodeChangeOp::Deregistered, node_id, None).await?;
+        tx.commit().await?;
+        metrics::counter!("felix_node_changes_total", "op" => "deregistered").increment(1);
+        Ok(())
+    }
+
+    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()> {
+        // GREATEST, not assignment: heartbeats from two connections can arrive
+        // out of order, and the newest observation is the one that matters.
+        // No change is emitted -- see the trait for why.
+        let updated = sqlx::query(
+            r#"UPDATE nodes
+               SET last_heartbeat_at_millis = GREATEST(last_heartbeat_at_millis, $2),
+                   updated_at = now()
+               WHERE node_id = $1"#,
+        )
+        .bind(node_id)
+        .bind(at_millis as i64)
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(StoreError::NotFound("node".into()));
+        }
+        Ok(())
+    }
+
+    async fn set_node_lifecycle(
+        &self,
+        node_id: &str,
+        lifecycle: NodeLifecycle,
+    ) -> StoreResult<Option<Node>> {
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query_as::<_, DbNode>(NODE_SELECT_BY_ID_FOR_UPDATE)
+            .bind(node_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(node_from_db)
+            .transpose()?
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+
+        if existing.status.lifecycle == lifecycle {
+            return Ok(None);
+        }
+        if !existing.status.lifecycle.can_transition_to(lifecycle) {
+            return Err(invalid_node_transition(
+                existing.status.lifecycle,
+                lifecycle,
+            ));
+        }
+
+        let mut updated = existing;
+        updated.status.lifecycle = lifecycle;
+        sqlx::query("UPDATE nodes SET lifecycle = $2, updated_at = now() WHERE node_id = $1")
+            .bind(node_id)
+            .bind(node_lifecycle_to_str(lifecycle))
+            .execute(&mut *tx)
+            .await?;
+
+        record_node_change(&mut tx, NodeChangeOp::Updated, node_id, Some(&updated)).await?;
+        tx.commit().await?;
+        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+        Ok(Some(updated))
+    }
+
+    async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>> {
+        // REPEATABLE READ, not just one transaction: under the default READ
+        // COMMITTED the two statements below see different snapshots, so a node
+        // committed between them is absent from `items` while its seq is
+        // already counted in `next_seq` -- lost to every consumer that resumes
+        // there. Together with seq being handed out in commit order (see
+        // 0005_nodes.sql), this makes snapshot-then-poll exactly-once.
+        let mut tx = self.pool.begin().await?;
+        begin_consistent_read(&mut tx).await?;
+        let rows = sqlx::query_as::<_, DbNode>(NODE_SELECT_ALL)
+            .fetch_all(&mut *tx)
+            .await?;
+        let items = rows
+            .into_iter()
+            .map(node_from_db)
+            .collect::<StoreResult<Vec<_>>>()?;
+        let next_seq = sqlx::query_scalar::<_, i64>("SELECT next_seq FROM node_change_seq")
+            .fetch_one(&mut *tx)
+            .await? as u64;
+        tx.commit().await?;
+        Ok(Snapshot { items, next_seq })
+    }
+
+    async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>> {
+        // Consistent for the same reason as `node_snapshot`: the rows and
+        // `next_seq` have to describe one instant.
+        let mut tx = self.pool.begin().await?;
+        begin_consistent_read(&mut tx).await?;
+        let rows = sqlx::query_as::<_, NodeChangeRow>(
+            r#"SELECT seq, op, node_id, payload FROM node_changes WHERE seq >= $1 ORDER BY seq ASC LIMIT $2"#,
+        )
+        .bind(since as i64)
+        .bind(self.limit())
+        .fetch_all(&mut *tx)
+        .await?;
+        let next_seq = sqlx::query_scalar::<_, i64>("SELECT next_seq FROM node_change_seq")
+            .fetch_one(&mut *tx)
+            .await? as u64;
+        tx.commit().await?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            items.push(NodeChange {
+                seq: row.seq as u64,
+                op: parse_node_change_op(&row.op)?,
+                node_id: row.node_id,
+                node: row.payload.map(serde_json::from_value).transpose()?,
+            });
+        }
+        Ok(ChangeSet { items, next_seq })
+    }
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE tenant_id = $1)")
@@ -1336,6 +1597,161 @@ impl ControlPlaneStore for PostgresStore {
     fn backend_name(&self) -> &'static str {
         "postgres"
     }
+}
+
+const NODE_SELECT_ALL: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes ORDER BY node_id"#;
+const NODE_SELECT_BY_ID: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1"#;
+/// `FOR UPDATE` so a concurrent register or patch of the same node waits rather
+/// than reading the row this transaction is about to replace.
+const NODE_SELECT_BY_ID_FOR_UPDATE: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1 FOR UPDATE"#;
+
+/// Bind a node in the column order the insert and the update both use.
+fn bind_node<'q>(
+    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    node: &'q Node,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    query
+        .bind(&node.node_id)
+        .bind(&node.spec.advertise_addr)
+        .bind(&node.spec.region)
+        .bind(serde_json::to_value(&node.spec.labels).unwrap_or_default())
+        .bind(node.spec.capacity.max_shards.map(|v| v as i32))
+        .bind(node.spec.capacity.weight as i32)
+        .bind(node_lifecycle_to_str(node.status.lifecycle))
+        .bind(node.status.last_heartbeat_at_millis as i64)
+        .bind(node.status.registered_at_millis as i64)
+        .bind(node.status.incarnation as i64)
+}
+
+/// Make the rest of the transaction read one consistent snapshot of the
+/// database, rather than re-reading between statements.
+async fn begin_consistent_read(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> StoreResult<()> {
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Append a change, taking its `seq` from the locked counter.
+///
+/// The `UPDATE ... RETURNING` holds a row lock until this transaction commits,
+/// so a concurrent writer blocks and takes the next number only afterwards.
+/// That is what makes `seq` order equal commit order, which is what lets a
+/// consumer resume at `next_seq` without missing anything. See 0005_nodes.sql.
+async fn record_node_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    op: NodeChangeOp,
+    node_id: &str,
+    node: Option<&Node>,
+) -> StoreResult<()> {
+    let seq = sqlx::query_scalar::<_, i64>(
+        "UPDATE node_change_seq SET next_seq = next_seq + 1 RETURNING next_seq - 1",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+
+    sqlx::query("INSERT INTO node_changes (seq, op, node_id, payload) VALUES ($1, $2, $3, $4)")
+        .bind(seq)
+        .bind(node_change_op_to_str(&op))
+        .bind(node_id)
+        .bind(node.map(serde_json::to_value).transpose()?)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Row shape for the `nodes` table.
+#[derive(Debug, Clone, FromRow)]
+struct DbNode {
+    node_id: String,
+    advertise_addr: String,
+    region: String,
+    labels: serde_json::Value,
+    capacity_max_shards: Option<i32>,
+    capacity_weight: i32,
+    lifecycle: String,
+    last_heartbeat_at_millis: i64,
+    registered_at_millis: i64,
+    incarnation: i64,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct NodeChangeRow {
+    seq: i64,
+    op: String,
+    node_id: String,
+    payload: Option<serde_json::Value>,
+}
+
+fn node_from_db(row: DbNode) -> StoreResult<Node> {
+    Ok(Node {
+        node_id: row.node_id,
+        spec: NodeSpec {
+            advertise_addr: row.advertise_addr,
+            region: row.region,
+            labels: serde_json::from_value(row.labels)?,
+            capacity: NodeCapacity {
+                max_shards: row.capacity_max_shards.map(|v| v as u32),
+                weight: row.capacity_weight as u32,
+            },
+        },
+        status: NodeStatus {
+            lifecycle: parse_node_lifecycle(&row.lifecycle)?,
+            last_heartbeat_at_millis: row.last_heartbeat_at_millis as u64,
+            registered_at_millis: row.registered_at_millis as u64,
+            incarnation: row.incarnation as u64,
+        },
+    })
+}
+
+fn node_lifecycle_to_str(lifecycle: NodeLifecycle) -> &'static str {
+    match lifecycle {
+        NodeLifecycle::Live => "live",
+        NodeLifecycle::Draining => "draining",
+        NodeLifecycle::Down => "down",
+        NodeLifecycle::Left => "left",
+    }
+}
+
+fn parse_node_lifecycle(value: &str) -> StoreResult<NodeLifecycle> {
+    match value {
+        "live" => Ok(NodeLifecycle::Live),
+        "draining" => Ok(NodeLifecycle::Draining),
+        "down" => Ok(NodeLifecycle::Down),
+        "left" => Ok(NodeLifecycle::Left),
+        other => Err(StoreError::Unexpected(anyhow!(
+            "unknown node lifecycle: {other}"
+        ))),
+    }
+}
+
+fn node_change_op_to_str(op: &NodeChangeOp) -> &'static str {
+    match op {
+        NodeChangeOp::Registered => "Registered",
+        NodeChangeOp::Updated => "Updated",
+        NodeChangeOp::Deregistered => "Deregistered",
+    }
+}
+
+fn parse_node_change_op(value: &str) -> StoreResult<NodeChangeOp> {
+    match value {
+        "Registered" => Ok(NodeChangeOp::Registered),
+        "Updated" => Ok(NodeChangeOp::Updated),
+        "Deregistered" => Ok(NodeChangeOp::Deregistered),
+        other => Err(StoreError::Unexpected(anyhow!(
+            "unknown node change op: {other}"
+        ))),
+    }
+}
+
+/// A model rejection is the caller's fault, so it surfaces as a conflict rather
+/// than an internal error.
+fn invalid_node(err: NodeValidationError) -> StoreError {
+    StoreError::Conflict(err.to_string())
+}
+
+fn invalid_node_transition(from: NodeLifecycle, to: NodeLifecycle) -> StoreError {
+    invalid_node(NodeValidationError::UnsupportedTransition { from, to })
 }
 
 fn is_unique_violation(err: &sqlx::Error) -> bool {
