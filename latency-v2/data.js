@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788798728225,
+  "lastUpdate": 1788801386978,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4026,6 +4026,72 @@ window.BENCHMARK_DATA = {
             "range": "745.98",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1401.00\nmean: 1196.80\nstdev: 745.98\ncv: 62.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "907175dc03001793e84c4215794aa438a44bb281",
+          "message": "feat(controlplane): add the persisted ShardAssignment resource (#226)\n\nOne assignment per (stream, shard), stored in both backends with an ordered\nchangefeed, plus an operator listing at GET /v1/shard-assignments.\n\n`generation` is owned by the store, never the caller, and increments on every\nwrite. A broker reports status against the generation it read, so a broker that\nwas slow, partitioned, or restarted cannot resurrect an ownership decision\nplacement already replaced. The contract sends a caller-chosen generation of 999\non every write and asserts it is ignored.\n\nTwo references, two policies, chosen rather than inherited. The stream is a\nforeign key with ON DELETE CASCADE: once a stream is gone its shards do not\nexist, and keeping ownership records for them leaves placement chasing ghosts.\nThe node deliberately has no foreign key -- deleting a node that still leads a\nshard is refused, because a cascade would erase the only record of where that\nshard's data lives, turning an operator's tidy-up into silent orphaning.\n\nConcurrent writes to one shard serialise on a FOR UPDATE row lock, so eight\nracing writers take eight distinct consecutive generations rather than several\nreading 0 and all storing 1. Verified in both directions: removing FOR UPDATE\nfails that case five times in five.\n\nStreams cannot be resized today -- StreamPatchRequest has no shards field -- so\nno assignment can be orphaned by a shrink. Documented for when it arrives.\n\nRefs #98\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T10:14:17-07:00",
+          "tree_id": "f88bcaa682d2e7db75acb2655b46f4ef14f2d71f",
+          "url": "https://github.com/gabloe/felix/commit/907175dc03001793e84c4215794aa438a44bb281"
+        },
+        "date": 1788801384879,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 158.20\nstdev: 1.79\ncv: 1.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "5.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 200.40\nstdev: 5.13\ncv: 2.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 228,
+            "range": "815.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 228.00\nmean: 657.60\nstdev: 815.39\ncv: 123.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 195,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 195.00\nmean: 195.20\nstdev: 1.48\ncv: 0.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 402,
+            "range": "24.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 402.00\nmean: 408.60\nstdev: 24.70\ncv: 6.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 638,
+            "range": "99.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 638.00\nmean: 665.20\nstdev: 99.67\ncv: 14.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
