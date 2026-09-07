@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788755048332,
+  "lastUpdate": 1788797044169,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -2964,6 +2964,58 @@ window.BENCHMARK_DATA = {
             "range": "10251.71",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 556540.15\nmean: 551738.61\nstdev: 10251.71\ncv: 1.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "071b2ea6c0ffec1ecb9787020deaf1b7a7b9731b",
+          "message": "feat(broker): register, heartbeat, drain, and deregister as a cluster member (#221)\n\n* feat(broker): register, heartbeat, drain, and deregister as a cluster member\n\nAdds the control-plane endpoints a broker needs to join and leave -- POST\n/v1/nodes, /drain, /deregister -- and the broker-side client that drives them.\n\nMembership is opt-in on FELIX_NODE_ID. A single-node broker has no cluster to\njoin, and registering one would put a node in the catalog placement would then\ntry to use.\n\nRegistration waits until the broker can serve. Advertising a node placement may\nroute to before it can answer is worse than advertising it a moment late.\n\nA 4xx registration is terminal and stops the process with the reason; a wrong\nidentity stays wrong, and retrying only hides it. An unreachable control plane\nis retried with bounded backoff, because it may simply be starting. Startup also\nfails outright on a node id with no advertised address, no control-plane URL, or\nan address that does not parse -- a broker that guessed its own address would\nregister something unreachable, and that surfaces later as peers unable to\nconnect to a node the catalog calls live.\n\nHeartbeat failures are counted and logged but never fatal. A briefly unreachable\ncontrol plane must not take down a broker that is serving fine; if it stays\nunreachable, expiry reaches the correct conclusion without help.\n\nShutdown drains then deregisters before connections drain, so nothing new is\nplaced here while in-flight work finishes. That is what separates a graceful\nstop (left) from a crash (down).\n\nThe integration test drives the real control-plane router rather than a stub, so\na drift in the HTTP contract between the two services fails here instead of in a\ncluster.\n\nRefs #95\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(deps): pin the controlplane dev-dependency and clear the yanked chacha20\n\nTwo unrelated `cargo deny` problems.\n\nThe failure was mine: the `controlplane` dev-dependency added for the membership\nintegration test carried a path with no version, which `wildcards = \"deny\"`\nrejects. Every other path dependency in the workspace pins a version; this now\nmatches.\n\nThe yanked chacha20 was a separate pre-existing warning, not the failure --\n`advisories` passed throughout. 0.10.2 is a plain patch over the yanked 0.10.1\nand reaches us through rand, quinn-proto, and sqlx-postgres rather than any\ndirect dependency.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:01:19-07:00",
+          "tree_id": "167022bb0b375e2329717575bc6e02496bb9de34",
+          "url": "https://github.com/gabloe/felix/commit/071b2ea6c0ffec1ecb9787020deaf1b7a7b9731b"
+        },
+        "date": 1788797043449,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 221772.34,
+            "range": "7677.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 221772.34\nmean: 225495.28\nstdev: 7677.05\ncv: 3.40%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 221772.34,
+            "range": "7677.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 221772.34\nmean: 225495.28\nstdev: 7677.05\ncv: 3.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55328.5,
+            "range": "780.54",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55328.50\nmean: 55545.81\nstdev: 780.54\ncv: 1.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553284.98,
+            "range": "7805.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553284.98\nmean: 555458.06\nstdev: 7805.45\ncv: 1.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
