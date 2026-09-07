@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788748652910,
+  "lastUpdate": 1788755045865,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3696,6 +3696,72 @@ window.BENCHMARK_DATA = {
             "range": "673.33",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1609.00\nmean: 1298.80\nstdev: 673.33\ncv: 51.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e1087f6ae4adbf70e95d0fcc5c6d116c3bb607b",
+          "message": "feat(controlplane): report broker health and expire silent nodes (#220)\n\nAdds `POST /v1/nodes/{node_id}/heartbeat`, a configurable expiry sweep, and the\nstore primitives behind both.\n\nNothing reports that a broker has stopped, so silence is the only signal. A\nsweep marks a node down once its last heartbeat is older than\n`expiry_timeout_ms`, defaulting to three intervals: one lost heartbeat is a\nhiccup, three is a pattern. Startup fails if the timeout does not exceed the\ninterval, since that expires brokers heartbeating exactly as configured.\n\nFour rules, each tested:\n\nThe recorded time is the control plane's clock. A broker that could supply it\ncould postpone its own expiry indefinitely.\n\nAn older incarnation is rejected. A heartbeat delayed past a restart belongs to\na process the broker has already replaced, and honouring it would report a dead\nincarnation as live.\n\nA heartbeat never revives a down node. It proves a process is running, not that\nit still owns the identity, so the broker must register again.\n\nA heartbeat publishes no change, because per-node per-interval events would\nevict every real membership change from the retention window.\n\nThe sweep is safe across control-plane instances: the Postgres UPDATE claims\nrows under lock and re-checks its predicate, so a concurrent sweep matches zero\nrows. Asserted with six racing sweepers over twelve nodes, not assumed.\n\nAuthentication is out of scope here and tracked in #126; the endpoint and the\ndocs both say so plainly.\n\nRefs #94\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-06T21:21:50-07:00",
+          "tree_id": "546dab3e94f726d73c4da846f7f78ce355d70548",
+          "url": "https://github.com/gabloe/felix/commit/5e1087f6ae4adbf70e95d0fcc5c6d116c3bb607b"
+        },
+        "date": 1788755044369,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "3.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.20\nstdev: 3.11\ncv: 1.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "71.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 239.20\nstdev: 71.00\ncv: 29.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 240,
+            "range": "134.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 240.00\nmean: 299.80\nstdev: 134.16\ncv: 44.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.40\nstdev: 1.14\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 408,
+            "range": "18.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 408.00\nmean: 415.20\nstdev: 18.75\ncv: 4.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 873,
+            "range": "626.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 873.00\nmean: 1099.60\nstdev: 626.04\ncv: 56.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
