@@ -38,8 +38,9 @@ use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
-    NamespaceChangeOp, NamespaceKey, Stream, StreamChange, StreamChangeOp, StreamKey,
-    StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
+    NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
+    NodePatchRequest, Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant,
+    TenantChange, TenantChangeOp,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -88,6 +89,37 @@ impl<T> ChangeLog<T> {
     }
 }
 
+/// A model rejection is the caller's fault, so it surfaces as a conflict
+/// rather than an internal error.
+fn invalid_node(err: crate::model::NodeValidationError) -> StoreError {
+    StoreError::Conflict(err.to_string())
+}
+
+fn invalid_transition(from: NodeLifecycle, to: NodeLifecycle) -> StoreError {
+    invalid_node(crate::model::NodeValidationError::UnsupportedTransition { from, to })
+}
+
+/// Node records and their change log under one lock.
+///
+/// Kept together so a snapshot cannot observe a record set and a `next_seq`
+/// that disagree.
+#[derive(Debug)]
+struct NodeState {
+    records: HashMap<String, Node>,
+    changes: ChangeLog<NodeChange>,
+}
+
+impl NodeState {
+    fn record(&mut self, op: NodeChangeOp, node_id: &str, node: Option<Node>) {
+        self.changes.record(|seq| NodeChange {
+            seq,
+            op,
+            node_id: node_id.to_string(),
+            node,
+        });
+    }
+}
+
 /// In-memory control-plane store.
 ///
 /// ## Data structures
@@ -114,6 +146,12 @@ pub struct InMemoryStore {
     streams: Arc<RwLock<HashMap<StreamKey, Stream>>>,
     /// Authoritative caches keyed by `(tenant_id, namespace, cache)`.
     caches: Arc<RwLock<HashMap<CacheKey, Cache>>>,
+    /// Broker membership keyed by `node_id`, with its change log.
+    ///
+    /// One lock over both, unlike the entities above: a snapshot has to read
+    /// the records and the log position as one value, or a change committed
+    /// between the two reads is missed by every consumer that resumes from it.
+    nodes: Arc<RwLock<NodeState>>,
     /// Bounded change log for tenant changes.
     ///
     /// `next_seq` is per-entity-type (not a global sequence across all entities).
@@ -153,6 +191,10 @@ impl InMemoryStore {
             namespaces: Arc::new(RwLock::new(HashMap::new())),
             streams: Arc::new(RwLock::new(HashMap::new())),
             caches: Arc::new(RwLock::new(HashMap::new())),
+            nodes: Arc::new(RwLock::new(NodeState {
+                records: HashMap::new(),
+                changes: ChangeLog::new(capacity),
+            })),
             tenant_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
             namespace_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
             stream_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
@@ -685,6 +727,172 @@ impl ControlPlaneStore for InMemoryStore {
         })
     }
 
+    async fn register_node(&self, node: Node) -> StoreResult<Node> {
+        node.validate().map_err(invalid_node)?;
+        let mut state = self.nodes.write().await;
+
+        if let Some((holder, _)) = state.records.iter().find(|(id, existing)| {
+            existing.spec.advertise_addr == node.spec.advertise_addr && *id != &node.node_id
+        }) {
+            return Err(StoreError::Conflict(format!(
+                "advertise_addr {} is already registered to node {holder}",
+                node.spec.advertise_addr
+            )));
+        }
+
+        let stored = match state.records.get(&node.node_id) {
+            Some(existing) => {
+                if !existing
+                    .status
+                    .lifecycle
+                    .can_transition_to(node.status.lifecycle)
+                {
+                    return Err(invalid_transition(
+                        existing.status.lifecycle,
+                        node.status.lifecycle,
+                    ));
+                }
+                Node {
+                    status: crate::model::NodeStatus {
+                        // The identity outlives the process, so its first
+                        // registration is what dates it.
+                        registered_at_millis: existing.status.registered_at_millis,
+                        incarnation: existing.status.incarnation + 1,
+                        ..node.status
+                    },
+                    ..node
+                }
+            }
+            None => Node {
+                status: crate::model::NodeStatus {
+                    incarnation: 0,
+                    ..node.status
+                },
+                ..node
+            },
+        };
+
+        state.records.insert(stored.node_id.clone(), stored.clone());
+        state.record(
+            NodeChangeOp::Registered,
+            &stored.node_id,
+            Some(stored.clone()),
+        );
+        metrics::counter!("felix_node_changes_total", "op" => "registered").increment(1);
+        Ok(stored)
+    }
+
+    async fn get_node(&self, node_id: &str) -> StoreResult<Node> {
+        self.nodes
+            .read()
+            .await
+            .records
+            .get(node_id)
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound("node".into()))
+    }
+
+    async fn list_nodes(&self) -> StoreResult<Vec<Node>> {
+        let mut items: Vec<Node> = self.nodes.read().await.records.values().cloned().collect();
+        items.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        Ok(items)
+    }
+
+    async fn patch_node(&self, node_id: &str, patch: NodePatchRequest) -> StoreResult<Node> {
+        let mut state = self.nodes.write().await;
+        let existing = state
+            .records
+            .get(node_id)
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+        let patched = patch.apply(existing).map_err(invalid_node)?;
+
+        if let Some((holder, _)) = state.records.iter().find(|(id, other)| {
+            other.spec.advertise_addr == patched.spec.advertise_addr && *id != node_id
+        }) {
+            return Err(StoreError::Conflict(format!(
+                "advertise_addr {} is already registered to node {holder}",
+                patched.spec.advertise_addr
+            )));
+        }
+
+        state.records.insert(node_id.to_string(), patched.clone());
+        state.record(NodeChangeOp::Updated, node_id, Some(patched.clone()));
+        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+        Ok(patched)
+    }
+
+    async fn delete_node(&self, node_id: &str) -> StoreResult<()> {
+        let mut state = self.nodes.write().await;
+        if state.records.remove(node_id).is_none() {
+            return Err(StoreError::NotFound("node".into()));
+        }
+        state.record(NodeChangeOp::Deregistered, node_id, None);
+        metrics::counter!("felix_node_changes_total", "op" => "deregistered").increment(1);
+        Ok(())
+    }
+
+    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()> {
+        let mut state = self.nodes.write().await;
+        let node = state
+            .records
+            .get_mut(node_id)
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+        // Never moves backwards: heartbeats from two connections can arrive out
+        // of order, and the newest observation is the one that matters.
+        node.status.last_heartbeat_at_millis = node.status.last_heartbeat_at_millis.max(at_millis);
+        Ok(())
+    }
+
+    async fn set_node_lifecycle(
+        &self,
+        node_id: &str,
+        lifecycle: NodeLifecycle,
+    ) -> StoreResult<Option<Node>> {
+        let mut state = self.nodes.write().await;
+        let node = state
+            .records
+            .get_mut(node_id)
+            .ok_or_else(|| StoreError::NotFound("node".into()))?;
+        if node.status.lifecycle == lifecycle {
+            return Ok(None);
+        }
+        if !node.status.lifecycle.can_transition_to(lifecycle) {
+            return Err(invalid_transition(node.status.lifecycle, lifecycle));
+        }
+        node.status.lifecycle = lifecycle;
+        let updated = node.clone();
+        state.record(NodeChangeOp::Updated, node_id, Some(updated.clone()));
+        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+        Ok(Some(updated))
+    }
+
+    async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>> {
+        // One guard, so `items` and `next_seq` describe the same instant.
+        let state = self.nodes.read().await;
+        let mut items: Vec<Node> = state.records.values().cloned().collect();
+        items.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        Ok(Snapshot {
+            items,
+            next_seq: state.changes.next_seq,
+        })
+    }
+
+    async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>> {
+        let state = self.nodes.read().await;
+        let items = state
+            .changes
+            .items
+            .iter()
+            .filter(|item| item.seq >= since)
+            .take(self.limit())
+            .cloned()
+            .collect();
+        Ok(ChangeSet {
+            items,
+            next_seq: state.changes.next_seq,
+        })
+    }
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
         Ok(self.tenants.read().await.contains_key(tenant_id))
     }
@@ -878,6 +1086,14 @@ impl AuthStore for InMemoryStore {
 mod tests {
     use super::*;
     use crate::model::{ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, StreamKind};
+
+    /// The same suite Postgres runs, so parity is enforced rather than assumed.
+    #[tokio::test]
+    async fn satisfies_the_node_store_contract() {
+        let store = std::sync::Arc::new(store_with_limits(100, 1000));
+        crate::store::node_contract::run_node_contract(store.clone()).await;
+        crate::store::node_contract::run_node_concurrency_contract(store).await;
+    }
 
     fn store_with_limits(changes_limit: u64, retention: i64) -> InMemoryStore {
         InMemoryStore::new(StoreConfig {

@@ -12,7 +12,8 @@ use controlplane::auth::idp_registry::IdpIssuerConfig;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodeLifecycle, NodePatchRequest, Stream, StreamChange, StreamKey,
+    StreamPatchRequest, Tenant, TenantChange,
 };
 use controlplane::store::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
@@ -934,6 +935,46 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn cache_changes(&self, _since: u64) -> StoreResult<ChangeSet<CacheChange>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn register_node(&self, _node: Node) -> StoreResult<Node> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn get_node(&self, _node_id: &str) -> StoreResult<Node> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn list_nodes(&self) -> StoreResult<Vec<Node>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn patch_node(&self, _node_id: &str, _patch: NodePatchRequest) -> StoreResult<Node> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn delete_node(&self, _node_id: &str) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn record_node_heartbeat(&self, _node_id: &str, _at_millis: u64) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn set_node_lifecycle(
+        &self,
+        _node_id: &str,
+        _lifecycle: NodeLifecycle,
+    ) -> StoreResult<Option<Node>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn node_changes(&self, _since: u64) -> StoreResult<ChangeSet<NodeChange>> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 

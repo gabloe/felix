@@ -204,7 +204,8 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
          {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
          {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.idp_issuers, \
          {schema_ident}.rbac_policies, {schema_ident}.rbac_groupings, \
-         {schema_ident}.tenant_signing_keys, {schema_ident}.tenants RESTART IDENTITY CASCADE",
+         {schema_ident}.tenant_signing_keys, {schema_ident}.nodes, \
+         {schema_ident}.node_changes, {schema_ident}.tenants RESTART IDENTITY CASCADE",
     );
     // Same as `ensure_schema`: the interpolated identifier is our own generated schema name,
     // which cannot be passed as a bind parameter.
@@ -212,6 +213,170 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
         .execute(&pool)
         .await
         .map(|_| ())
+}
+
+/// Node records are authoritative state, so a new store over the same database
+/// must find them exactly as they were -- including the observed status a
+/// restarting broker cannot reconstruct for itself.
+#[tokio::test]
+#[serial]
+async fn a_reconnected_store_still_sees_registered_nodes() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let pg_cfg = config::PostgresConfig {
+        url: url.clone(),
+        max_connections: 5,
+        connect_timeout_ms: 10_000,
+        acquire_timeout_ms: 10_000,
+    };
+    let store_config = StoreConfig {
+        changes_limit: config::DEFAULT_CHANGES_LIMIT,
+        change_retention_max_rows: None,
+    };
+
+    let before = {
+        let store =
+            PostgresStore::connect_without_migrations(&pg_cfg, store_config.clone()).await?;
+        let node = store
+            .register_node(crate::store::node_contract::node("broker-a", 7001))
+            .await?;
+        store
+            .record_node_heartbeat("broker-a", 1_800_000_000_000)
+            .await?;
+        store.node_snapshot().await?;
+        drop(store);
+        node
+    };
+
+    // A different store handle over the same database, which is what a restart
+    // of the control plane looks like from here.
+    let store = PostgresStore::connect_without_migrations(&pg_cfg, store_config).await?;
+    let after = store.get_node("broker-a").await?;
+
+    assert_eq!(after.node_id, before.node_id);
+    assert_eq!(after.spec, before.spec);
+    assert_eq!(
+        after.status.registered_at_millis,
+        before.status.registered_at_millis
+    );
+    assert_eq!(after.status.incarnation, before.status.incarnation);
+    assert_eq!(
+        after.status.last_heartbeat_at_millis, 1_800_000_000_000,
+        "the last observed heartbeat survives, so expiry can judge staleness",
+    );
+
+    // The changefeed survives too, so a client resuming after the restart is
+    // not forced to re-bootstrap.
+    let changes = store.node_changes(0).await?;
+    assert!(changes.items.iter().any(|c| c.node_id == "broker-a"));
+    Ok(())
+}
+
+/// The property `node_change_seq` exists to provide: a second writer cannot take
+/// a seq until the first has committed.
+///
+/// Without it -- with the `BIGSERIAL` the other change tables use -- writer 2
+/// takes seq 1 and commits while writer 1 still holds seq 0 uncommitted. A
+/// snapshot in that window reads `MAX(seq) + 1 = 2`, so when writer 1 finally
+/// commits, seq 0 is below every consumer's resume point and is never
+/// delivered. Serialising the allocation is what removes that window, and this
+/// asserts the serialisation rather than trusting it.
+#[tokio::test]
+#[serial]
+async fn a_node_change_seq_is_not_handed_out_until_the_holder_commits() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    const ALLOCATE: &str =
+        "UPDATE node_change_seq SET next_seq = next_seq + 1 RETURNING next_seq - 1";
+
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&url)
+        .await?;
+
+    let mut holder = pool.begin().await?;
+    let first: i64 = sqlx::query_scalar(ALLOCATE).fetch_one(&mut *holder).await?;
+
+    // Spawned rather than timed out in place: dropping a sqlx future does not
+    // cancel the statement the server is already running, so the contender has
+    // to be the same attempt that eventually succeeds.
+    let mut contender = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await?;
+            let seq: i64 = sqlx::query_scalar(ALLOCATE).fetch_one(&mut *tx).await?;
+            tx.commit().await?;
+            Ok::<i64, sqlx::Error>(seq)
+        }
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(750), &mut contender)
+            .await
+            .is_err(),
+        "a second writer took a seq while {first} was still uncommitted",
+    );
+
+    holder.commit().await?;
+
+    let second = tokio::time::timeout(Duration::from_secs(5), contender)
+        .await
+        .expect("the second writer should proceed once the first commits")??;
+
+    assert_eq!(
+        second,
+        first + 1,
+        "seq order must follow commit order with no gap",
+    );
+    pool.close().await;
+    Ok(())
+}
+
+/// The same suite the memory store runs, so parity is enforced rather than
+/// assumed. Skips silently when no database is configured, like every other
+/// test in this file.
+#[tokio::test]
+#[serial]
+async fn satisfies_the_node_store_contract() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let store = PostgresStore::connect_without_migrations(
+        &config::PostgresConfig {
+            url,
+            max_connections: 5,
+            connect_timeout_ms: 10_000,
+            acquire_timeout_ms: 10_000,
+        },
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: None,
+        },
+    )
+    .await?;
+
+    let store = std::sync::Arc::new(store);
+    crate::store::node_contract::run_node_contract(store.clone()).await;
+    crate::store::node_contract::run_node_concurrency_contract(store).await;
+    Ok(())
 }
 
 #[tokio::test]
