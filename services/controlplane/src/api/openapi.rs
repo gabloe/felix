@@ -20,10 +20,10 @@ use crate::api::{
         CacheChangesResponse, CacheCreateRequest, CacheListResponse, CacheSnapshotResponse,
         ErrorResponse, FeatureFlags, HealthStatus, ListRegionsResponse, NamespaceChangesResponse,
         NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse,
-        NodeHeartbeatRequest, NodeHeartbeatResponse, NodeRegistrationRequest,
-        NodeRegistrationResponse, Region, StreamChangesResponse, StreamCreateRequest,
-        StreamListResponse, StreamSnapshotResponse, SystemInfo, TenantChangesResponse,
-        TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
+        NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
+        NodeRegistrationRequest, NodeRegistrationResponse, NodeView, Region, StreamChangesResponse,
+        StreamCreateRequest, StreamListResponse, StreamSnapshotResponse, SystemInfo,
+        TenantChangesResponse, TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
     },
 };
 use crate::auth::admin;
@@ -91,7 +91,9 @@ use utoipa::OpenApi;
         nodes::report_health,
         nodes::register_node,
         nodes::drain_node,
-        nodes::deregister_node
+        nodes::deregister_node,
+        nodes::list_nodes,
+        nodes::get_node
     ),
     components(schemas(
         FeatureFlags,
@@ -149,6 +151,9 @@ use utoipa::OpenApi;
         NodeHeartbeatResponse,
         NodeRegistrationRequest,
         NodeRegistrationResponse,
+        NodeView,
+        NodePlacement,
+        NodeListResponse,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,
@@ -193,10 +198,43 @@ mod tests {
             "NodePatchRequest",
             "NodeChange",
             "NodeChangeOp",
+            "NodeView",
+            "NodePlacement",
+            "NodeListResponse",
+            "NodeRegistrationRequest",
+            "NodeRegistrationResponse",
+            "NodeHeartbeatRequest",
+            "NodeHeartbeatResponse",
         ] {
             assert!(
                 schemas.contains_key(name),
                 "{name} is missing from the schema"
+            );
+        }
+    }
+
+    /// A route the document does not describe is a route no generated client
+    /// can call, and nothing else in the build would notice.
+    #[test]
+    fn every_node_route_is_described() {
+        let doc = serde_json::to_value(ApiDoc::openapi()).expect("serialize openapi");
+        let paths = doc["paths"].as_object().expect("paths object");
+
+        for (path, method) in [
+            ("/v1/nodes", "get"),
+            ("/v1/nodes", "post"),
+            ("/v1/nodes/{node_id}", "get"),
+            ("/v1/nodes/{node_id}/heartbeat", "post"),
+            ("/v1/nodes/{node_id}/drain", "post"),
+            ("/v1/nodes/{node_id}/deregister", "post"),
+        ] {
+            let described = paths
+                .get(path)
+                .and_then(|entry| entry.get(method))
+                .is_some();
+            assert!(
+                described,
+                "{method} {path} is missing from the OpenAPI document"
             );
         }
     }

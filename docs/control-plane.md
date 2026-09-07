@@ -121,6 +121,51 @@ This is what separates a graceful shutdown from a crash: a broker that
 deregisters is `left`, and one that simply stops is found `down` by expiry. Both
 remove it from placement, but only the first is intentional.
 
+### Operator endpoints
+
+`GET /v1/nodes` and `GET /v1/nodes/{node_id}` list registered brokers and
+explain each one's placement standing:
+
+```json
+{ "node": { "node_id": "broker-1", "spec": { ... }, "status": { ... } },
+  "placement": { "eligible": false, "heartbeat_age_ms": 41200,
+                 "reasons": ["last heartbeat was 41200ms ago, past the 15000ms timeout; expiry has not run yet"] } }
+```
+
+`placement.reasons` exists because "this broker is registered but shards are not
+landing on it" is otherwise answered by reading a lifecycle string and doing
+heartbeat arithmetic by hand. It reports a stale heartbeat separately from the
+lifecycle, so the window between a heartbeat lapsing and the sweep noticing —
+where a node still reads `live` — is visible rather than inferred.
+
+Filters intersect, and an absent filter matches everything:
+
+```
+GET /v1/nodes?lifecycle=live&region=us-west-2&label=rack%3Da1&label=tier%3Dhot
+```
+
+Repeating `label` requires all of them. The listing is unpaginated, like the
+other listings in this API: a cluster has brokers in the tens, and a cursor no
+caller needs is a cursor every caller has to handle.
+
+#### Authorization
+
+Both read endpoints require `node.view:cluster:*` in a Felix bearer token. The
+tenant comes from the token's own `tid` claim rather than a path segment,
+because the cluster is not a tenant resource; that claim only selects which
+tenant's signing keys to verify against, exactly as `kid` selects a key without
+conferring one.
+
+`cluster:*` sits outside the tenant hierarchy on purpose. No tenant scope
+contains it, and `validate_new_rule_allowed` admits a policy only when its
+object is already inside the caller's scope — so a tenant admin cannot grant
+themselves cluster access, and nothing in the bootstrap seed grants it either.
+The converse also holds: cluster scope confers nothing inside a tenant, so it is
+not a backdoor into tenant data.
+
+Note that the registration, heartbeat, drain, and deregister endpoints above are
+**not** authenticated yet (#126). Only the operator read endpoints are.
+
 ### Configuration
 
 | Setting | Env | Default |

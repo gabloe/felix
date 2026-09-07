@@ -101,7 +101,14 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/tenants/{tenant_id}",
             axum::routing::delete(api::tenants::delete_tenant),
         )
-        .route("/v1/nodes", axum::routing::post(api::nodes::register_node))
+        .route(
+            "/v1/nodes",
+            axum::routing::get(api::nodes::list_nodes).post(api::nodes::register_node),
+        )
+        .route(
+            "/v1/nodes/{node_id}",
+            axum::routing::get(api::nodes::get_node),
+        )
         .route(
             "/v1/nodes/{node_id}/heartbeat",
             axum::routing::post(api::nodes::report_health),

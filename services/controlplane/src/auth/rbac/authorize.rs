@@ -16,6 +16,9 @@ pub const ACTION_STREAM_PUBLISH: &str = "stream.publish";
 pub const ACTION_STREAM_SUBSCRIBE: &str = "stream.subscribe";
 pub const ACTION_CACHE_READ: &str = "cache.read";
 pub const ACTION_CACHE_WRITE: &str = "cache.write";
+/// Read cluster membership. Cluster-scoped, so it is never reachable from a
+/// tenant scope -- see [`ParsedObject::Cluster`].
+pub const ACTION_NODE_VIEW: &str = "node.view";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
@@ -25,6 +28,14 @@ pub enum Segment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedObject {
+    /// The cluster itself: brokers, their liveness, their placement standing.
+    ///
+    /// Deliberately outside the tenant hierarchy. No tenant scope contains it,
+    /// so a tenant admin cannot grant it to themselves through
+    /// [`validate_new_rule_allowed`], which only admits rules already inside the
+    /// caller's scope. It reaches a token only when an operator who already has
+    /// cluster scope writes the rule.
+    Cluster,
     Tenant {
         tenant_id: String,
     },
@@ -64,6 +75,7 @@ pub fn canonical_action(action: &str) -> Option<&'static str> {
         ACTION_STREAM_SUBSCRIBE => Some(ACTION_STREAM_SUBSCRIBE),
         ACTION_CACHE_READ => Some(ACTION_CACHE_READ),
         ACTION_CACHE_WRITE => Some(ACTION_CACHE_WRITE),
+        ACTION_NODE_VIEW => Some(ACTION_NODE_VIEW),
         _ => None,
     }
 }
@@ -82,6 +94,7 @@ pub fn parse_permission(raw: &str, tenant_id: &str) -> Result<ParsedPermission, 
 /// Parse an RBAC object string into a typed structure.
 ///
 /// Canonical grammar:
+/// - `cluster:*`
 /// - `tenant:{tenant_id}`
 /// - `namespace:{tenant_id}/{namespace}`
 /// - `stream:{tenant_id}/{namespace}/{stream}`
@@ -89,6 +102,15 @@ pub fn parse_permission(raw: &str, tenant_id: &str) -> Result<ParsedPermission, 
 pub fn parse_object(raw: &str, tenant_id: &str) -> Result<ParsedObject, String> {
     if raw == "tenant:*" {
         return Err("tenant:* is not allowed".to_string());
+    }
+
+    // Checked before the tenant-scoped forms, and without consulting
+    // `tenant_id`: the cluster belongs to no tenant.
+    if raw == "cluster:*" {
+        return Ok(ParsedObject::Cluster);
+    }
+    if raw.starts_with("cluster:") {
+        return Err("the only cluster object is cluster:*".to_string());
     }
 
     if let Some(rest) = raw.strip_prefix("tenant:") {
@@ -141,6 +163,12 @@ pub fn parse_object(raw: &str, tenant_id: &str) -> Result<ParsedObject, String> 
 
 pub fn object_within_scope(scope: &ParsedObject, target: &ParsedObject) -> bool {
     match (scope, target) {
+        // Cluster scope is its own island in both directions. A tenant scope
+        // does not reach it, which is what stops a tenant admin granting
+        // themselves cluster access; and cluster scope confers nothing inside a
+        // tenant, so it cannot be used to read tenant data either.
+        (ParsedObject::Cluster, ParsedObject::Cluster) => true,
+        (ParsedObject::Cluster, _) | (_, ParsedObject::Cluster) => false,
         (ParsedObject::Tenant { tenant_id: s }, ParsedObject::Tenant { tenant_id: t }) => s == t,
         (ParsedObject::Tenant { tenant_id: s }, ParsedObject::Namespace { tenant_id: t, .. }) => {
             s == t
@@ -306,6 +334,88 @@ fn split3(input: &str) -> Result<(&str, &str, &str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cluster_object_parses_independently_of_any_tenant() {
+        // Same object, whatever tenant the token belongs to.
+        assert_eq!(parse_object("cluster:*", "t1"), Ok(ParsedObject::Cluster));
+        assert_eq!(parse_object("cluster:*", "t2"), Ok(ParsedObject::Cluster));
+        // One spelling only, so a typo is rejected rather than silently scoped.
+        assert!(parse_object("cluster:nodes", "t1").is_err());
+        assert!(parse_object("cluster:", "t1").is_err());
+    }
+
+    #[test]
+    fn node_view_is_a_recognised_action() {
+        let parsed = parse_permission("node.view:cluster:*", "t1").expect("parse");
+        assert_eq!(parsed.action, ACTION_NODE_VIEW);
+        assert_eq!(parsed.object, ParsedObject::Cluster);
+    }
+
+    /// The property the whole cluster scope rests on. `validate_new_rule_allowed`
+    /// admits a rule only if its object is inside the caller's existing scope,
+    /// so if a tenant scope never contains the cluster, no tenant admin can
+    /// write themselves a cluster permission.
+    #[test]
+    fn a_tenant_scope_never_reaches_the_cluster() {
+        let tenant_scopes = [
+            ParsedObject::Tenant {
+                tenant_id: "t1".to_string(),
+            },
+            parse_object("namespace:t1/*", "t1").expect("namespace"),
+            parse_object("stream:t1/payments/*", "t1").expect("stream"),
+        ];
+
+        for scope in &tenant_scopes {
+            assert!(
+                !object_within_scope(scope, &ParsedObject::Cluster),
+                "{scope:?} must not contain the cluster",
+            );
+        }
+
+        let rule = PolicyRule {
+            subject: "role:tenant-admin".to_string(),
+            object: "cluster:*".to_string(),
+            action: ACTION_NODE_VIEW.to_string(),
+        };
+        assert!(
+            validate_new_rule_allowed(&tenant_scopes, "t1", &rule).is_err(),
+            "a tenant admin must not be able to grant cluster access",
+        );
+    }
+
+    /// And the converse: cluster scope is not a backdoor into tenant data.
+    #[test]
+    fn cluster_scope_confers_nothing_inside_a_tenant() {
+        let cluster = [ParsedObject::Cluster];
+        for target in [
+            "tenant:t1",
+            "namespace:t1/payments",
+            "stream:t1/payments/orders",
+            "cache:t1/payments/sessions",
+        ] {
+            let parsed = parse_object(target, "t1").expect("parse");
+            assert!(
+                !object_within_scope(&ParsedObject::Cluster, &parsed),
+                "cluster scope must not reach {target}",
+            );
+        }
+
+        let rule = PolicyRule {
+            subject: "role:ops".to_string(),
+            object: "stream:t1/payments/orders".to_string(),
+            action: ACTION_STREAM_MANAGE.to_string(),
+        };
+        assert!(validate_new_rule_allowed(&cluster, "t1", &rule).is_err());
+    }
+
+    #[test]
+    fn cluster_scope_contains_the_cluster() {
+        assert!(object_within_scope(
+            &ParsedObject::Cluster,
+            &ParsedObject::Cluster
+        ));
+    }
 
     #[test]
     fn strict_object_validation_accepts_canonical_forms() {
