@@ -23,6 +23,7 @@ mod tests {
             metrics_bind: "0.0.0.0:8080".parse::<SocketAddr>().unwrap(),
             controlplane_url: None,
             controlplane_sync_interval_ms: 2000,
+            membership: None,
             ack_on_commit: false,
             max_frame_bytes: 16 * 1024 * 1024,
             publish_queue_wait_timeout_ms: 2000,

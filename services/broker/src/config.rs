@@ -5,6 +5,21 @@ use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 
+/// Identity this broker claims in the cluster.
+///
+/// Present only when `FELIX_NODE_ID` is set. Membership is opt-in because a
+/// single-node broker has no cluster to join, and registering one would put a
+/// node in the catalog that placement would then try to use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipConfig {
+    /// Stable across restarts. This is the identity, not the process.
+    pub node_id: String,
+    /// `host:port` peers reach this broker on. Not the bind address: a broker
+    /// bound to 0.0.0.0 has to advertise something routable.
+    pub advertise_addr: String,
+    pub region: String,
+}
+
 // Broker service configuration sourced from environment variables.
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
@@ -16,6 +31,8 @@ pub struct BrokerConfig {
     pub controlplane_url: Option<String>,
     // Poll interval for control-plane changes.
     pub controlplane_sync_interval_ms: u64,
+    // Cluster membership identity, when this broker joins one.
+    pub membership: Option<MembershipConfig>,
     // If true, publish acks are sent after commit.
     pub ack_on_commit: bool,
     // Max frame size accepted on QUIC streams.
@@ -101,6 +118,7 @@ impl Default for BrokerConfig {
             metrics_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
             controlplane_url: None,
             controlplane_sync_interval_ms: 2000,
+            membership: None,
             ack_on_commit: false,
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             publish_queue_wait_timeout_ms: DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS,
@@ -177,6 +195,57 @@ impl SubscriberLaneShard {
             _ => None,
         }
     }
+}
+
+/// Read the cluster identity, or `None` when this broker is not joining one.
+///
+/// Fails rather than defaults on a half-configured identity. A broker that
+/// guessed its own advertised address would register something unreachable, and
+/// the failure would surface later as peers unable to connect to a node the
+/// catalog says is live.
+fn membership_from_env(
+    controlplane_url: &Option<String>,
+) -> std::io::Result<Option<MembershipConfig>> {
+    let Some(node_id) = std::env::var("FELIX_NODE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let advertise_addr = std::env::var("FELIX_NODE_ADVERTISE_ADDR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "FELIX_NODE_ID is set but FELIX_NODE_ADVERTISE_ADDR is not; \
+                 a broker cannot advertise an address it has to guess",
+            )
+        })?;
+
+    // Parsed here so a malformed address fails at startup rather than as a
+    // rejected registration once everything else is already running.
+    if advertise_addr.parse::<SocketAddr>().is_err() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("FELIX_NODE_ADVERTISE_ADDR is not a valid host:port address: {advertise_addr}"),
+        ));
+    }
+
+    if controlplane_url.is_none() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_ID is set but FELIX_CONTROLPLANE_URL is not; \
+             there is nowhere to register",
+        ));
+    }
+
+    Ok(Some(MembershipConfig {
+        node_id,
+        advertise_addr,
+        region: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
+    }))
 }
 
 fn parse_sub_queue_policy(value: &str) -> Option<SubQueuePolicy> {
@@ -281,6 +350,7 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
+        let membership = membership_from_env(&controlplane_url)?;
         let ack_on_commit = std::env::var("FELIX_ACK_ON_COMMIT")
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -450,6 +520,7 @@ impl BrokerConfig {
             metrics_bind,
             controlplane_url,
             controlplane_sync_interval_ms,
+            membership,
             ack_on_commit,
             max_frame_bytes,
             publish_queue_wait_timeout_ms,
@@ -682,6 +753,87 @@ mod tests {
     use std::env;
     use std::fs;
     use tempfile::TempDir;
+
+    /// A broker with no identity is a single node, and registering one would
+    /// put a node in the catalog placement would then try to use.
+    #[serial]
+    #[test]
+    fn membership_is_off_without_a_node_id() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        }
+        assert!(
+            BrokerConfig::from_env()
+                .expect("config")
+                .membership
+                .is_none()
+        );
+    }
+
+    /// A broker that guessed its advertised address would register something
+    /// unreachable, and the failure would surface later as peers unable to
+    /// connect to a node the catalog says is live.
+    #[serial]
+    #[test]
+    fn a_node_id_without_an_advertise_address_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(
+            err.to_string().contains("FELIX_NODE_ADVERTISE_ADDR"),
+            "{err}"
+        );
+    }
+
+    /// Rejected at startup rather than as a failed registration once everything
+    /// else is already running.
+    #[serial]
+    #[test]
+    fn a_malformed_advertise_address_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "not-an-address");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("valid host:port"), "{err}");
+    }
+
+    #[serial]
+    #[test]
+    fn a_node_id_without_a_control_plane_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("FELIX_CONTROLPLANE_URL"), "{err}");
+    }
+
+    #[serial]
+    #[test]
+    fn a_complete_identity_is_accepted() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_REGION_ID", "eu-central-1");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        }
+        let membership = BrokerConfig::from_env()
+            .expect("config")
+            .membership
+            .expect("membership");
+        assert_eq!(membership.node_id, "broker-a");
+        assert_eq!(membership.advertise_addr, "10.0.0.4:7000");
+        assert_eq!(membership.region, "eu-central-1");
+    }
 
     // Helper to clear all Felix env vars
     fn clear_felix_env() {

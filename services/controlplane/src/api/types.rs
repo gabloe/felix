@@ -168,3 +168,28 @@ pub struct NodeHeartbeatResponse {
     /// Silence beyond this marks the node down.
     pub expiry_timeout_ms: u64,
 }
+
+/// A broker claiming its identity on boot.
+///
+/// Carries only spec fields. Observed status is the control plane's to set: a
+/// broker that could declare itself live could outlive its own expiry.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodeRegistrationRequest {
+    pub node_id: String,
+    /// `host:port` the broker-internal QUIC listener is reachable on.
+    pub advertise_addr: String,
+    pub region: String,
+    #[serde(default)]
+    pub labels: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub capacity: crate::model::NodeCapacity,
+}
+
+/// What a broker learns from registering.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodeRegistrationResponse {
+    pub node: crate::model::Node,
+    /// The cadence expected of this broker, so it is configured in one place.
+    pub heartbeat_interval_ms: u64,
+    pub expiry_timeout_ms: u64,
+}

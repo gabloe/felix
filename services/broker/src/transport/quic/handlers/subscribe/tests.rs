@@ -41,6 +41,7 @@ fn test_config() -> crate::config::BrokerConfig {
         metrics_bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
         controlplane_url: None,
         controlplane_sync_interval_ms: 2000,
+        membership: None,
         ack_on_commit: false,
         max_frame_bytes: 16 * 1024 * 1024,
         publish_queue_wait_timeout_ms: 2000,
