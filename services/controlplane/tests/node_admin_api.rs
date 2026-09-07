@@ -1,0 +1,336 @@
+//! Operator-facing node listing and detail.
+mod common;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use common::read_json;
+use controlplane::api::types::{FeatureFlags, Region};
+use controlplane::app::{AppState, build_router};
+use controlplane::auth::felix_token::{TenantSigningKeys, mint_token};
+use controlplane::auth::keys::generate_signing_keys;
+use controlplane::config::NodeLivenessConfig;
+use controlplane::model::{Node, NodeCapacity, NodeLifecycle, NodeSpec, NodeStatus};
+use controlplane::store::memory::InMemoryStore;
+use controlplane::store::{AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tower::ServiceExt;
+
+const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
+    heartbeat_interval_ms: 5_000,
+    expiry_timeout_ms: 15_000,
+    sweep_interval_ms: 2_000,
+};
+
+type App = axum::routing::RouterIntoService<Body, ()>;
+
+async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
+    let store = Arc::new(InMemoryStore::new(StoreConfig {
+        changes_limit: 1000,
+        change_retention_max_rows: Some(1000),
+    }));
+    let keys = generate_signing_keys().expect("keys");
+    store
+        .set_tenant_signing_keys("t1", keys.clone())
+        .await
+        .expect("set keys");
+
+    let state = AppState {
+        region: Region {
+            region_id: "local".to_string(),
+            display_name: "Local".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: FeatureFlags {
+            durable_storage: store.is_durable(),
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: Arc::clone(&store) as Arc<dyn ControlPlaneAuthStore + Send + Sync>,
+        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        bootstrap_enabled: false,
+        bootstrap_token: None,
+        node_liveness: LIVENESS,
+    };
+    (build_router(state).into_service(), store, keys)
+}
+
+fn token(keys: &TenantSigningKeys, perms: Vec<&str>) -> String {
+    mint_token(
+        keys,
+        "t1",
+        "p:ops",
+        perms.into_iter().map(str::to_string).collect(),
+        Duration::from_secs(900),
+    )
+    .expect("token")
+}
+
+fn get(path: &str, bearer: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method("GET").uri(path);
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    builder.body(Body::empty()).expect("request")
+}
+
+fn node(node_id: &str, port: u16, region: &str, rack: &str) -> Node {
+    Node {
+        node_id: node_id.to_string(),
+        spec: NodeSpec {
+            advertise_addr: format!("10.0.0.4:{port}"),
+            region: region.to_string(),
+            labels: BTreeMap::from([("rack".to_string(), rack.to_string())]),
+            capacity: NodeCapacity::default(),
+        },
+        status: NodeStatus {
+            lifecycle: NodeLifecycle::Live,
+            last_heartbeat_at_millis: controlplane::api::nodes::now_millis(),
+            registered_at_millis: 1,
+            incarnation: 0,
+        },
+    }
+}
+
+#[tokio::test]
+async fn listing_requires_a_token() {
+    let (app, _store, _keys) = setup().await;
+    let response = app.oneshot(get("/v1/nodes", None)).await.expect("request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A tenant admin's own scope must not open the cluster listing. This is the
+/// HTTP half of the property `authorize.rs` proves about the object grammar.
+#[tokio::test]
+async fn tenant_scoped_permissions_do_not_grant_the_cluster() {
+    let (app, _store, keys) = setup().await;
+    for perm in [
+        "tenant.manage:tenant:t1",
+        "ns.manage:namespace:t1/*",
+        "rbac.policy.manage:tenant:t1",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(get("/v1/nodes", Some(&token(&keys, vec![perm]))))
+            .await
+            .expect("request");
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{perm} must not grant node.view",
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_token_is_rejected() {
+    let (app, _store, _keys) = setup().await;
+    let response = app
+        .oneshot(get("/v1/nodes", Some("not.a.token")))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A token signed by a different tenant's keys must not pass, even carrying the
+/// right permission string.
+#[tokio::test]
+async fn a_token_signed_by_another_key_is_rejected() {
+    let (app, _store, _keys) = setup().await;
+    let foreign = generate_signing_keys().expect("keys");
+    let bearer = mint_token(
+        &foreign,
+        "t1",
+        "p:attacker",
+        vec!["node.view:cluster:*".to_string()],
+        Duration::from_secs(900),
+    )
+    .expect("token");
+
+    let response = app
+        .oneshot(get("/v1/nodes", Some(&bearer)))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cluster_node_view_lists_every_broker() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7001, "us-west-2", "a1"))
+        .await
+        .expect("register");
+    store
+        .register_node(node("broker-b", 7002, "eu-central-1", "b2"))
+        .await
+        .expect("register");
+
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+    let response = app
+        .oneshot(get("/v1/nodes", Some(&bearer)))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: serde_json::Value = read_json(response).await;
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["node"]["node_id"], "broker-a");
+    assert_eq!(items[0]["placement"]["eligible"], true);
+    // The advertised address is what an operator needs to check reachability.
+    assert_eq!(items[0]["node"]["spec"]["advertise_addr"], "10.0.0.4:7001");
+}
+
+#[tokio::test]
+async fn filters_intersect() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7001, "us-west-2", "a1"))
+        .await
+        .expect("register");
+    store
+        .register_node(node("broker-b", 7002, "us-west-2", "b2"))
+        .await
+        .expect("register");
+    store
+        .register_node(node("broker-c", 7003, "eu-central-1", "a1"))
+        .await
+        .expect("register");
+    store
+        .set_node_lifecycle("broker-b", NodeLifecycle::Draining)
+        .await
+        .expect("drain");
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+
+    for (query, expected) in [
+        ("?region=us-west-2", vec!["broker-a", "broker-b"]),
+        ("?lifecycle=live", vec!["broker-a", "broker-c"]),
+        ("?lifecycle=draining", vec!["broker-b"]),
+        ("?label=rack%3Da1", vec!["broker-a", "broker-c"]),
+        ("?region=us-west-2&label=rack%3Da1", vec!["broker-a"]),
+        ("?region=us-west-2&lifecycle=live", vec!["broker-a"]),
+        ("?region=nowhere", vec![]),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(get(&format!("/v1/nodes{query}"), Some(&bearer)))
+            .await
+            .expect("request");
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        let body: serde_json::Value = read_json(response).await;
+        let ids: Vec<String> = body["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| {
+                item["node"]["node_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(ids, expected, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_node_is_not_found() {
+    let (app, _store, keys) = setup().await;
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+    let response = app
+        .oneshot(get("/v1/nodes/absent", Some(&bearer)))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// The acceptance criterion: the output has to say *why* a node is not a
+/// placement candidate, not just that it is not one.
+#[tokio::test]
+async fn placement_explains_each_exclusion() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-down", 7001, "us-west-2", "a1"))
+        .await
+        .expect("register");
+    store
+        .set_node_lifecycle("broker-down", NodeLifecycle::Down)
+        .await
+        .expect("down");
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+
+    let response = app
+        .clone()
+        .oneshot(get("/v1/nodes/broker-down", Some(&bearer)))
+        .await
+        .expect("request");
+    let body: serde_json::Value = read_json(response).await;
+    assert_eq!(body["placement"]["eligible"], false);
+    let reasons = body["placement"]["reasons"].as_array().expect("reasons");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.as_str().unwrap_or_default().contains("heartbeat window")),
+        "{reasons:?}",
+    );
+}
+
+/// The window between a heartbeat lapsing and the sweep noticing: the node
+/// still reads `live`, and that gap is exactly what an operator is chasing.
+#[tokio::test]
+async fn a_stale_heartbeat_is_reported_before_expiry_runs() {
+    let (app, store, keys) = setup().await;
+    let mut stale = node("broker-stale", 7001, "us-west-2", "a1");
+    stale.status.last_heartbeat_at_millis =
+        controlplane::api::nodes::now_millis() - LIVENESS.expiry_timeout_ms * 3;
+    store.register_node(stale).await.expect("register");
+
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+    let response = app
+        .oneshot(get("/v1/nodes/broker-stale", Some(&bearer)))
+        .await
+        .expect("request");
+    let body: serde_json::Value = read_json(response).await;
+
+    assert_eq!(
+        body["node"]["status"]["lifecycle"], "live",
+        "expiry has not run"
+    );
+    assert_eq!(body["placement"]["eligible"], false);
+    let reasons = body["placement"]["reasons"].as_array().expect("reasons");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.as_str().unwrap_or_default().contains("past the")),
+        "a stale heartbeat should be called out even while the node reads live: {reasons:?}",
+    );
+    assert!(
+        body["placement"]["heartbeat_age_ms"].as_u64().unwrap_or(0) > LIVENESS.expiry_timeout_ms
+    );
+}
+
+/// Nothing in the operator view should carry key material or tokens.
+#[tokio::test]
+async fn the_node_view_exposes_no_secrets() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7001, "us-west-2", "a1"))
+        .await
+        .expect("register");
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+
+    let response = app
+        .oneshot(get("/v1/nodes", Some(&bearer)))
+        .await
+        .expect("request");
+    let body: serde_json::Value = read_json(response).await;
+    let rendered = body.to_string().to_lowercase();
+    for forbidden in ["secret", "private", "token", "signing", "password"] {
+        assert!(
+            !rendered.contains(forbidden),
+            "{forbidden} leaked: {rendered}"
+        );
+    }
+}

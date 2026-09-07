@@ -193,3 +193,30 @@ pub struct NodeRegistrationResponse {
     pub heartbeat_interval_ms: u64,
     pub expiry_timeout_ms: u64,
 }
+
+/// Why a node is or is not a placement candidate.
+///
+/// The point of the endpoint: "this broker is registered but shards are not
+/// landing on it" is otherwise answered by reading a lifecycle string and doing
+/// heartbeat arithmetic by hand.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodePlacement {
+    pub eligible: bool,
+    /// Empty when eligible. One entry per reason it is not.
+    pub reasons: Vec<String>,
+    /// How long since the last accepted heartbeat, against the control plane's
+    /// clock at the time of the request.
+    pub heartbeat_age_ms: u64,
+}
+
+/// A node as an operator sees it: the record, plus what it means.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodeView {
+    pub node: crate::model::Node,
+    pub placement: NodePlacement,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct NodeListResponse {
+    pub items: Vec<NodeView>,
+}
