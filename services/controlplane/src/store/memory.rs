@@ -871,6 +871,10 @@ impl ControlPlaneStore for InMemoryStore {
         let mut expired = Vec::with_capacity(stale.len());
         for node_id in stale {
             let node = state.records.get_mut(&node_id).expect("just listed");
+            crate::membership_metrics::record_transition(
+                node.status.lifecycle,
+                NodeLifecycle::Down,
+            );
             node.status.lifecycle = NodeLifecycle::Down;
             let moved = node.clone();
             state.record(NodeChangeOp::Updated, &node_id, Some(moved.clone()));
@@ -897,8 +901,10 @@ impl ControlPlaneStore for InMemoryStore {
         if !node.status.lifecycle.can_transition_to(lifecycle) {
             return Err(invalid_transition(node.status.lifecycle, lifecycle));
         }
+        let previous = node.status.lifecycle;
         node.status.lifecycle = lifecycle;
         let updated = node.clone();
+        crate::membership_metrics::record_transition(previous, lifecycle);
         state.record(NodeChangeOp::Updated, node_id, Some(updated.clone()));
         metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
         Ok(Some(updated))

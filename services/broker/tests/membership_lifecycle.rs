@@ -6,7 +6,7 @@
 //!
 //! Run with `cargo test -p broker --test membership_lifecycle`.
 use broker::config::MembershipConfig;
-use broker::membership::{self, RegisterError};
+use broker::membership::{self, MembershipError};
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
 use controlplane::config::NodeLivenessConfig;
@@ -223,7 +223,7 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
     .await
     .expect_err("should be refused");
     assert!(
-        matches!(err, RegisterError::Rejected(_)),
+        matches!(err, MembershipError::Rejected(_)),
         "a wrong address stays wrong, so this must not be retried: {err:?}",
     );
 

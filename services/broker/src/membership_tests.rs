@@ -295,3 +295,65 @@ fn jitter_delays_within_its_bound() {
         );
     }
 }
+
+/// The acceptance criterion: a refusal and an outage must be tellable apart. A
+/// misconfigured broker retrying forever looks exactly like a flaky network if
+/// both increment one counter.
+#[tokio::test]
+async fn a_refusal_and_an_outage_are_different_kinds() {
+    // 409 from a live control plane: the server answered and said no.
+    let app = axum::Router::new().route(
+        "/v1/nodes",
+        post(|| async { (axum::http::StatusCode::CONFLICT, "address in use") }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (stop, handle) = spawn_axum_with_shutdown(listener, app);
+    wait_for_listen(addr).await.expect("listen");
+
+    let client = build_test_client().expect("client");
+    let refused = register(&client, &format!("http://{addr}"), &config())
+        .await
+        .expect_err("should be refused");
+    assert_eq!(refused.kind(), crate::membership_metrics::KIND_REJECTED);
+
+    let _ = stop.send(());
+    let _ = handle.await;
+
+    // Nothing listening: no answer at all.
+    let outage = register(&client, &format!("http://{addr}"), &config())
+        .await
+        .expect_err("should be unavailable");
+    assert_eq!(outage.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
+}
+
+/// A 5xx is the control plane failing, not refusing, so it is retryable like an
+/// outage rather than terminal like a rejection.
+#[tokio::test]
+async fn a_server_error_counts_as_an_outage_not_a_refusal() {
+    let app = axum::Router::new().route(
+        "/v1/nodes",
+        post(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (stop, handle) = spawn_axum_with_shutdown(listener, app);
+    wait_for_listen(addr).await.expect("listen");
+
+    let client = build_test_client().expect("client");
+    let err = register(&client, &format!("http://{addr}"), &config())
+        .await
+        .expect_err("should fail");
+    assert_eq!(err.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
+    assert!(
+        matches!(err, MembershipError::Unavailable(_)),
+        "a 5xx must stay retryable",
+    );
+
+    let _ = stop.send(());
+    let _ = handle.await;
+}
