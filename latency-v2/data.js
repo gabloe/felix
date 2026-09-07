@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788815637339,
+  "lastUpdate": 1788821383477,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4224,6 +4224,72 @@ window.BENCHMARK_DATA = {
             "range": "2431.55",
             "unit": "us",
             "extra": "trials: 5\nmedian: 679.00\nmean: 1853.00\nstdev: 2431.55\ncv: 131.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b3af5ddf6528c506c28f64af137ae879e1f1bc6",
+          "message": "feat(broker): drive local shard state from assignment generations (#229)\n\nThe watch says who should own a shard. This is what a broker has actually done\nabout it, which is a separate thing: becoming an owner is not instant. The\ndurable log has to be opened and recovered first, and a broker serving writes in\nthat window would acknowledge records it cannot yet persist.\n\nSo ownership is two-phase in both directions -- opening before active, draining\nbefore closed -- and a shard serves only while active at the generation the\ncontrol plane currently names.\n\nThe rules that are easy to get wrong, each tested:\n\nAn older generation is ignored, so a duplicate delivery, a reordered poll or a\nsnapshot replay costs nothing. A newer one reopens rather than assuming local\nstate still matches. An open that finishes after a reassignment does not\nactivate, because the shard moved on while it was being recovered.\n\nA failed open is not retried by the same assignment arriving again: every poll\nre-delivers it, and retrying each time buries the failure while hammering a log\nthat is not opening. A new generation is what retries.\n\nA shard that vanished from the assignment set is released exactly like one\nreassigned away, because a snapshot replaces the whole picture and only the full\nset says what disappeared.\n\nA failed flush still gives up the shard. Ownership has moved regardless, and\ncontinuing to serve is worse than an unflushed tail -- but it is logged as an\nerror rather than swallowed.\n\nDecision and I/O are split as placement is, so every rule above is testable\nwithout a disk.\n\nRefs #101\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T15:47:24-07:00",
+          "tree_id": "44beecfee39a9ebed5757d609777f3c089de4d34",
+          "url": "https://github.com/gabloe/felix/commit/7b3af5ddf6528c506c28f64af137ae879e1f1bc6"
+        },
+        "date": 1788821381997,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.80\nstdev: 1.10\ncv: 0.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 201.20\nstdev: 2.77\ncv: 1.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 244,
+            "range": "294.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 244.00\nmean: 453.60\nstdev: 294.09\ncv: 64.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "5.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.80\nstdev: 5.36\ncv: 2.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 401,
+            "range": "175.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 401.00\nmean: 478.40\nstdev: 175.32\ncv: 36.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 577,
+            "range": "642.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 577.00\nmean: 892.40\nstdev: 642.19\ncv: 71.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
