@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::MembershipConfig;
+use crate::membership_metrics as mm;
 
 /// Ceiling on heartbeat retry backoff.
 ///
@@ -81,20 +82,41 @@ pub struct Registration {
     pub heartbeat_interval_ms: u64,
 }
 
-/// Why a registration attempt did not produce an identity.
+/// Why a membership call did not succeed.
 ///
-/// The split is what decides whether to retry. A control plane that is still
-/// starting will accept the same request in a moment; one that rejected the
-/// identity will reject it forever, and retrying only hides the misconfiguration.
+/// The split decides whether to retry, and it is also what the metrics report:
+/// a control plane that is still starting will accept the same request in a
+/// moment, while one that refused the identity will refuse it forever.
+/// Collapsing the two makes a misconfigured broker look like a flaky network.
 #[derive(Debug)]
-pub enum RegisterError {
-    /// The control plane refused this identity or address. Terminal.
+pub enum MembershipError {
+    /// The control plane answered and said no. Terminal.
     Rejected(String),
-    /// The control plane could not be reached, or failed internally.
+    /// Nothing answered, or it failed internally.
     Unavailable(anyhow::Error),
 }
 
-impl std::fmt::Display for RegisterError {
+impl MembershipError {
+    /// Metric label for this failure. Bounded to two values.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Rejected(_) => mm::KIND_REJECTED,
+            Self::Unavailable(_) => mm::KIND_UNAVAILABLE,
+        }
+    }
+
+    /// Classify an HTTP response. A 4xx is the server refusing; anything else
+    /// may simply be a control plane still coming up.
+    fn from_status(status: reqwest::StatusCode, message: String) -> Self {
+        if status.is_client_error() {
+            Self::Rejected(message)
+        } else {
+            Self::Unavailable(anyhow!(message))
+        }
+    }
+}
+
+impl std::fmt::Display for MembershipError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected(message) => write!(f, "{message}"),
@@ -111,7 +133,7 @@ pub async fn register(
     client: &reqwest::Client,
     base_url: &str,
     config: &MembershipConfig,
-) -> std::result::Result<Registration, RegisterError> {
+) -> std::result::Result<Registration, MembershipError> {
     let response = client
         .post(format!("{}/v1/nodes", base_url.trim_end_matches('/')))
         .json(&RegistrationRequest {
@@ -122,32 +144,28 @@ pub async fn register(
         .send()
         .await
         .with_context(|| format!("register node {} with {base_url}", config.node_id))
-        .map_err(RegisterError::Unavailable)?;
+        .map_err(MembershipError::Unavailable)?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        let message = format!(
-            "control plane rejected registration of {} ({status}): {body}",
-            config.node_id
-        );
-        // A 4xx says this identity or address is wrong, and it will be wrong
-        // next time too. Anything else may just be a control plane still coming
-        // up, which is worth waiting for.
-        return Err(if status.is_client_error() {
-            RegisterError::Rejected(message)
-        } else {
-            RegisterError::Unavailable(anyhow!(message))
-        });
+        return Err(MembershipError::from_status(
+            status,
+            format!(
+                "control plane rejected registration of {} ({status}): {body}",
+                config.node_id
+            ),
+        ));
     }
 
     let registered: RegistrationResponse = response
         .json()
         .await
         .context("decode node registration response")
-        .map_err(RegisterError::Unavailable)?;
+        .map_err(MembershipError::Unavailable)?;
 
-    metrics::counter!("felix_broker_membership_registrations_total").increment(1);
+    mm::record_registration("registered");
+    mm::record_membership_live(true);
     tracing::info!(
         node_id = %config.node_id,
         advertise_addr = %config.advertise_addr,
@@ -180,6 +198,7 @@ pub async fn run_heartbeat(
     let base_url = base_url.trim_end_matches('/').to_string();
     let url = format!("{base_url}/v1/nodes/{}/heartbeat", registration.node_id);
     let mut interval = Duration::from_millis(registration.heartbeat_interval_ms.max(1));
+    let mut last_success = std::time::Instant::now();
 
     loop {
         let failures = consecutive_failures.load(Ordering::Acquire);
@@ -197,7 +216,8 @@ pub async fn run_heartbeat(
         match send_heartbeat(&client, &url, registration.incarnation).await {
             Ok(response) => {
                 consecutive_failures.store(0, Ordering::Release);
-                metrics::counter!("felix_broker_heartbeats_total").increment(1);
+                last_success = std::time::Instant::now();
+                mm::record_heartbeat_success();
                 // The control plane owns the cadence, so a change to it takes
                 // effect without touching broker configuration.
                 interval = Duration::from_millis(response.heartbeat_interval_ms.max(1));
@@ -205,8 +225,9 @@ pub async fn run_heartbeat(
                 // Being told we are down means expiry already removed this node
                 // from placement. Registering again is the broker's job, not
                 // this loop's, so make the state visible and keep reporting.
-                if response.lifecycle != "live" && response.lifecycle != "draining" {
-                    metrics::counter!("felix_broker_heartbeat_rejected_total").increment(1);
+                let placeable = response.lifecycle == "live" || response.lifecycle == "draining";
+                mm::record_membership_live(placeable);
+                if !placeable {
                     tracing::warn!(
                         node_id = %registration.node_id,
                         lifecycle = %response.lifecycle,
@@ -216,7 +237,11 @@ pub async fn run_heartbeat(
             }
             Err(err) => {
                 let failures = consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
-                metrics::counter!("felix_broker_heartbeat_failures_total").increment(1);
+                mm::record_heartbeat_failure(err.kind());
+                // Published on failure too: this is the number that keeps rising
+                // while the control plane is unreachable, and the only warning a
+                // broker gets that it is about to be declared down.
+                mm::record_heartbeat_age(last_success.elapsed());
                 tracing::warn!(
                     node_id = %registration.node_id,
                     consecutive_failures = failures,
@@ -232,20 +257,28 @@ async fn send_heartbeat(
     client: &reqwest::Client,
     url: &str,
     incarnation: u64,
-) -> Result<HeartbeatResponse> {
+) -> std::result::Result<HeartbeatResponse, MembershipError> {
     let response = client
         .post(url)
         .json(&HeartbeatRequest { incarnation })
         .send()
         .await
-        .context("send heartbeat")?;
+        .context("send heartbeat")
+        .map_err(MembershipError::Unavailable)?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("heartbeat rejected ({status}): {body}"));
+        return Err(MembershipError::from_status(
+            status,
+            format!("heartbeat rejected ({status}): {body}"),
+        ));
     }
-    response.json().await.context("decode heartbeat response")
+    response
+        .json()
+        .await
+        .context("decode heartbeat response")
+        .map_err(MembershipError::Unavailable)
 }
 
 /// Stop receiving new placement, without stopping service.
@@ -348,8 +381,9 @@ pub fn spawn(
             let registration = loop {
                 match register(&client, &base_url, &config).await {
                     Ok(registration) => break registration,
-                    Err(RegisterError::Rejected(message)) => {
-                        metrics::counter!("felix_broker_membership_rejections_total").increment(1);
+                    Err(MembershipError::Rejected(message)) => {
+                        mm::record_registration(mm::KIND_REJECTED);
+                        mm::record_membership_live(false);
                         tracing::error!(
                             node_id = %config.node_id,
                             error = %message,
@@ -358,10 +392,9 @@ pub fn spawn(
                         fatal.cancel();
                         return;
                     }
-                    Err(RegisterError::Unavailable(err)) => {
+                    Err(MembershipError::Unavailable(err)) => {
                         attempt += 1;
-                        metrics::counter!("felix_broker_membership_registration_failures_total")
-                            .increment(1);
+                        mm::record_registration(mm::KIND_UNAVAILABLE);
                         tracing::warn!(
                             node_id = %config.node_id,
                             attempt,

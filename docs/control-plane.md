@@ -166,6 +166,53 @@ not a backdoor into tenant data.
 Note that the registration, heartbeat, drain, and deregister endpoints above are
 **not** authenticated yet (#126). Only the operator read endpoints are.
 
+### Metrics
+
+Every label below is bounded. Lifecycle has four values, region has as many as
+an operator configures, and failure kinds have two. **No metric carries
+`node_id`** — a fleet view is `felix_node_count`, and a broker's own view is its
+own series.
+
+Control plane:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_node_count{lifecycle,region}` | the fleet census, refreshed from the same store read the node listing serves |
+| `felix_node_transitions_total{from,to}` | lifecycle moves; `live -> down` is failure, `draining -> left` is a deploy |
+| `felix_node_registrations_total{outcome}` | `new`, `restart`, or `rejected` |
+| `felix_node_expiry_total` | nodes the sweep marked down |
+| `felix_node_expiry_failures_total` | sweeps that failed; non-zero means liveness is stale |
+| `felix_node_changes_total{op}` | membership changes published to the changefeed |
+
+Broker:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_heartbeat_age_seconds` | seconds since this broker's last accepted heartbeat |
+| `felix_broker_heartbeats_total` | heartbeats the control plane accepted |
+| `felix_broker_heartbeat_failures_total{kind}` | `rejected` or `unavailable` |
+| `felix_broker_membership_live` | 1 while the cluster considers this broker placeable |
+| `felix_broker_membership_registrations_total{outcome}` | `registered`, `rejected`, or `unavailable` |
+
+The `rejected` / `unavailable` split is the one worth keeping. `rejected` means
+the control plane answered and said no — a duplicate address, a superseded
+incarnation — and retrying never fixes it. `unavailable` means nothing answered.
+Collapsed into one counter, a misconfigured broker looks exactly like a flaky
+network.
+
+#### Suggested alerts
+
+| Condition | Why |
+| --- | --- |
+| `felix_broker_heartbeat_age_seconds > expiry_timeout_ms / 1000` | the earliest point a broker knows it is about to be declared down, and it fires even when the control plane is what is unreachable |
+| `increase(felix_node_transitions_total{to="down"}[5m]) > 0` | a broker failed; `to="left"` over the same window is a deploy and is not the same alert |
+| `increase(felix_broker_membership_registrations_total{outcome="rejected"}[15m]) > 0` | a broker is misconfigured and will never join; retrying will not clear it |
+| `felix_node_expiry_failures_total` rising | liveness is not being evaluated, so the census is stale in a way the census cannot show |
+| `sum(felix_node_count{lifecycle="live"}) < expected` | the fleet is smaller than intended, whatever the cause |
+
+Alert on `felix_broker_membership_live == 0` only where a broker is expected to
+be a member; it is legitimately 0 during a drain.
+
 ### Configuration
 
 | Setting | Env | Default |

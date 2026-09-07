@@ -11,6 +11,7 @@ pub mod controlplane;
 pub mod core_shards;
 pub mod durable_config;
 pub mod membership;
+pub mod membership_metrics;
 pub mod quic;
 pub mod timings;
 pub mod transport;

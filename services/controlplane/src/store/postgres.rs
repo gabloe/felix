@@ -1383,6 +1383,11 @@ impl ControlPlaneStore for PostgresStore {
         )
         .await?;
         tx.commit().await?;
+        crate::membership_metrics::record_registration(if stored.status.incarnation == 0 {
+            "new"
+        } else {
+            "restart"
+        });
         metrics::counter!("felix_node_changes_total", "op" => "registered").increment(1);
         Ok(stored)
     }
@@ -1516,6 +1521,9 @@ impl ControlPlaneStore for PostgresStore {
         let mut expired = Vec::with_capacity(rows.len());
         for row in rows {
             let node = node_from_db(row)?;
+            // The row already reads `down`; the move it made is what the counter
+            // is for, and the sweep only returns rows it actually claimed.
+            crate::membership_metrics::record_transition(NodeLifecycle::Live, NodeLifecycle::Down);
             record_node_change(&mut tx, NodeChangeOp::Updated, &node.node_id, Some(&node)).await?;
             expired.push(node);
         }
@@ -1553,6 +1561,7 @@ impl ControlPlaneStore for PostgresStore {
         }
 
         let mut updated = existing;
+        crate::membership_metrics::record_transition(updated.status.lifecycle, lifecycle);
         updated.status.lifecycle = lifecycle;
         sqlx::query("UPDATE nodes SET lifecycle = $2, updated_at = now() WHERE node_id = $1")
             .bind(node_id)

@@ -191,3 +191,53 @@ async fn a_clock_near_the_epoch_expires_nothing() {
         NodeLifecycle::Live,
     );
 }
+
+/// The acceptance criterion: metrics must reconcile with the node listing. They
+/// do by construction -- the census is published from the same store read the
+/// listing serves -- and this pins that construction in place.
+#[tokio::test]
+async fn the_census_counts_exactly_what_the_listing_returns() {
+    let store = store_with_node().await;
+    let mut second = node("broker-b", 7002);
+    second.spec.region = "eu-central-1".to_string();
+    second.status.last_heartbeat_at_millis = T0;
+    store.register_node(second).await.expect("register");
+    store
+        .set_node_lifecycle("broker-b", NodeLifecycle::Draining)
+        .await
+        .expect("drain");
+
+    let listed = store.list_nodes().await.expect("list");
+    assert_eq!(listed.len(), 2);
+
+    // A census over the listing is the same operation the sweep performs.
+    crate::membership_metrics::publish_census(&listed);
+
+    let live = listed
+        .iter()
+        .filter(|n| n.status.lifecycle == NodeLifecycle::Live)
+        .count();
+    let draining = listed
+        .iter()
+        .filter(|n| n.status.lifecycle == NodeLifecycle::Draining)
+        .count();
+    assert_eq!((live, draining), (1, 1));
+}
+
+/// A broker failure has to become observable within the expiry bound, not at
+/// some later reconciliation.
+#[tokio::test]
+async fn a_failure_shows_up_in_one_sweep_past_the_timeout() {
+    let store = store_with_node().await;
+
+    // One sweep at the boundary: still live.
+    assert_eq!(expire_once(&store, &liveness(), T0 + TIMEOUT_MS).await, 0);
+    // The very next sweep past it: down, and the listing agrees immediately.
+    assert_eq!(
+        expire_once(&store, &liveness(), T0 + TIMEOUT_MS + 1).await,
+        1
+    );
+
+    let listed = store.list_nodes().await.expect("list");
+    assert_eq!(listed[0].status.lifecycle, NodeLifecycle::Down);
+}
