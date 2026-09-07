@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788797041591,
+  "lastUpdate": 1788797605635,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -3828,6 +3828,72 @@ window.BENCHMARK_DATA = {
             "range": "381.32",
             "unit": "us",
             "extra": "trials: 5\nmedian: 608.00\nmean: 741.60\nstdev: 381.32\ncv: 51.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7cb8ed360855f5b04e532c9b9ea9332d3afb35c7",
+          "message": "feat(controlplane): expose broker membership to operators (#222)\n\nAdds GET /v1/nodes and GET /v1/nodes/{node_id}, filtered by lifecycle, region,\nand labels, each answering why a node is or is not a placement candidate.\n\n`placement.reasons` is the point. \"This broker is registered but shards are not\nlanding on it\" is otherwise answered by reading a lifecycle string and doing\nheartbeat arithmetic by hand. A stale heartbeat is reported separately from the\nlifecycle, so the window between a heartbeat lapsing and the sweep noticing --\nwhere a node still reads live -- is visible rather than inferred.\n\nBoth reads require `node.view:cluster:*`. That needed a cluster-scoped object,\nbecause every existing RBAC object is tenant-scoped and the cluster belongs to\nno tenant. `ParsedObject::Cluster` is its own island in both directions: no\ntenant scope contains it, so `validate_new_rule_allowed` cannot admit a tenant\nadmin's attempt to grant it; and it contains no tenant object, so it is not a\nbackdoor into tenant data. Both directions are asserted, in the grammar and\nover HTTP.\n\nThe tenant comes from the token's own `tid` claim rather than a path segment,\nsince the cluster is not a tenant resource. That claim only selects which\ntenant's signing keys to verify against -- the signature is what grants trust,\nas `kid` selects a key without conferring one.\n\nUnpaginated, matching the other listings: a cluster has brokers in the tens, and\na cursor no caller needs is a cursor every caller has to handle.\n\nThe OpenAPI test now asserts routes, not just schemas. A route the document does\nnot describe is a route no generated client can call, and nothing else in the\nbuild would notice.\n\nRefs #96\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T09:11:10-07:00",
+          "tree_id": "d109b865bb92cf12083ef990f1cea2481e0c3027",
+          "url": "https://github.com/gabloe/felix/commit/7cb8ed360855f5b04e532c9b9ea9332d3afb35c7"
+        },
+        "date": 1788797604354,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "6.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 153.80\nstdev: 6.69\ncv: 4.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 197,
+            "range": "2.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 198.00\nstdev: 2.45\ncv: 1.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 235,
+            "range": "12.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 235.00\nmean: 240.80\nstdev: 12.52\ncv: 5.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 195,
+            "range": "2.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 195.00\nmean: 194.80\nstdev: 2.28\ncv: 1.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 394,
+            "range": "29.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 394.00\nmean: 406.60\nstdev: 29.52\ncv: 7.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 996,
+            "range": "1082.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 996.00\nmean: 1384.20\nstdev: 1082.42\ncv: 78.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
