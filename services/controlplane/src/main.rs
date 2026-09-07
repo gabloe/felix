@@ -8,7 +8,7 @@ use anyhow::Context;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router, build_router};
 use controlplane::auth::oidc::UpstreamOidcValidator;
-use controlplane::{config, observability, store};
+use controlplane::{config, membership, observability, store};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use std::future::{Future, IntoFuture};
 use std::sync::Arc;
@@ -48,6 +48,14 @@ where
             async move { metrics_shutdown.cancelled().await },
         ))
     };
+
+    // Liveness expiry runs on the API token: it stops admitting work at the same
+    // point the listener does, before anything drains.
+    let expiry_task = membership::spawn_expiry_sweep(
+        Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
+        state.node_liveness.clone(),
+        api_shutdown.clone(),
+    );
 
     let app = build_router(state.clone());
 
@@ -127,6 +135,16 @@ where
         api_task.abort();
     }
 
+    let mut expiry_task = expiry_task;
+    if !budget
+        .drain("node_expiry_sweep", async {
+            let _ = (&mut expiry_task).await;
+        })
+        .await
+    {
+        expiry_task.abort();
+    }
+
     let mut bootstrap_task = bootstrap_task;
     if let Some(task) = &mut bootstrap_task
         && !budget
@@ -192,6 +210,7 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
         ),
         bootstrap_enabled: config.bootstrap.enabled,
         bootstrap_token: config.bootstrap.token,
+        node_liveness: config.node_liveness,
     })
 }
 
@@ -216,6 +235,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
         };
         let state = build_state(config).await.expect("state");
@@ -239,6 +259,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
         };
         let err = build_state(config).await.err().expect("missing postgres");
@@ -266,6 +287,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
             },
+            node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
         };
         let err = build_state(config)
@@ -293,6 +315,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
             },
+            node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
         };
         run_with_shutdown(config, async {
@@ -319,6 +342,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
             },
+            node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
         };
         run_with_shutdown(config, async {

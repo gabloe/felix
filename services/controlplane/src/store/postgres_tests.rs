@@ -247,7 +247,7 @@ async fn a_reconnected_store_still_sees_registered_nodes() -> anyhow::Result<()>
             .register_node(crate::store::node_contract::node("broker-a", 7001))
             .await?;
         store
-            .record_node_heartbeat("broker-a", 1_800_000_000_000)
+            .record_node_heartbeat("broker-a", 0, 1_800_000_000_000)
             .await?;
         store.node_snapshot().await?;
         drop(store);

@@ -9,6 +9,7 @@ use crate::api::openapi::ApiDoc;
 use crate::api::types::{FeatureFlags, Region};
 use crate::auth;
 use crate::auth::oidc::UpstreamOidcValidator;
+use crate::config::NodeLivenessConfig;
 use crate::observability;
 use crate::store::ControlPlaneAuthStore;
 use axum::Router;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub oidc_validator: UpstreamOidcValidator,
     pub bootstrap_enabled: bool,
     pub bootstrap_token: Option<String>,
+    pub node_liveness: NodeLivenessConfig,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -98,6 +100,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/tenants/{tenant_id}",
             axum::routing::delete(api::tenants::delete_tenant),
+        )
+        .route(
+            "/v1/nodes/{node_id}/heartbeat",
+            axum::routing::post(api::nodes::report_health),
         )
         .route(
             "/v1/tenants/{tenant_id}/token/exchange",

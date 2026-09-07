@@ -35,6 +35,7 @@ fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>,
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: enabled,
         bootstrap_token: token,
+        node_liveness: Default::default(),
     };
     (store, state)
 }

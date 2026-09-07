@@ -17,6 +17,15 @@ pub const DEFAULT_CHANGES_LIMIT: u64 = 1000;
 // it expires, so this leaves headroom to finish the drain and exit before then.
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 pub const DEFAULT_CHANGE_RETENTION_MAX_ROWS: i64 = 10_000;
+/// How often a healthy broker is expected to report health.
+pub const DEFAULT_NODE_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
+/// How long a node may go unheard before the cluster calls it down.
+///
+/// Three intervals: one lost heartbeat is a hiccup, three is a pattern.
+pub const DEFAULT_NODE_EXPIRY_TIMEOUT_MS: u64 = 15_000;
+/// How often the expiry sweep runs. Finer than the timeout so a node is marked
+/// down close to when it actually expires rather than a whole timeout later.
+pub const DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_PG_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_PG_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_PG_ACQUIRE_TIMEOUT_MS: u64 = 5_000;
@@ -60,6 +69,50 @@ impl Default for PostgresConfig {
     }
 }
 
+/// Timings for broker liveness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLivenessConfig {
+    /// Advertised to brokers in every heartbeat response.
+    pub heartbeat_interval_ms: u64,
+    /// Silence beyond this marks a node down.
+    pub expiry_timeout_ms: u64,
+    /// How often the sweep looks for expired nodes.
+    pub sweep_interval_ms: u64,
+}
+
+impl Default for NodeLivenessConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_ms: DEFAULT_NODE_HEARTBEAT_INTERVAL_MS,
+            expiry_timeout_ms: DEFAULT_NODE_EXPIRY_TIMEOUT_MS,
+            sweep_interval_ms: DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS,
+        }
+    }
+}
+
+impl NodeLivenessConfig {
+    fn validate(&self) -> Result<()> {
+        if self.heartbeat_interval_ms == 0 {
+            return Err(anyhow!(
+                "node heartbeat_interval_ms must be greater than zero"
+            ));
+        }
+        if self.sweep_interval_ms == 0 {
+            return Err(anyhow!("node sweep_interval_ms must be greater than zero"));
+        }
+        // A timeout at or below the interval expires brokers that are heartbeating
+        // exactly as told to, which takes down a healthy cluster.
+        if self.expiry_timeout_ms <= self.heartbeat_interval_ms {
+            return Err(anyhow!(
+                "node expiry_timeout_ms ({}) must exceed heartbeat_interval_ms ({})",
+                self.expiry_timeout_ms,
+                self.heartbeat_interval_ms
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ControlPlaneConfig {
     pub bind_addr: SocketAddr,
@@ -71,6 +124,7 @@ pub struct ControlPlaneConfig {
     pub change_retention_max_rows: Option<i64>,
     pub oidc_allowed_algorithms: Vec<Algorithm>,
     pub bootstrap: BootstrapConfig,
+    pub node_liveness: NodeLivenessConfig,
     // Total budget for draining in-flight requests after SIGTERM/SIGINT before
     // remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
@@ -87,7 +141,15 @@ struct ControlPlaneConfigOverride {
     change_retention_max_rows: Option<i64>,
     oidc_allowed_algorithms: Option<Vec<String>>,
     bootstrap: Option<BootstrapOverride>,
+    node_liveness: Option<NodeLivenessOverride>,
     shutdown_drain_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeLivenessOverride {
+    heartbeat_interval_ms: Option<u64>,
+    expiry_timeout_ms: Option<u64>,
+    sweep_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +200,14 @@ impl ControlPlaneConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_CHANGES_LIMIT);
+        let node_liveness = NodeLivenessConfig {
+            heartbeat_interval_ms: parse_positive_env("FELIX_NODE_HEARTBEAT_INTERVAL_MS")
+                .unwrap_or(DEFAULT_NODE_HEARTBEAT_INTERVAL_MS),
+            expiry_timeout_ms: parse_positive_env("FELIX_NODE_EXPIRY_TIMEOUT_MS")
+                .unwrap_or(DEFAULT_NODE_EXPIRY_TIMEOUT_MS),
+            sweep_interval_ms: parse_positive_env("FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS")
+                .unwrap_or(DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS),
+        };
         let shutdown_drain_timeout_ms = std::env::var("FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -198,6 +268,7 @@ impl ControlPlaneConfig {
                     .with_context(|| "parse FELIX_BOOTSTRAP_BIND_ADDR")?,
                 token: std::env::var("FELIX_BOOTSTRAP_TOKEN").ok(),
             },
+            node_liveness,
             shutdown_drain_timeout_ms,
         };
         config.validate()?;
@@ -226,6 +297,17 @@ impl ControlPlaneConfig {
             }
             if let Some(value) = override_cfg.change_retention_max_rows {
                 config.change_retention_max_rows = Some(value);
+            }
+            if let Some(liveness) = override_cfg.node_liveness {
+                if let Some(value) = liveness.heartbeat_interval_ms {
+                    config.node_liveness.heartbeat_interval_ms = value;
+                }
+                if let Some(value) = liveness.expiry_timeout_ms {
+                    config.node_liveness.expiry_timeout_ms = value;
+                }
+                if let Some(value) = liveness.sweep_interval_ms {
+                    config.node_liveness.sweep_interval_ms = value;
+                }
             }
             if let Some(value) = override_cfg.shutdown_drain_timeout_ms
                 && value > 0
@@ -292,8 +374,19 @@ impl ControlPlaneConfig {
                 "oidc_allowed_algorithms cannot be empty; include at least ES256"
             ));
         }
+        self.node_liveness.validate()?;
         Ok(())
     }
+}
+
+/// Read a positive integer from the environment, ignoring absent, unparsable,
+/// and zero values so a typo falls back to the default rather than disabling a
+/// timer.
+fn parse_positive_env(key: &str) -> Option<u64> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
 }
 
 fn parse_oidc_allowed_algorithms_csv(value: &str) -> Result<Vec<Algorithm>> {
@@ -397,6 +490,91 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A timeout at or below the interval expires brokers that are heartbeating
+    /// exactly as configured, which takes the cluster down.
+    #[test]
+    fn a_liveness_timeout_must_outlast_the_heartbeat_interval() {
+        let too_short = NodeLivenessConfig {
+            heartbeat_interval_ms: 5_000,
+            expiry_timeout_ms: 5_000,
+            sweep_interval_ms: 1_000,
+        };
+        let err = too_short.validate().expect_err("equal should be rejected");
+        assert!(err.to_string().contains("must exceed"), "{err}");
+
+        let inverted = NodeLivenessConfig {
+            expiry_timeout_ms: 1_000,
+            ..too_short.clone()
+        };
+        assert!(inverted.validate().is_err());
+
+        let ok = NodeLivenessConfig {
+            expiry_timeout_ms: 5_001,
+            ..too_short
+        };
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_liveness_intervals_are_rejected() {
+        for zeroed in [
+            NodeLivenessConfig {
+                heartbeat_interval_ms: 0,
+                ..NodeLivenessConfig::default()
+            },
+            NodeLivenessConfig {
+                sweep_interval_ms: 0,
+                ..NodeLivenessConfig::default()
+            },
+        ] {
+            assert!(zeroed.validate().is_err(), "{zeroed:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn the_default_liveness_config_is_valid() {
+        assert!(NodeLivenessConfig::default().validate().is_ok());
+    }
+
+    /// An unparsable or zero value falls back to the default rather than
+    /// disabling the timer.
+    #[serial]
+    #[test]
+    fn bad_liveness_env_values_fall_back_to_defaults() {
+        let _env = clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_HEARTBEAT_INTERVAL_MS", "not-a-number");
+            env::set_var("FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS", "0");
+            env::set_var("FELIX_NODE_EXPIRY_TIMEOUT_MS", "30000");
+        }
+
+        let config = ControlPlaneConfig::from_env().expect("config");
+        assert_eq!(
+            config.node_liveness.heartbeat_interval_ms,
+            DEFAULT_NODE_HEARTBEAT_INTERVAL_MS
+        );
+        assert_eq!(
+            config.node_liveness.sweep_interval_ms,
+            DEFAULT_NODE_EXPIRY_SWEEP_INTERVAL_MS
+        );
+        assert_eq!(config.node_liveness.expiry_timeout_ms, 30_000);
+    }
+
+    /// A config whose liveness timings cannot work must fail at startup, not
+    /// after it has taken the cluster down.
+    #[serial]
+    #[test]
+    fn an_unworkable_liveness_config_fails_startup() {
+        let _env = clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_HEARTBEAT_INTERVAL_MS", "10000");
+            env::set_var("FELIX_NODE_EXPIRY_TIMEOUT_MS", "5000");
+        }
+
+        let err = ControlPlaneConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("must exceed"), "{err}");
     }
 
     #[serial]

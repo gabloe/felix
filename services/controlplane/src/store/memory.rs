@@ -831,16 +831,54 @@ impl ControlPlaneStore for InMemoryStore {
         Ok(())
     }
 
-    async fn record_node_heartbeat(&self, node_id: &str, at_millis: u64) -> StoreResult<()> {
+    async fn record_node_heartbeat(
+        &self,
+        node_id: &str,
+        incarnation: u64,
+        at_millis: u64,
+    ) -> StoreResult<Node> {
         let mut state = self.nodes.write().await;
         let node = state
             .records
             .get_mut(node_id)
             .ok_or_else(|| StoreError::NotFound("node".into()))?;
+        if incarnation < node.status.incarnation {
+            return Err(StoreError::Conflict(format!(
+                "heartbeat for incarnation {incarnation} of {node_id}, which is now at {}",
+                node.status.incarnation
+            )));
+        }
         // Never moves backwards: heartbeats from two connections can arrive out
         // of order, and the newest observation is the one that matters.
         node.status.last_heartbeat_at_millis = node.status.last_heartbeat_at_millis.max(at_millis);
-        Ok(())
+        Ok(node.clone())
+    }
+
+    async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>> {
+        let mut state = self.nodes.write().await;
+        let stale: Vec<String> = state
+            .records
+            .values()
+            .filter(|node| {
+                matches!(
+                    node.status.lifecycle,
+                    NodeLifecycle::Live | NodeLifecycle::Draining
+                ) && node.status.last_heartbeat_at_millis < expiry_before_millis
+            })
+            .map(|node| node.node_id.clone())
+            .collect();
+
+        let mut expired = Vec::with_capacity(stale.len());
+        for node_id in stale {
+            let node = state.records.get_mut(&node_id).expect("just listed");
+            node.status.lifecycle = NodeLifecycle::Down;
+            let moved = node.clone();
+            state.record(NodeChangeOp::Updated, &node_id, Some(moved.clone()));
+            metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
+            expired.push(moved);
+        }
+        expired.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        Ok(expired)
     }
 
     async fn set_node_lifecycle(

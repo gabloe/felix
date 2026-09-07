@@ -307,6 +307,7 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
         bootstrap_token: Some(BOOTSTRAP_TOKEN.to_string()),
+        node_liveness: Default::default(),
     };
 
     let app = build_router(state.clone()).merge(build_bootstrap_router(state));

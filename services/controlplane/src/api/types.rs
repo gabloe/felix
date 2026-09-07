@@ -5,7 +5,9 @@
 use crate::model::{
     Cache, CacheChange, Namespace, NamespaceChange, Stream, StreamChange, Tenant, TenantChange,
 };
-use crate::model::{ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, StreamKind};
+use crate::model::{
+    ConsistencyLevel, DeliveryGuarantee, NodeLifecycle, RetentionPolicy, StreamKind,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -141,4 +143,28 @@ pub struct CacheSnapshotResponse {
 pub struct CacheChangesResponse {
     pub items: Vec<CacheChange>,
     pub next_seq: u64,
+}
+
+/// A broker's report that it is alive.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodeHeartbeatRequest {
+    /// The reporting process's own incarnation, from its last registration.
+    ///
+    /// Carried so a heartbeat that was delayed past a restart is rejected
+    /// rather than counted for the process that replaced it.
+    pub incarnation: u64,
+}
+
+/// What the control plane tells a broker in return.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct NodeHeartbeatResponse {
+    pub node_id: String,
+    /// The node's lifecycle as the cluster sees it. A broker that reads `down`
+    /// here has been expired and must register again.
+    pub lifecycle: NodeLifecycle,
+    /// How soon the next heartbeat is expected, so the interval is configured
+    /// in one place rather than on every broker.
+    pub heartbeat_interval_ms: u64,
+    /// Silence beyond this marks the node down.
+    pub expiry_timeout_ms: u64,
 }

@@ -32,6 +32,7 @@ fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     build_router(state).into_service()
 }

@@ -42,6 +42,7 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     build_router(state).into_service()
 }
@@ -958,7 +959,16 @@ impl ControlPlaneStore for FailingStore {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
-    async fn record_node_heartbeat(&self, _node_id: &str, _at_millis: u64) -> StoreResult<()> {
+    async fn record_node_heartbeat(
+        &self,
+        _node_id: &str,
+        _incarnation: u64,
+        _at_millis: u64,
+    ) -> StoreResult<Node> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn expire_stale_nodes(&self, _expiry_before_millis: u64) -> StoreResult<Vec<Node>> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
@@ -1093,6 +1103,7 @@ async fn system_health_reports_internal_error_on_store_failure() {
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1122,6 +1133,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1184,6 +1196,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1299,6 +1312,7 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
+        node_liveness: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1360,6 +1374,7 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
         bootstrap_token: Some("secret".to_string()),
+        node_liveness: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_bootstrap_router(state).into_service();

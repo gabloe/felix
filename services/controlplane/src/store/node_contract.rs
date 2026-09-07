@@ -42,6 +42,10 @@ pub(crate) async fn run_node_contract(store: Arc<dyn ControlPlaneStore>) {
     patch_rejects_an_unsupported_transition(store).await;
     a_heartbeat_never_moves_backwards(store).await;
     a_heartbeat_publishes_no_change(store).await;
+    a_heartbeat_from_a_superseded_incarnation_is_rejected(store).await;
+    a_heartbeat_does_not_revive_a_down_node(store).await;
+    expiry_moves_only_stale_serving_nodes(store).await;
+    expiry_is_idempotent_across_instances(store).await;
     set_lifecycle_is_idempotent(store).await;
     missing_nodes_report_not_found(store).await;
     delete_removes_and_publishes(store).await;
@@ -53,7 +57,56 @@ pub(crate) async fn run_node_contract(store: Arc<dyn ControlPlaneStore>) {
 ///
 /// Separate from [`run_node_contract`] only because these need an owned handle.
 pub(crate) async fn run_node_concurrency_contract(store: Arc<dyn ControlPlaneStore>) {
-    a_snapshot_taken_under_concurrent_writes_loses_nothing(store).await;
+    a_snapshot_taken_under_concurrent_writes_loses_nothing(Arc::clone(&store)).await;
+    concurrent_sweeps_expire_a_node_exactly_once(store).await;
+}
+
+/// The multi-instance case for real: several sweeps racing on one store, as
+/// several control-plane replicas would. Exactly one may claim each node, and
+/// the changefeed must show one event per node, not one per sweep.
+async fn concurrent_sweeps_expire_a_node_exactly_once(store: Arc<dyn ControlPlaneStore>) {
+    const NODES: u16 = 12;
+    const SWEEPERS: usize = 6;
+
+    clear(store.as_ref()).await;
+    let mut cutoff = 0;
+    for i in 0..NODES {
+        let registered = store
+            .register_node(node(&format!("broker-{i:03}"), 7400 + i))
+            .await
+            .expect("register");
+        cutoff = cutoff.max(registered.status.last_heartbeat_at_millis + 1);
+    }
+    let since = store.node_snapshot().await.expect("snapshot").next_seq;
+
+    let sweepers: Vec<_> = (0..SWEEPERS)
+        .map(|_| {
+            let store = Arc::clone(&store);
+            tokio::spawn(async move {
+                store
+                    .expire_stale_nodes(cutoff)
+                    .await
+                    .expect("expire")
+                    .len()
+            })
+        })
+        .collect();
+
+    let mut claimed = 0;
+    for sweeper in sweepers {
+        claimed += sweeper.await.expect("sweeper");
+    }
+    assert_eq!(
+        claimed, NODES as usize,
+        "every node must be claimed exactly once across all sweeps",
+    );
+
+    let changes = store.node_changes(since).await.expect("changes");
+    assert_eq!(
+        changes.items.len(),
+        NODES as usize,
+        "one change per node, not one per sweep",
+    );
 }
 
 /// The reason `node_changes.seq` is allocated from a locked row rather than a
@@ -253,11 +306,11 @@ async fn a_heartbeat_never_moves_backwards(store: &dyn ControlPlaneStore) {
     let at = registered.status.last_heartbeat_at_millis;
 
     store
-        .record_node_heartbeat("broker-a", at + 1_000)
+        .record_node_heartbeat("broker-a", 0, at + 1_000)
         .await
         .expect("beat");
     store
-        .record_node_heartbeat("broker-a", at - 1_000)
+        .record_node_heartbeat("broker-a", 0, at - 1_000)
         .await
         .expect("late beat");
 
@@ -274,7 +327,7 @@ async fn a_heartbeat_publishes_no_change(store: &dyn ControlPlaneStore) {
     let before = store.node_snapshot().await.expect("snapshot").next_seq;
 
     store
-        .record_node_heartbeat("broker-a", 1_800_000_000_000)
+        .record_node_heartbeat("broker-a", 0, 1_800_000_000_000)
         .await
         .expect("beat");
 
@@ -322,7 +375,7 @@ async fn missing_nodes_report_not_found(store: &dyn ControlPlaneStore) {
     ));
     assert!(matches!(
         store
-            .record_node_heartbeat("absent", 1)
+            .record_node_heartbeat("absent", 0, 1)
             .await
             .expect_err("beat"),
         StoreError::NotFound(_)
@@ -447,5 +500,152 @@ async fn changes_are_ordered_and_monotonic(store: &dyn ControlPlaneStore) {
     assert!(
         changes.next_seq > changes.items.last().expect("last").seq,
         "next_seq must be past the last change returned",
+    );
+}
+
+/// A heartbeat delayed past a restart belongs to a process the broker has
+/// already replaced. Counting it would report a dead incarnation as live.
+async fn a_heartbeat_from_a_superseded_incarnation_is_rejected(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .register_node(node("broker-a", 7001))
+        .await
+        .expect("register");
+    let restarted = store
+        .register_node(node("broker-a", 7001))
+        .await
+        .expect("re-register");
+    assert_eq!(restarted.status.incarnation, 1);
+
+    let err = store
+        .record_node_heartbeat("broker-a", 0, 1_800_000_000_000)
+        .await
+        .expect_err("stale incarnation should be rejected");
+    assert!(matches!(err, StoreError::Conflict(_)), "got {err:?}");
+
+    // The current incarnation still works, and a future one is accepted too:
+    // the broker may have re-registered against another control-plane instance.
+    store
+        .record_node_heartbeat("broker-a", 1, 1_800_000_000_000)
+        .await
+        .expect("current incarnation");
+    store
+        .record_node_heartbeat("broker-a", 2, 1_800_000_000_001)
+        .await
+        .expect("newer incarnation");
+}
+
+/// A heartbeat proves a process is running, not that it still owns the
+/// identity. Reviving here would let a broker the cluster already replaced keep
+/// receiving placement.
+async fn a_heartbeat_does_not_revive_a_down_node(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .register_node(node("broker-a", 7001))
+        .await
+        .expect("register");
+    store
+        .set_node_lifecycle("broker-a", NodeLifecycle::Down)
+        .await
+        .expect("down");
+
+    let after = store
+        .record_node_heartbeat("broker-a", 0, 1_900_000_000_000)
+        .await
+        .expect("beat");
+    assert_eq!(after.status.lifecycle, NodeLifecycle::Down);
+    assert_eq!(
+        after.status.last_heartbeat_at_millis, 1_900_000_000_000,
+        "liveness is still recorded, so a later registration is judged fairly",
+    );
+}
+
+async fn expiry_moves_only_stale_serving_nodes(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    let base = node("broker-fresh", 7301).status.last_heartbeat_at_millis;
+
+    store
+        .register_node(node("broker-stale", 7300))
+        .await
+        .expect("register");
+    let mut fresh = node("broker-fresh", 7301);
+    fresh.status.last_heartbeat_at_millis = base + 10_000;
+    store.register_node(fresh).await.expect("register");
+    store
+        .register_node(node("broker-left", 7302))
+        .await
+        .expect("register");
+    store
+        .set_node_lifecycle("broker-left", NodeLifecycle::Left)
+        .await
+        .expect("leave");
+
+    let expired = store.expire_stale_nodes(base + 1).await.expect("expire");
+    assert_eq!(
+        expired
+            .iter()
+            .map(|n| n.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["broker-stale"],
+        "only a stale, still-serving node should move",
+    );
+    assert_eq!(
+        store
+            .get_node("broker-fresh")
+            .await
+            .expect("get")
+            .status
+            .lifecycle,
+        NodeLifecycle::Live,
+    );
+    assert_eq!(
+        store
+            .get_node("broker-left")
+            .await
+            .expect("get")
+            .status
+            .lifecycle,
+        NodeLifecycle::Left,
+    );
+}
+
+/// Several control-plane instances run this sweep against one database. A node
+/// must be claimed by exactly one of them, and published once.
+async fn expiry_is_idempotent_across_instances(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    let registered = store
+        .register_node(node("broker-a", 7001))
+        .await
+        .expect("register");
+    let cutoff = registered.status.last_heartbeat_at_millis + 1;
+    let since = store.node_snapshot().await.expect("snapshot").next_seq;
+
+    assert_eq!(
+        store
+            .expire_stale_nodes(cutoff)
+            .await
+            .expect("expire")
+            .len(),
+        1
+    );
+    for _ in 0..3 {
+        assert!(
+            store
+                .expire_stale_nodes(cutoff)
+                .await
+                .expect("expire")
+                .is_empty()
+        );
+    }
+
+    assert_eq!(
+        store
+            .node_changes(since)
+            .await
+            .expect("changes")
+            .items
+            .len(),
+        1,
+        "a repeated sweep must not publish a change per pass",
     );
 }
