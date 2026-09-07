@@ -225,3 +225,17 @@ pub struct NodeListResponse {
 pub struct ShardAssignmentListResponse {
     pub items: Vec<crate::model::ShardAssignment>,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardAssignmentSnapshotResponse {
+    pub items: Vec<crate::model::ShardAssignment>,
+    /// Where to start polling changes. A consumer that applies this snapshot and
+    /// then polls from here sees every committed change exactly once.
+    pub next_seq: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardAssignmentChangesResponse {
+    pub items: Vec<crate::model::ShardAssignmentChange>,
+    pub next_seq: u64,
+}

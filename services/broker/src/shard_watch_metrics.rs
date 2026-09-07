@@ -1,0 +1,51 @@
+//! Metrics for the broker's shard-ownership watch.
+//!
+//! The question these answer is whether this broker's ownership view can still
+//! be trusted. A watch that is failing, or resnapshotting repeatedly, is a
+//! broker acting on a picture of the cluster that may already be wrong.
+
+/// Checkpoint the watch has reached. Compare against the control plane's
+/// `next_seq` to see lag directly.
+pub const CHECKPOINT: &str = "felix_broker_shard_watch_checkpoint";
+/// Snapshots taken. Rises on start, and on every forced resync after.
+pub const SNAPSHOTS_TOTAL: &str = "felix_broker_shard_watch_snapshots_total";
+/// Assignments held after the last snapshot.
+pub const ASSIGNMENTS: &str = "felix_broker_shard_assignments";
+/// Changes applied.
+pub const APPLIED_TOTAL: &str = "felix_broker_shard_changes_applied_total";
+/// Changes ignored for carrying a generation at or below the one held. Routine
+/// in small numbers -- it is what makes duplicate delivery harmless.
+pub const STALE_TOTAL: &str = "felix_broker_shard_changes_stale_total";
+/// Forced resyncs, by `reason`: `gap_in_history` or `sequence_reset`.
+pub const RESYNCS_TOTAL: &str = "felix_broker_shard_watch_resyncs_total";
+/// Polls that failed outright.
+pub const FAILURES_TOTAL: &str = "felix_broker_shard_watch_failures_total";
+
+pub fn record_checkpoint(seq: u64) {
+    metrics::gauge!(CHECKPOINT).set(seq as f64);
+}
+
+pub fn record_snapshot(assignments: usize) {
+    metrics::counter!(SNAPSHOTS_TOTAL).increment(1);
+    metrics::gauge!(ASSIGNMENTS).set(assignments as f64);
+}
+
+pub fn record_applied(count: usize) {
+    metrics::counter!(APPLIED_TOTAL).increment(count as u64);
+}
+
+pub fn record_stale_change() {
+    metrics::counter!(STALE_TOTAL).increment(1);
+}
+
+pub fn record_failure() {
+    metrics::counter!(FAILURES_TOTAL).increment(1);
+}
+
+pub fn record_resync(reason: super::shard_watch::Resync) {
+    let label = match reason {
+        super::shard_watch::Resync::GapInHistory => "gap_in_history",
+        super::shard_watch::Resync::SequenceReset => "sequence_reset",
+    };
+    metrics::counter!(RESYNCS_TOTAL, "reason" => label).increment(1);
+}

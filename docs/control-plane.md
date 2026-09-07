@@ -229,6 +229,35 @@ fixes.
 | --- | --- | --- |
 | `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |
 
+#### How brokers follow ownership
+
+`GET /v1/shard-assignments/snapshot` returns every current assignment plus a
+`next_seq`; `GET /v1/shard-assignments/changes?since=N` returns the changes from
+there. A broker applies the snapshot and then polls, and the two together
+describe every committed change exactly once — the snapshot is read at a
+consistent point and `next_seq` is the log position at that same point.
+
+Three things can break that, and a broker has to notice each rather than carry
+on from a checkpoint the control plane can no longer honour:
+
+| Signal | Meaning | Response |
+| --- | --- | --- |
+| first returned `seq` > `since` | changes between were evicted from the window | re-snapshot |
+| empty page but `next_seq` > `since` | the whole span was evicted, not empty | re-snapshot |
+| `next_seq` < `since` | the sequence reset under us — a control plane restarted onto a store that does not persist it | re-snapshot |
+
+The second is the subtle one: an empty page is only safe when the log has not
+moved. Treating it as "nothing new" whenever it is empty silently skips
+everything that was evicted.
+
+Changes are applied by generation, not arrival: a change carrying a generation
+at or below the one already held is dropped. That is what makes duplicate
+delivery harmless and stops a reordered or retried poll rolling ownership
+backwards. Falling behind is not an error — a broker that was away long enough
+resnapshots and carries on.
+
+Both endpoints require `node.view:cluster:*`.
+
 #### Referential integrity
 
 Two references, two different policies, chosen rather than inherited:
@@ -267,6 +296,17 @@ Control plane:
 | `felix_shards_placed_total` | shards given a leader by reconciliation |
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
+
+Broker side:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_shard_watch_checkpoint` | log position the watch has reached; compare against the control plane to see lag |
+| `felix_broker_shard_assignments` | assignments this broker currently believes in |
+| `felix_broker_shard_changes_applied_total` | ownership changes applied |
+| `felix_broker_shard_changes_stale_total` | changes dropped for a stale generation; small numbers are routine, and are what makes duplicate delivery harmless |
+| `felix_broker_shard_watch_resyncs_total{reason}` | forced resnapshots: `gap_in_history` or `sequence_reset` |
+| `felix_broker_shard_watch_failures_total` | polls that failed outright |
 
 Broker:
 

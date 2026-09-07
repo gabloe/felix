@@ -22,7 +22,8 @@ use crate::api::{
         NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse,
         NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
         NodeRegistrationRequest, NodeRegistrationResponse, NodeView, Region,
-        ShardAssignmentListResponse, StreamChangesResponse, StreamCreateRequest,
+        ShardAssignmentChangesResponse, ShardAssignmentListResponse,
+        ShardAssignmentSnapshotResponse, StreamChangesResponse, StreamCreateRequest,
         StreamListResponse, StreamSnapshotResponse, SystemInfo, TenantChangesResponse,
         TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
     },
@@ -37,8 +38,9 @@ use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, ConsistencyLevel,
     DeliveryGuarantee, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey, Node,
     NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus,
-    RetentionPolicy, ShardAssignment, ShardKey, ShardState, Stream, StreamChange, StreamChangeOp,
-    StreamKey, StreamKind, StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
+    RetentionPolicy, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
+    ShardState, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest,
+    Tenant, TenantChange, TenantChangeOp,
 };
 use utoipa::OpenApi;
 
@@ -95,7 +97,9 @@ use utoipa::OpenApi;
         nodes::deregister_node,
         nodes::list_nodes,
         nodes::get_node,
-        nodes::list_shard_assignments
+        nodes::list_shard_assignments,
+        nodes::shard_assignment_snapshot,
+        nodes::shard_assignment_changes
     ),
     components(schemas(
         FeatureFlags,
@@ -160,6 +164,10 @@ use utoipa::OpenApi;
         ShardKey,
         ShardState,
         ShardAssignmentListResponse,
+        ShardAssignmentSnapshotResponse,
+        ShardAssignmentChangesResponse,
+        ShardAssignmentChange,
+        ShardAssignmentChangeOp,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,
@@ -208,6 +216,9 @@ mod tests {
             "ShardKey",
             "ShardState",
             "ShardAssignmentListResponse",
+            "ShardAssignmentSnapshotResponse",
+            "ShardAssignmentChangesResponse",
+            "ShardAssignmentChange",
             "NodeView",
             "NodePlacement",
             "NodeListResponse",
@@ -238,6 +249,8 @@ mod tests {
             ("/v1/nodes/{node_id}/drain", "post"),
             ("/v1/nodes/{node_id}/deregister", "post"),
             ("/v1/shard-assignments", "get"),
+            ("/v1/shard-assignments/snapshot", "get"),
+            ("/v1/shard-assignments/changes", "get"),
         ] {
             let described = paths
                 .get(path)
