@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788815639582,
+  "lastUpdate": 1788821386364,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3328,6 +3328,58 @@ window.BENCHMARK_DATA = {
             "range": "24227.30",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 844802.26\nmean: 835513.27\nstdev: 24227.30\ncv: 2.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b3af5ddf6528c506c28f64af137ae879e1f1bc6",
+          "message": "feat(broker): drive local shard state from assignment generations (#229)\n\nThe watch says who should own a shard. This is what a broker has actually done\nabout it, which is a separate thing: becoming an owner is not instant. The\ndurable log has to be opened and recovered first, and a broker serving writes in\nthat window would acknowledge records it cannot yet persist.\n\nSo ownership is two-phase in both directions -- opening before active, draining\nbefore closed -- and a shard serves only while active at the generation the\ncontrol plane currently names.\n\nThe rules that are easy to get wrong, each tested:\n\nAn older generation is ignored, so a duplicate delivery, a reordered poll or a\nsnapshot replay costs nothing. A newer one reopens rather than assuming local\nstate still matches. An open that finishes after a reassignment does not\nactivate, because the shard moved on while it was being recovered.\n\nA failed open is not retried by the same assignment arriving again: every poll\nre-delivers it, and retrying each time buries the failure while hammering a log\nthat is not opening. A new generation is what retries.\n\nA shard that vanished from the assignment set is released exactly like one\nreassigned away, because a snapshot replaces the whole picture and only the full\nset says what disappeared.\n\nA failed flush still gives up the shard. Ownership has moved regardless, and\ncontinuing to serve is worse than an unflushed tail -- but it is logged as an\nerror rather than swallowed.\n\nDecision and I/O are split as placement is, so every rule above is testable\nwithout a disk.\n\nRefs #101\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T15:47:24-07:00",
+          "tree_id": "44beecfee39a9ebed5757d609777f3c089de4d34",
+          "url": "https://github.com/gabloe/felix/commit/7b3af5ddf6528c506c28f64af137ae879e1f1bc6"
+        },
+        "date": 1788821385662,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 229011,
+            "range": "1879.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229011.00\nmean: 229037.04\nstdev: 1879.02\ncv: 0.82%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 229011,
+            "range": "1879.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229011.00\nmean: 229037.04\nstdev: 1879.02\ncv: 0.82%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55720.23,
+            "range": "1261.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55720.23\nmean: 55260.71\nstdev: 1261.20\ncv: 2.28%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557202.29,
+            "range": "12611.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557202.29\nmean: 552607.15\nstdev: 12611.96\ncv: 2.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
