@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788825918177,
+  "lastUpdate": 1788842846754,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4356,6 +4356,72 @@ window.BENCHMARK_DATA = {
             "range": "1090.59",
             "unit": "us",
             "extra": "trials: 5\nmedian: 503.00\nmean: 989.40\nstdev: 1090.59\ncv: 110.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "389ebfd5b805d1ddaa4811b4b72aef5878d98377",
+          "message": "feat(broker): route publishes through shard ownership (#231)\n\n* feat(broker): decide ingress dispatch from shard ownership\n\nThe decision layer for routing publishes by ownership: given a shard, is it\nmine, someone else's, or nobody's right now.\n\nTwo sources have to agree. The router says who the cluster believes owns the\nshard; the lifecycle says whether this broker has actually opened it. Trusting\nonly the router serves writes during recovery; trusting only the lifecycle keeps\nserving a shard that has been reassigned. Every combination is tested.\n\nRemote is a typed result rather than an error, so M4 can forward it and it stays\ndistinguishable from a failure. Not-ready is separate from not-assigned for the\nsame reason -- one resolves on its own, the other needs placement.\n\nA broker with no cluster identity dispatches locally by construction: no router\nto consult, no assignments to honour. Clustering is opt-in, and a broker that\nnever joined one has to behave exactly as it did before this existed, which is\nthe first thing the tests assert.\n\n`shard_for` is where a routing key will map to a shard number. The wire protocol\ncarries no such key, so every record of a stream lands on shard 0 today and a\nstream's configured shard count is metadata the data path does not use. The\nhashing is written and tested against the mapping a negotiated key would get, so\nadding the field is a wire change rather than a routing change.\n\nRefs #103\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(broker): gate publishes on shard ownership\n\nEvery publish now passes an ownership check before anything reaches storage.\n`resolve_stream_cached` is the one function all eleven publish call sites funnel\nthrough, which is why the gate lives there.\n\nThe check is deliberately outside the stream-handle cache. That cache avoids a\nregistry lookup and holds for a TTL; ownership changes the instant the control\nplane says so, and caching it would keep a broker serving a reassigned shard for\nup to a TTL.\n\nBoth reads are ArcSwap loads, so the resolver is synchronous and allocation\nfree. My first version locked a tokio Mutex to consult local shard state, which\nput an await into the publish path for what is two loads; the servable set is\nnow published as a snapshot alongside the routes. A single-node broker\nshort-circuits on a null check before either, and that it behaves exactly as\nbefore is the first thing the tests assert.\n\nOne task keeps the two views in step, in a fixed order: reconcile local state,\npublish what is servable, then publish the routes. The other order would\nadvertise this node as the owner of a shard it has not opened.\n\nA broker cannot forward yet. An address book needs /v1/nodes, which requires a\ncluster-scoped token brokers do not have (#126), so a shard led by this node\nresolves on the node id alone and every other shard is refused with its owner\nnamed. Forwarding is M4, and `Dispatch::Forward` is already the shape it plugs\ninto.\n\nAlso serialises the durable_config env tests. They guarded the environment with\na local lock while the config tests clear every FELIX_ variable under a\ndifferent one, so the two could interleave. Pre-existing, and the extra tests\nhere made it fire: once in ten runs before, zero in ten after.\n\nCloses #103\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T21:45:10-07:00",
+          "tree_id": "5a70b7ee7637e15e332f747d8f709bc7fc9cd40d",
+          "url": "https://github.com/gabloe/felix/commit/389ebfd5b805d1ddaa4811b4b72aef5878d98377"
+        },
+        "date": 1788842845416,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 120.00\nstdev: 0.71\ncv: 0.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 168,
+            "range": "13.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 168.00\nmean: 172.60\nstdev: 13.18\ncv: 7.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 346,
+            "range": "674.72",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 346.00\nmean: 605.60\nstdev: 674.72\ncv: 111.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 162.20\nstdev: 0.84\ncv: 0.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 337,
+            "range": "12.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 337.00\nmean: 335.60\nstdev: 12.30\ncv: 3.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 862,
+            "range": "482.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 862.00\nmean: 945.80\nstdev: 482.91\ncv: 51.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
