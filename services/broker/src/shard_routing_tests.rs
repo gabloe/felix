@@ -42,7 +42,7 @@ fn catalog() -> HashMap<String, NodeRef> {
 
 /// Build an ingress router whose view is `assignments`, with `opened` shards
 /// already through their opening phase locally.
-async fn ingress(assignments: &[ShardAssignment], opened: &[u32]) -> IngressRouter {
+fn ingress(assignments: &[ShardAssignment], opened: &[u32]) -> IngressRouter {
     let nodes = catalog();
     let router = Arc::new(ShardRouter::new(
         "broker-a",
@@ -62,21 +62,23 @@ async fn ingress(assignments: &[ShardAssignment], opened: &[u32]) -> IngressRout
             lifecycle.opened(&assignment.key, assignment.generation);
         }
     }
-    IngressRouter::new(router, Arc::new(Mutex::new(lifecycle)))
+    let ingress = IngressRouter::new(router);
+    ingress.publish_servable(lifecycle.servable());
+    ingress
 }
 
 /// The property that must not regress: a broker with no cluster identity
 /// behaves exactly as it did before clustering existed.
 #[tokio::test]
 async fn a_single_node_broker_always_serves_locally() {
-    assert_eq!(dispatch(None, &key(0)).await, Dispatch::Local);
-    assert_eq!(dispatch(None, &key(41)).await, Dispatch::Local);
+    assert_eq!(dispatch(None, &key(0)), Dispatch::Local);
+    assert_eq!(dispatch(None, &key(41)), Dispatch::Local);
 }
 
 #[tokio::test]
 async fn an_owned_and_open_shard_is_served_locally() {
-    let ingress = ingress(&[assignment(0, "broker-a", 3)], &[0]).await;
-    assert_eq!(dispatch(Some(&ingress), &key(0)).await, Dispatch::Local);
+    let ingress = ingress(&[assignment(0, "broker-a", 3)], &[0]);
+    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
 }
 
 /// The reason ownership and readiness are two separate sources: the cluster
@@ -84,9 +86,9 @@ async fn an_owned_and_open_shard_is_served_locally() {
 /// write now would promise durability that is not set up.
 #[tokio::test]
 async fn an_owned_shard_still_opening_is_not_served() {
-    let ingress = ingress(&[assignment(0, "broker-a", 3)], &[]).await;
+    let ingress = ingress(&[assignment(0, "broker-a", 3)], &[]);
     assert_eq!(
-        dispatch(Some(&ingress), &key(0)).await,
+        dispatch(Some(&ingress), &key(0)),
         Dispatch::Unavailable(Reason::NotReady),
     );
 }
@@ -94,9 +96,9 @@ async fn an_owned_shard_still_opening_is_not_served() {
 /// Remote must be its own outcome, not an error, or M4 has nothing to act on.
 #[tokio::test]
 async fn a_shard_owned_elsewhere_is_forwardable() {
-    let ingress = ingress(&[assignment(0, "broker-b", 2)], &[]).await;
+    let ingress = ingress(&[assignment(0, "broker-b", 2)], &[]);
     assert_eq!(
-        dispatch(Some(&ingress), &key(0)).await,
+        dispatch(Some(&ingress), &key(0)),
         Dispatch::Forward {
             node_id: "broker-b".to_string(),
             advertise_addr: SocketAddr::from(([10, 0, 0, 4], 7002)),
@@ -108,9 +110,9 @@ async fn a_shard_owned_elsewhere_is_forwardable() {
 /// locally, or a broker writes data nobody asked it to hold.
 #[tokio::test]
 async fn an_unassigned_shard_is_refused() {
-    let ingress = ingress(&[], &[]).await;
+    let ingress = ingress(&[], &[]);
     assert_eq!(
-        dispatch(Some(&ingress), &key(0)).await,
+        dispatch(Some(&ingress), &key(0)),
         Dispatch::Unavailable(Reason::NotAssigned),
     );
 }
@@ -134,11 +136,8 @@ async fn an_unavailable_owner_is_reported_with_its_reason() {
         .collect();
     router.publish(routing_table_from(&owned, &nodes), &nodes);
 
-    let ingress = IngressRouter::new(
-        router,
-        Arc::new(Mutex::new(ShardLifecycle::new("broker-a"))),
-    );
-    match dispatch(Some(&ingress), &key(0)).await {
+    let ingress = IngressRouter::new(router);
+    match dispatch(Some(&ingress), &key(0)) {
         Dispatch::Unavailable(Reason::OwnerUnavailable(detail)) => {
             assert!(detail.contains("broker-dead"), "{detail}");
         }
@@ -163,9 +162,9 @@ async fn losing_a_shard_stops_local_service() {
 
     let owned: HashMap<ShardKey, ShardAssignment> = [(key(0), mine)].into_iter().collect();
     router.publish(routing_table_from(&owned, &nodes), &nodes);
-    let lifecycle = Arc::new(Mutex::new(lifecycle));
-    let ingress = IngressRouter::new(Arc::clone(&router), Arc::clone(&lifecycle));
-    assert_eq!(dispatch(Some(&ingress), &key(0)).await, Dispatch::Local);
+    let ingress = IngressRouter::new(Arc::clone(&router));
+    ingress.publish_servable(lifecycle.servable());
+    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
 
     // Reassigned to broker-b.
     let moved: HashMap<ShardKey, ShardAssignment> = [(key(0), assignment(0, "broker-b", 2))]
@@ -174,10 +173,7 @@ async fn losing_a_shard_stops_local_service() {
     router.publish(routing_table_from(&moved, &nodes), &nodes);
 
     assert!(
-        matches!(
-            dispatch(Some(&ingress), &key(0)).await,
-            Dispatch::Forward { .. }
-        ),
+        matches!(dispatch(Some(&ingress), &key(0)), Dispatch::Forward { .. }),
         "a reassigned shard must stop being served here",
     );
 }
@@ -203,9 +199,10 @@ async fn a_local_route_at_a_newer_generation_is_not_served_until_reopened() {
         .collect();
     router.publish(routing_table_from(&newer, &nodes), &nodes);
 
-    let ingress = IngressRouter::new(router, Arc::new(Mutex::new(lifecycle)));
+    let ingress = IngressRouter::new(router);
+    ingress.publish_servable(lifecycle.servable());
     assert_eq!(
-        dispatch(Some(&ingress), &key(0)).await,
+        dispatch(Some(&ingress), &key(0)),
         Dispatch::Unavailable(Reason::NotReady),
         "local state must catch up before serving the new generation",
     );
@@ -220,15 +217,14 @@ async fn a_multi_shard_stream_dispatches_per_shard() {
             assignment(2, "broker-a", 1),
         ],
         &[0, 2],
-    )
-    .await;
+    );
 
-    assert_eq!(dispatch(Some(&ingress), &key(0)).await, Dispatch::Local);
+    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
     assert!(matches!(
-        dispatch(Some(&ingress), &key(1)).await,
+        dispatch(Some(&ingress), &key(1)),
         Dispatch::Forward { .. }
     ));
-    assert_eq!(dispatch(Some(&ingress), &key(2)).await, Dispatch::Local);
+    assert_eq!(dispatch(Some(&ingress), &key(2)), Dispatch::Local);
 }
 
 /// Without a routing key on the wire there is only one shard to choose, and

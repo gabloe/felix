@@ -9,13 +9,13 @@
 //! no router to consult and no assignments to honour, so dispatch is `Local` by
 //! construction. Clustering is opt-in, and a broker that never joined one must
 //! behave exactly as it did before this existed.
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use felix_router::{Resolution, ShardRouter, Unavailable};
-use tokio::sync::Mutex;
 
-use crate::shard_lifecycle::ShardLifecycle;
 use crate::shard_watch::ShardKey;
 
 /// What ingress should do with a request.
@@ -108,32 +108,57 @@ fn finalize(mut hash: u64) -> u64 {
     hash ^ (hash >> 31)
 }
 
+/// Shards this broker has opened, and the generation each was opened at.
+///
+/// Published as an immutable snapshot for the same reason routes are: the
+/// publish path reads this on every request, and it must not take a lock a
+/// writer can hold -- least of all an async one, which would put an await into
+/// the hot path for a lookup that is two loads.
+pub type ServableShards = HashMap<ShardKey, u64>;
+
 /// Resolves ingress requests against cluster ownership.
 ///
 /// Absent on a single-node broker — see [`dispatch`].
+///
+/// Both reads are `ArcSwap` loads, so `dispatch` is synchronous and allocation
+/// free. That is deliberate: it sits in front of every publish, and a resolver
+/// that cost a lock or an await would show up in p999 long before it showed up
+/// in a correctness test.
 pub struct IngressRouter {
     router: Arc<ShardRouter>,
-    lifecycle: Arc<Mutex<ShardLifecycle>>,
+    servable: ArcSwap<ServableShards>,
 }
 
 impl IngressRouter {
-    pub fn new(router: Arc<ShardRouter>, lifecycle: Arc<Mutex<ShardLifecycle>>) -> Self {
-        Self { router, lifecycle }
+    pub fn new(router: Arc<ShardRouter>) -> Self {
+        Self {
+            router,
+            servable: ArcSwap::from_pointee(ServableShards::new()),
+        }
+    }
+
+    /// Replace the set of shards this broker can serve.
+    ///
+    /// Called after each lifecycle reconcile, which is the only thing that
+    /// changes it.
+    pub fn publish_servable(&self, servable: ServableShards) {
+        self.servable.store(Arc::new(servable));
     }
 
     /// Decide what to do with a request for `key`.
     ///
     /// Two sources have to agree. The router says who the cluster believes owns
-    /// the shard; the lifecycle says whether this broker has actually opened it.
-    /// Trusting only the router would serve writes during recovery; trusting
-    /// only the lifecycle would keep serving a shard that has been reassigned.
-    pub async fn dispatch(&self, key: &ShardKey) -> Dispatch {
-        let route = self.router.resolve(&to_router_key(key));
-        match route {
+    /// the shard; the servable set says whether this broker has actually opened
+    /// it. Trusting only the router would serve writes during recovery;
+    /// trusting only local state would keep serving a shard that has been
+    /// reassigned.
+    pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
+        match self.router.resolve(&to_router_key(key)) {
             Resolution::Local { generation } => {
-                // The cluster says ours. Local state has the deciding vote on
-                // whether it is servable yet.
-                if self.lifecycle.lock().await.may_serve_at(key, generation) {
+                // The cluster says ours. Local readiness has the deciding vote,
+                // and only at this exact generation: an older one means we have
+                // not caught up with a reassignment that already happened.
+                if self.servable.load().get(key) == Some(&generation) {
                     Dispatch::Local
                 } else {
                     Dispatch::Unavailable(Reason::NotReady)
@@ -165,11 +190,12 @@ impl IngressRouter {
 ///
 /// `None` is a single-node broker: no identity, no assignments, nothing to
 /// resolve against. Everything is local, exactly as it was before clustering
-/// existed.
-pub async fn dispatch(ingress: Option<&IngressRouter>, key: &ShardKey) -> Dispatch {
+/// existed, and it costs one branch.
+#[inline]
+pub fn dispatch(ingress: Option<&IngressRouter>, key: &ShardKey) -> Dispatch {
     match ingress {
         None => Dispatch::Local,
-        Some(ingress) => ingress.dispatch(key).await,
+        Some(ingress) => ingress.dispatch(key),
     }
 }
 
@@ -202,6 +228,48 @@ pub fn routing_table_from(
         }),
         nodes,
     )
+}
+
+/// Keep local shard state and the routing table in step with the watch.
+///
+/// One task owns the sequence, so the two never disagree: reconcile local state
+/// first, then publish what is servable, then publish the routes. Publishing
+/// routes first would advertise this node as the owner of a shard it has not
+/// opened.
+///
+/// The routing table is built with an empty node catalog, because a broker has
+/// no way to read one: `/v1/nodes` requires a cluster-scoped token and brokers
+/// do not have credentials yet (#126). The consequence is deliberate and
+/// correct for M3 -- a shard led by this node resolves `Local` on the node id
+/// alone, and every other shard resolves to a refusal naming its owner rather
+/// than a forward. Forwarding needs an address book, and that arrives with M4.
+pub fn spawn_feed(
+    ownership: Arc<tokio::sync::RwLock<crate::shard_watch::ShardOwnership>>,
+    lifecycle: Arc<tokio::sync::Mutex<crate::shard_lifecycle::ShardLifecycle>>,
+    store: Arc<dyn crate::shard_lifecycle::ShardStore>,
+    ingress: Arc<IngressRouter>,
+    router: Arc<ShardRouter>,
+    interval: std::time::Duration,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let catalog = HashMap::new();
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => return,
+                _ = ticker.tick() => {}
+            }
+
+            let assignments = ownership.read().await.assignments().clone();
+            crate::shard_lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments).await;
+
+            let servable = lifecycle.lock().await.servable();
+            ingress.publish_servable(servable);
+            router.publish(routing_table_from(&assignments, &catalog), &catalog);
+        }
+    })
 }
 
 #[cfg(test)]

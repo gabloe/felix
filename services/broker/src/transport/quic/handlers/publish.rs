@@ -66,6 +66,8 @@ pub(crate) use uni::{
 // exercises directly, without widening them for the rest of the crate.
 #[cfg(test)]
 use crate::auth::AuthContext;
+use crate::shard_routing::{Dispatch, IngressRouter, dispatch, shard_for};
+use crate::shard_watch::ShardKey;
 #[cfg(test)]
 use crate::transport::quic::errors::AckEnqueueError;
 #[cfg(test)]
@@ -127,6 +129,11 @@ pub(crate) struct PublishJob {
 ///   (`handle_connection`) and closes that gap without touching the shared worker pool.
 #[derive(Clone)]
 pub(crate) struct PublishContext {
+    /// Cluster ownership, when this broker is a member.
+    ///
+    /// `None` on a single-node broker, which is the default: there is nothing
+    /// to resolve against, and the gate costs one null check.
+    pub(crate) ingress: Option<Arc<IngressRouter>>,
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
     pub(crate) worker_count: usize,
     pub(crate) depth: Arc<AtomicUsize>,
@@ -168,14 +175,61 @@ impl PublishContext {
     }
 }
 
+/// Resolve a stream, refusing one whose shard this broker does not own.
+///
+/// The single chokepoint every publish path funnels through, which is why the
+/// ownership gate is here: nothing reaches storage without passing it.
+///
+/// Ownership is checked *outside* the handle cache, deliberately. The cache
+/// exists to avoid a registry lookup and holds for `STREAM_CACHE_TTL`; ownership
+/// changes the instant the control plane says so, and caching it would keep a
+/// broker serving a reassigned shard for up to a TTL. The check is two atomic
+/// loads, so paying it per publish costs less than reasoning about staleness.
 pub(crate) async fn resolve_stream_cached(
     broker: &Broker,
+    ingress: Option<&IngressRouter>,
     cache: &mut StreamHandleCache,
     key_scratch: &mut String,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
 ) -> Option<StreamHandle> {
+    // Single-node brokers short-circuit on a null check; a cluster member pays
+    // two loads. Either way there is no lock and no await.
+    if ingress.is_some() {
+        let key = ShardKey {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            // No routing key on the wire yet, so every record of a stream lands
+            // on shard 0. See `shard_routing::shard_for`.
+            shard: shard_for(1, None),
+        };
+        match dispatch(ingress, &key) {
+            Dispatch::Local => {}
+            Dispatch::Forward { ref node_id, .. } => {
+                // M4 forwards here. Until then the frame is refused rather than
+                // written locally, which is the whole point of the gate.
+                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
+                tracing::debug!(
+                    tenant_id, namespace, stream,
+                    owner = %node_id,
+                    "publish refused: shard is owned by another broker",
+                );
+                return None;
+            }
+            Dispatch::Unavailable(reason) => {
+                t_counter!("felix_publish_requests_total", "result" => "unroutable").increment(1);
+                tracing::debug!(
+                    tenant_id, namespace, stream,
+                    reason = %reason,
+                    "publish refused: shard is not servable here",
+                );
+                return None;
+            }
+        }
+    }
+
     // Short-lived cache to avoid repeated stream lookups on hot paths.
     key_scratch.clear();
     let needed = tenant_id.len() + namespace.len() + stream.len() + 2;

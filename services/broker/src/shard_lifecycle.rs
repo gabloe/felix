@@ -277,6 +277,18 @@ impl ShardLifecycle {
         }
     }
 
+    /// Shards this broker can serve, and the generation each was opened at.
+    ///
+    /// The form ingress reads on every publish. Handing out a snapshot rather
+    /// than exposing the lock keeps the hot path off any mutex this holds.
+    pub fn servable(&self) -> HashMap<ShardKey, u64> {
+        self.shards
+            .iter()
+            .filter(|(_, shard)| shard.phase.may_serve())
+            .map(|(key, shard)| (key.clone(), shard.generation))
+            .collect()
+    }
+
     /// How many shards sit in each phase, for the gauge.
     pub fn counts(&self) -> HashMap<Phase, usize> {
         let mut counts = HashMap::new();
@@ -337,6 +349,24 @@ impl ShardStore for DurableShardStore {
         log.sync()
             .await
             .map_err(|err| anyhow::anyhow!("flush shard log: {err}"))
+    }
+}
+
+/// A [`ShardStore`] for a broker with no durable storage.
+///
+/// Taking a shard is bookkeeping only: there is no log to open and nothing to
+/// flush, so both operations succeed immediately. Kept explicit rather than
+/// making the store optional, so the lifecycle has one code path.
+pub struct EphemeralShardStore;
+
+#[async_trait::async_trait]
+impl ShardStore for EphemeralShardStore {
+    async fn open(&self, _key: &ShardKey) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn release(&self, _key: &ShardKey) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

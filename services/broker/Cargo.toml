@@ -52,6 +52,7 @@ anyhow = { workspace = true }
 # async methods need boxing.
 async-trait = "0.1"
 felix-router = { path = "../../crates/felix-router", version = "0.2.0" }
+arc-swap = "1"
 base64 = "0.23"
 felix-broker = { path = "../../crates/felix-broker", version = "0.2.0" }
 felix-common = { path = "../../crates/felix-common", version = "0.2.0", features = ["lifecycle"] }

@@ -162,6 +162,7 @@ fn parse_bool_env(name: &str) -> Result<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// The environment is process-global, so these tests take a lock and clean
     /// up after themselves rather than running in parallel against each other.
@@ -179,6 +180,10 @@ mod tests {
         "FELIX_DURABLE_REPAIR_CHECKSUM_TAIL",
     ];
 
+    /// Every caller is `#[serial]`, which is what actually keeps these apart
+    /// from the `config` tests: those clear every `FELIX_*` variable, including
+    /// the ones set here, and a local lock cannot exclude a test that does not
+    /// take it. The lock below is kept as a second belt for direct callers.
     fn with_env<T>(pairs: &[(&str, &str)], body: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         for name in VARS {
@@ -198,6 +203,7 @@ mod tests {
         result
     }
 
+    #[serial]
     #[test]
     fn durability_is_off_unless_a_directory_is_set() {
         with_env(&[], || {
@@ -208,6 +214,7 @@ mod tests {
         });
     }
 
+    #[serial]
     #[test]
     fn a_directory_alone_enables_the_defaults() {
         with_env(&[("FELIX_DURABLE_STORAGE_DIR", "/var/lib/felix")], || {
@@ -223,6 +230,7 @@ mod tests {
         });
     }
 
+    #[serial]
     #[test]
     fn every_fsync_mode_is_selectable() {
         for (raw, expected) in [
@@ -253,6 +261,7 @@ mod tests {
         }
     }
 
+    #[serial]
     #[test]
     fn a_periodic_interval_is_honoured() {
         with_env(
@@ -275,6 +284,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn an_interval_without_a_mode_still_applies() {
         with_env(
@@ -296,6 +306,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn an_unknown_fsync_mode_is_rejected() {
         with_env(
@@ -310,6 +321,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn a_zero_periodic_interval_is_rejected_at_startup() {
         with_env(
@@ -339,6 +351,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn segment_and_index_sizes_are_configurable() {
         with_env(
@@ -363,6 +376,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn an_unparseable_size_is_reported_with_its_variable_name() {
         with_env(
@@ -380,6 +394,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn a_segment_too_small_to_hold_a_record_is_rejected() {
         with_env(
@@ -394,6 +409,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn an_invalid_boolean_is_rejected() {
         with_env(
@@ -411,6 +427,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn the_summary_names_the_durability_policy() {
         with_env(

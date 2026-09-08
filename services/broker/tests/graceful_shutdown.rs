@@ -74,6 +74,7 @@ async fn start_broker() -> Result<Harness> {
         auth,
         accept_shutdown.clone(),
         connections.clone(),
+        None,
     ));
 
     Ok(Harness {
