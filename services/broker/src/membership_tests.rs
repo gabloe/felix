@@ -102,6 +102,7 @@ async fn serve(
 fn config() -> MembershipConfig {
     MembershipConfig {
         node_id: "broker-a".to_string(),
+        token: "test-token".to_string(),
         advertise_addr: "10.0.0.4:7000".to_string(),
         region: "us-west-2".to_string(),
     }
@@ -251,8 +252,10 @@ async fn draining_and_deregistering_hit_the_right_endpoints() {
     let (base_url, stop, handle) = serve(Arc::clone(&calls)).await;
     let client = build_test_client().expect("client");
 
-    drain(&client, &base_url, "broker-a").await.expect("drain");
-    deregister(&client, &base_url, "broker-a")
+    drain(&client, &base_url, "broker-a", "test-token")
+        .await
+        .expect("drain");
+    deregister(&client, &base_url, "broker-a", "test-token")
         .await
         .expect("deregister");
 

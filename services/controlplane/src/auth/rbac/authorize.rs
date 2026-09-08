@@ -19,6 +19,12 @@ pub const ACTION_CACHE_WRITE: &str = "cache.write";
 /// Read cluster membership. Cluster-scoped, so it is never reachable from a
 /// tenant scope -- see [`ParsedObject::Cluster`].
 pub const ACTION_NODE_VIEW: &str = "node.view";
+/// Claim or change a node's membership: register, report health, drain, leave.
+///
+/// Granted over `node:{node_id}` for a broker, which is what stops one broker
+/// speaking for another, or over `cluster:*` for an operator that manages the
+/// whole fleet.
+pub const ACTION_NODE_MANAGE: &str = "node.manage";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
@@ -28,6 +34,15 @@ pub enum Segment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedObject {
+    /// One named node.
+    ///
+    /// The scope a broker's own credential carries. It contains only itself, so
+    /// a broker holding `node.manage:node:broker-a` cannot register, drain, or
+    /// report health for `broker-b` -- which is the whole reason node identity
+    /// is an object rather than a field the caller asserts.
+    Node {
+        node_id: String,
+    },
     /// The cluster itself: brokers, their liveness, their placement standing.
     ///
     /// Deliberately outside the tenant hierarchy. No tenant scope contains it,
@@ -76,6 +91,7 @@ pub fn canonical_action(action: &str) -> Option<&'static str> {
         ACTION_CACHE_READ => Some(ACTION_CACHE_READ),
         ACTION_CACHE_WRITE => Some(ACTION_CACHE_WRITE),
         ACTION_NODE_VIEW => Some(ACTION_NODE_VIEW),
+        ACTION_NODE_MANAGE => Some(ACTION_NODE_MANAGE),
         _ => None,
     }
 }
@@ -95,6 +111,7 @@ pub fn parse_permission(raw: &str, tenant_id: &str) -> Result<ParsedPermission, 
 ///
 /// Canonical grammar:
 /// - `cluster:*`
+/// - `node:{node_id}`
 /// - `tenant:{tenant_id}`
 /// - `namespace:{tenant_id}/{namespace}`
 /// - `stream:{tenant_id}/{namespace}/{stream}`
@@ -111,6 +128,18 @@ pub fn parse_object(raw: &str, tenant_id: &str) -> Result<ParsedObject, String> 
     }
     if raw.starts_with("cluster:") {
         return Err("the only cluster object is cluster:*".to_string());
+    }
+
+    // Also tenant-independent: a node belongs to the cluster, not to a tenant.
+    if let Some(node_id) = raw.strip_prefix("node:") {
+        if node_id.is_empty() || node_id == "*" {
+            // `node:*` would be `cluster:*` by another name, and having two
+            // spellings for one scope is how a policy review misses one.
+            return Err("node objects must name one node; use cluster:* for all".to_string());
+        }
+        return Ok(ParsedObject::Node {
+            node_id: node_id.to_string(),
+        });
     }
 
     if let Some(rest) = raw.strip_prefix("tenant:") {
@@ -168,7 +197,16 @@ pub fn object_within_scope(scope: &ParsedObject, target: &ParsedObject) -> bool 
         // themselves cluster access; and cluster scope confers nothing inside a
         // tenant, so it cannot be used to read tenant data either.
         (ParsedObject::Cluster, ParsedObject::Cluster) => true,
+        // Cluster scope covers every node, which is what an operator managing
+        // the fleet holds.
+        (ParsedObject::Cluster, ParsedObject::Node { .. }) => true,
         (ParsedObject::Cluster, _) | (_, ParsedObject::Cluster) => false,
+        // A node scope is exactly one node. No wildcard, no hierarchy: this is
+        // the boundary that stops one broker acting as another.
+        (ParsedObject::Node { node_id: scope }, ParsedObject::Node { node_id: target }) => {
+            scope == target
+        }
+        (ParsedObject::Node { .. }, _) | (_, ParsedObject::Node { .. }) => false,
         (ParsedObject::Tenant { tenant_id: s }, ParsedObject::Tenant { tenant_id: t }) => s == t,
         (ParsedObject::Tenant { tenant_id: s }, ParsedObject::Namespace { tenant_id: t, .. }) => {
             s == t
@@ -334,6 +372,99 @@ fn split3(input: &str) -> Result<(&str, &str, &str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The boundary the whole node credential rests on: a scope for one node
+    /// contains that node and nothing else.
+    #[test]
+    fn a_node_scope_covers_exactly_one_node() {
+        let a = parse_object("node:broker-a", "t1").expect("parse");
+        let b = parse_object("node:broker-b", "t1").expect("parse");
+
+        assert!(object_within_scope(&a, &a));
+        assert!(
+            !object_within_scope(&a, &b),
+            "a broker must not be able to act for another broker",
+        );
+        assert!(!object_within_scope(&b, &a));
+    }
+
+    /// An operator managing the fleet holds cluster scope, which covers every
+    /// node -- but a node scope never widens back out to the cluster.
+    #[test]
+    fn cluster_scope_covers_every_node_but_not_the_reverse() {
+        let cluster = ParsedObject::Cluster;
+        let node = parse_object("node:broker-a", "t1").expect("parse");
+
+        assert!(object_within_scope(&cluster, &node));
+        assert!(
+            !object_within_scope(&node, &cluster),
+            "one node's credential must not confer fleet-wide access",
+        );
+    }
+
+    /// Two spellings for one scope is how a policy review misses one.
+    #[test]
+    fn a_node_wildcard_is_rejected() {
+        assert!(parse_object("node:*", "t1").is_err());
+        assert!(parse_object("node:", "t1").is_err());
+    }
+
+    #[test]
+    fn a_node_object_ignores_the_request_tenant() {
+        assert_eq!(
+            parse_object("node:broker-a", "t1"),
+            parse_object("node:broker-a", "t2"),
+        );
+    }
+
+    #[test]
+    fn node_manage_is_a_recognised_action() {
+        let parsed = parse_permission("node.manage:node:broker-a", "t1").expect("parse");
+        assert_eq!(parsed.action, ACTION_NODE_MANAGE);
+        assert_eq!(
+            parsed.object,
+            ParsedObject::Node {
+                node_id: "broker-a".to_string()
+            }
+        );
+    }
+
+    /// A tenant admin must not be able to write themselves a node permission,
+    /// for the same reason they cannot write a cluster one.
+    #[test]
+    fn a_tenant_scope_never_reaches_a_node() {
+        let tenant_scopes = [
+            ParsedObject::Tenant {
+                tenant_id: "t1".to_string(),
+            },
+            parse_object("namespace:t1/*", "t1").expect("namespace"),
+        ];
+        let node = parse_object("node:broker-a", "t1").expect("parse");
+
+        for scope in &tenant_scopes {
+            assert!(!object_within_scope(scope, &node), "{scope:?}");
+        }
+
+        let rule = PolicyRule {
+            subject: "role:tenant-admin".to_string(),
+            object: "node:broker-a".to_string(),
+            action: ACTION_NODE_MANAGE.to_string(),
+        };
+        assert!(
+            validate_new_rule_allowed(&tenant_scopes, "t1", &rule).is_err(),
+            "a tenant admin must not be able to grant node access",
+        );
+    }
+
+    /// And a node credential confers nothing inside a tenant.
+    #[test]
+    fn a_node_scope_confers_nothing_in_a_tenant() {
+        let node = [parse_object("node:broker-a", "t1").expect("parse")];
+        for target in ["tenant:t1", "namespace:t1/payments", "stream:t1/ns/orders"] {
+            let parsed = parse_object(target, "t1").expect("parse");
+            assert!(!object_within_scope(&node[0], &parsed), "{target}");
+        }
+    }
 
     #[test]
     fn the_cluster_object_parses_independently_of_any_tenant() {

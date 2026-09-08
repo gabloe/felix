@@ -15,9 +15,12 @@
 //!   claim a future heartbeat and outlive its timeout.
 //!
 //! # Security considerations
-//! - **This endpoint is not yet authenticated.** Any caller that can reach it
-//!   can report health for any node_id. Authenticating broker identity is
-//!   tracked in #126; until then this is only safe on a trusted network.
+//! - Every write requires `node.manage` over the node being changed. A broker's
+//!   credential is scoped to `node:{its own id}`, so it cannot register, drain,
+//!   deregister, or report health for another broker; an operator holding
+//!   `cluster:*` can manage the whole fleet.
+//! - Reads require `node.view:cluster:*`. The listing exposes advertised
+//!   internal addresses, which is the cluster's network layout.
 use crate::api::error::{
     ApiError, api_conflict, api_forbidden, api_internal, api_not_found, api_unauthorized,
 };
@@ -28,7 +31,9 @@ use crate::api::types::{
 };
 use crate::app::AppState;
 use crate::auth::felix_token::verify_token;
-use crate::auth::rbac::authorize::{ACTION_NODE_VIEW, ParsedObject, parse_permission};
+use crate::auth::rbac::authorize::{
+    ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,
+};
 use crate::model::{Node, NodeLifecycle, NodeSpec, NodeStatus};
 use crate::store::StoreError;
 use axum::Json;
@@ -59,9 +64,11 @@ use std::collections::HashMap;
 /// - 409 when the reported incarnation is older than the recorded one.
 pub(crate) async fn report_health(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(node_id): Path<String>,
     Json(request): Json<NodeHeartbeatRequest>,
 ) -> Result<Json<NodeHeartbeatResponse>, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
     // The control plane's clock, deliberately: expiry is judged against it, so
     // letting a caller supply the time would let it postpone its own timeout.
     let now = now_millis();
@@ -115,8 +122,13 @@ pub fn now_millis() -> u64 {
 ///   already belongs to another node.
 pub(crate) async fn register_node(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<NodeRegistrationRequest>,
 ) -> Result<Json<NodeRegistrationResponse>, ApiError> {
+    // The identity being claimed comes from the body, so that is what the
+    // token has to be authorised for. A broker cannot register as someone else
+    // by asking to.
+    require_node_manage(&state, &headers, &request.node_id).await?;
     let now = now_millis();
     let node = Node {
         node_id: request.node_id,
@@ -173,8 +185,10 @@ pub(crate) async fn register_node(
 /// - 409 when the node is not currently serving, since there is nothing to drain.
 pub(crate) async fn drain_node(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(node_id): Path<String>,
 ) -> Result<Json<Node>, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
     set_lifecycle(&state, &node_id, NodeLifecycle::Draining).await
 }
 
@@ -199,8 +213,10 @@ pub(crate) async fn drain_node(
 /// - 404 when the node is not registered.
 pub(crate) async fn deregister_node(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(node_id): Path<String>,
 ) -> Result<Json<Node>, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
     set_lifecycle(&state, &node_id, NodeLifecycle::Left).await
 }
 
@@ -462,22 +478,7 @@ pub(crate) async fn get_node(
 /// `node.view:cluster:*`, and no tenant scope contains a cluster object, so a
 /// tenant admin cannot write that rule for themselves.
 async fn require_cluster_node_view(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| api_unauthorized("missing bearer token"))?;
-
-    let tenant_id = unverified_tenant(bearer)?;
-    let keys = state
-        .store
-        .get_tenant_signing_keys(&tenant_id)
-        .await
-        .map_err(|ref err| api_internal("failed to load signing keys", err))?;
-    let claims = verify_token(&keys, &tenant_id, bearer, 5)
-        .map_err(|_| api_unauthorized("invalid token"))?;
+    let (tenant_id, claims) = verified_claims(state, headers).await?;
 
     let allowed = claims.perms.iter().any(|perm| {
         // Parsed against the token's own tenant; a cluster object ignores it.
@@ -494,6 +495,73 @@ async fn require_cluster_node_view(state: &AppState, headers: &HeaderMap) -> Res
     } else {
         Err(api_forbidden("missing node.view:cluster:* permission"))
     }
+}
+
+/// Require permission to change one node's membership.
+///
+/// The node id comes from the request -- a path segment, or the body on
+/// registration -- and the token has to carry `node.manage` over a scope that
+/// contains it. A broker's credential is scoped to `node:{its own id}`, so
+/// presenting it for another node fails here rather than being trusted because
+/// the request said so. An operator holding `cluster:*` covers every node.
+///
+/// This is what closes the hole where any caller that could reach the control
+/// plane could register, drain, or deregister any broker, or keep a dead one
+/// looking alive.
+async fn require_node_manage(
+    state: &AppState,
+    headers: &HeaderMap,
+    node_id: &str,
+) -> Result<(), ApiError> {
+    let (tenant_id, claims) = verified_claims(state, headers).await?;
+    let target = ParsedObject::Node {
+        node_id: node_id.to_string(),
+    };
+
+    let allowed = claims.perms.iter().any(|perm| {
+        // Unparsable entries are skipped rather than trusted, so a malformed
+        // permission can never widen access.
+        matches!(
+            parse_permission(perm, &tenant_id),
+            Ok(parsed) if parsed.action == ACTION_NODE_MANAGE
+                && object_within_scope(&parsed.object, &target)
+        )
+    });
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(api_forbidden(&format!(
+            "missing node.manage on node:{node_id} or cluster:*"
+        )))
+    }
+}
+
+/// Verify a bearer token and return the tenant whose keys signed it.
+///
+/// Shared by the read and write guards so there is one verification path, not
+/// two that can drift.
+async fn verified_claims(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(String, crate::auth::felix_token::FelixClaims), ApiError> {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| api_unauthorized("missing bearer token"))?;
+
+    let tenant_id = unverified_tenant(bearer)?;
+    let keys = state
+        .store
+        .get_tenant_signing_keys(&tenant_id)
+        .await
+        .map_err(|ref err| api_internal("failed to load signing keys", err))?;
+    let claims = verify_token(&keys, &tenant_id, bearer, 5)
+        .map_err(|_| api_unauthorized("invalid token"))?;
+    Ok((tenant_id, claims))
 }
 
 /// Read `tid` from an unverified token, only to choose a verification key.

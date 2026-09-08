@@ -3,17 +3,18 @@ mod common;
 mod http_helpers;
 
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
 use common::read_json;
 use controlplane::api::types::FeatureFlags;
 use controlplane::app::{AppState, build_router};
 use controlplane::config::NodeLivenessConfig;
 use controlplane::model::{Node, NodeCapacity, NodeLifecycle, NodeSpec, NodeStatus};
 use controlplane::store::memory::InMemoryStore;
-use controlplane::store::{ControlPlaneStore, StoreConfig};
+use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use http_helpers::json_request;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 
 const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
@@ -39,6 +40,33 @@ fn node(node_id: &str) -> Node {
             incarnation: 0,
         },
     }
+}
+
+/// A credential covering every node. These tests are about heartbeat
+/// behaviour, not authorisation -- `node_write_auth.rs` covers that.
+async fn fleet_token(store: &InMemoryStore) -> String {
+    let keys = controlplane::auth::keys::generate_signing_keys().expect("keys");
+    store
+        .set_tenant_signing_keys("t1", keys.clone())
+        .await
+        .expect("keys");
+    controlplane::auth::felix_token::mint_token(
+        &keys,
+        "t1",
+        "p:operator",
+        vec!["node.manage:cluster:*".to_string()],
+        Duration::from_secs(900),
+    )
+    .expect("token")
+}
+
+fn authed(bearer: &str, method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+    let mut request = json_request(method, uri, body);
+    request.headers_mut().insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {bearer}").parse().expect("header"),
+    );
+    request
 }
 
 async fn app_with(store: Arc<InMemoryStore>) -> axum::routing::RouterIntoService<Body, ()> {
@@ -76,10 +104,12 @@ async fn a_heartbeat_returns_the_lifecycle_and_the_expected_cadence() {
         .register_node(node("broker-a"))
         .await
         .expect("register");
+    let token = fleet_token(&store).await;
     let app = app_with(Arc::clone(&store)).await;
 
     let response = app
-        .oneshot(json_request(
+        .oneshot(authed(
+            &token,
             "POST",
             "/v1/nodes/broker-a/heartbeat",
             serde_json::json!({ "incarnation": 0 }),
@@ -110,9 +140,11 @@ async fn a_heartbeat_records_the_control_planes_clock() {
         .expect("register");
     let before = controlplane::api::nodes::now_millis();
 
+    let token = fleet_token(&store).await;
     let app = app_with(Arc::clone(&store)).await;
     let response = app
-        .oneshot(json_request(
+        .oneshot(authed(
+            &token,
             "POST",
             "/v1/nodes/broker-a/heartbeat",
             serde_json::json!({ "incarnation": 0, "last_heartbeat_at_millis": 99_999_999_999_999u64 }),
@@ -135,9 +167,12 @@ async fn a_heartbeat_records_the_control_planes_clock() {
 
 #[tokio::test]
 async fn a_heartbeat_for_an_unregistered_node_is_not_found() {
-    let app = app_with(store()).await;
+    let store = store();
+    let token = fleet_token(&store).await;
+    let app = app_with(store).await;
     let response = app
-        .oneshot(json_request(
+        .oneshot(authed(
+            &token,
             "POST",
             "/v1/nodes/absent/heartbeat",
             serde_json::json!({ "incarnation": 0 }),
@@ -159,9 +194,11 @@ async fn a_heartbeat_for_a_superseded_incarnation_conflicts() {
         .await
         .expect("restart");
 
+    let token = fleet_token(&store).await;
     let app = app_with(Arc::clone(&store)).await;
     let response = app
-        .oneshot(json_request(
+        .oneshot(authed(
+            &token,
             "POST",
             "/v1/nodes/broker-a/heartbeat",
             serde_json::json!({ "incarnation": 0 }),
@@ -185,9 +222,11 @@ async fn an_expired_broker_is_told_it_is_down() {
         .await
         .expect("down");
 
+    let token = fleet_token(&store).await;
     let app = app_with(Arc::clone(&store)).await;
     let response = app
-        .oneshot(json_request(
+        .oneshot(authed(
+            &token,
             "POST",
             "/v1/nodes/broker-a/heartbeat",
             serde_json::json!({ "incarnation": 0 }),

@@ -256,6 +256,7 @@ After bootstrap, admin actions require explicit Felix permissions:
 - RBAC policy writes: `rbac.policy.manage:<scoped object>`
 - RBAC assignment writes: `rbac.assignment.manage:<scoped object>`
 - Cluster membership reads: `node.view:cluster:*`
+- Cluster membership writes: `node.manage:node:{node_id}` or `node.manage:cluster:*`
 
 ### RBAC Object Grammar and Delegation
 
@@ -265,6 +266,7 @@ Canonical RBAC object formats:
 - `stream:{tenant_id}/{namespace}/{stream_or_*}`
 - `cache:{tenant_id}/{namespace}/{cache_or_*}`
 - `cluster:*` — the cluster itself, outside the tenant hierarchy
+- `node:{node_id}` — one broker, also outside it
 
 Write-time protections:
 - `tenant:*` is rejected
@@ -308,9 +310,11 @@ cluster scope cannot read tenant data.
 - **It contains no tenant object.** Cluster scope is not a backdoor into tenant
   data.
 
-Only `GET /v1/nodes` and `GET /v1/nodes/{node_id}` require it today. The
-endpoints brokers use to register and report health are **not yet
-authenticated** and are safe on a trusted network only.
+Reads require `node.view:cluster:*`. Writes — register, heartbeat, drain,
+deregister — require `node.manage` over the node being changed, held either as
+`node:{node_id}` by that broker or as `cluster:*` by an operator. A node is an
+RBAC object rather than a field the caller asserts, which is what stops one
+broker acting for another.
 
 ### Supported Identity Providers
 
