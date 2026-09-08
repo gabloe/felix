@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788821386364,
+  "lastUpdate": 1788825920005,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3380,6 +3380,58 @@ window.BENCHMARK_DATA = {
             "range": "12611.96",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557202.29\nmean: 552607.15\nstdev: 12611.96\ncv: 2.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d280f3b5157c7d154709b5f8ea75dd637023f00b",
+          "message": "feat(router): resolve shards to nodes, keeping region policy as a constraint (#230)\n\nfelix-router was a region-pair allowlist and nothing else. It now answers where\na shard lives, with that allowlist demoted to one input rather than the whole\nimplementation: placement decides where a shard is, policy decides whether we\nmay reach it, and folding those together makes one look like the other when\nthey fail for different reasons.\n\nThe allowlist is generic over how a region is named rather than duplicated.\nConfiguration uses RegionId and a node advertises a region by name; one\nallowlist serving both beats two drifting apart.\n\nRoutes are published as an immutable snapshot and swapped whole. A lookup is an\natomic load against a table nobody can mutate underneath it, so the publish path\ntakes no lock a writer can hold and makes no control-plane call. Whole-table\nrather than per-shard, because a partial update lets a reader see half a\nrebalance.\n\nEvery outcome is explicit. There is deliberately no \"not sure, handle it\nlocally\": that is a broker writing a shard it does not own. Remote is a typed\nresult rather than an error so M4 can forward it, and stale is separate from\nunavailable because being behind is not the same as being wrong -- the caller\nwaits for the watch instead of failing the stream.\n\nTwo rules that read as edge cases and are not. A shard led by this node resolves\nlocal regardless of liveness or region policy, because a broker that stopped\nserving its own shards while waiting to see its own heartbeat land would remove\nitself from the cluster for nothing. And an unknown leader is reported\nseparately from a dead one: both are unroutable, but one is a missing address\nand the other is a failover, and they send an operator to different places.\n\nRefs #102\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T17:03:08-07:00",
+          "tree_id": "a18ecb5d3d6bd2747bc95f87e2e1da34c8eb92e4",
+          "url": "https://github.com/gabloe/felix/commit/d280f3b5157c7d154709b5f8ea75dd637023f00b"
+        },
+        "date": 1788825919647,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 254994.03,
+            "range": "4331.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254994.03\nmean: 256103.73\nstdev: 4331.35\ncv: 1.69%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 254994.03,
+            "range": "4331.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254994.03\nmean: 256103.73\nstdev: 4331.35\ncv: 1.69%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60179.91,
+            "range": "930.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60179.91\nmean: 60396.08\nstdev: 930.99\ncv: 1.54%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 601799.1,
+            "range": "9309.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 601799.10\nmean: 603960.81\nstdev: 9309.92\ncv: 1.54%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
