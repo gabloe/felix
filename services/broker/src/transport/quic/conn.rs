@@ -27,6 +27,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::auth::BrokerAuth;
 use crate::config::BrokerConfig;
+use crate::shard_routing::IngressRouter;
 use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
@@ -74,6 +75,9 @@ pub async fn serve(
         auth,
         CancellationToken::new(),
         TaskTracker::new(),
+        // The simple entry point is single-node; a cluster member goes through
+        // `serve_with_shutdown` so it can pass its ownership view.
+        None,
     )
     .await
 }
@@ -98,8 +102,9 @@ pub async fn serve_with_shutdown(
     auth: Arc<BrokerAuth>,
     shutdown: CancellationToken,
     connections: TaskTracker,
+    ingress: Option<Arc<IngressRouter>>,
 ) -> Result<()> {
-    let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
+    let publish_ctx = build_publish_context(Arc::clone(&broker), &config, ingress);
     // Main accept loop: spawn a task per incoming QUIC connection.
     if config.disable_timings {
         timings::set_enabled(false);
@@ -142,7 +147,11 @@ pub async fn serve_with_shutdown(
     }
 }
 
-fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishContext {
+fn build_publish_context(
+    broker: Arc<Broker>,
+    config: &BrokerConfig,
+    ingress: Option<Arc<IngressRouter>>,
+) -> PublishContext {
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
@@ -227,6 +236,7 @@ fn build_publish_context(broker: Arc<Broker>, config: &BrokerConfig) -> PublishC
         worker_txs.push(publish_tx);
     }
     PublishContext {
+        ingress,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,
@@ -288,6 +298,7 @@ pub(crate) async fn handle_connection_with_shutdown(
     // instances from `build_publish_context` — only `conn_admission`, `subscriptions`, and
     // `lane_manager` are fresh per connection.
     let publish_ctx = PublishContext {
+        ingress: None,
         conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
         subscriptions: Arc::new(SubscriptionLimiter::new()),
         lane_manager: WriterLaneManager::new(&config),
@@ -474,7 +485,7 @@ mod tests {
             publish_queue_wait_timeout_ms: 17,
             ..BrokerConfig::default()
         };
-        let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
+        let publish_ctx = build_publish_context(Arc::clone(&broker), &config, None);
         assert_eq!(publish_ctx.worker_count, 1);
         assert_eq!(publish_ctx.workers.len(), 1);
         assert_eq!(publish_ctx.wait_timeout, Duration::from_millis(17));
@@ -503,7 +514,7 @@ mod tests {
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
         let config = BrokerConfig::default();
-        let publish_ctx = build_publish_context(broker, &config);
+        let publish_ctx = build_publish_context(broker, &config, None);
 
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
@@ -534,7 +545,7 @@ mod tests {
         broker.register_namespace("t1", "default").await?;
 
         let config = BrokerConfig::default();
-        let publish_ctx = build_publish_context(Arc::clone(&broker), &config);
+        let publish_ctx = build_publish_context(Arc::clone(&broker), &config, None);
         let auth = Arc::new(BrokerAuth::new("http://127.0.0.1".to_string()));
 
         let cert = generate_simple_self_signed(vec!["localhost".into()])?;

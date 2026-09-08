@@ -36,6 +36,7 @@ mod test_support;
 use anyhow::{Context, Result};
 use broker::membership;
 use broker::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
+use broker::{shard_lifecycle, shard_routing, shard_watch};
 use felix_broker::{Broker, DurableStorage};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use felix_storage::EphemeralCache;
@@ -102,6 +103,28 @@ where
     // neither advertises itself nor answers a direct client before its streams
     // exist.
     let seeded = CancellationToken::new();
+
+    // Cluster ownership, when this broker has an identity. Built before the
+    // accept loop because the publish path consults it, and `None` on a
+    // single-node broker so that path is a null check.
+    let cluster = config.membership.as_ref().map(|membership| {
+        let router = Arc::new(felix_router::ShardRouter::new(
+            membership.node_id.clone(),
+            membership.region.clone(),
+            felix_router::RegionRouter::new(membership.region.clone()),
+        ));
+        let ingress = Arc::new(shard_routing::IngressRouter::new(Arc::clone(&router)));
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(
+            shard_lifecycle::ShardLifecycle::new(membership.node_id.clone()),
+        ));
+        let ownership = Arc::new(tokio::sync::RwLock::new(
+            shard_watch::ShardOwnership::default(),
+        ));
+        (router, ingress, lifecycle, ownership)
+    });
+    let ingress_router = cluster
+        .as_ref()
+        .map(|(_, ingress, _, _)| Arc::clone(ingress));
     let sync_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
     let connections = TaskTracker::new();
@@ -187,6 +210,7 @@ where
         let accept_shutdown = accept_shutdown.clone();
         let connections = connections.clone();
         let seeded = seeded.clone();
+        let ingress_router = ingress_router.clone();
         tokio::spawn(async move {
             // A durable broker does not accept until its streams exist.
             // Readiness alone only steers orchestrated traffic; a client with
@@ -213,6 +237,7 @@ where
                 auth,
                 accept_shutdown,
                 connections,
+                ingress_router,
             )
             .await
             {
@@ -325,6 +350,40 @@ where
         }
     };
 
+    // Shard ownership: follow the control plane's assignments, and keep local
+    // state and the routing table in step with them.
+    let shard_tasks = match (&cluster, &config.controlplane_url, &durable_storage) {
+        (Some((router, ingress, lifecycle, ownership)), Some(base_url), storage) => {
+            let store: Arc<dyn shard_lifecycle::ShardStore> = match storage {
+                Some(storage) => Arc::new(shard_lifecycle::DurableShardStore::new(Arc::new(
+                    storage.clone(),
+                ))),
+                // Without durable storage there is no log to open, so taking a
+                // shard is bookkeeping only.
+                None => Arc::new(shard_lifecycle::EphemeralShardStore),
+            };
+            let watch = tokio::spawn(shard_watch::run(
+                membership_client.clone(),
+                base_url.clone(),
+                None,
+                Arc::clone(ownership),
+                Duration::from_millis(config.controlplane_sync_interval_ms),
+                sync_shutdown.clone(),
+            ));
+            let feed = shard_routing::spawn_feed(
+                Arc::clone(ownership),
+                Arc::clone(lifecycle),
+                store,
+                Arc::clone(ingress),
+                Arc::clone(router),
+                Duration::from_millis(config.controlplane_sync_interval_ms),
+                sync_shutdown.clone(),
+            );
+            Some((watch, feed))
+        }
+        _ => None,
+    };
+
     // Block until the shutdown signal resolves so the process stays alive.
     // A refused registration ends the process too: a broker that is not a
     // cluster member should say so and stop, not serve traffic nobody routes.
@@ -390,6 +449,28 @@ where
                 .await;
             })
             .await;
+    }
+
+    if let Some((watch, feed)) = shard_tasks {
+        sync_shutdown.cancel();
+        let mut watch = watch;
+        let mut feed = feed;
+        if !budget
+            .drain("shard_watch", async {
+                let _ = (&mut watch).await;
+            })
+            .await
+        {
+            watch.abort();
+        }
+        if !budget
+            .drain("shard_feed", async {
+                let _ = (&mut feed).await;
+            })
+            .await
+        {
+            feed.abort();
+        }
     }
 
     let mut membership = membership;

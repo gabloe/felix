@@ -335,6 +335,36 @@ Two rules that look like edge cases and are not:
   unroutable, but one is a missing address and the other is a failover in
   progress, and they send an operator to different places.
 
+#### The ingress gate
+
+Every publish passes through `resolve_stream_cached`, which is why the ownership
+check lives there: nothing reaches storage without it.
+
+Ownership is checked **outside** the stream-handle cache. That cache exists to
+avoid a registry lookup and holds for a TTL; ownership changes the instant the
+control plane says so, and caching it would keep a broker serving a reassigned
+shard for up to a TTL. The check is two atomic loads, so paying it per publish
+costs less than reasoning about staleness.
+
+Both reads are `ArcSwap` loads, so the resolver is synchronous and allocation
+free — no lock a writer can hold, and no await added to the publish path. A
+single-node broker short-circuits on a null check before either.
+
+One task keeps the two views in step, in a fixed order: reconcile local shard
+state, publish what is servable, then publish the routes. Publishing routes
+first would advertise this node as the owner of a shard it has not opened.
+
+**A broker cannot forward yet.** Building an address book needs `/v1/nodes`,
+which requires a cluster-scoped token, and brokers have no credentials (#126).
+So a shard led by this node resolves on the node id alone, and every other shard
+is refused with the owner named rather than forwarded. Forwarding is M4.
+
+**Sharding is not reachable from the wire.** `Publish` carries no routing key,
+so every record of a stream lands on shard 0 and a stream's configured `shards`
+count is metadata the data path does not use. `shard_for` is where a negotiated
+key plugs in; the hashing is written and tested, so adding the field is a wire
+change rather than a routing change.
+
 #### Referential integrity
 
 Two references, two different policies, chosen rather than inherited:

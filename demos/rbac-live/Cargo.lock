@@ -266,6 +266,7 @@ name = "broker"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "axum",
  "base64 0.23.1",
@@ -276,6 +277,7 @@ dependencies = [
  "felix-broker",
  "felix-client",
  "felix-common",
+ "felix-router",
  "felix-storage",
  "felix-transport",
  "felix-wire",
@@ -955,6 +957,14 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "felix-router"
+version = "0.2.0"
+dependencies = [
+ "arc-swap",
+ "felix-common",
 ]
 
 [[package]]

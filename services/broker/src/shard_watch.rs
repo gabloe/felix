@@ -101,6 +101,11 @@ impl ShardOwnership {
             .collect();
     }
 
+    /// Everything this broker currently believes about ownership.
+    pub fn assignments(&self) -> &HashMap<ShardKey, ShardAssignment> {
+        &self.assignments
+    }
+
     pub fn get(&self, key: &ShardKey) -> Option<&ShardAssignment> {
         self.assignments.get(key)
     }

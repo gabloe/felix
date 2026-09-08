@@ -15,6 +15,7 @@ pub mod membership_metrics;
 pub mod quic;
 pub mod shard_lifecycle;
 pub mod shard_lifecycle_metrics;
+pub mod shard_routing;
 pub mod shard_watch;
 pub mod shard_watch_metrics;
 pub mod timings;
