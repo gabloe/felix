@@ -301,6 +301,7 @@ dependencies = [
  "felix-broker",
  "felix-client",
  "felix-common",
+ "felix-router",
  "felix-storage",
  "felix-transport",
  "felix-wire",
