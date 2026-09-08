@@ -210,6 +210,12 @@ pub struct TransportConfig {
     // Optional initial congestion window (bytes). None keeps quinn's RFC default.
     // Setting this high removes the slow-start ramp on trusted low-loss paths.
     pub initial_congestion_window_bytes: Option<u64>,
+    // Optional keep-alive interval. None keeps quinn's default of never, which
+    // suits connections that are either busy or expected to be torn down. Set it
+    // for long-lived connections that go quiet: it is what turns a silently dead
+    // path into a closed connection instead of a request that hangs until its
+    // own timeout.
+    pub keep_alive_interval: Option<std::time::Duration>,
 }
 
 // Keep defaults large enough for most dev/test workloads.
@@ -264,6 +270,7 @@ impl Default for TransportConfig {
             udp_send_buffer_bytes,
             udp_recv_buffer_bytes,
             initial_congestion_window_bytes,
+            keep_alive_interval: None,
         }
     }
 }
@@ -352,6 +359,9 @@ impl TransportConfig {
         config.stream_receive_window(stream_window);
         config.receive_window(receive_window);
         config.send_window(self.send_window);
+        if let Some(interval) = self.keep_alive_interval {
+            config.keep_alive_interval(Some(interval));
+        }
         // Path MTU: start safe, probe high. Fewer, larger datagrams directly
         // reduce per-byte syscall and crypto costs on high-MTU paths.
         let initial_mtu = initial_mtu.clamp(1200, self.max_udp_payload_size);
@@ -738,6 +748,29 @@ impl QuicConnection {
 
     pub fn stats(&self) -> quinn::ConnectionStats {
         self.inner.stats()
+    }
+
+    /// The ALPN protocol the handshake settled on, if any.
+    ///
+    /// `None` means the peer offered no ALPN, which TLS treats as success. An
+    /// endpoint that uses ALPN to separate roles must therefore check this
+    /// rather than assume the handshake did it — see the broker's internal
+    /// listener.
+    pub fn negotiated_protocol(&self) -> Option<Vec<u8>> {
+        self.inner
+            .handshake_data()?
+            .downcast::<quinn::crypto::rustls::HandshakeData>()
+            .ok()?
+            .protocol
+    }
+
+    /// Resolve when the connection closes, with the reason.
+    ///
+    /// Lets one task own detection of a lost connection, so every request
+    /// waiting on it is failed at the moment it drops rather than at its own
+    /// timeout.
+    pub async fn closed(&self) -> quinn::ConnectionError {
+        self.inner.closed().await
     }
 
     /// Why the connection closed, or `None` while it is still live. Lets a

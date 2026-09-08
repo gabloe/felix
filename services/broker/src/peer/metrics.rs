@@ -1,0 +1,79 @@
+//! Metrics for the broker-internal transport.
+//!
+//! These answer one question a broker can answer about itself and the control
+//! plane cannot: *can this broker reach the peers it needs to forward to?* A
+//! healthy cluster in the catalog says nothing about whether any given broker's
+//! connections to it are up.
+//!
+//! Outcomes are split by kind rather than collapsed into a failure count,
+//! because they call for different responses: a `handshake` failure is
+//! configuration or a version mismatch, `unreachable` is the network, and
+//! `timeout` is a peer that accepted the request and did not answer.
+
+/// Live peer connections this broker holds, as a gauge.
+pub const CONNECTIONS: &str = "felix_broker_peer_connections";
+/// Connection attempts, by `outcome`: `connected`, `unreachable`, `handshake`.
+pub const CONNECT_ATTEMPTS_TOTAL: &str = "felix_broker_peer_connect_attempts_total";
+/// Connections that dropped after being established, by `reason`.
+pub const CONNECTION_LOSSES_TOTAL: &str = "felix_broker_peer_connection_losses_total";
+/// Reconnect attempts made after a loss, i.e. redials that were not the first.
+pub const RECONNECTS_TOTAL: &str = "felix_broker_peer_reconnects_total";
+/// Multiplexed request streams open across all peers, as a gauge.
+pub const STREAMS: &str = "felix_broker_peer_streams";
+/// Requests sent to peers, by `outcome`.
+pub const REQUESTS_TOTAL: &str = "felix_broker_peer_requests_total";
+/// Requests refused before being sent because the peer was already at its
+/// in-flight limit. Distinct from a failure: nothing was attempted, and the
+/// caller can retry elsewhere or shed.
+pub const REQUESTS_SHED_TOTAL: &str = "felix_broker_peer_requests_shed_total";
+/// Round-trip latency of a forwarded request, in seconds.
+pub const REQUEST_SECONDS: &str = "felix_broker_peer_request_seconds";
+/// Requests this broker served for a peer, by `outcome`.
+pub const SERVED_TOTAL: &str = "felix_broker_peer_served_total";
+/// Inbound peer connections refused, by `reason`: `alpn`, `handshake`.
+pub const INBOUND_REJECTED_TOTAL: &str = "felix_broker_peer_inbound_rejected_total";
+
+pub const OUTCOME_CONNECTED: &str = "connected";
+pub const OUTCOME_UNREACHABLE: &str = "unreachable";
+pub const OUTCOME_HANDSHAKE: &str = "handshake";
+pub const OUTCOME_OK: &str = "ok";
+pub const OUTCOME_ERROR: &str = "error";
+pub const OUTCOME_TIMEOUT: &str = "timeout";
+pub const OUTCOME_DISCONNECTED: &str = "disconnected";
+
+pub fn record_connect_attempt(outcome: &'static str) {
+    metrics::counter!(CONNECT_ATTEMPTS_TOTAL, "outcome" => outcome).increment(1);
+}
+
+pub fn record_reconnect() {
+    metrics::counter!(RECONNECTS_TOTAL).increment(1);
+}
+
+pub fn record_connection_loss(reason: &'static str) {
+    metrics::counter!(CONNECTION_LOSSES_TOTAL, "reason" => reason).increment(1);
+}
+
+pub fn set_connections(count: usize) {
+    metrics::gauge!(CONNECTIONS).set(count as f64);
+}
+
+pub fn set_streams(count: usize) {
+    metrics::gauge!(STREAMS).set(count as f64);
+}
+
+pub fn record_request(outcome: &'static str, elapsed: std::time::Duration) {
+    metrics::counter!(REQUESTS_TOTAL, "outcome" => outcome).increment(1);
+    metrics::histogram!(REQUEST_SECONDS, "outcome" => outcome).record(elapsed.as_secs_f64());
+}
+
+pub fn record_request_shed() {
+    metrics::counter!(REQUESTS_SHED_TOTAL).increment(1);
+}
+
+pub fn record_served(outcome: &'static str) {
+    metrics::counter!(SERVED_TOTAL, "outcome" => outcome).increment(1);
+}
+
+pub fn record_inbound_rejected(reason: &'static str) {
+    metrics::counter!(INBOUND_REJECTED_TOTAL, "reason" => reason).increment(1);
+}

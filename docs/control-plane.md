@@ -89,9 +89,23 @@ put a node in the catalog that placement would then try to use.
 | Env | Required | Meaning |
 | --- | --- | --- |
 | `FELIX_NODE_ID` | opt-in | Stable across restarts. This is the identity, not the process. |
-| `FELIX_NODE_ADVERTISE_ADDR` | with `FELIX_NODE_ID` | `host:port` peers reach this broker on. Not the bind address: a broker bound to `0.0.0.0` has to advertise something routable. |
+| `FELIX_NODE_ADVERTISE_ADDR` | with `FELIX_NODE_ID` | `host:port` peers reach this broker's **internal** listener on. Not the bind address: a broker bound to `0.0.0.0` has to advertise something routable. |
 | `FELIX_CONTROLPLANE_URL` | with `FELIX_NODE_ID` | Where to register. |
 | `FELIX_REGION_ID` | no | Defaults to `local`. |
+| `FELIX_INTERNAL_BIND` | no | Where the internal listener binds. Defaults to `0.0.0.0:5001`. Must not share a port with `FELIX_QUIC_BIND`. |
+
+The advertised address is the internal listener's, not the client-facing one:
+peers are the only thing that reads it. A broker that advertises a port it does
+not bind logs a warning at startup rather than refusing, because a deployment
+may legitimately map ports.
+
+The internal transport is described in
+[the broker-internal forwarding protocol](internal-protocol.md); its remaining
+settings (`FELIX_INTERNAL_CONNS_PER_PEER`, `FELIX_INTERNAL_STREAMS_PER_CONN`,
+`FELIX_INTERNAL_MAX_INFLIGHT`, `FELIX_INTERNAL_REQUEST_TIMEOUT_MS`,
+`FELIX_INTERNAL_IDLE_TIMEOUT_MS`, `FELIX_INTERNAL_RECONNECT_BASE_MS`,
+`FELIX_INTERNAL_RECONNECT_MAX_MS`, `FELIX_INTERNAL_HANDSHAKE_TIMEOUT_MS`) all
+have working defaults.
 
 Startup fails, rather than defaulting, when `FELIX_NODE_ID` is set without an
 advertised address or a control-plane URL, or when the address does not parse.

@@ -51,6 +51,8 @@ pub enum Kind {
     ForwardPublishOk = 2,
     ForwardPublishError = 3,
     NotLeader = 4,
+    Hello = 5,
+    HelloOk = 6,
 }
 
 impl Kind {
@@ -62,6 +64,8 @@ impl Kind {
             2 => Ok(Kind::ForwardPublishOk),
             3 => Ok(Kind::ForwardPublishError),
             4 => Ok(Kind::NotLeader),
+            5 => Ok(Kind::Hello),
+            6 => Ok(Kind::HelloOk),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -195,6 +199,30 @@ pub struct NotLeader {
     pub generation: u64,
 }
 
+/// The first message on a peer connection, naming who is calling.
+///
+/// Sent before any request so a version or identity mismatch is found while the
+/// connection is being established rather than on the first forwarded publish,
+/// which would otherwise have to be failed and retried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hello {
+    pub correlation_id: u64,
+    /// The caller's cluster identity, as the catalog knows it.
+    pub node_id: String,
+}
+
+/// The responder accepted the handshake and names itself.
+///
+/// The caller checks this against the node id it dialled. An address the
+/// catalog has since reassigned answers with a different id, which is a
+/// connection to the wrong broker regardless of whether it would have served
+/// the request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelloOk {
+    pub correlation_id: u64,
+    pub node_id: String,
+}
+
 /// A decoded internal message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalMessage {
@@ -202,6 +230,8 @@ pub enum InternalMessage {
     ForwardPublishOk(ForwardPublishOk),
     ForwardPublishError(ForwardPublishError),
     NotLeader(NotLeader),
+    Hello(Hello),
+    HelloOk(HelloOk),
 }
 
 impl InternalMessage {
@@ -211,6 +241,8 @@ impl InternalMessage {
             Self::ForwardPublishOk(_) => Kind::ForwardPublishOk,
             Self::ForwardPublishError(_) => Kind::ForwardPublishError,
             Self::NotLeader(_) => Kind::NotLeader,
+            Self::Hello(_) => Kind::Hello,
+            Self::HelloOk(_) => Kind::HelloOk,
         }
     }
 
@@ -225,6 +257,8 @@ impl InternalMessage {
             Self::ForwardPublishOk(m) => m.correlation_id,
             Self::ForwardPublishError(m) => m.correlation_id,
             Self::NotLeader(m) => m.correlation_id,
+            Self::Hello(m) => m.correlation_id,
+            Self::HelloOk(m) => m.correlation_id,
         }
     }
 
@@ -264,6 +298,14 @@ impl InternalMessage {
                 put_str(&mut body, &m.node_id)?;
                 put_str(&mut body, &m.advertise_addr)?;
                 body.put_u64(m.generation);
+            }
+            Self::Hello(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.node_id)?;
+            }
+            Self::HelloOk(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.node_id)?;
             }
         }
 
@@ -367,6 +409,22 @@ impl InternalMessage {
                 };
                 expect_empty(&body)?;
                 Ok(Self::NotLeader(message))
+            }
+            Kind::Hello => {
+                let message = Hello {
+                    correlation_id: take_u64(&mut body)?,
+                    node_id: take_str(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::Hello(message))
+            }
+            Kind::HelloOk => {
+                let message = HelloOk {
+                    correlation_id: take_u64(&mut body)?,
+                    node_id: take_str(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::HelloOk(message))
             }
         }
     }

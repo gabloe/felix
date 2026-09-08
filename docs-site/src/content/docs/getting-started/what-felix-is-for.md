@@ -143,7 +143,7 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Durable streams | ✅ Today | Opt-in per stream via `durable: true`, and only when the broker runs with `FELIX_DURABLE_STORAGE_DIR`. Segmented crash-safe log: CRC-verified records, torn-tail recovery, group commit, three fsync policies. Single node, and nothing trims it |
 | Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; bounded by retention when it is configured, unbounded otherwise |
 | Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
-| Sharding | 🚧 Partial | Streams carry a shard count; ops are not yet directed to a shard leader |
+| Sharding | 🚧 Partial | Streams carry a shard count, the control plane assigns each shard an owner, and a publish resolves against that ownership before anything else happens. A publish for a shard this broker does not own is refused with the owner named — it is not yet forwarded there. The wire protocol still carries no routing key, so every record of a stream lands on shard 0 |
 
 ### Measured performance
 
@@ -208,7 +208,7 @@ ship rather than being marked off here.
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
-| Multi-node clustering and replication | 🎯 Target | Brokers register with the control plane and their liveness is tracked, so the catalog knows which brokers exist. Nothing routes across them: no sharding, forwarding, replication, or failover |
+| Multi-node clustering and replication | 🎯 Target | Brokers register with the control plane, their liveness is tracked, and shards are assigned to owners. Brokers reach each other over a broker-internal QUIC transport with its own protocol, listener, and pooling. What is missing is the thing that uses it: no publish is forwarded to its owner yet, and there is no replication or failover |
 | Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
 | At-least-once / quorum acks | 🎯 Target | Not started |
