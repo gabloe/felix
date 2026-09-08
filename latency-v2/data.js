@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788842846754,
+  "lastUpdate": 1788845495100,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4422,6 +4422,72 @@ window.BENCHMARK_DATA = {
             "range": "482.91",
             "unit": "us",
             "extra": "trials: 5\nmedian: 862.00\nmean: 945.80\nstdev: 482.91\ncv: 51.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d74e7bea5f5813746f419489b7affefef2e94627",
+          "message": "feat(controlplane): authenticate and authorize membership writes (#232)\n\nRegistration, heartbeat, drain and deregistration were reachable by anyone who\ncould reach the control plane. Any caller could claim a broker identity, keep a\ndead node looking alive, bump an incarnation so the real broker's heartbeats\nwere rejected, or deregister the fleet.\n\nAll four now require `node.manage` over the node being changed. The user named\nthree; heartbeat is the same hole and is included.\n\nNode identity is an RBAC object, not a field the caller asserts. A broker's\ncredential is scoped to `node:{its own id}` and contains exactly that node, so\npresenting it for another broker fails authorisation rather than being believed.\nAn operator holds `cluster:*`, which covers every node. Registration authorises\nthe identity in the request body, so a broker cannot claim a name its credential\ndoes not cover.\n\n`node:*` is rejected. It would be `cluster:*` under a second name, and two\nspellings for one scope is how a policy review misses one.\n\nA node scope is an island the same way cluster scope is: no tenant scope reaches\nit, so a tenant admin cannot grant themselves one, and it confers nothing inside\na tenant. `node.view` does not imply `node.manage` -- reading the fleet is not\npermission to change it.\n\nBroker side, a credential is required rather than optional. A broker with an\nidentity and no token refuses to start, because starting one that will fail\nevery control-plane call on a loop is worse. `FELIX_NODE_TOKEN_FILE` reads it\nfrom a mounted secret so it need not sit in a process listing. The same\ncredential authenticates the shard-assignment watch, which is cluster metadata\nby the same argument.\n\nThe two guards share one verification path so they cannot drift.\n\nRefs #126\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T22:29:18-07:00",
+          "tree_id": "02b86035d736d2816dce7bc8b3e42064ea642c7b",
+          "url": "https://github.com/gabloe/felix/commit/d74e7bea5f5813746f419489b7affefef2e94627"
+        },
+        "date": 1788845493871,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 122,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 122.00\nstdev: 0.71\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 167,
+            "range": "3.54",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 168.00\nstdev: 3.54\ncv: 2.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 219,
+            "range": "15.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 219.00\nmean: 211.60\nstdev: 15.63\ncv: 7.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "2.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 164.00\nstdev: 2.55\ncv: 1.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 339,
+            "range": "21.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 339.00\nmean: 341.40\nstdev: 21.81\ncv: 6.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 576,
+            "range": "314.74",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 576.00\nmean: 711.00\nstdev: 314.74\ncv: 44.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
