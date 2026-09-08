@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788821383477,
+  "lastUpdate": 1788825918177,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4290,6 +4290,72 @@ window.BENCHMARK_DATA = {
             "range": "642.19",
             "unit": "us",
             "extra": "trials: 5\nmedian: 577.00\nmean: 892.40\nstdev: 642.19\ncv: 71.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d280f3b5157c7d154709b5f8ea75dd637023f00b",
+          "message": "feat(router): resolve shards to nodes, keeping region policy as a constraint (#230)\n\nfelix-router was a region-pair allowlist and nothing else. It now answers where\na shard lives, with that allowlist demoted to one input rather than the whole\nimplementation: placement decides where a shard is, policy decides whether we\nmay reach it, and folding those together makes one look like the other when\nthey fail for different reasons.\n\nThe allowlist is generic over how a region is named rather than duplicated.\nConfiguration uses RegionId and a node advertises a region by name; one\nallowlist serving both beats two drifting apart.\n\nRoutes are published as an immutable snapshot and swapped whole. A lookup is an\natomic load against a table nobody can mutate underneath it, so the publish path\ntakes no lock a writer can hold and makes no control-plane call. Whole-table\nrather than per-shard, because a partial update lets a reader see half a\nrebalance.\n\nEvery outcome is explicit. There is deliberately no \"not sure, handle it\nlocally\": that is a broker writing a shard it does not own. Remote is a typed\nresult rather than an error so M4 can forward it, and stale is separate from\nunavailable because being behind is not the same as being wrong -- the caller\nwaits for the watch instead of failing the stream.\n\nTwo rules that read as edge cases and are not. A shard led by this node resolves\nlocal regardless of liveness or region policy, because a broker that stopped\nserving its own shards while waiting to see its own heartbeat land would remove\nitself from the cluster for nothing. And an unknown leader is reported\nseparately from a dead one: both are unroutable, but one is a missing address\nand the other is a failover, and they send an operator to different places.\n\nRefs #102\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T17:03:08-07:00",
+          "tree_id": "a18ecb5d3d6bd2747bc95f87e2e1da34c8eb92e4",
+          "url": "https://github.com/gabloe/felix/commit/d280f3b5157c7d154709b5f8ea75dd637023f00b"
+        },
+        "date": 1788825917260,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 119.80\nstdev: 0.45\ncv: 0.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 163,
+            "range": "1.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 162.60\nstdev: 1.82\ncv: 1.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 207,
+            "range": "9.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 207.60\nstdev: 9.48\ncv: 4.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.60\nstdev: 0.55\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 323,
+            "range": "19.93",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 323.00\nmean: 333.40\nstdev: 19.93\ncv: 5.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 503,
+            "range": "1090.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 503.00\nmean: 989.40\nstdev: 1090.59\ncv: 110.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
