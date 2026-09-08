@@ -24,6 +24,7 @@ Canonical actions:
 - `cache.read`
 - `cache.write`
 - `node.view` — cluster-scoped only; see [Cluster scope](#cluster-scope)
+- `node.manage` — over `node:{node_id}` or `cluster:*`
 
 ## Object Grammar
 

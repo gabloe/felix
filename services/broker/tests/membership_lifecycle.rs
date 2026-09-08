@@ -12,7 +12,7 @@ use controlplane::app::{AppState, build_router};
 use controlplane::config::NodeLivenessConfig;
 use controlplane::model::NodeLifecycle;
 use controlplane::store::memory::InMemoryStore;
-use controlplane::store::{ControlPlaneStore, StoreConfig};
+use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use reqwest::{Client, redirect::Policy};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -30,6 +30,9 @@ struct Cluster {
     base_url: String,
     store: Arc<InMemoryStore>,
     client: Client,
+    /// A credential scoped to `broker-a`, which is the broker these tests are.
+    token: String,
+    keys: controlplane::auth::felix_token::TenantSigningKeys,
     stop: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<()>,
 }
@@ -40,6 +43,21 @@ impl Cluster {
             changes_limit: 1000,
             change_retention_max_rows: Some(1000),
         }));
+        let keys = controlplane::auth::keys::generate_signing_keys().expect("keys");
+        store
+            .set_tenant_signing_keys("t1", keys.clone())
+            .await
+            .expect("keys");
+        // Scoped to this broker's own identity, which is what a real deployment
+        // would hand it. `broker-b` cases below rely on that being a real limit.
+        let token = controlplane::auth::felix_token::mint_token(
+            &keys,
+            "t1",
+            "p:broker-a",
+            vec!["node.manage:node:broker-a".to_string()],
+            Duration::from_secs(900),
+        )
+        .expect("token");
         let state = AppState {
             region: Region {
                 region_id: "us-west-2".to_string(),
@@ -75,6 +93,8 @@ impl Cluster {
         Self {
             base_url: format!("http://{addr}"),
             store,
+            token,
+            keys,
             client: Client::builder()
                 .timeout(Duration::from_secs(2))
                 .no_proxy()
@@ -84,6 +104,18 @@ impl Cluster {
             stop,
             server,
         }
+    }
+
+    /// A credential covering every node, for cases that are not about scope.
+    fn fleet_token(&self) -> String {
+        controlplane::auth::felix_token::mint_token(
+            &self.keys,
+            "t1",
+            "p:operator",
+            vec!["node.manage:cluster:*".to_string()],
+            Duration::from_secs(900),
+        )
+        .expect("token")
     }
 
     async fn lifecycle(&self, node_id: &str) -> NodeLifecycle {
@@ -101,9 +133,10 @@ impl Cluster {
     }
 }
 
-fn config(node_id: &str, port: u16) -> MembershipConfig {
+fn config(node_id: &str, port: u16, token: &str) -> MembershipConfig {
     MembershipConfig {
         node_id: node_id.to_string(),
+        token: token.to_string(),
         advertise_addr: format!("10.0.0.4:{port}"),
         region: "us-west-2".to_string(),
     }
@@ -118,7 +151,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
     let first = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001),
+        &config("broker-a", 7001, &cluster.token),
     )
     .await
     .expect("register");
@@ -129,7 +162,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
     let second = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001),
+        &config("broker-a", 7001, &cluster.token),
     )
     .await
     .expect("re-register");
@@ -156,12 +189,18 @@ async fn graceful_shutdown_leaves_rather_than_expiring() {
     membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001),
+        &config("broker-a", 7001, &cluster.token),
     )
     .await
     .expect("register");
 
-    membership::shutdown_membership(&cluster.client, &cluster.base_url, "broker-a").await;
+    membership::shutdown_membership(
+        &cluster.client,
+        &cluster.base_url,
+        "broker-a",
+        &cluster.token,
+    )
+    .await;
 
     assert_eq!(cluster.lifecycle("broker-a").await, NodeLifecycle::Left);
     cluster.shutdown().await;
@@ -174,7 +213,7 @@ async fn an_abrupt_stop_is_detected_by_expiry() {
     let registered = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001),
+        &config("broker-a", 7001, &cluster.token),
     )
     .await
     .expect("register");
@@ -211,15 +250,18 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
     membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001),
+        &config("broker-a", 7001, &cluster.token),
     )
     .await
     .expect("register");
 
+    // Cluster-scoped on purpose: this test is about the duplicate address, and a
+    // node-scoped token would fail authorisation first and prove nothing.
+    let fleet_token = cluster.fleet_token();
     let err = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-b", 7001),
+        &config("broker-b", 7001, &fleet_token),
     )
     .await
     .expect_err("should be refused");
@@ -243,7 +285,7 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
     let task = membership::spawn(
         cluster.client.clone(),
         cluster.base_url.clone(),
-        config("broker-a", 7001),
+        config("broker-a", 7001, &cluster.token),
         serving,
         shutdown.clone(),
     );
@@ -273,5 +315,66 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
 
     shutdown.cancel();
     let _ = task.handle.await;
+    cluster.shutdown().await;
+}
+
+/// End to end, through the real broker client and the real control plane: a
+/// broker's own credential cannot be turned on another broker.
+///
+/// This is the hole that was open — anyone who could reach the control plane
+/// could deregister any broker in the fleet.
+#[tokio::test]
+async fn a_brokers_credential_cannot_deregister_another_broker() {
+    let cluster = Cluster::start().await;
+
+    // broker-b exists, registered by an operator.
+    let fleet_token = cluster.fleet_token();
+    membership::register(
+        &cluster.client,
+        &cluster.base_url,
+        &config("broker-b", 7002, &fleet_token),
+    )
+    .await
+    .expect("register broker-b");
+    assert_eq!(cluster.lifecycle("broker-b").await, NodeLifecycle::Live);
+
+    // broker-a holds only its own credential.
+    let err = membership::deregister(
+        &cluster.client,
+        &cluster.base_url,
+        "broker-b",
+        &cluster.token,
+    )
+    .await
+    .expect_err("broker-a must not deregister broker-b");
+    assert!(err.to_string().contains("403"), "{err}");
+
+    assert_eq!(
+        cluster.lifecycle("broker-b").await,
+        NodeLifecycle::Live,
+        "the attempt must leave broker-b untouched",
+    );
+
+    cluster.shutdown().await;
+}
+
+/// A broker with no credential at all gets nowhere, and finds out at
+/// registration rather than silently running as a non-member.
+#[tokio::test]
+async fn an_unauthenticated_broker_cannot_register() {
+    let cluster = Cluster::start().await;
+
+    let err = membership::register(
+        &cluster.client,
+        &cluster.base_url,
+        &config("broker-a", 7001, ""),
+    )
+    .await
+    .expect_err("should be refused");
+    assert!(
+        matches!(err, MembershipError::Rejected(_)),
+        "a missing credential is terminal, not something to retry: {err:?}",
+    );
+
     cluster.shutdown().await;
 }

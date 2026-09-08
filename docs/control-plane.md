@@ -77,9 +77,8 @@ Four rules, each of which exists for a reason:
   putting each in the changefeed would evict every real membership change from
   the retention window. Only the lifecycle move that expiry causes is published.
 
-> **Not yet authenticated.** Any caller that can reach this endpoint can report
-> health for any `node_id`. Authenticating broker identity is tracked in #126;
-> until then it is only safe on a trusted network.
+Requires `node.manage` over the node being reported — see
+[Authorizing membership writes](#authorizing-membership-writes).
 
 ### Broker-side lifecycle
 
@@ -163,8 +162,47 @@ themselves cluster access, and nothing in the bootstrap seed grants it either.
 The converse also holds: cluster scope confers nothing inside a tenant, so it is
 not a backdoor into tenant data.
 
-Note that the registration, heartbeat, drain, and deregister endpoints above are
-**not** authenticated yet (#126). Only the operator read endpoints are.
+#### Authorizing membership writes
+
+Registration, heartbeat, drain, and deregistration all require `node.manage`
+over the node being changed:
+
+| Object | Who holds it | Can change |
+| --- | --- | --- |
+| `node:{node_id}` | a broker, for its own identity | that node only |
+| `cluster:*` | an operator managing the fleet | every node |
+
+**A node is an RBAC object, not a field the caller asserts.** A broker
+presenting `node.manage:node:broker-a` for `broker-b` is refused, so one broker
+cannot register, drain, deregister, or report health for another. Registration
+authorises the identity in the *request body*, so a broker cannot claim a name
+its credential does not cover.
+
+`node:*` is deliberately rejected: it would be `cluster:*` under a second name,
+and two spellings for one scope is how a policy review misses one.
+
+A node scope is an island in the same way `cluster:*` is. No tenant scope
+contains it, so a tenant admin cannot grant themselves one; and it confers
+nothing inside a tenant. `node.view` does not imply `node.manage` — reading the
+fleet is not permission to change it.
+
+##### Giving a broker its credential
+
+A broker with `FELIX_NODE_ID` set **must** have a credential, or it refuses to
+start. Starting one that will fail every control-plane call on a loop is worse
+than refusing.
+
+| Env | Meaning |
+| --- | --- |
+| `FELIX_NODE_TOKEN` | the token itself |
+| `FELIX_NODE_TOKEN_FILE` | a path to read it from, for a mounted secret |
+
+The file form exists so a credential need not sit in an environment variable
+visible in a process listing. Whitespace is trimmed, and a blank value is
+treated as no credential rather than as an empty one.
+
+The same credential authenticates the shard-assignment watch, which is cluster
+metadata by the same argument.
 
 ### Shard ownership
 
@@ -355,7 +393,8 @@ state, publish what is servable, then publish the routes. Publishing routes
 first would advertise this node as the owner of a shard it has not opened.
 
 **A broker cannot forward yet.** Building an address book needs `/v1/nodes`,
-which requires a cluster-scoped token, and brokers have no credentials (#126).
+which requires `node.view:cluster:*`; a broker's own credential is scoped to its
+own node.
 So a shard led by this node resolves on the node id alone, and every other shard
 is refused with the owner named rather than forwarded. Forwarding is M4.
 

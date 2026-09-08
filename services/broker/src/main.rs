@@ -365,7 +365,9 @@ where
             let watch = tokio::spawn(shard_watch::run(
                 membership_client.clone(),
                 base_url.clone(),
-                None,
+                // The assignment feed is cluster metadata, so it is read with
+                // the same credential the rest of membership uses.
+                config.membership.as_ref().map(|m| m.token.clone()),
                 Arc::clone(ownership),
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
@@ -445,6 +447,7 @@ where
                     &membership_client,
                     base_url,
                     &membership_config.node_id,
+                    &membership_config.token,
                 )
                 .await;
             })

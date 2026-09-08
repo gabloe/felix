@@ -14,6 +14,12 @@ use std::net::SocketAddr;
 pub struct MembershipConfig {
     /// Stable across restarts. This is the identity, not the process.
     pub node_id: String,
+    /// Credential proving this broker may act for `node_id`.
+    ///
+    /// Required, not optional. A broker with an identity and no credential
+    /// cannot register, and starting one that will fail every control-plane
+    /// call on a loop is worse than refusing to start.
+    pub token: String,
     /// `host:port` peers reach this broker on. Not the bind address: a broker
     /// bound to 0.0.0.0 has to advertise something routable.
     pub advertise_addr: String,
@@ -241,8 +247,37 @@ fn membership_from_env(
         ));
     }
 
+    // Read from a file when given one, so a token can arrive as a mounted
+    // secret rather than an environment variable visible in a process listing.
+    let token = match std::env::var("FELIX_NODE_TOKEN_FILE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("read FELIX_NODE_TOKEN_FILE {path}: {err}"),
+                )
+            })?
+            .trim()
+            .to_string(),
+        None => std::env::var("FELIX_NODE_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default(),
+    };
+    if token.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_ID is set but no node credential was provided; \
+             set FELIX_NODE_TOKEN or FELIX_NODE_TOKEN_FILE",
+        ));
+    }
+
     Ok(Some(MembershipConfig {
         node_id,
+        token,
         advertise_addr,
         region: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
     }))
@@ -825,6 +860,7 @@ mod tests {
             env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
             env::set_var("FELIX_REGION_ID", "eu-central-1");
             env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
         }
         let membership = BrokerConfig::from_env()
             .expect("config")
@@ -833,6 +869,61 @@ mod tests {
         assert_eq!(membership.node_id, "broker-a");
         assert_eq!(membership.advertise_addr, "10.0.0.4:7000");
         assert_eq!(membership.region, "eu-central-1");
+        assert_eq!(membership.token, "a-node-token");
+    }
+
+    /// A broker with an identity and no credential cannot register. Starting it
+    /// to fail every control-plane call on a loop is worse than refusing.
+    #[serial]
+    #[test]
+    fn an_identity_without_a_credential_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("FELIX_NODE_TOKEN"), "{err}");
+    }
+
+    /// A token can arrive as a mounted secret rather than an environment
+    /// variable visible in a process listing.
+    #[serial]
+    #[test]
+    fn a_credential_can_come_from_a_file() {
+        let dir = TempDir::new().expect("dir");
+        let path = dir.path().join("node.token");
+        fs::write(&path, "  file-token\n").expect("write");
+
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN_FILE", path.to_str().expect("path"));
+        }
+        let membership = BrokerConfig::from_env()
+            .expect("config")
+            .membership
+            .expect("membership");
+        assert_eq!(
+            membership.token, "file-token",
+            "surrounding whitespace is trimmed"
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn a_blank_credential_is_no_credential() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "   ");
+        }
+        assert!(BrokerConfig::from_env().is_err());
     }
 
     // Helper to clear all Felix env vars

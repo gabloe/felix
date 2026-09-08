@@ -76,6 +76,8 @@ struct HeartbeatResponse {
 #[derive(Debug, Clone)]
 pub struct Registration {
     pub node_id: String,
+    /// Carried so the heartbeat loop does not need the whole config.
+    pub token: String,
     /// This process's incarnation. Sent with every heartbeat so one delayed
     /// past a restart is rejected instead of counted for its successor.
     pub incarnation: u64,
@@ -136,6 +138,10 @@ pub async fn register(
 ) -> std::result::Result<Registration, MembershipError> {
     let response = client
         .post(format!("{}/v1/nodes", base_url.trim_end_matches('/')))
+        // Proves this broker may claim `node_id`. The control plane authorises
+        // the identity in the body against it, so a broker cannot register
+        // under a name its credential does not cover.
+        .bearer_auth(&config.token)
         .json(&RegistrationRequest {
             node_id: &config.node_id,
             advertise_addr: &config.advertise_addr,
@@ -176,6 +182,7 @@ pub async fn register(
 
     Ok(Registration {
         node_id: config.node_id.clone(),
+        token: config.token.clone(),
         incarnation: registered.node.status.incarnation,
         heartbeat_interval_ms: registered.heartbeat_interval_ms,
     })
@@ -213,7 +220,7 @@ pub async fn run_heartbeat(
             _ = tokio::time::sleep(jittered(delay)) => {}
         }
 
-        match send_heartbeat(&client, &url, registration.incarnation).await {
+        match send_heartbeat(&client, &url, &registration.token, registration.incarnation).await {
             Ok(response) => {
                 consecutive_failures.store(0, Ordering::Release);
                 last_success = std::time::Instant::now();
@@ -256,10 +263,12 @@ pub async fn run_heartbeat(
 async fn send_heartbeat(
     client: &reqwest::Client,
     url: &str,
+    token: &str,
     incarnation: u64,
 ) -> std::result::Result<HeartbeatResponse, MembershipError> {
     let response = client
         .post(url)
+        .bearer_auth(token)
         .json(&HeartbeatRequest { incarnation })
         .send()
         .await
@@ -282,19 +291,30 @@ async fn send_heartbeat(
 }
 
 /// Stop receiving new placement, without stopping service.
-pub async fn drain(client: &reqwest::Client, base_url: &str, node_id: &str) -> Result<()> {
-    post_lifecycle(client, base_url, node_id, "drain").await
+pub async fn drain(
+    client: &reqwest::Client,
+    base_url: &str,
+    node_id: &str,
+    token: &str,
+) -> Result<()> {
+    post_lifecycle(client, base_url, node_id, token, "drain").await
 }
 
 /// Leave the cluster on purpose, so this is not mistaken for a crash.
-pub async fn deregister(client: &reqwest::Client, base_url: &str, node_id: &str) -> Result<()> {
-    post_lifecycle(client, base_url, node_id, "deregister").await
+pub async fn deregister(
+    client: &reqwest::Client,
+    base_url: &str,
+    node_id: &str,
+    token: &str,
+) -> Result<()> {
+    post_lifecycle(client, base_url, node_id, token, "deregister").await
 }
 
 async fn post_lifecycle(
     client: &reqwest::Client,
     base_url: &str,
     node_id: &str,
+    token: &str,
     action: &str,
 ) -> Result<()> {
     let response = client
@@ -302,6 +322,7 @@ async fn post_lifecycle(
             "{}/v1/nodes/{node_id}/{action}",
             base_url.trim_end_matches('/')
         ))
+        .bearer_auth(token)
         .send()
         .await
         .with_context(|| format!("{action} node {node_id}"))?;
@@ -434,11 +455,16 @@ pub fn spawn(
 /// then deregister so this reads as intentional rather than as a crash.
 /// Neither failure is worth aborting a shutdown over: if the control plane
 /// cannot be told, heartbeat expiry reaches the same conclusion a timeout later.
-pub async fn shutdown_membership(client: &reqwest::Client, base_url: &str, node_id: &str) {
-    if let Err(err) = drain(client, base_url, node_id).await {
+pub async fn shutdown_membership(
+    client: &reqwest::Client,
+    base_url: &str,
+    node_id: &str,
+    token: &str,
+) {
+    if let Err(err) = drain(client, base_url, node_id, token).await {
         tracing::warn!(node_id, error = %err, "could not mark this broker draining");
     }
-    if let Err(err) = deregister(client, base_url, node_id).await {
+    if let Err(err) = deregister(client, base_url, node_id, token).await {
         tracing::warn!(
             node_id,
             error = %err,

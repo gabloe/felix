@@ -90,6 +90,7 @@ Objects:
 - Stream: `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
 - Cache: `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
 - Cluster: `cluster:*` — see [Cluster scope](#cluster-scope)
+- Node: `node:{node_id}` — one broker
 
 Actions:
 - `rbac.view`, `rbac.policy.manage`, `rbac.assignment.manage`
@@ -97,6 +98,7 @@ Actions:
 - `stream.publish`, `stream.subscribe`
 - `cache.read`, `cache.write`
 - `node.view` — cluster-scoped only
+- `node.manage` — over `node:{node_id}` or `cluster:*`
 
 ### Cluster scope
 

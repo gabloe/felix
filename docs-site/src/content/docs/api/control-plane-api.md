@@ -130,8 +130,12 @@ so a tenant admin cannot grant themselves cluster access. The tenant comes from
 the token's own `tid` claim rather than a path segment, and only selects which
 signing keys to verify against.
 
-The registration, heartbeat, drain, and deregister endpoints brokers use are
-**not yet authenticated**. They are safe on a trusted network only.
+The registration, heartbeat, drain, and deregister endpoints require
+`node.manage` over the node being changed. A broker's credential is scoped to
+`node:{its own id}`, so it cannot act for another broker; an operator holding
+`cluster:*` can manage the whole fleet. Registration authorises the identity in
+the request body, so a broker cannot claim a name its credential does not
+cover.
 
 ### Internal Bootstrap API (Day-0)
 
