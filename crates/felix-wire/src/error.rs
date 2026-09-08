@@ -16,4 +16,12 @@ pub enum Error {
     Serialize(serde_json::Error),
     #[error("failed to deserialize message")]
     Deserialize(serde_json::Error),
+    #[error("string field is not valid utf-8")]
+    InvalidUtf8,
+    #[error("unsupported internal message kind {0}")]
+    UnsupportedInternalKind(u16),
+    #[error("unknown internal error code {0}")]
+    UnknownInternalErrorCode(u16),
+    #[error("unknown internal ack mode {0}")]
+    UnknownInternalAckMode(u8),
 }
