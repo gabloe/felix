@@ -3,6 +3,9 @@
 This document defines the language-neutral wire format for Felix. It is the
 source of truth for all client implementations.
 
+> Brokers speak a separate protocol to each other, with its own magic, version
+> and message kinds. See [the broker-internal forwarding protocol](internal-protocol.md).
+
 ## Goals
 - Stable, versioned envelope
 - Minimal message set for v1

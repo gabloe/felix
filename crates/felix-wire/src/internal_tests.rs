@@ -1,0 +1,337 @@
+//! Round-trips, byte-exact golden vectors, and malformed input.
+//!
+//! The malformed cases matter most. A peer is authenticated, not assumed
+//! correct: every one of these must be an error, and none may panic.
+use super::*;
+
+fn shard() -> ShardRef {
+    ShardRef {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 3,
+        generation: 7,
+    }
+}
+
+fn forward() -> InternalMessage {
+    InternalMessage::ForwardPublish(ForwardPublish {
+        correlation_id: 42,
+        shard: shard(),
+        ack: AckMode::OnCommit,
+        payloads: vec![Bytes::from_static(b"a"), Bytes::from_static(b"bb")],
+    })
+}
+
+fn every_message() -> Vec<InternalMessage> {
+    vec![
+        forward(),
+        InternalMessage::ForwardPublishOk(ForwardPublishOk {
+            correlation_id: 42,
+            first_offset: 100,
+            last_offset: 101,
+        }),
+        InternalMessage::ForwardPublishError(ForwardPublishError {
+            correlation_id: 42,
+            code: ErrorCode::StaleRoute,
+            detail: "generation 7 is ahead of mine".to_string(),
+        }),
+        InternalMessage::NotLeader(NotLeader {
+            correlation_id: 42,
+            node_id: "broker-b".to_string(),
+            advertise_addr: "10.0.0.5:7000".to_string(),
+            generation: 9,
+        }),
+    ]
+}
+
+#[test]
+fn every_message_round_trips() {
+    for message in every_message() {
+        let encoded = message.encode().expect("encode");
+        let decoded = InternalMessage::decode(encoded).expect("decode");
+        assert_eq!(decoded, message);
+    }
+}
+
+#[test]
+fn every_message_carries_a_correlation_id() {
+    for message in every_message() {
+        assert_eq!(
+            message.correlation_id(),
+            42,
+            "a response with no correlation could never be matched or discarded",
+        );
+    }
+}
+
+/// The whole point of a distinct magic: a client frame must not decode here,
+/// and an internal frame must not decode as a client frame.
+#[test]
+fn client_and_internal_frames_do_not_decode_as_each_other() {
+    let internal = forward().encode().expect("encode");
+    assert!(
+        matches!(
+            crate::Frame::decode(internal.clone()),
+            Err(Error::InvalidMagic)
+        ),
+        "an internal frame must not parse as a client frame",
+    );
+
+    let client = crate::Frame::new(0x1, Bytes::from_static(b"hello"))
+        .expect("frame")
+        .encode();
+    assert!(
+        matches!(InternalMessage::decode(client), Err(Error::InvalidMagic)),
+        "a client frame must not parse as an internal frame",
+    );
+}
+
+/// Byte-exact, so a layout change has to be deliberate. Every field is at a
+/// known offset; a reordering or a width change fails here rather than in a
+/// cluster.
+#[test]
+fn forward_publish_matches_its_golden_vector() {
+    let encoded = forward().encode().expect("encode");
+    let expected: Vec<u8> = [
+        // header: magic "FLXI", version 1, kind 1, length
+        &[0x46, 0x4C, 0x58, 0x49][..],
+        &[0x00, 0x01][..],
+        &[0x00, 0x01][..],
+        &[0x00, 0x00, 0x00, 0x3A][..],
+        // correlation_id 42
+        &[0, 0, 0, 0, 0, 0, 0, 42][..],
+        // "t1", "ns", "orders"
+        &[0, 0, 0, 2][..],
+        b"t1",
+        &[0, 0, 0, 2][..],
+        b"ns",
+        &[0, 0, 0, 6][..],
+        b"orders",
+        // shard 3, generation 7, ack on-commit
+        &[0, 0, 0, 3][..],
+        &[0, 0, 0, 0, 0, 0, 0, 7][..],
+        &[2][..],
+        // two payloads
+        &[0, 0, 0, 2][..],
+        &[0, 0, 0, 1][..],
+        b"a",
+        &[0, 0, 0, 2][..],
+        b"bb",
+    ]
+    .concat();
+    assert_eq!(encoded.as_ref(), expected.as_slice());
+}
+
+#[test]
+fn not_leader_matches_its_golden_vector() {
+    let message = InternalMessage::NotLeader(NotLeader {
+        correlation_id: 1,
+        node_id: "b".to_string(),
+        advertise_addr: "h:1".to_string(),
+        generation: 2,
+    });
+    let expected: Vec<u8> = [
+        &[0x46, 0x4C, 0x58, 0x49][..],
+        &[0x00, 0x01][..],
+        &[0x00, 0x04][..],
+        &[0x00, 0x00, 0x00, 0x1C][..],
+        &[0, 0, 0, 0, 0, 0, 0, 1][..],
+        &[0, 0, 0, 1][..],
+        b"b",
+        &[0, 0, 0, 3][..],
+        b"h:1",
+        &[0, 0, 0, 0, 0, 0, 0, 2][..],
+    ]
+    .concat();
+    assert_eq!(
+        message.encode().expect("encode").as_ref(),
+        expected.as_slice()
+    );
+}
+
+/// An unknown kind is rejected rather than skipped: the kind selects how to
+/// read the body, so ignoring one means confidently misparsing it.
+#[test]
+fn an_unknown_kind_is_rejected() {
+    let mut frame = BytesMut::new();
+    frame.put_u32(INTERNAL_MAGIC);
+    frame.put_u16(INTERNAL_VERSION);
+    frame.put_u16(999);
+    frame.put_u32(0);
+    assert!(matches!(
+        InternalMessage::decode(frame.freeze()),
+        Err(Error::UnsupportedInternalKind(999)),
+    ));
+}
+
+#[test]
+fn an_unknown_version_is_rejected() {
+    let mut frame = BytesMut::new();
+    frame.put_u32(INTERNAL_MAGIC);
+    frame.put_u16(INTERNAL_VERSION + 1);
+    frame.put_u16(Kind::ForwardPublishOk as u16);
+    frame.put_u32(24);
+    assert!(matches!(
+        InternalMessage::decode(frame.freeze()),
+        Err(Error::UnsupportedVersion(_)),
+    ));
+}
+
+/// The allocation trap the client binary path documents: a tiny body declaring
+/// an enormous payload count must be rejected before `with_capacity` sees it.
+#[test]
+fn a_declared_payload_count_is_bounded_by_the_body() {
+    let mut body = BytesMut::new();
+    body.put_u64(1);
+    for value in ["t1", "ns", "orders"] {
+        body.put_u32(value.len() as u32);
+        body.extend_from_slice(value.as_bytes());
+    }
+    body.put_u32(0);
+    body.put_u64(0);
+    body.put_u8(0);
+    body.put_u32(u32::MAX); // "there are four billion payloads after this"
+
+    let mut frame = BytesMut::new();
+    InternalHeader {
+        kind: Kind::ForwardPublish,
+        length: body.len() as u32,
+    }
+    .encode(&mut frame);
+    frame.extend_from_slice(&body);
+
+    assert!(
+        matches!(
+            InternalMessage::decode(frame.freeze()),
+            Err(Error::Incomplete)
+        ),
+        "a declared count must be checked against the bytes that remain",
+    );
+}
+
+/// Truncation at every byte must be an error, never a panic. This is the test
+/// that says a hostile or buggy peer cannot take a broker down.
+#[test]
+fn truncation_at_every_byte_is_an_error_not_a_panic() {
+    for message in every_message() {
+        let encoded = message.encode().expect("encode");
+        for cut in 0..encoded.len() {
+            let truncated = encoded.slice(0..cut);
+            assert!(
+                InternalMessage::decode(truncated).is_err(),
+                "{:?} truncated to {cut} bytes must not decode",
+                message.kind(),
+            );
+        }
+    }
+}
+
+/// Every single-byte corruption must either decode to something well formed or
+/// error. Neither may panic.
+#[test]
+fn single_byte_corruption_never_panics() {
+    for message in every_message() {
+        let encoded = message.encode().expect("encode");
+        for index in 0..encoded.len() {
+            for bit in 0..8u32 {
+                let mut corrupted = encoded.to_vec();
+                corrupted[index] ^= 1 << bit;
+                let _ = InternalMessage::decode(Bytes::from(corrupted));
+            }
+        }
+    }
+}
+
+#[test]
+fn trailing_bytes_are_rejected() {
+    let mut encoded = forward().encode().expect("encode").to_vec();
+    encoded.push(0);
+    // The header's length no longer matches the body, which is the first thing
+    // checked.
+    assert!(InternalMessage::decode(Bytes::from(encoded)).is_err());
+}
+
+#[test]
+fn a_non_utf8_identifier_is_rejected() {
+    let mut body = BytesMut::new();
+    body.put_u64(1);
+    body.put_u32(2);
+    body.extend_from_slice(&[0xff, 0xfe]);
+
+    let mut frame = BytesMut::new();
+    InternalHeader {
+        kind: Kind::NotLeader,
+        length: body.len() as u32,
+    }
+    .encode(&mut frame);
+    frame.extend_from_slice(&body);
+
+    assert!(matches!(
+        InternalMessage::decode(frame.freeze()),
+        Err(Error::InvalidUtf8),
+    ));
+}
+
+#[test]
+fn an_over_long_identifier_is_refused_on_encode() {
+    let message = InternalMessage::NotLeader(NotLeader {
+        correlation_id: 1,
+        node_id: "n".repeat(MAX_IDENT_BYTES + 1),
+        advertise_addr: "h:1".to_string(),
+        generation: 1,
+    });
+    assert!(matches!(message.encode(), Err(Error::FrameTooLarge)));
+}
+
+#[test]
+fn an_over_large_batch_is_refused_on_encode() {
+    let message = InternalMessage::ForwardPublish(ForwardPublish {
+        correlation_id: 1,
+        shard: shard(),
+        ack: AckMode::None,
+        payloads: vec![Bytes::new(); MAX_BATCH_PAYLOADS + 1],
+    });
+    assert!(matches!(message.encode(), Err(Error::FrameTooLarge)));
+}
+
+#[test]
+fn an_empty_batch_round_trips() {
+    let message = InternalMessage::ForwardPublish(ForwardPublish {
+        correlation_id: 5,
+        shard: shard(),
+        ack: AckMode::None,
+        payloads: Vec::new(),
+    });
+    let decoded = InternalMessage::decode(message.encode().expect("encode")).expect("decode");
+    assert_eq!(decoded, message);
+}
+
+#[test]
+fn unknown_enum_values_are_rejected() {
+    assert!(Kind::from_u16(0).is_err());
+    assert!(ErrorCode::from_u16(0).is_err());
+    assert!(ErrorCode::from_u16(999).is_err());
+    assert!(AckMode::from_u8(9).is_err());
+}
+
+/// Retryability is a property of the code, so a requester does not have to
+/// re-derive it from a message string.
+#[test]
+fn error_codes_say_whether_to_retry() {
+    for code in [
+        ErrorCode::StaleRoute,
+        ErrorCode::Unavailable,
+        ErrorCode::Overload,
+    ] {
+        assert!(code.is_retryable(), "{code:?}");
+    }
+    for code in [
+        ErrorCode::Unauthorized,
+        ErrorCode::ProtocolVersion,
+        ErrorCode::Malformed,
+        ErrorCode::StorageFailed,
+    ] {
+        assert!(!code.is_retryable(), "{code:?}");
+    }
+}

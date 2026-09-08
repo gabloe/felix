@@ -21,6 +21,7 @@ mod frame;
 mod message;
 
 pub mod binary;
+pub mod internal;
 pub mod text;
 
 pub use error::{Error, Result};
