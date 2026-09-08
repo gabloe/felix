@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788845495100,
+  "lastUpdate": 1788875469836,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4488,6 +4488,72 @@ window.BENCHMARK_DATA = {
             "range": "314.74",
             "unit": "us",
             "extra": "trials: 5\nmedian: 576.00\nmean: 711.00\nstdev: 314.74\ncv: 44.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ebdbbde1218560f20239235beb240285cee5b0c1",
+          "message": "feat(wire): define the broker-internal forwarding protocol (#233)\n\nA separate protocol, not a superset of the client one. A client able to send\nForwardPublish could write to a shard on a broker that never checked ownership,\nand a broker accepting client frames on its internal listener would treat a peer\nas an authenticated publisher. The distinct magic makes a misdirected connection\nfail loudly rather than parse into something plausible; the listener and the peer\ncredential are the actual boundary.\n\nKinds rather than flag bits. The client protocol uses bits because they modify\none payload layout; here each kind is a layout, so an enum makes \"unknown kind\"\none unambiguous check. Additive change adds a kind, which an older peer already\nrejects; the version exists for what that cannot cover.\n\nGeneration is what keeps a forward safe, and the asymmetry is the point. Equal\ngenerations proceed. A requester behind gets NotLeader carrying the new owner, so\nit retries against it rather than guessing. A requester ahead means the owner is\nbehind, and the owner must refuse: accepting would be writing a shard it may no\nlonger hold. Neither direction can be mistaken for a successful ownership claim.\n\nNotLeader is a kind rather than an error code because it carries a routing\nanswer, not only a reason. Error codes carry their own retryability so a\nrequester never re-derives it from a message string.\n\nEvery peer-provided length is checked against what remains before it sizes\nanything -- a broker is authenticated, not assumed correct. The tests truncate\nevery message at every byte and flip every bit of every byte; all must error and\nnone may panic.\n\nThe golden vectors caught my own arithmetic: two hand-computed body lengths were\nwrong, which is exactly what they are for.\n\nFlows and correlation rules are in docs/internal-protocol.md, written before the\ncode as the issue asks.\n\nRefs #104\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T06:49:11-07:00",
+          "tree_id": "19b1085dd8817315ff53d23cff29e7c3da51191c",
+          "url": "https://github.com/gabloe/felix/commit/ebdbbde1218560f20239235beb240285cee5b0c1"
+        },
+        "date": 1788875468863,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 93,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 93.00\nmean: 92.80\nstdev: 1.64\ncv: 1.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 128,
+            "range": "22.23",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 136.40\nstdev: 22.23\ncv: 16.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 179,
+            "range": "1340.02",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 179.00\nmean: 809.20\nstdev: 1340.02\ncv: 165.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 126,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 126.00\nmean: 126.00\nstdev: 0.71\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 254,
+            "range": "6.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 254.00\nmean: 251.00\nstdev: 6.12\ncv: 2.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 351,
+            "range": "50.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 351.00\nmean: 357.00\nstdev: 50.50\ncv: 14.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
