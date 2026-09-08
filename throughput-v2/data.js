@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788842849552,
+  "lastUpdate": 1788845497361,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3484,6 +3484,58 @@ window.BENCHMARK_DATA = {
             "range": "11125.24",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 594679.01\nmean: 594261.68\nstdev: 11125.24\ncv: 1.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d74e7bea5f5813746f419489b7affefef2e94627",
+          "message": "feat(controlplane): authenticate and authorize membership writes (#232)\n\nRegistration, heartbeat, drain and deregistration were reachable by anyone who\ncould reach the control plane. Any caller could claim a broker identity, keep a\ndead node looking alive, bump an incarnation so the real broker's heartbeats\nwere rejected, or deregister the fleet.\n\nAll four now require `node.manage` over the node being changed. The user named\nthree; heartbeat is the same hole and is included.\n\nNode identity is an RBAC object, not a field the caller asserts. A broker's\ncredential is scoped to `node:{its own id}` and contains exactly that node, so\npresenting it for another broker fails authorisation rather than being believed.\nAn operator holds `cluster:*`, which covers every node. Registration authorises\nthe identity in the request body, so a broker cannot claim a name its credential\ndoes not cover.\n\n`node:*` is rejected. It would be `cluster:*` under a second name, and two\nspellings for one scope is how a policy review misses one.\n\nA node scope is an island the same way cluster scope is: no tenant scope reaches\nit, so a tenant admin cannot grant themselves one, and it confers nothing inside\na tenant. `node.view` does not imply `node.manage` -- reading the fleet is not\npermission to change it.\n\nBroker side, a credential is required rather than optional. A broker with an\nidentity and no token refuses to start, because starting one that will fail\nevery control-plane call on a loop is worse. `FELIX_NODE_TOKEN_FILE` reads it\nfrom a mounted secret so it need not sit in a process listing. The same\ncredential authenticates the shard-assignment watch, which is cluster metadata\nby the same argument.\n\nThe two guards share one verification path so they cannot drift.\n\nRefs #126\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-07T22:29:18-07:00",
+          "tree_id": "02b86035d736d2816dce7bc8b3e42064ea642c7b",
+          "url": "https://github.com/gabloe/felix/commit/d74e7bea5f5813746f419489b7affefef2e94627"
+        },
+        "date": 1788845496853,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 251960.71,
+            "range": "1786.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251960.71\nmean: 251026.74\nstdev: 1786.10\ncv: 0.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 251960.71,
+            "range": "1786.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251960.71\nmean: 251026.74\nstdev: 1786.10\ncv: 0.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60040.13,
+            "range": "1293.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60040.13\nmean: 59426.22\nstdev: 1293.28\ncv: 2.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 600401.27,
+            "range": "12932.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 600401.27\nmean: 594262.20\nstdev: 12932.82\ncv: 2.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
