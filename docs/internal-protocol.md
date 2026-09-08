@@ -100,13 +100,17 @@ explicit typed answer, and **never a successful ownership claim**.
 
 ### Subscribe
 
-Whether a subscription is redirected to the owner or proxied through the
-receiving broker is decided in M4.4, and the two need different message sets.
+A subscription for a shard this broker does not own is **redirected**, not
+proxied. See [subscribe routing](subscribe-routing.md) for the decision and the
+measurements behind it.
 
-What both need is the redirect primitive, which is defined here: `NotLeader`
-carries the owning node's id, its advertised address, and its generation. A
-redirect design uses it as the answer; a proxy design uses it when the shard
-moves mid-subscription. Relay kinds for a proxy design are additive.
+The primitive is `NotLeader`, which carries the owning node's id, its advertised
+address, and its generation. It is the answer to a misrouted subscribe, and it
+is also what ends a live subscription whose shard has moved.
+
+No relay kinds are defined, because nothing relays. Should proxying ever be
+added they are additive: an unknown kind is already a typed error rather than a
+misparse, so it needs no version bump.
 
 ## Errors
 
