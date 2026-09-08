@@ -13,3 +13,6 @@ categories = ["network-programming"]
 
 [dependencies]
 felix-common = { path = "../felix-common", version = "0.2.0" }
+# Routes are read on every publish and replaced wholesale; a swap keeps readers
+# off any lock a writer can hold.
+arc-swap = "1"

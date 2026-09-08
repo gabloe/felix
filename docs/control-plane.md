@@ -300,6 +300,41 @@ not the same event as the shard becoming servable.
 | `felix_broker_shard_stale_events_total` | events ignored for an old generation |
 | `felix_broker_shard_open_failures_total` | non-zero means a shard the cluster believes is placed here is not being served |
 
+#### Resolving a shard to a node
+
+`felix-router` answers *where* a shard lives; the region allowlist answers
+*whether* traffic may cross to it. Keeping those separate matters: folding them
+together makes a placement decision look like a policy decision, and they fail
+for different reasons and need different fixes.
+
+Routes are published as an immutable snapshot and swapped in whole. A lookup is
+an atomic load against a table nobody can mutate underneath it, so the publish
+path never takes a lock a writer can hold and never makes a control-plane call.
+Updates replace the table entirely rather than patching shards, because a
+partial update would let a reader see half a rebalance.
+
+Every outcome is explicit — there is deliberately no "not sure, handle it
+locally", because that is a broker writing a shard it does not own:
+
+| Outcome | Meaning |
+| --- | --- |
+| `Local` | this node leads the shard; handle it here |
+| `Remote` | another node leads it, with the address to reach it. M4 forwards; until then it is a typed refusal, distinguishable from failure |
+| `Stale` | the caller knows a newer generation than this router does. Wait for the watch, do not fail the stream |
+| `Unavailable::NoAssignment` | placement has not assigned it |
+| `Unavailable::LeaderUnknown` | the assignment names a node with no known address |
+| `Unavailable::LeaderNotLive` | the leader is registered but not live |
+| `Unavailable::RegionNotRoutable` | region policy forbids reaching the leader |
+
+Two rules that look like edge cases and are not:
+
+- **A shard led by this node resolves `Local` regardless of liveness or region
+  policy.** A broker that stopped serving its own shards while waiting to see
+  its own heartbeat land would remove itself from the cluster for no reason.
+- **An unknown leader is reported differently from a dead one.** Both are
+  unroutable, but one is a missing address and the other is a failover in
+  progress, and they send an operator to different places.
+
 #### Referential integrity
 
 Two references, two different policies, chosen rather than inherited:
