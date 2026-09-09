@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788927306210,
+  "lastUpdate": 1788930443704,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3692,6 +3692,58 @@ window.BENCHMARK_DATA = {
             "range": "27786.91",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 848599.97\nmean: 859578.85\nstdev: 27786.91\ncv: 3.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "24644c4cefeb3d4cd61fe22fd272074f432641a3",
+          "message": "feat(cluster): add a local three-node cluster harness (#108) (#237)\n\n* feat(cluster): add a local three-node cluster harness (#108)\n\n`task cluster:smoke` starts three brokers, publishes through one that does\nnot own the shard, and receives the record from the one that does. That is\nM4's completion signal, and running it found that it did not work.\n\n**The ownership gate has been inert for all real client traffic since it\nshipped in #231.** The per-connection `PublishContext` set `ingress: None`,\nso every client connection lost the cluster view: brokers wrote shards they\ndid not own, and #106's forwarding never ran. The gate's unit tests passed\nthroughout, because they call it directly with a router in hand — the bug\nlives at the seam, and only a real client through a real broker process\nreaches it.\n\nThe fix is `PublishContext::for_connection`, which owns the decision about\nwhat a connection inherits in one place, plus a unit test that fails when\nthe cluster view is dropped.\n\nThe harness itself: brokers are real processes with their own ports,\nidentities, credentials, and data directories, and the control plane runs in\nprocess because a broker's only route to a credential today is an OIDC\nexchange against a real IdP. `docs/cluster-harness.md` states what that does\nand does not exercise.\n\nNothing sleeps for a fixed duration. Start-up returns once every broker is\nready, every broker is placeable, every shard has a leader — placement is\nstepped rather than waited for — and a publish succeeds. That last check is\nthe only honest one for the window where a broker holds an assignment it has\nnot finished opening, and it deliberately publishes through an arbitrary\nbroker so routing is covered by start-up itself.\n\nTwo credentials, because they are not interchangeable: a client token with\nonly stream permissions for brokers over QUIC, and an admin token with\n`node.view:cluster:*` for the control plane. A broker rejects a whole token\ncontaining an action it does not recognise, so one credential for both\ncannot publish at all.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(cluster): run the cluster tests serially and fail fast on a dead broker\n\nCI ran the three tests in parallel, so a two-core runner was asked to start\nnine broker processes at once. They starved each other and the first cluster\ntimed out waiting for readiness — a failure that looked like a broker bug\nrather than a test-setup one. Serial runs also narrow the window in which two\nclusters are handed the same ephemeral port.\n\nStart-up now checks whether a broker has already exited before deciding it is\nmerely slow, and reports its exit status. A broker that refuses its\nconfiguration surfaced as a 30s readiness timeout that said nothing about\nwhy; it now fails in under a second naming the exit.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* chore(cluster): classify felix-cluster in the licence table\n\nA new crate has to be classified deliberately, and the publish check enforces\nthat. `felix-cluster` embeds the control plane and drives the broker, both\nElastic-2.0, so it inherits Elastic-2.0 and is not published — internal\ntooling, unlike `felix-conformance`, which is Apache-2.0 precisely so\nthird-party implementers can run it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T22:04:57-07:00",
+          "tree_id": "ac52fe8554815fce9eef2bb2e2bcf244a19d8f07",
+          "url": "https://github.com/gabloe/felix/commit/24644c4cefeb3d4cd61fe22fd272074f432641a3"
+        },
+        "date": 1788930443004,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228162.82,
+            "range": "3218.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228162.82\nmean: 228617.58\nstdev: 3218.12\ncv: 1.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228162.82,
+            "range": "3218.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228162.82\nmean: 228617.58\nstdev: 3218.12\ncv: 1.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56113.5,
+            "range": "7152.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56113.50\nmean: 53294.53\nstdev: 7152.10\ncv: 13.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 561135.04,
+            "range": "71521.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 561135.04\nmean: 532945.31\nstdev: 71521.00\ncv: 13.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
