@@ -70,6 +70,15 @@ struct HeartbeatRequest {
 struct HeartbeatResponse {
     lifecycle: String,
     heartbeat_interval_ms: u64,
+    /// How long the control plane will wait before declaring this node down.
+    /// The broker's lease is derived from it, so the two ends cannot disagree
+    /// about when authority to serve ends.
+    ///
+    /// Defaulted rather than required: a control plane predating this field
+    /// leaves the broker on its conservative initial lease instead of failing to
+    /// parse the response and losing membership entirely.
+    #[serde(default)]
+    expiry_timeout_ms: Option<u64>,
 }
 
 /// A registered identity, and what the control plane told us about it.
@@ -201,6 +210,7 @@ pub async fn run_heartbeat(
     registration: Registration,
     shutdown: CancellationToken,
     consecutive_failures: Arc<AtomicU64>,
+    lease: Arc<crate::lease::LeaseState>,
 ) {
     let base_url = base_url.trim_end_matches('/').to_string();
     let url = format!("{base_url}/v1/nodes/{}/heartbeat", registration.node_id);
@@ -224,6 +234,15 @@ pub async fn run_heartbeat(
             Ok(response) => {
                 consecutive_failures.store(0, Ordering::Release);
                 last_success = std::time::Instant::now();
+                // The heartbeat *is* the lease renewal. Renewed only on an
+                // accepted response, so a control plane that answers "you are
+                // not live" does not extend the authority to serve.
+                if response.lifecycle == "live" || response.lifecycle == "draining" {
+                    if let Some(expiry) = response.expiry_timeout_ms {
+                        lease.adopt(Duration::from_millis(expiry.max(1)));
+                    }
+                    lease.renew();
+                }
                 mm::record_heartbeat_success();
                 // The control plane owns the cadence, so a change to it takes
                 // effect without touching broker configuration.
@@ -235,10 +254,15 @@ pub async fn run_heartbeat(
                 let placeable = response.lifecycle == "live" || response.lifecycle == "draining";
                 mm::record_membership_live(placeable);
                 if !placeable {
+                    // Told outright that it is not a member. Waiting out the
+                    // remaining margin would serve a shard the control plane may
+                    // already have reassigned.
+                    lease.surrender();
                     tracing::warn!(
                         node_id = %registration.node_id,
                         lifecycle = %response.lifecycle,
-                        "the control plane no longer considers this broker live",
+                        "the control plane no longer considers this broker live; \
+                         surrendering the lease",
                     );
                 }
             }
@@ -372,6 +396,9 @@ pub struct MembershipTask {
     /// Consecutive heartbeat failures, exposed so shutdown and metrics can see
     /// whether membership is currently healthy.
     pub consecutive_failures: Arc<AtomicU64>,
+    /// This broker's authority to serve the shards it leads. Renewed by the
+    /// heartbeat below; read by the publish path.
+    pub lease: Arc<crate::lease::LeaseState>,
 }
 
 /// Register once the broker can serve, then report health until shutdown.
@@ -385,13 +412,14 @@ pub fn spawn(
     config: MembershipConfig,
     serving: CancellationToken,
     shutdown: CancellationToken,
+    lease: Arc<crate::lease::LeaseState>,
 ) -> MembershipTask {
     let fatal = CancellationToken::new();
     let consecutive_failures = Arc::new(AtomicU64::new(0));
-
     let handle = tokio::spawn({
         let fatal = fatal.clone();
         let consecutive_failures = Arc::clone(&consecutive_failures);
+        let lease = Arc::clone(&lease);
         async move {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
@@ -437,6 +465,7 @@ pub fn spawn(
                 registration,
                 shutdown,
                 consecutive_failures,
+                lease,
             )
             .await;
         }
@@ -446,6 +475,7 @@ pub fn spawn(
         handle,
         fatal,
         consecutive_failures,
+        lease,
     }
 }
 

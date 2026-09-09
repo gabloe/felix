@@ -127,6 +127,15 @@ where
         .as_ref()
         .map(|(_, ingress, _, _)| Arc::clone(ingress));
 
+    // This broker's authority to serve the shards it leads. Created here rather
+    // than inside the membership task because the accept loop is built first and
+    // the publish path reads it. Starts conservative and invalid: authority
+    // arrives with the first accepted heartbeat, never before.
+    let lease = config
+        .membership
+        .as_ref()
+        .map(|_| Arc::new(peer_lease_state()));
+
     // Outbound peer connections. Built here because the publish path forwards
     // through it, and before the accept loop for the same reason the router is:
     // a publish must never arrive at a broker that can resolve a remote owner
@@ -230,6 +239,7 @@ where
         let seeded = seeded.clone();
         let ingress_router = ingress_router.clone();
         let peers_for_accept = peers.clone();
+        let lease_for_accept = lease.clone();
         tokio::spawn(async move {
             // A durable broker does not accept until its streams exist.
             // Readiness alone only steers orchestrated traffic; a client with
@@ -259,6 +269,7 @@ where
                 quic::ClusterContext {
                     ingress: ingress_router,
                     peers: peers_for_accept,
+                    lease: lease_for_accept,
                 },
             )
             .await
@@ -358,12 +369,19 @@ where
                 now.cancel();
                 now
             };
+            let lease = Arc::clone(lease.as_ref().expect("a cluster member has a lease"));
+            // Keeps the cheap admission flag in step with the clock, so a broker
+            // that loses its lease stops accepting without waiting for a publish
+            // to discover it.
+            let refresh = Arc::clone(&lease).spawn_refresh(sync_shutdown.clone());
+            drop(refresh);
             Some(membership::spawn(
                 membership_client.clone(),
                 base_url.clone(),
                 membership_config.clone(),
                 serving,
                 sync_shutdown.clone(),
+                lease,
             ))
         }
         _ => {
@@ -625,6 +643,15 @@ where
 /// This is convenient for local development but **not appropriate for production**.
 /// Production should load a real certificate chain and private key (and should avoid
 /// regenerating keys on each start).
+/// The initial lease: conservative, and invalid until the first heartbeat.
+///
+/// The real duration comes from the control plane's expiry window on the first
+/// accepted heartbeat, so this value only bounds how long a broker could serve
+/// if that window ever stopped being reported.
+fn peer_lease_state() -> broker::lease::LeaseState {
+    broker::lease::LeaseState::new(Duration::from_secs(10))
+}
+
 fn build_server_config() -> Result<ServerConfig> {
     // Dev-only self-signed TLS config for QUIC endpoints.
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;

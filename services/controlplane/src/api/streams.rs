@@ -69,6 +69,7 @@ pub(crate) async fn create_stream(
         stream: body.stream,
         kind: body.kind,
         shards: body.shards,
+        replication_factor: body.replication_factor,
         retention: body.retention,
         consistency: body.consistency,
         delivery: body.delivery,

@@ -246,3 +246,49 @@ async fn a_moved_shard_converges_on_the_new_owner() -> Result<()> {
     cluster.shutdown().await;
     Ok(())
 }
+
+/// A broker that cannot renew its lease stops serving.
+///
+/// This is the fence from `docs/replication-design.md`, end to end, and it is
+/// what closes the write-loss path in #239: a broker whose authority has lapsed
+/// refuses rather than writing a shard someone else may already lead.
+///
+/// The control plane is stopped rather than the network cut, because that is the
+/// partition this harness can produce — and it is the same loss of authority
+/// from the broker's point of view.
+#[serial]
+#[tokio::test]
+async fn a_broker_that_cannot_renew_its_lease_stops_serving() -> Result<()> {
+    let mut cluster = Cluster::start(config(3)).await?;
+    let owner = cluster.owner(STREAM).await?;
+
+    // Serving normally, on a lease it is renewing.
+    cluster
+        .publish_via(&owner, STREAM, b"while-leased".to_vec())
+        .await
+        .expect("a leased broker must serve");
+
+    cluster.stop_control_plane().await;
+
+    // The lease outlives a brief outage — that is the point of a lease — and
+    // then lapses. Bounded: the harness runs a 1s expiry window.
+    let mut refused = false;
+    for _ in 0..200 {
+        if cluster
+            .publish_via(&owner, STREAM, b"after-expiry".to_vec())
+            .await
+            .is_err()
+        {
+            refused = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        refused,
+        "{owner} kept accepting writes after it could no longer renew its lease",
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}

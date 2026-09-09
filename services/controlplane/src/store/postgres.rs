@@ -94,6 +94,7 @@ struct DbStream {
     stream: String,
     kind: String,
     shards: i32,
+    replication_factor: i32,
     retention_max_age_seconds: Option<i64>,
     retention_max_size_bytes: Option<i64>,
     consistency: String,
@@ -434,7 +435,7 @@ impl ControlPlaneStore for PostgresStore {
         .await?;
 
         let streams = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1"#,
         )
         .bind(tenant_id)
@@ -495,6 +496,7 @@ impl ControlPlaneStore for PostgresStore {
                 stream: stream.stream,
                 kind: parse_stream_kind(&stream.kind)?,
                 shards: stream.shards as u32,
+                replication_factor: stream.replication_factor as u32,
                 retention: RetentionPolicy {
                     max_age_seconds: stream.retention_max_age_seconds.map(|v| v as u64),
                     max_size_bytes: stream.retention_max_size_bytes.map(|v| v as u64),
@@ -676,7 +678,7 @@ impl ControlPlaneStore for PostgresStore {
         });
 
         let streams = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1 AND namespace = $2"#,
         )
         .bind(&key.tenant_id)
@@ -737,6 +739,7 @@ impl ControlPlaneStore for PostgresStore {
                 stream: stream.stream,
                 kind: parse_stream_kind(&stream.kind)?,
                 shards: stream.shards as u32,
+                replication_factor: stream.replication_factor as u32,
                 retention: RetentionPolicy {
                     max_age_seconds: stream.retention_max_age_seconds.map(|v| v as u64),
                     max_size_bytes: stream.retention_max_size_bytes.map(|v| v as u64),
@@ -832,7 +835,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn list_streams(&self, tenant_id: &str, namespace: &str) -> StoreResult<Vec<Stream>> {
         let rows = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1 AND namespace = $2 ORDER BY stream"#,
         )
         .bind(tenant_id)
@@ -847,7 +850,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn get_stream(&self, key: &StreamKey) -> StoreResult<Stream> {
         let row = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3"#,
         )
         .bind(&key.tenant_id)
@@ -877,14 +880,15 @@ impl ControlPlaneStore for PostgresStore {
         }
 
         let insert = sqlx::query(
-            r#"INSERT INTO streams (tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            r#"INSERT INTO streams (tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(&stream.tenant_id)
         .bind(&stream.namespace)
         .bind(&stream.stream)
         .bind(stream_kind_to_str(&stream.kind))
         .bind(stream.shards as i32)
+        .bind(stream.replication_factor as i32)
         .bind(stream.retention.max_age_seconds.map(|v| v as i64))
         .bind(stream.retention.max_size_bytes.map(|v| v as i64))
         .bind(consistency_to_str(&stream.consistency))
@@ -924,7 +928,7 @@ impl ControlPlaneStore for PostgresStore {
     ) -> StoreResult<Stream> {
         let mut tx = self.pool.begin().await?;
         let current = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
                FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 FOR UPDATE"#,
         )
         .bind(&key.tenant_id)
@@ -953,11 +957,12 @@ impl ControlPlaneStore for PostgresStore {
         }
 
         sqlx::query(
-            r#"UPDATE streams SET kind = $1, shards = $2, retention_max_age_seconds = $3, retention_max_size_bytes = $4, consistency = $5, delivery = $6, durable = $7, updated_at = now()
-                WHERE tenant_id = $8 AND namespace = $9 AND stream = $10"#,
+            r#"UPDATE streams SET kind = $1, shards = $2, replication_factor = $3, retention_max_age_seconds = $4, retention_max_size_bytes = $5, consistency = $6, delivery = $7, durable = $8, updated_at = now()
+                WHERE tenant_id = $9 AND namespace = $10 AND stream = $11"#,
         )
         .bind(stream_kind_to_str(&updated.kind))
         .bind(updated.shards as i32)
+        .bind(updated.replication_factor as i32)
         .bind(updated.retention.max_age_seconds.map(|v| v as i64))
         .bind(updated.retention.max_size_bytes.map(|v| v as i64))
         .bind(consistency_to_str(&updated.consistency))
@@ -1021,7 +1026,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn stream_snapshot(&self) -> StoreResult<Snapshot<Stream>> {
         let rows = sqlx::query_as::<_, DbStream>(
-            r#"SELECT tenant_id, namespace, stream, kind, shards, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable FROM streams ORDER BY tenant_id, namespace, stream"#,
+            r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable FROM streams ORDER BY tenant_id, namespace, stream"#,
         )
         .fetch_all(&self.pool)
         .await
@@ -2184,6 +2189,7 @@ fn stream_from_db(row: DbStream) -> StoreResult<Stream> {
         stream: row.stream,
         kind: parse_stream_kind(&row.kind)?,
         shards: row.shards as u32,
+        replication_factor: 1,
         retention: RetentionPolicy {
             max_age_seconds: row.retention_max_age_seconds.map(|v| v as u64),
             max_size_bytes: row.retention_max_size_bytes.map(|v| v as u64),
@@ -2658,6 +2664,7 @@ mod tests {
             stream: "s1".to_string(),
             kind: "Stream".to_string(),
             shards: 2,
+            replication_factor: 1,
             retention_max_age_seconds: Some(3600),
             retention_max_size_bytes: Some(2048),
             consistency: "Leader".to_string(),

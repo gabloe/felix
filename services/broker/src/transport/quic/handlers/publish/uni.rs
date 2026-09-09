@@ -66,7 +66,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
     let Some(target) = publish_target(
         resolve_route(
             broker,
-            publish_ctx.ingress.as_deref(),
+            publish_ctx.authority(),
             stream_cache,
             stream_cache_key,
             &batch.tenant_id,
@@ -138,7 +138,7 @@ pub(crate) async fn handle_publish_message_uni(
     let Some(target) = publish_target(
         resolve_route(
             broker,
-            publish_ctx.ingress.as_deref(),
+            publish_ctx.authority(),
             stream_cache,
             stream_cache_key,
             &tenant_id,
@@ -209,7 +209,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
     let Some(target) = publish_target(
         resolve_route(
             broker,
-            publish_ctx.ingress.as_deref(),
+            publish_ctx.authority(),
             stream_cache,
             stream_cache_key,
             &tenant_id,

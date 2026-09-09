@@ -139,6 +139,11 @@ pub(crate) struct PublishContext {
     /// the handlers can tell "forwardable" from "cannot forward" before
     /// enqueueing rather than after.
     pub(crate) peers: Option<Arc<crate::peer::PeerPool>>,
+    /// This broker's authority to serve the shards it leads.
+    ///
+    /// `None` on a single-node broker, which leads by construction and has
+    /// nobody to lose a shard to.
+    pub(crate) lease: Option<Arc<crate::lease::LeaseState>>,
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
     pub(crate) worker_count: usize,
     pub(crate) depth: Arc<AtomicUsize>,
@@ -174,11 +179,11 @@ impl PublishContext {
     /// the worker queues, the shared budget, and **the cluster view** — is
     /// carried through.
     ///
-    /// The cluster view is the part worth stating. `ingress` and `peers` decide
-    /// whether a publish is served here, refused, or forwarded, and dropping
-    /// them here disables shard ownership for every client connection: the gate
-    /// keeps passing its own tests while no broker ever refuses or forwards a
-    /// shard it does not own.
+    /// The cluster view is the part worth stating. `ingress`, `peers`, and
+    /// `lease` decide whether a publish is served here, refused, or forwarded,
+    /// and dropping any of them here disables shard ownership for every client
+    /// connection: the gate keeps passing its own tests while no broker ever
+    /// refuses or forwards a shard it does not own.
     pub(crate) fn for_connection(&self, config: &crate::config::BrokerConfig) -> Self {
         Self {
             conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
@@ -257,6 +262,27 @@ pub(crate) fn internal_ack(ack: Option<felix_wire::AckMode>) -> felix_wire::inte
     }
 }
 
+/// What decides whether this broker may serve a publish at all.
+///
+/// The two travel together because they answer halves of one question — the
+/// router says whether this broker *should* hold the shard, the lease says
+/// whether it still *may* act on that. Separating them at a call site is how one
+/// gets forgotten.
+#[derive(Clone, Copy)]
+pub(crate) struct Authority<'a> {
+    pub(crate) ingress: Option<&'a IngressRouter>,
+    pub(crate) lease: Option<&'a crate::lease::LeaseState>,
+}
+
+impl PublishContext {
+    pub(crate) fn authority(&self) -> Authority<'_> {
+        Authority {
+            ingress: self.ingress.as_deref(),
+            lease: self.lease.as_deref(),
+        }
+    }
+}
+
 /// Where a publish should be applied.
 #[derive(Debug)]
 pub(crate) enum PublishRoute {
@@ -280,7 +306,7 @@ pub(crate) enum PublishRoute {
 /// loads, so paying it per publish costs less than reasoning about staleness.
 pub(crate) async fn resolve_route(
     broker: &Broker,
-    ingress: Option<&IngressRouter>,
+    authority: Authority<'_>,
     cache: &mut StreamHandleCache,
     key_scratch: &mut String,
     tenant_id: &str,
@@ -289,6 +315,24 @@ pub(crate) async fn resolve_route(
 ) -> PublishRoute {
     // Single-node brokers short-circuit on a null check; a cluster member pays
     // two loads. Either way there is no lock and no await.
+    let Authority { ingress, lease } = authority;
+
+    // The admission fence. Cheap and possibly stale, so it only sheds early --
+    // the authoritative check happens again before the record is committed. See
+    // `crate::lease`.
+    if let Some(lease) = lease
+        && !lease.looks_valid()
+    {
+        crate::lease_metrics::record_refusal(crate::lease_metrics::BOUNDARY_ADMISSION);
+        tracing::debug!(
+            tenant_id,
+            namespace,
+            stream,
+            "publish refused: this broker no longer holds a lease on the shards it led",
+        );
+        return PublishRoute::Refused;
+    }
+
     if ingress.is_some() {
         let key = ShardKey {
             tenant_id: tenant_id.to_string(),

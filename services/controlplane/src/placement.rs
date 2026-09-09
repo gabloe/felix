@@ -46,8 +46,9 @@ impl std::fmt::Display for Unplaceable {
 pub enum Decision {
     /// The existing assignment is still valid. Nothing to write.
     Kept,
-    /// This shard needs an assignment written, to this leader.
-    Place(String),
+    /// This shard needs an assignment written: a leader, and the followers that
+    /// will hold a copy of it.
+    Place(String, Vec<String>),
     Unplaceable(Unplaceable),
 }
 
@@ -65,9 +66,11 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn to_place(&self) -> impl Iterator<Item = (&ShardKey, &str)> {
+    pub fn to_place(&self) -> impl Iterator<Item = (&ShardKey, &str, &[String])> {
         self.shards.iter().filter_map(|plan| match &plan.decision {
-            Decision::Place(leader) => Some((&plan.key, leader.as_str())),
+            Decision::Place(leader, replicas) => {
+                Some((&plan.key, leader.as_str(), replicas.as_slice()))
+            }
             _ => None,
         })
     }
@@ -92,7 +95,36 @@ impl Plan {
 /// Independent of the order `streams`, `nodes`, and `existing` arrive in: shards
 /// are planned in sorted order and candidates are chosen by score, so two
 /// control-plane instances reading the same rows agree without coordinating.
-pub fn plan(streams: &[Stream], nodes: &[Node], existing: &[ShardAssignment]) -> Plan {
+/// Which replicas hold enough of a shard's log to lead it.
+///
+/// Promotion is gated on this, and the gate is the difference between a failover
+/// and data loss: a replica that holds nothing can be promoted perfectly well
+/// and will serve an empty shard.
+pub trait CaughtUp {
+    /// Whether `node_id` is within the catch-up bound for `key`.
+    fn is_caught_up(&self, key: &ShardKey, node_id: &str) -> bool;
+}
+
+/// Nothing is caught up.
+///
+/// What the cluster can honestly report until records are actually replicated
+/// (#112). With this, promotion never fires and placement behaves exactly as it
+/// did — which is correct, because a promotion today would hand the shard to a
+/// broker holding none of it.
+pub struct NothingCaughtUp;
+
+impl CaughtUp for NothingCaughtUp {
+    fn is_caught_up(&self, _key: &ShardKey, _node_id: &str) -> bool {
+        false
+    }
+}
+
+pub fn plan(
+    streams: &[Stream],
+    nodes: &[Node],
+    existing: &[ShardAssignment],
+    caught_up: &dyn CaughtUp,
+) -> Plan {
     let eligible: Vec<&Node> = {
         let mut live: Vec<&Node> = nodes
             .iter()
@@ -117,6 +149,21 @@ pub fn plan(streams: &[Stream], nodes: &[Node], existing: &[ShardAssignment]) ->
             *load.entry(assignment.leader.as_str()).or_default() += 1;
         }
     }
+
+    // Keyed by the same string `stream_of` builds, so the lookup below cannot
+    // disagree with the key it is derived from.
+    let factors: HashMap<String, u32> = streams
+        .iter()
+        .map(|stream| {
+            (
+                format!(
+                    "{}/{}/{}",
+                    stream.tenant_id, stream.namespace, stream.stream
+                ),
+                stream.replication_factor.max(1),
+            )
+        })
+        .collect();
 
     let mut keys: Vec<ShardKey> = streams
         .iter()
@@ -146,10 +193,44 @@ pub fn plan(streams: &[Stream], nodes: &[Node], existing: &[ShardAssignment]) ->
             continue;
         }
 
+        let replication_factor = factors.get(stream_of(&key).as_str()).copied().unwrap_or(1);
+
+        // The leader is gone. Prefer one of its followers -- but only one that
+        // actually holds the log, or the failover is the data loss.
+        if let Some(previous) = current.get(&key)
+            && let Some(promoted) = promote(&key, previous, &eligible, caught_up)
+        {
+            *load.entry(promoted).or_default() += 1;
+            let replicas = choose_replicas(
+                &key,
+                &eligible,
+                &mut load,
+                promoted,
+                replication_factor.saturating_sub(1),
+            );
+            shards.push(ShardPlan {
+                key,
+                decision: Decision::Place(promoted.to_string(), replicas),
+            });
+            continue;
+        }
+
         let decision = match choose(&key, &eligible, &load) {
             Some(leader) => {
                 *load.entry(leader).or_default() += 1;
-                Decision::Place(leader.to_string())
+                // Followers are the next best-scoring nodes for this shard,
+                // excluding the leader. Chosen by the same score so the whole
+                // replica set is a deterministic function of the shard key and
+                // the cluster -- two control-plane instances planning the same
+                // cluster produce the same set.
+                let replicas = choose_replicas(
+                    &key,
+                    &eligible,
+                    &mut load,
+                    leader,
+                    replication_factor.saturating_sub(1),
+                );
+                Decision::Place(leader.to_string(), replicas)
             }
             None if eligible.is_empty() => Decision::Unplaceable(Unplaceable::NoEligibleNode),
             None => Decision::Unplaceable(Unplaceable::AllNodesAtCapacity),
@@ -158,6 +239,72 @@ pub fn plan(streams: &[Stream], nodes: &[Node], existing: &[ShardAssignment]) ->
     }
 
     Plan { shards }
+}
+
+/// The best eligible follower that is caught up, if any.
+///
+/// Ties break on score then node id, the same way leadership does, so the choice
+/// is a deterministic function of the shard and the cluster.
+fn promote<'a>(
+    key: &ShardKey,
+    previous: &ShardAssignment,
+    eligible: &[&'a Node],
+    caught_up: &dyn CaughtUp,
+) -> Option<&'a str> {
+    eligible
+        .iter()
+        .filter(|node| previous.replicas.iter().any(|r| r == &node.node_id))
+        .filter(|node| caught_up.is_caught_up(key, &node.node_id))
+        .max_by(|a, b| {
+            score(key, &a.node_id)
+                .cmp(&score(key, &b.node_id))
+                .then_with(|| a.node_id.cmp(&b.node_id))
+        })
+        .map(|node| node.node_id.as_str())
+}
+
+/// The stream a shard belongs to, as `tenant/namespace/stream`.
+fn stream_of(key: &ShardKey) -> String {
+    format!("{}/{}/{}", key.tenant_id, key.namespace, key.stream)
+}
+
+/// The next best-scoring nodes for a shard, after the leader.
+///
+/// Fewer than `wanted` is normal and not an error: a three-node cluster cannot
+/// hold four copies. Placement records what it could achieve rather than
+/// claiming a replica set it did not create, because an assignment that names a
+/// node holding nothing is exactly the lie failover would act on.
+fn choose_replicas<'a>(
+    key: &ShardKey,
+    eligible: &[&'a Node],
+    load: &mut HashMap<&'a str, u32>,
+    leader: &str,
+    wanted: u32,
+) -> Vec<String> {
+    let mut chosen = Vec::new();
+    for _ in 0..wanted {
+        let Some(node) = eligible
+            .iter()
+            .filter(|node| node.node_id != leader)
+            .filter(|node| !chosen.iter().any(|taken: &String| taken == &node.node_id))
+            .filter(|node| match node.spec.capacity.max_shards {
+                // A replica holds a copy, so it counts against capacity just as
+                // leadership does.
+                Some(max) => load.get(node.node_id.as_str()).copied().unwrap_or(0) < max,
+                None => true,
+            })
+            .max_by(|a, b| {
+                score(key, &a.node_id)
+                    .cmp(&score(key, &b.node_id))
+                    .then_with(|| a.node_id.cmp(&b.node_id))
+            })
+        else {
+            break;
+        };
+        *load.entry(node.node_id.as_str()).or_default() += 1;
+        chosen.push(node.node_id.clone());
+    }
+    chosen
 }
 
 /// Highest-scoring node with capacity left.
@@ -242,11 +389,11 @@ fn order(key: &ShardKey) -> (&str, &str, &str, u32) {
 ///
 /// New assignments start `Assigning`: placement has decided, and the broker has
 /// not yet confirmed it is serving. Generation is the store's.
-pub fn assignment_for(key: &ShardKey, leader: &str) -> ShardAssignment {
+pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> ShardAssignment {
     ShardAssignment {
         key: key.clone(),
         leader: leader.to_string(),
-        replicas: Vec::new(),
+        replicas,
         generation: 0,
         state: ShardState::Assigning,
     }
@@ -270,15 +417,17 @@ pub async fn reconcile_once(store: &dyn crate::store::ControlPlaneStore) -> Reco
         }
     };
 
-    let plan = plan(&streams, &nodes, &existing);
+    // Nothing is caught up until records are replicated (#112), so promotion
+    // does not yet fire and placement behaves as it did.
+    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
         ..ReconcileOutcome::default()
     };
 
-    for (key, leader) in plan.to_place() {
+    for (key, leader, replicas) in plan.to_place() {
         match store
-            .put_shard_assignment(assignment_for(key, leader))
+            .put_shard_assignment(assignment_for(key, leader, replicas.to_vec()))
             .await
         {
             Ok(assignment) => {
@@ -287,6 +436,7 @@ pub async fn reconcile_once(store: &dyn crate::store::ControlPlaneStore) -> Reco
                     stream = %key.stream,
                     shard = key.shard,
                     leader = %leader,
+                    replicas = replicas.len(),
                     generation = assignment.generation,
                     "shard placed",
                 );

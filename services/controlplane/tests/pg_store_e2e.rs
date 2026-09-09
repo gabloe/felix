@@ -508,6 +508,7 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: None,
@@ -524,6 +525,7 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: None,
@@ -841,6 +843,7 @@ async fn pg_store_additional_paths() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -1017,6 +1020,7 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 2,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: Some(1024),
@@ -1033,6 +1037,7 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             stream: "events".to_string(),
             kind: StreamKind::Queue,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -1164,6 +1169,7 @@ async fn pg_store_not_found_and_noop_paths() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -1278,6 +1284,7 @@ async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: None,
@@ -1422,6 +1429,7 @@ async fn pg_store_full_surface_area() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: None,
@@ -1708,6 +1716,7 @@ async fn pg_changes_monotonic_and_delete_not_found() -> Result<()> {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(3600),
                 max_size_bytes: None,

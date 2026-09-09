@@ -362,6 +362,7 @@ async fn seed_shards(store: &InMemoryStore) {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 3,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,

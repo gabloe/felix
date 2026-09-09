@@ -156,6 +156,8 @@ pub async fn serve_with_shutdown(
 pub struct ClusterContext {
     pub ingress: Option<Arc<IngressRouter>>,
     pub peers: Option<Arc<crate::peer::PeerPool>>,
+    /// This broker's authority to serve the shards it leads.
+    pub lease: Option<Arc<crate::lease::LeaseState>>,
 }
 
 fn build_publish_context(
@@ -163,7 +165,11 @@ fn build_publish_context(
     config: &BrokerConfig,
     cluster: ClusterContext,
 ) -> PublishContext {
-    let ClusterContext { ingress, peers } = cluster;
+    let ClusterContext {
+        ingress,
+        peers,
+        lease,
+    } = cluster;
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
@@ -188,6 +194,7 @@ fn build_publish_context(
         let queue_depth_worker = Arc::clone(&queue_depth);
         let broker_for_worker = Arc::clone(&broker);
         let peers_for_worker = peers.clone();
+        let lease_for_worker = lease.clone();
         let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
@@ -204,11 +211,29 @@ fn build_publish_context(
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
                 let result: Result<(), anyhow::Error> = match &job.target {
-                    PublishTarget::Resolved(handle) => broker_for_worker
-                        .publish_batch_to_handle(handle, &job.payloads)
-                        .await
-                        .map(|_| ())
-                        .map_err(Into::into),
+                    PublishTarget::Resolved(handle) => {
+                        // The commit fence, and the authoritative one. Everything
+                        // between admission and here can take arbitrarily long --
+                        // a full queue, a slow fsync, a suspended process -- so a
+                        // lease that was valid on the way in may have lapsed. A
+                        // broker that writes here after losing its lease is a
+                        // broker writing a shard someone else may already lead.
+                        match &lease_for_worker {
+                            Some(lease) if !lease.is_valid_now() => {
+                                crate::lease_metrics::record_refusal(
+                                    crate::lease_metrics::BOUNDARY_COMMIT,
+                                );
+                                Err(anyhow::anyhow!(
+                                    "lease lapsed before the record could be committed"
+                                ))
+                            }
+                            _ => broker_for_worker
+                                .publish_batch_to_handle(handle, &job.payloads)
+                                .await
+                                .map(|_| ())
+                                .map_err(Into::into),
+                        }
+                    }
                     #[cfg(test)]
                     PublishTarget::Named {
                         tenant_id,
@@ -274,6 +299,7 @@ fn build_publish_context(
     PublishContext {
         ingress,
         peers,
+        lease,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,

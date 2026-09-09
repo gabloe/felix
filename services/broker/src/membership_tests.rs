@@ -178,6 +178,9 @@ async fn heartbeats_carry_the_registered_incarnation() {
         registration,
         shutdown.clone(),
         Arc::clone(&failures),
+        Arc::new(crate::lease::LeaseState::new(
+            std::time::Duration::from_secs(30),
+        )),
     ));
 
     // Wait for a few beats rather than a fixed sleep.
@@ -224,6 +227,9 @@ async fn heartbeat_failures_are_counted_and_then_recovered_from() {
         registration,
         shutdown.clone(),
         Arc::clone(&failures),
+        Arc::new(crate::lease::LeaseState::new(
+            std::time::Duration::from_secs(30),
+        )),
     ));
 
     for _ in 0..400 {
