@@ -126,6 +126,11 @@ only a *forwarded* publish — a stale ex-owner serving locally never forwards, 
 nothing checks it. The window is bounded by the broker's control-plane sync
 interval.
 
+This is acknowledged-write loss, not merely a routing delay: the client is told
+the publish succeeded, and the record is durably on disk on a broker nobody will
+read it from. Tracked in
+[#239](https://github.com/gabloe/felix/issues/239).
+
 What is promised, and what `a_moved_shard_converges_on_the_new_owner` asserts, is
 **convergence**: the old owner starts forwarding within a bounded time. The test
 is deliberately written to converge rather than to wait long enough not to

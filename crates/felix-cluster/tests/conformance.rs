@@ -164,10 +164,13 @@ async fn a_forwarded_publish_is_still_authorized() -> Result<()> {
 /// are invisible to subscribers on the new owner.
 ///
 /// Nothing in M4 closes that window — there is no fencing, and the generation
-/// check only protects a *forwarded* publish, which is not what this is. What is
-/// promised is convergence, and convergence is what this asserts. The window
-/// itself is a gap, recorded in `docs/cluster-harness.md` rather than hidden
-/// behind a test that waits long enough not to see it.
+/// check only protects a *forwarded* publish, which is not what this is. The
+/// client is told the publish succeeded, so this is acknowledged-write loss:
+/// tracked in <https://github.com/gabloe/felix/issues/239>.
+///
+/// What is promised is convergence, and convergence is what this asserts. The
+/// test is deliberately written to converge rather than to wait long enough not
+/// to observe the window, so the gap stays visible.
 #[serial]
 #[tokio::test]
 async fn a_moved_shard_converges_on_the_new_owner() -> Result<()> {
