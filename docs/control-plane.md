@@ -107,6 +107,9 @@ emptying it, because a control-plane blip must not turn a healthy cluster into
 one that refuses every remote publish. `felix_broker_node_catalog_nodes` reading
 zero while assignments are known is exactly that failure.
 
+A three-node cluster can be run locally with
+[the cluster harness](cluster-harness.md).
+
 The internal transport is described in
 [the broker-internal forwarding protocol](internal-protocol.md); its remaining
 settings (`FELIX_INTERNAL_CONNS_PER_PEER`, `FELIX_INTERNAL_STREAMS_PER_CONN`,

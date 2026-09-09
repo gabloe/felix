@@ -1,0 +1,33 @@
+[package]
+name = "felix-cluster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Local multi-node Felix cluster harness for integration and failure testing"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+# A test and development harness, not a library anyone consumes from a registry.
+publish = false
+
+[[bin]]
+name = "felix-cluster"
+path = "src/bin/felix-cluster.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+controlplane = { path = "../../services/controlplane", version = "0.2.0" }
+felix-client = { path = "../felix-client", version = "0.2.0" }
+felix-wire = { path = "../felix-wire", version = "0.2.0" }
+quinn = "0.11"
+rustls = "0.23"
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -209,5 +209,23 @@ tasks:
         "$PY" scripts/perf/normalize_and_aggregate.py
         "$PY" scripts/perf/make_charts.py --config scripts/perf/fast.yml
         "$PY" scripts/perf/render_markdown_snippets.py --config scripts/perf/fast.yml
+  cluster:up:
+    desc: Start a local three-node cluster and hold it until Ctrl-C.
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -p felix-cluster -- up {{.CLI_ARGS}}
+  cluster:status:
+    desc: Start a cluster, print membership and shard ownership, then tear it down.
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -p felix-cluster -- status {{.CLI_ARGS}}
+  cluster:smoke:
+    desc: Publish through a non-owner and receive from the owner.
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -p felix-cluster -- smoke {{.CLI_ARGS}}
+  cluster:test:
+    desc: Cross-broker integration tests against a real three-node cluster.
+    cmds: ["cargo test -p felix-cluster"]
   conformance:
     cmds: ["cargo run -p felix-conformance"]

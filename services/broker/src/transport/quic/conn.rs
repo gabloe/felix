@@ -332,15 +332,11 @@ pub(crate) async fn handle_connection_with_shutdown(
     // exhaust the process-wide publish budget (`publish_ctx.admission`), open unbounded
     // subscriptions, or (via a stale/colliding cache) share subscription delivery state with
     // an unrelated connection. `workers`/`admission`/`depth` stay the shared, process-wide
-    // instances from `build_publish_context` — only `conn_admission`, `subscriptions`, and
-    // `lane_manager` are fresh per connection.
-    let publish_ctx = PublishContext {
-        ingress: None,
-        conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
-        subscriptions: Arc::new(SubscriptionLimiter::new()),
-        lane_manager: WriterLaneManager::new(&config),
-        ..publish_ctx
-    };
+    // instances from `build_publish_context`. What is and is not carried through
+    // is `PublishContext::for_connection`'s to decide, in one place, because
+    // dropping the cluster view here silently disabled shard ownership for every
+    // client connection once already.
+    let publish_ctx = publish_ctx.for_connection(&config);
     // Tracks the per-stream handler tasks so shutdown can wait for in-flight
     // work instead of dropping it.
     let streams = TaskTracker::new();
