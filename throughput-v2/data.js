@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788925023784,
+  "lastUpdate": 1788927306210,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3640,6 +3640,58 @@ window.BENCHMARK_DATA = {
             "range": "9386.56",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 550119.64\nmean: 550135.69\nstdev: 9386.56\ncv: 1.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d7fe5634e9040d3ff4ce5727a17f9fbf047be59",
+          "message": "feat(broker): forward remote publishes to the owner and relay its ack (#106) (#236)\n\nA publish that reaches the wrong broker is now sent to the one that owns\nits shard, instead of being refused.\n\nThree pieces had to exist for that. The address book came first: shard\nassignments name an owner by node id, and nothing turned that into an\naddress, so every remote shard resolved to \"owner unavailable\". Brokers now\npoll `/v1/nodes` on the routing tick, with the credential they already hold\nfor assignments. A failed refresh keeps the previous catalog — a\ncontrol-plane blip must not turn a healthy cluster into one that refuses\nevery remote publish.\n\nForwarding then runs on the publish worker rather than inline on the read\nloop, as a new `PublishTarget::Forward`. A slow peer therefore backs up the\nsame queue a slow disk would, and the existing ack, backpressure and\ncancellation plumbing apply unchanged.\n\nThe owner re-checks ownership at the generation the requester named, and\nanswers rather than guesses: requester behind is `NotLeader` naming the\ncurrent owner, requester ahead is `StaleRoute`. It never relays onward — a\nchain of brokers each forwarding to the next has unbounded latency and a\nfailure mode nobody can reason about.\n\nTwo rules are load-bearing:\n\n**The ingress broker cannot acknowledge before the owner has.** This\noverrides `ack_on_commit`, which is off by default and would otherwise ack\nright after enqueue. That setting is a statement about a local write; for a\nforward this broker has accepted nothing.\n\n**An ambiguous outcome is never retried.** A dropped connection or a\ntimeout may have applied the batch, so a retry is a duplicate rather than a\nrepair, and the publish is reported as indeterminate rather than failed.\nRefusals are retried, because the refusal is the evidence nothing was\nwritten. This is stricter than AtLeastOnce allows, deliberately: a\nduplicate produced inside the broker is invisible to the client, which\nholds the request_id and is the only layer that could deduplicate.\n\n`publish_batch_with_outcome` reports the log offsets a batch was assigned,\nso the owner's acknowledgement is truthful rather than a fabricated zero;\n`publish_batch_to_handle` is now a wrapper and the hot path is unchanged.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T21:13:08-07:00",
+          "tree_id": "565198b3dc6e58239b18f9d3b7d8a175e7addbe8",
+          "url": "https://github.com/gabloe/felix/commit/2d7fe5634e9040d3ff4ce5727a17f9fbf047be59"
+        },
+        "date": 1788927305202,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 393460.17,
+            "range": "13737.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393460.17\nmean: 389494.80\nstdev: 13737.79\ncv: 3.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 393460.17,
+            "range": "13737.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393460.17\nmean: 389494.80\nstdev: 13737.79\ncv: 3.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 84860,
+            "range": "2778.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 84860.00\nmean: 85957.89\nstdev: 2778.69\ncv: 3.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 848599.97,
+            "range": "27786.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 848599.97\nmean: 859578.85\nstdev: 27786.91\ncv: 3.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
