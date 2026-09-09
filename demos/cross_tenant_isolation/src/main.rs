@@ -682,6 +682,8 @@ async fn create_stream(
         stream: STREAM.to_string(),
         kind: StreamKind::Stream,
         shards: 1,
+        // Leader-only: this demo is about tenant isolation, not replication.
+        replication_factor: 1,
         retention: RetentionPolicy {
             max_age_seconds: None,
             max_size_bytes: None,

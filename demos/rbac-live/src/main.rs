@@ -466,6 +466,8 @@ async fn create_stream(http: &reqwest::Client, cp_base: &str) -> Result<StatusCo
         stream: STREAM.to_string(),
         kind: StreamKind::Stream,
         shards: 1,
+        // Leader-only: this demo is about authorization, not replication.
+        replication_factor: 1,
         retention: RetentionPolicy {
             max_age_seconds: None,
             max_size_bytes: None,
