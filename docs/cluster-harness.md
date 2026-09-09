@@ -43,6 +43,12 @@ demo that does not show that linkage is not showing anything.
 
 `-s` keeps Task from echoing its own `cargo run` line above every result.
 
+A subscriber can sit idle indefinitely. That is worth stating because it was not
+always true: QUIC closes a connection that has been idle for `max_idle_timeout`,
+and a subscription to a quiet stream sends nothing in either direction, so
+without a keep-alive the connection died after 30 seconds and took the
+subscription with it. The transport now sends keep-alives by default.
+
 That second line is the whole point of a cluster, and it is why the commands say
 which broker they went through. A single broker produces the same records; only
 the routing differs, so the routing is what the output shows.

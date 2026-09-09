@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// Whether an endpoint accepts connections or makes them.
 ///
@@ -210,12 +211,25 @@ pub struct TransportConfig {
     // Optional initial congestion window (bytes). None keeps quinn's RFC default.
     // Setting this high removes the slow-start ramp on trusted low-loss paths.
     pub initial_congestion_window_bytes: Option<u64>,
-    // Optional keep-alive interval. None keeps quinn's default of never, which
-    // suits connections that are either busy or expected to be torn down. Set it
-    // for long-lived connections that go quiet: it is what turns a silently dead
-    // path into a closed connection instead of a request that hangs until its
-    // own timeout.
+    // How often to send a keep-alive on an otherwise idle connection.
+    //
+    // Load-bearing, not a tuning knob. QUIC closes a connection that has been
+    // idle for `max_idle_timeout`, and a subscription to a quiet stream is
+    // exactly that: the broker sends nothing, the client sends nothing, no
+    // packets flow, and the connection dies underneath a subscriber that is
+    // still perfectly healthy. Without this, a stream with a 30-second gap
+    // between records loses every subscriber.
+    //
+    // Must stay comfortably below `max_idle_timeout`; quinn only sends these
+    // when the connection is otherwise silent, so a busy connection pays
+    // nothing.
     pub keep_alive_interval: Option<std::time::Duration>,
+    // How long a silent connection survives.
+    //
+    // Set explicitly rather than inherited so the relationship with
+    // `keep_alive_interval` is visible in one place: changing this without
+    // changing that is how idle subscriptions start dying again.
+    pub max_idle_timeout: Option<std::time::Duration>,
 }
 
 // Keep defaults large enough for most dev/test workloads.
@@ -233,9 +247,18 @@ const DEFAULT_INITIAL_MTU: u16 = 1200;
 const DEFAULT_MTU_DISCOVERY_UPPER_BOUND: u16 = 16384;
 const DEFAULT_MAX_UDP_PAYLOAD_SIZE: u16 = 65527;
 const DEFAULT_UDP_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+// Three keep-alives fit inside the idle window, so a subscription survives two
+// lost packets before the connection is declared dead. Both are quinn's own
+// idle default and a third of it; what matters is the ratio.
+const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 fn env_u64(name: &str) -> Option<u64> {
     std::env::var(name).ok()?.parse::<u64>().ok()
+}
+
+fn env_millis(name: &str) -> Option<Duration> {
+    Some(Duration::from_millis(env_u64(name)?))
 }
 
 impl Default for TransportConfig {
@@ -270,7 +293,10 @@ impl Default for TransportConfig {
             udp_send_buffer_bytes,
             udp_recv_buffer_bytes,
             initial_congestion_window_bytes,
-            keep_alive_interval: None,
+            keep_alive_interval: env_millis("FELIX_KEEPALIVE_MS")
+                .or(Some(DEFAULT_KEEP_ALIVE_INTERVAL)),
+            max_idle_timeout: env_millis("FELIX_MAX_IDLE_TIMEOUT_MS")
+                .or(Some(DEFAULT_MAX_IDLE_TIMEOUT)),
         }
     }
 }
@@ -361,6 +387,13 @@ impl TransportConfig {
         config.send_window(self.send_window);
         if let Some(interval) = self.keep_alive_interval {
             config.keep_alive_interval(Some(interval));
+        }
+        if let Some(timeout) = self.max_idle_timeout {
+            // Falls back to quinn's own default if the value does not fit a
+            // VarInt, rather than failing to build a transport over a knob.
+            if let Ok(timeout) = timeout.try_into() {
+                config.max_idle_timeout(Some(timeout));
+            }
         }
         // Path MTU: start safe, probe high. Fewer, larger datagrams directly
         // reduce per-byte syscall and crypto costs on high-MTU paths.
@@ -870,6 +903,88 @@ mod tests {
         let config = TransportConfig::default();
         assert!(config.max_frame_bytes > 0);
         assert!(config.max_streams > 0);
+    }
+
+    /// The default keep-alive must fit inside the idle window with room to lose
+    /// a packet or two.
+    ///
+    /// These two numbers are a pair. Raising the idle timeout without raising
+    /// the keep-alive is harmless; lowering the idle timeout below the
+    /// keep-alive silently reintroduces the bug this exists to prevent.
+    #[test]
+    fn the_keep_alive_fits_inside_the_idle_window() {
+        let config = TransportConfig::default();
+        let keep_alive = config.keep_alive_interval.expect("a keep-alive by default");
+        let idle = config.max_idle_timeout.expect("an idle timeout by default");
+        assert!(
+            keep_alive * 3 <= idle,
+            "keep-alive {keep_alive:?} leaves no margin inside idle timeout {idle:?}",
+        );
+    }
+
+    /// **A connection with nothing to say must stay up.**
+    ///
+    /// A subscription to a quiet stream sends nothing in either direction, so
+    /// without a keep-alive QUIC closes it on the idle timer and the subscriber
+    /// is disconnected while perfectly healthy. Run against a deliberately tiny
+    /// idle window so the test is seconds rather than a minute.
+    #[tokio::test]
+    async fn an_idle_connection_survives_with_a_keep_alive() -> Result<()> {
+        let idle = Duration::from_millis(600);
+        let transport = TransportConfig {
+            max_idle_timeout: Some(idle),
+            keep_alive_interval: Some(idle / 4),
+            ..TransportConfig::default()
+        };
+
+        let (server_config, cert) = make_server_config()?;
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+        let accepted = tokio::spawn(async move { server.accept().await });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let server_side = accepted.await??;
+
+        // Several idle windows with no traffic at all.
+        tokio::time::sleep(idle * 5).await;
+
+        assert!(
+            connection.close_reason().is_none(),
+            "an idle connection was closed despite a keep-alive: {:?}",
+            connection.close_reason(),
+        );
+        assert!(server_side.close_reason().is_none());
+        Ok(())
+    }
+
+    /// The same connection without a keep-alive, to show the first test is
+    /// asserting something. This is the behaviour every Felix client had.
+    #[tokio::test]
+    async fn an_idle_connection_dies_without_a_keep_alive() -> Result<()> {
+        let idle = Duration::from_millis(600);
+        let transport = TransportConfig {
+            max_idle_timeout: Some(idle),
+            keep_alive_interval: None,
+            ..TransportConfig::default()
+        };
+
+        let (server_config, cert) = make_server_config()?;
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+        let accepted = tokio::spawn(async move { server.accept().await });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let _server_side = accepted.await??;
+
+        tokio::time::sleep(idle * 5).await;
+
+        assert!(
+            connection.close_reason().is_some(),
+            "expected the idle timeout to close this connection",
+        );
+        Ok(())
     }
 
     #[test]
