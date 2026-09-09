@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788930443704,
+  "lastUpdate": 1788934381373,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3744,6 +3744,58 @@ window.BENCHMARK_DATA = {
             "range": "71521.00",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 561135.04\nmean: 532945.31\nstdev: 71521.00\ncv: 13.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66ba26264eff125fc7d181dca61dbf753ebbbd7a",
+          "message": "test(cluster): cross-broker conformance on one node and on three (#109) (#238)\n\n* test(cluster): cross-broker conformance on one node and on three (#109)\n\nOne set of assertions, run against a single broker and a three-node cluster.\nThe equivalence is the claim being tested: a client must not be able to tell\nhow many brokers there are, or which one it connected to.\n\nScenarios are parameterised by which broker the publish goes through, and\ncover delivery, ordering, duplicate-freedom, payload integrity, error\nmapping for an unregistered stream, and authorization. A scenario a\ndeployment cannot express — a non-owner, on a single node — reports\n`Skipped` and says so, rather than quietly running against the owner and\nlooking like coverage.\n\nEverything goes through the client-facing API, because a test reaching into\nbroker internals cannot tell a correctly routed publish from one the wrong\nbroker handled locally. `delivery` checks the ingress broker's forward\ncounter before waiting for the record: a broker that served the publish\nitself delivers to its own subscribers and looks correct from any single\nvantage point. Failures name the ingress broker, the owner, the shard, and\nthe generation.\n\nEvery scenario was verified against the failure it claims to detect. With\nthe ownership gate disabled, four fail — including with the exact diagnosis\nthe acceptance criterion asks for. The authorization scenario now subscribes\nwith its credential before asserting the publish is refused: a token\nrejected outright would otherwise fail the publish for the wrong reason and\npass while asserting nothing.\n\nThe suite surfaced a gap rather than papering over it. Ownership reaches a\nbroker through its watch, so between the control plane moving a shard and\nthe old owner noticing, that broker still serves publishes locally and those\nrecords are invisible to subscribers on the new owner. Nothing in M4 closes\nthis: the generation check protects a forwarded publish, and a stale\nex-owner never forwards. Convergence is what is promised and what is\nasserted; the window is recorded in docs/cluster-harness.md and\ndocs/control-plane.md.\n\n`move_shard` drains the current owner and re-runs placement, so a\nreassignment can be forced without stopping a broker — the node stays up and\nonly ownership changes.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: link the stale-ownership window to its tracking issue\n\nNames it as acknowledged-write loss rather than a routing delay: the client\nis told the publish succeeded, and the record is durably on a broker nobody\nreads it from. Tracked in #239.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T23:09:33-07:00",
+          "tree_id": "17bf681c1a95e19e304bcb7aa6be894208bae85f",
+          "url": "https://github.com/gabloe/felix/commit/66ba26264eff125fc7d181dca61dbf753ebbbd7a"
+        },
+        "date": 1788934380276,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 370674.37,
+            "range": "14665.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 370674.37\nmean: 367751.00\nstdev: 14665.02\ncv: 3.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 370674.37,
+            "range": "14665.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 370674.37\nmean: 367751.00\nstdev: 14665.02\ncv: 3.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 81718.54,
+            "range": "1032.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 81718.54\nmean: 82078.32\nstdev: 1032.30\ncv: 1.26%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 817185.45,
+            "range": "10322.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 817185.45\nmean: 820783.23\nstdev: 10322.97\ncv: 1.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
