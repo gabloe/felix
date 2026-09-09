@@ -81,16 +81,16 @@ struct Listener {
 }
 
 impl Listener {
-    fn start(node_id: &str, handler: Arc<dyn PeerRequestHandler>) -> Self {
-        Self::start_on(node_id, handler, config())
+    async fn start(node_id: &str, handler: Arc<dyn PeerRequestHandler>) -> Self {
+        Self::start_on(node_id, handler, config()).await
     }
 
-    fn start_on(
+    async fn start_on(
         node_id: &str,
         handler: Arc<dyn PeerRequestHandler>,
         config: PeerTransportConfig,
     ) -> Self {
-        let server = Self::bind_with_retry(node_id, handler, &config);
+        let server = Self::bind_with_retry(node_id, handler, &config).await;
         let addr = server.local_addr().expect("addr");
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(server.serve(shutdown.clone()));
@@ -101,10 +101,13 @@ impl Listener {
         }
     }
 
-    /// The restart case rebinds the port the previous listener held, and the OS
-    /// releases it a moment after that listener's task ends. Retrying is
-    /// scaffolding for that gap, not for anything the transport does.
-    fn bind_with_retry(
+    /// The restart case rebinds the port the previous listener held, and quinn
+    /// releases it only once that endpoint's connections have finished draining.
+    ///
+    /// The wait must yield to the runtime. `#[tokio::test]` is single-threaded,
+    /// so a blocking sleep here would stop the very tasks that close those
+    /// connections, and the port would never come free however long we waited.
+    async fn bind_with_retry(
         node_id: &str,
         handler: Arc<dyn PeerRequestHandler>,
         config: &PeerTransportConfig,
@@ -115,7 +118,7 @@ impl Listener {
                 Ok(server) => return server,
                 Err(err) => {
                     last = Some(err);
-                    std::thread::sleep(Duration::from_millis(20));
+                    tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             }
         }
@@ -137,7 +140,7 @@ fn pool(config: PeerTransportConfig) -> Arc<PeerPool> {
 #[tokio::test]
 async fn repeated_requests_reuse_one_connection() {
     let handler = Arc::new(CountingHandler::default());
-    let listener = Listener::start(PEER, handler.clone());
+    let listener = Listener::start(PEER, handler.clone()).await;
     let pool = pool(config());
 
     for _ in 0..20 {
@@ -185,7 +188,7 @@ async fn concurrent_requests_do_not_cross_responses() {
         }
     }
 
-    let listener = Listener::start(PEER, Arc::new(EchoHandler));
+    let listener = Listener::start(PEER, Arc::new(EchoHandler)).await;
     let pool = pool(config());
 
     let mut tasks = Vec::new();
@@ -231,7 +234,8 @@ async fn a_restarted_peer_is_reconnected_to() {
             bind: "127.0.0.1:0".parse().expect("addr"),
             ..config()
         },
-    );
+    )
+    .await;
     let addr = first.addr;
     let pool = pool(config());
 
@@ -248,7 +252,8 @@ async fn a_restarted_peer_is_reconnected_to() {
             bind: addr,
             ..config()
         },
-    );
+    )
+    .await;
 
     let mut recovered = false;
     for _ in 0..50 {
@@ -279,7 +284,8 @@ async fn connection_loss_fails_in_flight_requests_immediately() {
             // Longer than the test waits, so nothing answers on its own.
             delay: Duration::from_secs(30),
         }),
-    );
+    )
+    .await;
     let pool = pool(PeerTransportConfig {
         // Far longer than the connection will live: if the request only fails
         // when this expires, the test times out instead of passing.
@@ -322,7 +328,8 @@ async fn a_peer_at_its_inflight_limit_sheds_rather_than_queues() {
             seen: AtomicUsize::new(0),
             delay: Duration::from_secs(30),
         }),
-    );
+    )
+    .await;
     let pool = pool(PeerTransportConfig {
         max_inflight_per_peer: 4,
         request_timeout: Duration::from_secs(10),
@@ -374,7 +381,8 @@ async fn a_silent_peer_times_out() {
             seen: AtomicUsize::new(0),
             delay: Duration::from_secs(30),
         }),
-    );
+    )
+    .await;
     let pool = pool(PeerTransportConfig {
         request_timeout: Duration::from_millis(200),
         ..config()
@@ -437,7 +445,7 @@ async fn an_unreachable_peer_backs_off() {
 /// connection even if it would have answered.
 #[tokio::test]
 async fn a_peer_that_identifies_as_someone_else_is_refused() {
-    let listener = Listener::start("broker-c", Arc::new(CountingHandler::default()));
+    let listener = Listener::start("broker-c", Arc::new(CountingHandler::default())).await;
     let pool = pool(config());
 
     let err = pool
@@ -465,7 +473,7 @@ async fn a_peer_that_identifies_as_someone_else_is_refused() {
 async fn the_internal_listener_refuses_a_client_facing_connection() {
     use felix_transport::{QuicClient, TransportConfig};
 
-    let listener = Listener::start(PEER, Arc::new(CountingHandler::default()));
+    let listener = Listener::start(PEER, Arc::new(CountingHandler::default())).await;
 
     // A client-shaped endpoint: no ALPN, exactly like the client-facing role.
     let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -549,7 +557,7 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAnything {
 /// has forgotten it.
 #[tokio::test]
 async fn shutdown_closes_connections_and_refuses_new_requests() {
-    let listener = Listener::start(PEER, Arc::new(CountingHandler::default()));
+    let listener = Listener::start(PEER, Arc::new(CountingHandler::default())).await;
     let pool = pool(config());
     pool.request(PEER, listener.addr, forward())
         .await
@@ -576,7 +584,7 @@ async fn shutdown_closes_connections_and_refuses_new_requests() {
 /// leaving a peer to time out.
 #[tokio::test]
 async fn the_default_handler_answers_unavailable() {
-    let listener = Listener::start(PEER, Arc::new(UnavailableHandler));
+    let listener = Listener::start(PEER, Arc::new(UnavailableHandler)).await;
     let pool = pool(config());
 
     let response = pool
