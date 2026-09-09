@@ -189,6 +189,39 @@ impl ControlPlane {
         .context("mint admin token")
     }
 
+    /// A credential that may subscribe but not publish.
+    ///
+    /// For asserting that a forwarded publish is still authorized: a check done
+    /// only at the ingress broker, or done there and then trusted by the owner,
+    /// would let this through.
+    pub fn subscribe_only_token(&self, tenant_id: &str) -> Result<String> {
+        controlplane::auth::felix_token::mint_token(
+            &self.keys,
+            tenant_id,
+            "p:harness-reader",
+            vec![format!("stream.subscribe:stream:{tenant_id}/*/*")],
+            Duration::from_secs(3600),
+        )
+        .context("mint subscribe-only token")
+    }
+
+    /// A credential that can change any node's membership.
+    ///
+    /// Separate from [`Self::admin_token`], which only reads: draining a broker
+    /// is a write, and the control plane requires `node.manage` over a scope
+    /// containing the node. A test that moves a shard needs this; nothing else
+    /// should.
+    pub fn operator_token(&self, tenant_id: &str) -> Result<String> {
+        controlplane::auth::felix_token::mint_token(
+            &self.keys,
+            tenant_id,
+            "p:harness-operator",
+            vec!["node.manage:cluster:*".to_string()],
+            Duration::from_secs(3600),
+        )
+        .context("mint operator token")
+    }
+
     /// Place any unassigned shard onto a live broker.
     ///
     /// Driven explicitly rather than waited for: the reconciler runs on a timer,

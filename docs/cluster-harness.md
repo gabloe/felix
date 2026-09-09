@@ -87,6 +87,50 @@ A broker that exits during start-up is reported with its exit status
 immediately, rather than as a readiness timeout tens of seconds later that says
 nothing about why.
 
+## The conformance suite
+
+`crates/felix-cluster/tests/conformance.rs` runs one set of assertions against
+**both** a single broker and a three-node cluster. That equivalence is the
+claim being tested: a client must not be able to tell how many brokers there
+are, or which one it connected to.
+
+Scenarios live in `scenarios.rs` and are parameterised by which broker the
+publish goes through — the owner, or one that is not. A scenario that a
+deployment cannot express (a non-owner, on a single node) reports `Skipped` and
+says so in the log; it is never quietly run against the owner, which would look
+like coverage while asserting nothing.
+
+Everything goes through the client-facing API. A test that reached into broker
+internals could not distinguish a correctly routed publish from one the wrong
+broker handled locally, which is the failure the suite exists to catch. The
+`delivery` scenario checks the forward counter on the ingress broker before
+waiting for the record, because a broker that served the publish itself delivers
+to its own subscribers and looks correct from any single vantage point.
+
+Failures name the ingress broker, the owner, the shard, and the generation:
+
+```
+a non-owner handled the publish locally instead of forwarding it
+  (ingress=broker-0 owner=broker-2 shard=t1/ns/orders/0 generation=0)
+```
+
+## A gap the suite does not paper over: the stale-ownership window
+
+Ownership reaches a broker through its watch. Between the control plane moving a
+shard and the old owner noticing, that broker still believes it owns the shard
+and **serves publishes locally**. Those records land in its log and are invisible
+to subscribers on the new owner.
+
+Nothing in M4 closes this. There is no fencing, and the generation check protects
+only a *forwarded* publish — a stale ex-owner serving locally never forwards, so
+nothing checks it. The window is bounded by the broker's control-plane sync
+interval.
+
+What is promised, and what `a_moved_shard_converges_on_the_new_owner` asserts, is
+**convergence**: the old owner starts forwarding within a bounded time. The test
+is deliberately written to converge rather than to wait long enough not to
+observe the window, so the gap stays visible.
+
 ## Using it from a test
 
 ```rust

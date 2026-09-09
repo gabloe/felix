@@ -1,0 +1,323 @@
+//! Correctness assertions that must hold on any deployment.
+//!
+//! Every scenario here runs unchanged against a single broker and against a
+//! three-node cluster. That is the point: the semantics a client sees must not
+//! depend on how many brokers there are, or on which one it happened to connect
+//! to. A scenario that only makes sense in a cluster says so and skips.
+//!
+//! # Diagnosis
+//!
+//! Failures name the ingress broker, the owner, the shard, and the assignment
+//! generation. Cross-broker failures are otherwise indistinguishable from one
+//! another: "the record never arrived" is the same sentence whether the publish
+//! was written by the wrong broker, refused by the right one, or lost between
+//! them.
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+
+use crate::Cluster;
+
+/// How long a delivery may take before the scenario calls it lost.
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Which broker a scenario publishes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ingress {
+    /// The broker that owns the shard. Always available.
+    Owner,
+    /// A broker that does not. Only exists in a cluster; scenarios asking for it
+    /// on a single node are skipped rather than quietly run against the owner,
+    /// which would assert nothing.
+    NonOwner,
+}
+
+/// What a scenario did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    /// The deployment cannot express this scenario — a non-owner on a
+    /// single-node cluster. Reported, never silently treated as a pass.
+    Skipped(&'static str),
+}
+
+/// Context for a failure message.
+async fn diagnose(cluster: &Cluster, stream: &str, ingress: &str) -> String {
+    let key = format!("{}/{}/{}/0", cluster.tenant_id, cluster.namespace, stream);
+    match cluster.shard_assignments().await {
+        Ok(map) => match map.get(&key) {
+            Some(assignment) => format!(
+                "ingress={ingress} owner={} shard={key} generation={}",
+                assignment.leader, assignment.generation
+            ),
+            None => format!("ingress={ingress} shard={key} (unassigned)"),
+        },
+        Err(err) => format!("ingress={ingress} shard={key} (assignments unreadable: {err})"),
+    }
+}
+
+/// Resolve which broker to publish through, or say why the scenario cannot run.
+async fn ingress_node(
+    cluster: &Cluster,
+    stream: &str,
+    ingress: Ingress,
+) -> Result<Result<(String, String), Outcome>> {
+    let owner = cluster.owner(stream).await?;
+    match ingress {
+        Ingress::Owner => Ok(Ok((owner.clone(), owner))),
+        Ingress::NonOwner => match cluster.owner_and_non_owner(stream).await {
+            Ok((owner, non_owner)) => Ok(Ok((non_owner, owner))),
+            // A single-node deployment has an owner and nobody else. Skipped
+            // rather than run against the owner, which would assert nothing
+            // while looking like coverage.
+            Err(_) => Ok(Err(Outcome::Skipped(
+                "no non-owner exists on a single-node deployment",
+            ))),
+        },
+    }
+}
+
+/// A published record reaches a subscriber, whichever broker it was published
+/// through.
+///
+/// The assertion the whole milestone rests on. It also checks that a publish
+/// through a non-owner *was* forwarded: a broker that handled it locally
+/// delivers the record to its own subscribers and looks correct from any single
+/// vantage point.
+pub async fn delivery(cluster: &Cluster, stream: &str, ingress: Ingress) -> Result<Outcome> {
+    let (via, owner) = match ingress_node(cluster, stream, ingress).await? {
+        Ok(pair) => pair,
+        Err(skipped) => return Ok(skipped),
+    };
+
+    let (_client, mut subscription) = cluster.subscribe_on(&owner, stream).await?;
+    let forwarded_before = forward_count(cluster, &via).await?;
+
+    let payload = format!("delivery-{ingress:?}").into_bytes();
+    cluster.publish_via(&via, stream, payload.clone()).await?;
+
+    let forwarded_after = forward_count(cluster, &via).await?;
+    match ingress {
+        Ingress::NonOwner if forwarded_after <= forwarded_before => {
+            bail!(
+                "a non-owner handled the publish locally instead of forwarding it ({})",
+                diagnose(cluster, stream, &via).await
+            );
+        }
+        Ingress::Owner if forwarded_after > forwarded_before => {
+            bail!(
+                "the owner forwarded a shard it owns ({})",
+                diagnose(cluster, stream, &via).await
+            );
+        }
+        _ => {}
+    }
+
+    let event = tokio::time::timeout(DELIVERY_TIMEOUT, subscription.next_event())
+        .await
+        .with_context(|| {
+            format!(
+                "no delivery within {DELIVERY_TIMEOUT:?} ({})",
+                "see the diagnosis below"
+            )
+        })
+        .map_err(|err| {
+            anyhow::anyhow!("{err}") // context is attached by the caller below
+        })?
+        .context("subscription failed")?
+        .context("subscription closed before the record arrived")?;
+
+    if event.payload != payload {
+        bail!(
+            "payload corrupted in transit: sent {:?}, received {:?} ({})",
+            String::from_utf8_lossy(&payload),
+            String::from_utf8_lossy(&event.payload),
+            diagnose(cluster, stream, &via).await
+        );
+    }
+    Ok(Outcome::Passed)
+}
+
+/// A batch published through one broker arrives in order, complete, and once.
+///
+/// Ordering, integrity, and duplicate-freedom are one scenario because they are
+/// one property of the same sequence: checking them separately would need three
+/// publishes and could pass on each while the stream was wrong.
+pub async fn ordering_and_integrity(
+    cluster: &Cluster,
+    stream: &str,
+    ingress: Ingress,
+    count: usize,
+) -> Result<Outcome> {
+    let (via, owner) = match ingress_node(cluster, stream, ingress).await? {
+        Ok(pair) => pair,
+        Err(skipped) => return Ok(skipped),
+    };
+
+    let (_client, mut subscription) = cluster.subscribe_on(&owner, stream).await?;
+    for index in 0..count {
+        cluster
+            .publish_via(&via, stream, record(index))
+            .await
+            .with_context(|| format!("publish {index}"))?;
+    }
+
+    let mut received = Vec::with_capacity(count);
+    for index in 0..count {
+        let event = tokio::time::timeout(DELIVERY_TIMEOUT, subscription.next_event())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "only {index} of {count} records arrived within {DELIVERY_TIMEOUT:?}"
+                )
+            })?
+            .context("subscription failed")?
+            .context("subscription closed early")?;
+        received.push(event.payload.to_vec());
+    }
+
+    let expected: Vec<Vec<u8>> = (0..count).map(record).collect();
+    if received != expected {
+        let context = diagnose(cluster, stream, &via).await;
+        // Say which of the three properties broke, because the fixes differ.
+        let mut sorted = received.clone();
+        sorted.sort();
+        sorted.dedup();
+        if sorted.len() != received.len() {
+            bail!("duplicate records delivered ({context})");
+        }
+        if sorted.len() != expected.len() {
+            bail!(
+                "expected {count} records, got {} ({context})",
+                received.len()
+            );
+        }
+        bail!("records delivered out of order ({context})");
+    }
+
+    // Nothing beyond the batch. A forward that was retried after an ambiguous
+    // failure would show up here and nowhere else.
+    match tokio::time::timeout(Duration::from_millis(500), subscription.next_event()).await {
+        Err(_) => Ok(Outcome::Passed),
+        Ok(Ok(Some(extra))) => bail!(
+            "an extra record was delivered: {:?} ({})",
+            String::from_utf8_lossy(&extra.payload),
+            diagnose(cluster, stream, &via).await
+        ),
+        Ok(_) => Ok(Outcome::Passed),
+    }
+}
+
+/// Bytes survive the crossing exactly, including ones a text-shaped path would
+/// mangle.
+pub async fn payload_integrity(
+    cluster: &Cluster,
+    stream: &str,
+    ingress: Ingress,
+) -> Result<Outcome> {
+    let (via, owner) = match ingress_node(cluster, stream, ingress).await? {
+        Ok(pair) => pair,
+        Err(skipped) => return Ok(skipped),
+    };
+
+    // Every byte value, a NUL, and something long enough not to fit a small
+    // buffer by accident.
+    let mut payload: Vec<u8> = (0..=255u8).collect();
+    payload.extend(std::iter::repeat_n(0u8, 64));
+    payload.extend(b"tail");
+
+    let (_client, mut subscription) = cluster.subscribe_on(&owner, stream).await?;
+    cluster.publish_via(&via, stream, payload.clone()).await?;
+
+    let event = tokio::time::timeout(DELIVERY_TIMEOUT, subscription.next_event())
+        .await
+        .map_err(|_| anyhow::anyhow!("no delivery within {DELIVERY_TIMEOUT:?}"))?
+        .context("subscription failed")?
+        .context("subscription closed")?;
+
+    if event.payload.as_ref() != payload.as_slice() {
+        bail!(
+            "payload changed in transit: {} bytes sent, {} received ({})",
+            payload.len(),
+            event.payload.len(),
+            diagnose(cluster, stream, &via).await
+        );
+    }
+    Ok(Outcome::Passed)
+}
+
+/// A publish to a stream nobody registered is refused, with the same answer
+/// whichever broker it arrives at.
+///
+/// The interesting half is the non-owner: an unknown stream must not become a
+/// forward to an owner that does not exist, and must not be answered
+/// differently just because routing was involved.
+pub async fn unknown_stream_is_refused(cluster: &Cluster, ingress: Ingress) -> Result<Outcome> {
+    // Resolved against a stream that does exist, because the point is to vary
+    // the ingress broker, not to find one for a stream with no owner.
+    let (via, _) = match ingress_node(cluster, "orders", ingress).await? {
+        Ok(pair) => pair,
+        Err(skipped) => return Ok(skipped),
+    };
+
+    match cluster
+        .publish_via(&via, "no-such-stream", b"nowhere".to_vec())
+        .await
+    {
+        Ok(()) => bail!("publishing to an unregistered stream succeeded via {via}"),
+        Err(_) => Ok(Outcome::Passed),
+    }
+}
+
+/// A credential without publish permission is refused, and routing does not
+/// launder it.
+///
+/// A forwarded publish crosses a trust boundary the client never sees. If
+/// authorization were checked only at the owner, or only at the ingress broker
+/// and then trusted, this is where that shows.
+pub async fn unauthorized_publish_is_refused(
+    cluster: &Cluster,
+    stream: &str,
+    ingress: Ingress,
+) -> Result<Outcome> {
+    let (via, _) = match ingress_node(cluster, stream, ingress).await? {
+        Ok(pair) => pair,
+        Err(skipped) => return Ok(skipped),
+    };
+
+    // The credential has to be good for something first. A token rejected
+    // outright — a malformed one, or one carrying an action the broker does not
+    // recognise — would fail the publish below for the wrong reason and make
+    // this scenario pass while asserting nothing.
+    cluster
+        .subscribe_on_with_token(&via, stream, &cluster.subscribe_only_token)
+        .await
+        .context("the subscribe-only credential could not subscribe, so the publish check below would prove nothing")?;
+
+    match cluster
+        .publish_via_token(
+            &via,
+            stream,
+            b"denied".to_vec(),
+            &cluster.subscribe_only_token,
+        )
+        .await
+    {
+        Ok(()) => bail!(
+            "a token without stream.publish was accepted ({})",
+            diagnose(cluster, stream, &via).await
+        ),
+        Err(_) => Ok(Outcome::Passed),
+    }
+}
+
+fn record(index: usize) -> Vec<u8> {
+    format!("record-{index:06}").into_bytes()
+}
+
+async fn forward_count(cluster: &Cluster, node_id: &str) -> Result<f64> {
+    Ok(cluster
+        .metric(node_id, "felix_broker_forwards_total")
+        .await?
+        .unwrap_or(0.0))
+}
