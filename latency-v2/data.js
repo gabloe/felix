@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788875469836,
+  "lastUpdate": 1788925020773,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4554,6 +4554,72 @@ window.BENCHMARK_DATA = {
             "range": "50.50",
             "unit": "us",
             "extra": "trials: 5\nmedian: 351.00\nmean: 357.00\nstdev: 50.50\ncv: 14.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37346a6632cb3abe1337225eded8807fffc0b9c4",
+          "message": "feat(broker): add a pooled broker-to-broker QUIC transport (#105) (#235)\n\n* feat(broker): add a pooled broker-to-broker QUIC transport (#105)\n\nBrokers can now reach each other. The transport is complete on its own\nterms; nothing forwards through it yet, which is #106.\n\nRole separation is enforced at TLS, not at the frame. Both internal\nendpoints negotiate `felix-internal/1` and the client-facing role\nnegotiates none, so a client pointed at the internal port has no protocol\nin common and the handshake is refused before a frame is read. Startup\nalso refuses a configuration where the two listeners share a port.\n\nOutbound is a lazy per-peer pool: one connection by default, four\nmultiplexed streams on it because a QUIC stream is ordered and a large\nforwarded batch would otherwise hold up everything queued behind it.\nThree bounds keep an unhealthy peer from consuming the broker, and each\nfails differently — in-flight requests are shed without being sent,\nreconnects back off on a jittered exponential schedule, and every request\nhas a timeout. Only a shed request is retryable: a dropped connection or\na timeout may have applied the write, so retrying is a duplicate.\n\n`Hello`/`HelloOk` are added to the internal protocol. The version is in\nevery frame header already, so a mismatched peer would be rejected on its\nfirst request either way — but that request would be a real forwarded\npublish. The handshake moves the rejection to connect time, and its node\nids catch a connection to a broker that is not the one the catalog named.\n\nTwo bugs the tests found rather than confirmed:\n\n- The connection watcher held an `Arc<PeerConnection>` while the\n  connection owned its join handle. That cycle meant the connection never\n  dropped.\n- A peer connection stayed open through shutdown while a handler was\n  running, because cancellation cannot interrupt one. Peers waited out\n  their request timeouts to learn the broker had gone. Connections now\n  close themselves on shutdown, after client work has drained.\n\nfelix-transport gains `keep_alive_interval` (default unchanged: none) and\n`closed()`, so one task can fail every waiter the moment a connection\ndrops instead of each reaching its own timeout.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): let the peer-restart test's bind retry yield to the runtime\n\n`#[tokio::test]` runs on a current-thread runtime, so the blocking sleep in\nthe rebind loop stopped the very tasks that close the previous listener's\nconnections. quinn releases the port only once those have drained, so the\nloop starved itself: the port could never come free however long it waited.\n\nmacOS happened to free the port before the first attempt, so this only\nfailed on CI.\n\nThe wait is load-bearing — one retry is needed even when it works — so it\nstays, now on `tokio::time::sleep`.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T20:34:38-07:00",
+          "tree_id": "a750522b897b57ca5df90c6e6fdc900c2e325b8d",
+          "url": "https://github.com/gabloe/felix/commit/37346a6632cb3abe1337225eded8807fffc0b9c4"
+        },
+        "date": 1788925019251,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.00\nstdev: 0.71\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "3.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 208.60\nstdev: 3.21\ncv: 1.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 258,
+            "range": "73.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 280.20\nstdev: 73.17\ncv: 26.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "6.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 204.20\nstdev: 6.69\ncv: 3.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 407,
+            "range": "56.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 407.00\nmean: 432.80\nstdev: 56.94\ncv: 13.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 603,
+            "range": "342.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 603.00\nmean: 793.60\nstdev: 342.40\ncv: 43.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
