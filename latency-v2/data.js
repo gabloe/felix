@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788934378251,
+  "lastUpdate": 1788967313655,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4818,6 +4818,72 @@ window.BENCHMARK_DATA = {
             "range": "2920.40",
             "unit": "us",
             "extra": "trials: 5\nmedian: 4471.00\nmean: 3632.60\nstdev: 2920.40\ncv: 80.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0518aa110b2c500417d51812a9ee8d0826d87ffe",
+          "message": "feat(cluster): drive the cluster by hand from a second terminal (#243)\n\n`up` now writes a session file -- the broker addresses and a credential -- so\nanother window has something to attach to, and adds `subscribe`, `publish`,\nand `owners` that find it themselves. Everything the cluster needed to be\ntalked to previously lived in the one process and nowhere else.\n\nThe output names the broker each thing went through and whether the record\ncrossed a node boundary:\n\n    subscribing to orders on broker-2 (owner)\n    [broker-2] offset      1  hello\n\n    published via broker-0 -> forwarded to broker-2 -> acknowledged\n\nThat second line is the only part a single broker does differently, so it is\nwhat the output shows. `publish` defaults to a broker that does *not* own the\nshard for the same reason; `--via` the owner prints \"no hop\" instead.\n\n`subscribe` defaults to the owner because the owner is the only broker that\nserves a subscription today. Pointing it elsewhere is allowed and says so\nplainly rather than appearing to hang -- subscribe routing is M6.\n\n`up` also handles SIGTERM, not just Ctrl-C. The brokers are child processes,\nso this process dying without running its teardown orphans three of them,\neach holding a port and a data directory. Verified: without the handler a\nplain `kill` leaves all three behind; with it, three go to zero.\n\nThe session file holds a bearer token, so it is written owner-only and\nremoved on teardown. The cluster it opens is loopback-only with dev\ncertificates and disappears with the process.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T08:19:17-07:00",
+          "tree_id": "467071371a5d8c6dea1c2f43c6060a42a5a8c7ed",
+          "url": "https://github.com/gabloe/felix/commit/0518aa110b2c500417d51812a9ee8d0826d87ffe"
+        },
+        "date": 1788967311880,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "4.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 159.60\nstdev: 4.39\ncv: 2.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "14.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 216.80\nstdev: 14.17\ncv: 6.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 245,
+            "range": "193.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 245.00\nmean: 337.40\nstdev: 193.14\ncv: 57.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 199.20\nstdev: 0.84\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 416,
+            "range": "14.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 416.00\nmean: 420.00\nstdev: 14.78\ncv: 3.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 991,
+            "range": "371.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 991.00\nmean: 958.40\nstdev: 371.61\ncv: 38.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
