@@ -24,6 +24,7 @@ pub mod client;
 pub mod controlplane;
 pub mod ports;
 pub mod scenarios;
+pub mod session;
 pub mod wait;
 
 use std::collections::HashMap;
@@ -526,6 +527,26 @@ impl Cluster {
                 )
             })
             .collect())
+    }
+
+    /// Everything another process needs to talk to this cluster.
+    pub fn session(&self) -> session::Session {
+        session::Session {
+            control_plane: self.control_plane_url().to_string(),
+            tenant_id: self.tenant_id.clone(),
+            namespace: self.namespace.clone(),
+            client_token: self.client_token.clone(),
+            admin_token: self.admin_token.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|node| session::SessionNode {
+                    node_id: node.node_id.clone(),
+                    client_addr: node.client_addr,
+                    metrics_addr: node.metrics_addr,
+                })
+                .collect(),
+        }
     }
 
     /// The node that owns `stream`'s shard 0.
