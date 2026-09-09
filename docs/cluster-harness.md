@@ -12,6 +12,52 @@ task cluster:test     # the cross-broker integration tests
 `-- --nodes 5` sets the size. Nothing else is required: no compose file, no
 images, no ports to reserve, and no state left behind.
 
+## Driving it by hand
+
+`up` writes a session file — the broker addresses and a credential — so a second
+terminal has something to attach to. The other commands find it themselves.
+
+```bash
+# window 1
+task cluster:up
+
+# window 2
+task cluster:subscribe
+
+# window 3
+task cluster:publish -- hello
+```
+
+```text
+# window 2
+subscribing to orders on broker-2 (owner)
+[broker-2] offset      1  hello
+
+# window 3
+published via broker-0 → forwarded to broker-2 → acknowledged
+```
+
+That second line is the whole point of a cluster, and it is why the commands say
+which broker they went through. A single broker produces the same records; only
+the routing differs, so the routing is what the output shows.
+
+`publish` defaults to a broker that does **not** own the shard, because that is
+the path a single-node deployment cannot demonstrate. `--via broker-2` (the
+owner) prints `written locally, no hop` instead.
+
+`subscribe` defaults to the owner, because the owner is the only broker that
+serves a subscription today. `--on` a different broker is allowed and says
+plainly that nothing will arrive — subscribe routing is M6, decided in
+[subscribe routing](subscribe-routing.md).
+
+`task cluster:owners` prints who leads what, which is worth having on screen
+before publishing: the owner is chosen by rendezvous hash, so it differs between
+runs.
+
+The session file holds a bearer token. It is written owner-only into the temp
+directory and removed on teardown; the cluster it opens is loopback-only with dev
+certificates, and disappears with the process.
+
 ## What is real, and what is not
 
 **Brokers are real processes.** Each gets its own client-facing QUIC port,
