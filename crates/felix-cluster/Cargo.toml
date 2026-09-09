@@ -31,3 +31,9 @@ tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# These spawn several broker processes each. Run one cluster at a time: a CI
+# runner with two cores starting nine brokers at once starves them all, and the
+# ephemeral ports they were handed are more likely to collide.
+serial_test = "3"

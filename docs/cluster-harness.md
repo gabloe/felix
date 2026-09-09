@@ -75,6 +75,18 @@ Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing in M4 required it.
 
+## Running the tests
+
+They are `#[serial]`. Each starts three broker processes, and a two-core CI
+runner asked to start nine at once starves them all — the first symptom is a
+readiness timeout that looks like a bug in the broker rather than in the test
+setup. Serial runs also narrow the window in which two clusters can be handed
+the same ephemeral port.
+
+A broker that exits during start-up is reported with its exit status
+immediately, rather than as a readiness timeout tens of seconds later that says
+nothing about why.
+
 ## Using it from a test
 
 ```rust

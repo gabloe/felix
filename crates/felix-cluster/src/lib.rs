@@ -55,6 +55,15 @@ impl BrokerNode {
     pub fn is_running(&self) -> bool {
         self.process.is_some()
     }
+
+    /// The exit status if this broker has already stopped.
+    ///
+    /// A broker that refuses its configuration exits within milliseconds. Left
+    /// unchecked, that becomes a readiness timeout tens of seconds later that
+    /// says nothing about why.
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.process.as_mut()?.try_wait().ok().flatten()
+    }
 }
 
 /// A running cluster.
@@ -133,7 +142,7 @@ impl Cluster {
             );
         }
 
-        let cluster = Self {
+        let mut cluster = Self {
             control_plane: Some(control_plane),
             nodes,
             tenant_id: config.tenant_id.clone(),
@@ -144,7 +153,10 @@ impl Cluster {
             _root: root,
         };
 
-        cluster.await_ready(&config).await?;
+        // Two phases: the first needs the child handles, to tell "not ready yet"
+        // from "already exited"; the rest only observes the cluster.
+        cluster.await_brokers_ready().await?;
+        cluster.await_cluster_ready(&config).await?;
         Ok(cluster)
     }
 
@@ -158,20 +170,39 @@ impl Cluster {
         &self.control_plane().base_url
     }
 
-    /// Wait for every broker to be ready, registered, and serving its shards.
-    async fn await_ready(&self, config: &ClusterConfig) -> Result<()> {
-        for node in &self.nodes {
-            let url = format!("http://{}/ready", node.metrics_addr);
-            wait::until(READY_TIMEOUT, &format!("broker {} ready", node.node_id), || {
-                let http = self.http.clone();
-                let url = url.clone();
-                async move {
-                    matches!(http.get(&url).send().await, Ok(response) if response.status().is_success())
+    /// Wait for every broker process to report ready.
+    async fn await_brokers_ready(&mut self) -> Result<()> {
+        // Written as a loop rather than through `wait::until` so a broker that
+        // has already exited can be reported as such, with its status, instead
+        // of timing out.
+        for index in 0..self.nodes.len() {
+            let url = format!("http://{}/ready", self.nodes[index].metrics_addr);
+            let deadline = std::time::Instant::now() + READY_TIMEOUT;
+            loop {
+                if let Some(status) = self.nodes[index].exited() {
+                    let node_id = &self.nodes[index].node_id;
+                    bail!("{node_id} exited before becoming ready ({status})");
                 }
-            })
-            .await?;
+                let ok = matches!(
+                    self.http.get(&url).send().await,
+                    Ok(response) if response.status().is_success()
+                );
+                if ok {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let node_id = &self.nodes[index].node_id;
+                    bail!("timed out after {READY_TIMEOUT:?} waiting for {node_id} to be ready");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
+        Ok(())
+    }
 
+    /// Wait until the cluster as a whole can serve: every broker registered and
+    /// placeable, every shard led, and a publish accepted.
+    async fn await_cluster_ready(&self, config: &ClusterConfig) -> Result<()> {
         let expected: Vec<String> = self.nodes.iter().map(|n| n.node_id.clone()).collect();
         wait::until(
             READY_TIMEOUT,

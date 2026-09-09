@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig};
+use serial_test::serial;
 
 const STREAM: &str = "orders";
 
@@ -23,6 +24,7 @@ fn config() -> ClusterConfig {
 
 /// The milestone signal. A publish that arrives at a broker which does not own
 /// the shard reaches a subscriber on the one that does.
+#[serial]
 #[tokio::test]
 async fn a_publish_through_a_non_owner_is_delivered_by_the_owner() {
     let cluster = Cluster::start(config()).await.expect("start cluster");
@@ -66,6 +68,7 @@ async fn a_publish_through_a_non_owner_is_delivered_by_the_owner() {
 
 /// The owner serves its own shard without forwarding, which is what makes the
 /// test above about routing rather than about publishing at all.
+#[serial]
 #[tokio::test]
 async fn a_publish_through_the_owner_is_not_forwarded() {
     let cluster = Cluster::start(config()).await.expect("start cluster");
@@ -102,6 +105,7 @@ async fn a_publish_through_the_owner_is_not_forwarded() {
 ///
 /// This is the primitive the M5-M10 failure tests need: without it every such
 /// test races the expiry sweep.
+#[serial]
 #[tokio::test]
 async fn a_stopped_broker_leaves_the_cluster() {
     let mut cluster = Cluster::start(config()).await.expect("start cluster");
