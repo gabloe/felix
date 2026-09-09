@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788968205175,
+  "lastUpdate": 1788969151623,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3900,6 +3900,58 @@ window.BENCHMARK_DATA = {
             "range": "8606.02",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 546557.78\nmean: 547026.01\nstdev: 8606.02\ncv: 1.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a63e350f1ce9dcb816f52493dfc66e328aa8bcca",
+          "message": "fix(cluster): name the stream on both sides, and stop clusters clobbering each other (#244)\n\nThree things the demo needed.\n\n**The stream is explicit.** `subscribe` and `publish` take it as a positional\nargument, and `publish` names both the stream and the payload in its output:\n\n    published \"hello\" to orders via broker-0 -> forwarded to broker-2 -> acknowledged\n    [broker-2] offset      1  hello\n\nTwo terminals side by side have nothing else linking what was published to\nwhat arrived. Defaulting the stream made the demo shorter and showed less; a\nmissing message is now an error rather than a publish of the stream name.\n\n**A second cluster no longer destroys the first's session.** The path is\nfixed, so a second `up` takes the file over -- it now says so. More\nimportantly, teardown only removes the file if it still describes that\ncluster. Stopping the second used to delete a session belonging to a cluster\nthat was still running, leaving three brokers alive holding their ports with\nno way to address them.\n\nFound by running two clusters at once and killing the wrong one.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T08:50:00-07:00",
+          "tree_id": "a8c5148deab5f7a82f61f37f54550c97e9570bfd",
+          "url": "https://github.com/gabloe/felix/commit/a63e350f1ce9dcb816f52493dfc66e328aa8bcca"
+        },
+        "date": 1788969149939,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230739.95,
+            "range": "2024.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230739.95\nmean: 231489.55\nstdev: 2024.23\ncv: 0.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230739.95,
+            "range": "2024.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230739.95\nmean: 231489.55\nstdev: 2024.23\ncv: 0.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55665.59,
+            "range": "7370.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55665.59\nmean: 52691.07\nstdev: 7370.97\ncv: 13.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 556655.87,
+            "range": "73709.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 556655.87\nmean: 526910.65\nstdev: 73709.75\ncv: 13.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
