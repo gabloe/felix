@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788969148159,
+  "lastUpdate": 1788979146280,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5016,6 +5016,72 @@ window.BENCHMARK_DATA = {
             "range": "604.64",
             "unit": "us",
             "extra": "trials: 5\nmedian: 813.00\nmean: 1079.80\nstdev: 604.64\ncv: 56.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acc2bce87937ca1d253cbefb5980da93a2f23820",
+          "message": "fix(transport): keep idle connections alive so quiet subscriptions survive (#245)\n\nA subscription to a stream with no traffic sends nothing in either\ndirection. QUIC closes a connection idle for `max_idle_timeout`, quinn\ndefaults that to 30 seconds, and nothing in Felix set a keep-alive -- so\n**every subscriber on a quiet stream was silently disconnected after 30\nseconds**, healthy and doing nothing wrong.\n\nThis is not specific to the harness. Every client connection had it. A\nstream with a 30-second gap between records lost every subscriber, and the\nonly symptom was the subscription ending with no error.\n\n`TransportConfig` now defaults to a 10-second keep-alive against a\n30-second idle timeout, both overridable by env. The idle timeout is set\nexplicitly rather than inherited from quinn so the relationship between the\ntwo is visible in one place: changing one without the other is how this\ncomes back.\n\nTwo tests, run against a deliberately tiny idle window so they take three\nseconds rather than a minute. One asserts an idle connection survives with a\nkeep-alive; the other asserts it dies without one, so the first is known to\nbe asserting something. A third checks the two defaults keep their ratio.\n\nVerified end to end: a subscriber idle for 50 seconds -- well past the\nwindow that was killing it -- then received a publish normally.\n\nReported from a recording session, where a subscriber left waiting while\nnarrating died before anything was published.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T11:36:45-07:00",
+          "tree_id": "7db642ce7ad3fc3cce92a5f52ab3315d997564ce",
+          "url": "https://github.com/gabloe/felix/commit/acc2bce87937ca1d253cbefb5980da93a2f23820"
+        },
+        "date": 1788979144751,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "1.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.00\nstdev: 1.41\ncv: 0.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "2.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 202.60\nstdev: 2.30\ncv: 1.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 238,
+            "range": "14.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 238.00\nmean: 242.40\nstdev: 14.52\ncv: 5.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "2.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 198.00\nstdev: 2.65\ncv: 1.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 399,
+            "range": "235.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 499.40\nstdev: 235.19\ncv: 47.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 572,
+            "range": "1330.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 572.00\nmean: 1148.20\nstdev: 1330.85\ncv: 115.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
