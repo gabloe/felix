@@ -3,10 +3,8 @@
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use felix_broker::StreamHandle;
-#[cfg(test)]
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
-#[cfg(test)]
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,6 +19,14 @@ use crate::transport::quic::handlers::publish::{PublishContext, PublishJob};
 
 pub(crate) enum PublishTarget {
     Resolved(StreamHandle),
+    /// Another broker owns the shard. The batch is sent there and its answer
+    /// relayed, from the same worker a local write would have used, so the ack
+    /// path is identical either way.
+    Forward {
+        target: crate::peer::ForwardTarget,
+        key: crate::peer::ForwardKey,
+        ack: felix_wire::internal::AckMode,
+    },
     #[cfg(test)]
     Named {
         tenant_id: String,
@@ -36,7 +42,6 @@ pub(crate) enum PublishTarget {
 ///
 /// This *must* be stable across processes for predictable performance; it does not need to be
 /// cryptographically secure.
-#[cfg(test)]
 pub(crate) fn publish_worker_index(
     tenant_id: &str,
     namespace: &str,
@@ -108,6 +113,15 @@ pub(crate) async fn enqueue_publish(
 ) -> Result<bool> {
     let worker_index = match &job.target {
         PublishTarget::Resolved(handle) => handle.id() as usize % publish_ctx.worker_count.max(1),
+        // Hashed by name, because there is no local handle to hash. Same
+        // function the named path uses, so one stream's forwards stay on one
+        // worker and keep their order.
+        PublishTarget::Forward { key, .. } => publish_worker_index(
+            &key.tenant_id,
+            &key.namespace,
+            &key.stream,
+            publish_ctx.worker_count,
+        ),
         #[cfg(test)]
         PublishTarget::Named {
             tenant_id,

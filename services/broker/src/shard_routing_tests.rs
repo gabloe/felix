@@ -102,6 +102,8 @@ async fn a_shard_owned_elsewhere_is_forwardable() {
         Dispatch::Forward {
             node_id: "broker-b".to_string(),
             advertise_addr: SocketAddr::from(([10, 0, 0, 4], 7002)),
+            // Carried through so the owner can compare it with its own.
+            generation: 2,
         },
     );
 }

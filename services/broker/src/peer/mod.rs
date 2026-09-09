@@ -11,12 +11,16 @@
 //! consume this broker.
 pub mod codec;
 pub mod config;
+pub mod forward;
+pub mod handler;
 pub mod metrics;
 pub mod pool;
 pub mod server;
 mod tls;
 
 pub use config::PeerTransportConfig;
+pub use forward::{ForwardError, ForwardKey, ForwardTarget, forward_publish};
+pub use handler::ForwardingHandler;
 pub use pool::{PeerError, PeerPool};
 pub use server::{PeerRequestHandler, PeerServer, UnavailableHandler};
 

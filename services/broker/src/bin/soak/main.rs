@@ -277,8 +277,9 @@ async fn start_broker(auth: &AuthFixture) -> Result<BrokerHarness> {
                 auth,
                 accept_shutdown,
                 connections,
-                // The soak harness is a single-node broker.
-                None,
+                // The soak harness is a single-node broker: nothing to route
+                // against, and no peers to forward to.
+                Default::default(),
             )
             .await
             {

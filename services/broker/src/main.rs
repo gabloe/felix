@@ -126,6 +126,23 @@ where
     let ingress_router = cluster
         .as_ref()
         .map(|(_, ingress, _, _)| Arc::clone(ingress));
+
+    // Outbound peer connections. Built here because the publish path forwards
+    // through it, and before the accept loop for the same reason the router is:
+    // a publish must never arrive at a broker that can resolve a remote owner
+    // and not reach it.
+    let peer_shutdown = CancellationToken::new();
+    let peers = match (&config.peer_transport, &config.membership) {
+        (Some(peer_config), Some(membership_config)) => Some(
+            peer::PeerPool::new(
+                membership_config.node_id.clone(),
+                peer_config.clone(),
+                peer_shutdown.clone(),
+            )
+            .context("bind peer transport")?,
+        ),
+        _ => None,
+    };
     let sync_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
     let connections = TaskTracker::new();
@@ -212,6 +229,7 @@ where
         let connections = connections.clone();
         let seeded = seeded.clone();
         let ingress_router = ingress_router.clone();
+        let peers_for_accept = peers.clone();
         tokio::spawn(async move {
             // A durable broker does not accept until its streams exist.
             // Readiness alone only steers orchestrated traffic; a client with
@@ -238,7 +256,10 @@ where
                 auth,
                 accept_shutdown,
                 connections,
-                ingress_router,
+                quic::ClusterContext {
+                    ingress: ingress_router,
+                    peers: peers_for_accept,
+                },
             )
             .await
             {
@@ -353,16 +374,18 @@ where
 
     // The broker-internal listener, when this broker is in a cluster. This is
     // the address `NodeSpec.advertise_addr` names, so it must be up for peers to
-    // reach this node at all. Nothing forwards to it yet (#106): a peer that
-    // connects is told plainly that this broker cannot apply a forwarded write,
-    // rather than being left to time out.
-    let peer_shutdown = CancellationToken::new();
-    let peer_task = match (&config.peer_transport, &config.membership) {
-        (Some(peer_config), Some(membership_config)) => {
+    // reach this node at all.
+    let peer_task = match (&config.peer_transport, &config.membership, &cluster) {
+        (Some(peer_config), Some(membership_config), Some((router, ingress, _, _))) => {
             let server = peer::PeerServer::bind(
                 membership_config.node_id.clone(),
                 peer_config,
-                Arc::new(peer::UnavailableHandler),
+                Arc::new(peer::ForwardingHandler::new(
+                    Arc::clone(&broker),
+                    Arc::clone(ingress),
+                    Arc::clone(router),
+                    membership_config.advertise_addr.clone(),
+                )),
             )
             .context("bind broker-internal listener")?;
             tracing::info!(
@@ -398,11 +421,18 @@ where
                 sync_shutdown.clone(),
             ));
             let feed = shard_routing::spawn_feed(
-                Arc::clone(ownership),
-                Arc::clone(lifecycle),
-                store,
-                Arc::clone(ingress),
-                Arc::clone(router),
+                shard_routing::FeedState {
+                    ownership: Arc::clone(ownership),
+                    lifecycle: Arc::clone(lifecycle),
+                    store,
+                    ingress: Arc::clone(ingress),
+                    router: Arc::clone(router),
+                },
+                Some(shard_routing::CatalogSource {
+                    client: membership_client.clone(),
+                    base_url: base_url.clone(),
+                    token: config.membership.as_ref().map(|m| m.token.clone()),
+                }),
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
             );
@@ -454,6 +484,9 @@ where
     // publish this broker is still applying is not cut off by its own shutdown.
     // Cancelling closes the connections, which tells every peer immediately
     // rather than leaving each to wait out its request timeout.
+    if let Some(pool) = &peers {
+        pool.shutdown().await;
+    }
     if let Some(peer_task) = peer_task {
         peer_shutdown.cancel();
         let mut peer_task = peer_task;

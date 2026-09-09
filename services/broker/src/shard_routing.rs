@@ -23,12 +23,17 @@ use crate::shard_watch::ShardKey;
 pub enum Dispatch {
     /// Serve it here.
     Local,
-    /// Another node owns it. M4 forwards; until then the caller refuses with
-    /// this attached, so "someone else's shard" stays distinguishable from
-    /// "something went wrong".
+    /// Another node owns it. The publish is forwarded there over the internal
+    /// protocol and its answer is relayed back to the client.
     Forward {
         node_id: String,
         advertise_addr: SocketAddr,
+        /// The generation this broker resolved against.
+        ///
+        /// Carried to the owner, which compares it with its own. A mismatch in
+        /// either direction is a typed answer and never a successful ownership
+        /// claim — see `docs/internal-protocol.md`.
+        generation: u64,
     },
     /// Nobody can serve it right now, and this says why.
     Unavailable(Reason),
@@ -167,10 +172,11 @@ impl IngressRouter {
             Resolution::Remote {
                 node_id,
                 advertise_addr,
-                ..
+                generation,
             } => Dispatch::Forward {
                 node_id,
                 advertise_addr,
+                generation,
             },
             Resolution::Stale { have, wanted } => {
                 Dispatch::Unavailable(Reason::Stale { have, wanted })
@@ -230,6 +236,25 @@ pub fn routing_table_from(
     )
 }
 
+/// The cluster state one task keeps in step. Grouped because they are only ever
+/// used together, and only in the order this feed applies them.
+pub struct FeedState {
+    pub ownership: Arc<tokio::sync::RwLock<crate::shard_watch::ShardOwnership>>,
+    pub lifecycle: Arc<tokio::sync::Mutex<crate::shard_lifecycle::ShardLifecycle>>,
+    pub store: Arc<dyn crate::shard_lifecycle::ShardStore>,
+    pub ingress: Arc<IngressRouter>,
+    pub router: Arc<ShardRouter>,
+}
+
+/// What the feed needs to read the node catalog.
+pub struct CatalogSource {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    /// The same credential the assignment feed uses: `/v1/nodes` and
+    /// `/v1/shard-assignments` both require `node.view:cluster:*`.
+    pub token: Option<String>,
+}
+
 /// Keep local shard state and the routing table in step with the watch.
 ///
 /// One task owns the sequence, so the two never disagree: reconcile local state
@@ -237,29 +262,50 @@ pub fn routing_table_from(
 /// routes first would advertise this node as the owner of a shard it has not
 /// opened.
 ///
-/// The routing table is built with an empty node catalog, because a broker has
-/// no way to read one: `/v1/nodes` requires a cluster-scoped token and brokers
-/// do not have credentials yet (#126). The consequence is deliberate and
-/// correct for M3 -- a shard led by this node resolves `Local` on the node id
-/// alone, and every other shard resolves to a refusal naming its owner rather
-/// than a forward. Forwarding needs an address book, and that arrives with M4.
+/// The node catalog is refreshed on the same tick, because a route is only
+/// usable when both halves are known: an assignment names an owner by id, and
+/// only the catalog turns that into an address to forward to.
 pub fn spawn_feed(
-    ownership: Arc<tokio::sync::RwLock<crate::shard_watch::ShardOwnership>>,
-    lifecycle: Arc<tokio::sync::Mutex<crate::shard_lifecycle::ShardLifecycle>>,
-    store: Arc<dyn crate::shard_lifecycle::ShardStore>,
-    ingress: Arc<IngressRouter>,
-    router: Arc<ShardRouter>,
+    state: FeedState,
+    catalog_source: Option<CatalogSource>,
     interval: std::time::Duration,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
+    let FeedState {
+        ownership,
+        lifecycle,
+        store,
+        ingress,
+        router,
+    } = state;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let catalog = HashMap::new();
+        let mut catalog = HashMap::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
+            }
+
+            if let Some(source) = &catalog_source {
+                match crate::node_catalog::fetch(
+                    &source.client,
+                    &source.base_url,
+                    source.token.as_deref(),
+                )
+                .await
+                {
+                    Ok(fetched) => catalog = fetched,
+                    // The previous catalog is kept: a control-plane blip must
+                    // not erase every address this broker can forward to and
+                    // turn a healthy cluster into one that refuses every remote
+                    // publish.
+                    Err(err) => {
+                        tracing::warn!(error = %err, "node catalog refresh failed; keeping the last one");
+                        crate::shard_watch_metrics::record_catalog_refresh_failure();
+                    }
+                }
             }
 
             let assignments = ownership.read().await.assignments().clone();
@@ -268,6 +314,7 @@ pub fn spawn_feed(
             let servable = lifecycle.lock().await.servable();
             ingress.publish_servable(servable);
             router.publish(routing_table_from(&assignments, &catalog), &catalog);
+            crate::shard_watch_metrics::set_catalog_nodes(catalog.len());
         }
     })
 }
