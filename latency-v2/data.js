@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788968201896,
+  "lastUpdate": 1788969148159,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4950,6 +4950,72 @@ window.BENCHMARK_DATA = {
             "range": "500.26",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1128.00\nmean: 1030.60\nstdev: 500.26\ncv: 48.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a63e350f1ce9dcb816f52493dfc66e328aa8bcca",
+          "message": "fix(cluster): name the stream on both sides, and stop clusters clobbering each other (#244)\n\nThree things the demo needed.\n\n**The stream is explicit.** `subscribe` and `publish` take it as a positional\nargument, and `publish` names both the stream and the payload in its output:\n\n    published \"hello\" to orders via broker-0 -> forwarded to broker-2 -> acknowledged\n    [broker-2] offset      1  hello\n\nTwo terminals side by side have nothing else linking what was published to\nwhat arrived. Defaulting the stream made the demo shorter and showed less; a\nmissing message is now an error rather than a publish of the stream name.\n\n**A second cluster no longer destroys the first's session.** The path is\nfixed, so a second `up` takes the file over -- it now says so. More\nimportantly, teardown only removes the file if it still describes that\ncluster. Stopping the second used to delete a session belonging to a cluster\nthat was still running, leaving three brokers alive holding their ports with\nno way to address them.\n\nFound by running two clusters at once and killing the wrong one.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T08:50:00-07:00",
+          "tree_id": "a8c5148deab5f7a82f61f37f54550c97e9570bfd",
+          "url": "https://github.com/gabloe/felix/commit/a63e350f1ce9dcb816f52493dfc66e328aa8bcca"
+        },
+        "date": 1788969145530,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 157.60\nstdev: 1.14\ncv: 0.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 201.20\nstdev: 1.64\ncv: 0.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 243,
+            "range": "8.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 243.00\nmean: 238.40\nstdev: 8.91\ncv: 3.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "5.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 198.00\nstdev: 5.79\ncv: 2.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 405,
+            "range": "164.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 405.00\nmean: 476.60\nstdev: 164.13\ncv: 34.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 813,
+            "range": "604.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 813.00\nmean: 1079.80\nstdev: 604.64\ncv: 56.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
