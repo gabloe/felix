@@ -15,6 +15,7 @@ service.
 | `crates/felix-conformance/` | Apache-2.0 | Conformance test runner and wire-format test vectors, so third-party client/server implementations can validate interop. (It links against the Elastic-2.0 crates below to run its checks against the reference broker — that's normal for a dev/CI tool and doesn't change its own license.) |
 | `crates/felix-broker/`, `felix-storage`, `felix-metadata`, `felix-authz`, `felix-crypto`, `felix-consensus`, `felix-router` | Elastic License 2.0 | Server-side core logic. |
 | `services/broker/`, `services/controlplane/`, `services/agent/` | Elastic License 2.0 | The runnable server binaries. |
+| `crates/felix-cluster/` | Elastic License 2.0 | Local multi-node cluster harness for integration and failure tests. It embeds the control plane and drives the broker, so unlike `felix-conformance` it is internal tooling rather than something a third-party implementer runs. Not published. |
 
 The root [`LICENSE`](LICENSE) file is Elastic License 2.0 (the license for
 the project as a whole / the deployable server). [`LICENSE-APACHE`](LICENSE-APACHE)

@@ -43,15 +43,22 @@ ELASTIC = {
     "felix-crypto",
     "felix-consensus",
     "felix-router",
+    "felix-cluster",
     "broker",
     "controlplane",
     "agent",
 }
 
-# Service binaries and a dev/CI tool with hard Elastic-2.0 dependencies. Nobody
+# Service binaries and dev/CI tools with hard Elastic-2.0 dependencies. Nobody
 # consumes these from a registry, and `broker`/`controlplane`/`agent` are generic
 # names that would collide besides.
-NOT_PUBLISHABLE = {"broker", "controlplane", "agent", "felix-conformance"}
+NOT_PUBLISHABLE = {
+    "broker",
+    "controlplane",
+    "agent",
+    "felix-conformance",
+    "felix-cluster",
+}
 
 # crates.io hard requirement is `description`; the rest are discoverability
 # fields we want set before a first publish rather than bolted on after.

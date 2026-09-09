@@ -167,6 +167,27 @@ pub(crate) struct PublishContext {
 }
 
 impl PublishContext {
+    /// Derive this connection's context from the process-wide one.
+    ///
+    /// Only the per-connection limits are fresh: its slice of the publish byte
+    /// budget, its subscription limiter, and its writer lanes. Everything else —
+    /// the worker queues, the shared budget, and **the cluster view** — is
+    /// carried through.
+    ///
+    /// The cluster view is the part worth stating. `ingress` and `peers` decide
+    /// whether a publish is served here, refused, or forwarded, and dropping
+    /// them here disables shard ownership for every client connection: the gate
+    /// keeps passing its own tests while no broker ever refuses or forwards a
+    /// shard it does not own.
+    pub(crate) fn for_connection(&self, config: &crate::config::BrokerConfig) -> Self {
+        Self {
+            conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
+            subscriptions: Arc::new(SubscriptionLimiter::new()),
+            lane_manager: WriterLaneManager::new(config),
+            ..self.clone()
+        }
+    }
+
     /// Overflow policy for publishes that carry no ack (fire-and-forget).
     /// Unacked publishes get `Backpressure`, never `Wait`: with no ack there is no
     /// channel on which to report a timeout, so a bounded wait could only end in a

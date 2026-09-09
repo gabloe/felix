@@ -1721,6 +1721,32 @@ async fn handle_publish_batch_message_uni_drop_returns_true() {
     assert!(result);
 }
 
+/// A connection's context must keep the cluster view.
+///
+/// This exact field was overridden to `None` when the ownership gate shipped,
+/// which left every broker writing shards it did not own — the gate's own unit
+/// tests passed throughout, because they call it directly. The invariant only
+/// shows up at the seam.
+#[tokio::test]
+async fn a_connections_context_keeps_the_cluster_view() {
+    use crate::shard_routing::IngressRouter;
+    use felix_router::{RegionRouter, ShardRouter};
+
+    let (mut context, _rx, _tx) = make_publish_context(1);
+    let router = Arc::new(ShardRouter::new(
+        "broker-a",
+        "us-west-2",
+        RegionRouter::new("us-west-2".to_string()),
+    ));
+    context.ingress = Some(Arc::new(IngressRouter::new(router)));
+
+    let derived = context.for_connection(&crate::config::BrokerConfig::default());
+    assert!(
+        derived.ingress.is_some(),
+        "a connection that loses the router serves every shard locally",
+    );
+}
+
 #[tokio::test]
 async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     let broker = Broker::new(EphemeralCache::new().into());

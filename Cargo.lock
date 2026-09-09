@@ -997,6 +997,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "felix-cluster"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "controlplane",
+ "felix-client",
+ "felix-wire",
+ "quinn",
+ "reqwest 0.12.28",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "felix-common"
 version = "0.2.0"
 dependencies = [
