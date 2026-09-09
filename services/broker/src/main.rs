@@ -35,6 +35,7 @@ mod test_support;
 
 use anyhow::{Context, Result};
 use broker::membership;
+use broker::peer;
 use broker::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
 use broker::{shard_lifecycle, shard_routing, shard_watch};
 use felix_broker::{Broker, DurableStorage};
@@ -350,6 +351,30 @@ where
         }
     };
 
+    // The broker-internal listener, when this broker is in a cluster. This is
+    // the address `NodeSpec.advertise_addr` names, so it must be up for peers to
+    // reach this node at all. Nothing forwards to it yet (#106): a peer that
+    // connects is told plainly that this broker cannot apply a forwarded write,
+    // rather than being left to time out.
+    let peer_shutdown = CancellationToken::new();
+    let peer_task = match (&config.peer_transport, &config.membership) {
+        (Some(peer_config), Some(membership_config)) => {
+            let server = peer::PeerServer::bind(
+                membership_config.node_id.clone(),
+                peer_config,
+                Arc::new(peer::UnavailableHandler),
+            )
+            .context("bind broker-internal listener")?;
+            tracing::info!(
+                addr = %server.local_addr()?,
+                "broker-internal listener started (peer connections are encrypted but \
+                 not yet authenticated; see docs/internal-protocol.md)",
+            );
+            Some(tokio::spawn(server.serve(peer_shutdown.clone())))
+        }
+        _ => None,
+    };
+
     // Shard ownership: follow the control plane's assignments, and keep local
     // state and the routing table in step with them.
     let shard_tasks = match (&cluster, &config.controlplane_url, &durable_storage) {
@@ -424,6 +449,23 @@ where
     // hang until the deadline even with no connections left.
     connections.close();
     budget.drain("quic_connections", connections.wait()).await;
+
+    // Peers stop being served only after client work has drained, so a forwarded
+    // publish this broker is still applying is not cut off by its own shutdown.
+    // Cancelling closes the connections, which tells every peer immediately
+    // rather than leaving each to wait out its request timeout.
+    if let Some(peer_task) = peer_task {
+        peer_shutdown.cancel();
+        let mut peer_task = peer_task;
+        if !budget
+            .drain("peer_listener", async {
+                let _ = (&mut peer_task).await;
+            })
+            .await
+        {
+            peer_task.abort();
+        }
+    }
 
     let mut accept_task = accept_task;
     if !budget

@@ -26,6 +26,34 @@ pub struct MembershipConfig {
     pub region: String,
 }
 
+/// Warn when peers would be told to connect somewhere nothing is listening.
+///
+/// `NodeSpec.advertise_addr` is the *internal* listener's address, so a broker
+/// that advertises a port it does not bind is reachable by the catalog and
+/// unreachable in fact. Not fatal: a deployment may map ports, and refusing to
+/// start on a legitimate NAT would be worse than saying so.
+fn warn_on_unreachable_advertise(
+    membership: &MembershipConfig,
+    peer: &crate::peer::PeerTransportConfig,
+) {
+    // Port 0 is an ephemeral bind, so there is nothing to compare against.
+    if peer.bind.port() == 0 {
+        return;
+    }
+    let Ok(advertised) = membership.advertise_addr.parse::<SocketAddr>() else {
+        return;
+    };
+    if advertised.port() != peer.bind.port() {
+        tracing::warn!(
+            advertise_addr = %membership.advertise_addr,
+            internal_bind = %peer.bind,
+            "FELIX_NODE_ADVERTISE_ADDR names a different port than the internal \
+             listener binds; peers will be told to connect where nothing is listening \
+             unless the ports are mapped",
+        );
+    }
+}
+
 // Broker service configuration sourced from environment variables.
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
@@ -39,6 +67,9 @@ pub struct BrokerConfig {
     pub controlplane_sync_interval_ms: u64,
     // Cluster membership identity, when this broker joins one.
     pub membership: Option<MembershipConfig>,
+    // Broker-internal transport, present only when this broker joins a cluster.
+    // A broker with no peers has nothing to listen for.
+    pub peer_transport: Option<crate::peer::PeerTransportConfig>,
     // If true, publish acks are sent after commit.
     pub ack_on_commit: bool,
     // Max frame size accepted on QUIC streams.
@@ -125,6 +156,7 @@ impl Default for BrokerConfig {
             controlplane_url: None,
             controlplane_sync_interval_ms: 2000,
             membership: None,
+            peer_transport: None,
             ack_on_commit: false,
             max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
             publish_queue_wait_timeout_ms: DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS,
@@ -386,6 +418,14 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
         let membership = membership_from_env(&controlplane_url)?;
+        let peer_transport = match &membership {
+            Some(membership) => {
+                let peer = crate::peer::PeerTransportConfig::from_env(quic_bind)?;
+                warn_on_unreachable_advertise(membership, &peer);
+                Some(peer)
+            }
+            None => None,
+        };
         let ack_on_commit = std::env::var("FELIX_ACK_ON_COMMIT")
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -556,6 +596,7 @@ impl BrokerConfig {
             controlplane_url,
             controlplane_sync_interval_ms,
             membership,
+            peer_transport,
             ack_on_commit,
             max_frame_bytes,
             publish_queue_wait_timeout_ms,
@@ -885,6 +926,53 @@ mod tests {
         }
         let err = BrokerConfig::from_env().expect_err("should fail");
         assert!(err.to_string().contains("FELIX_NODE_TOKEN"), "{err}");
+    }
+
+    /// A broker in a cluster listens for peers; one on its own has no peers to
+    /// listen for, so it binds nothing.
+    #[serial]
+    #[test]
+    fn the_internal_listener_is_configured_only_for_a_cluster_member() {
+        clear_felix_env();
+        assert!(
+            BrokerConfig::from_env()
+                .expect("config")
+                .peer_transport
+                .is_none(),
+            "a standalone broker must not bind an internal listener",
+        );
+
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:5001");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_INTERNAL_BIND", "0.0.0.0:5001");
+        }
+        let peer = BrokerConfig::from_env()
+            .expect("config")
+            .peer_transport
+            .expect("peer transport");
+        assert_eq!(peer.bind.to_string(), "0.0.0.0:5001");
+    }
+
+    /// The two roles must not be reachable at the same place. Sharing a port
+    /// would put client traffic and peer traffic on one listener, which is the
+    /// separation the internal protocol exists to keep.
+    #[serial]
+    #[test]
+    fn an_internal_listener_sharing_the_client_port_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:5000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_QUIC_BIND", "0.0.0.0:5000");
+            env::set_var("FELIX_INTERNAL_BIND", "0.0.0.0:5000");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("share a port"), "{err}");
     }
 
     /// A token can arrive as a mounted secret rather than an environment

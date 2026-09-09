@@ -42,6 +42,7 @@ fn test_config() -> crate::config::BrokerConfig {
         controlplane_url: None,
         controlplane_sync_interval_ms: 2000,
         membership: None,
+        peer_transport: None,
         ack_on_commit: false,
         max_frame_bytes: 16 * 1024 * 1024,
         publish_queue_wait_timeout_ms: 2000,

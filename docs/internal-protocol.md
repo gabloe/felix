@@ -15,7 +15,12 @@ Three things keep them apart, and only the first is a wire concern:
 1. **A distinct magic.** `FLXI` rather than `FLX1`, so a frame from one side
    fails to decode on the other rather than parsing into something plausible.
 2. **A distinct listener.** Internal traffic arrives on the broker-internal QUIC
-   role, never the client one (M4.2).
+   role, never the client one. The two bind different ports, and startup refuses
+   a configuration where they share one. Both internal endpoints negotiate the
+   `felix-internal/1` ALPN and the client-facing role negotiates none, so a
+   client pointed at the internal port has no protocol in common with it and TLS
+   refuses the handshake — before a frame is read, and before any broker state
+   is touched.
 3. **A distinct credential.** Peer authentication is mTLS between brokers (M8.1).
 
 The magic alone is not security — it is what makes a misdirected connection fail
@@ -39,6 +44,22 @@ an enum makes "unknown kind" a single unambiguous check.
 **An unknown kind is rejected, never skipped.** Same reasoning as the client
 protocol's unknown flag bits: the kind selects how to read the body, so ignoring
 one means confidently misparsing it.
+
+### Handshake
+
+The first message on a connection is `Hello`, answered by `HelloOk`. Both carry
+a node id.
+
+It exists for *when* a mismatch is found, not for what is found. Every frame
+already carries the version, so a mismatched peer would be rejected on its first
+request either way — but that request would be a real forwarded publish, which
+then has to be failed and retried. Doing it at connect makes the connection
+unusable before anything is riding on it.
+
+The node ids make one further check possible: the caller compares `HelloOk`
+against the node id it dialled. An address the catalog has since reassigned
+answers with a different id, which is a connection to the wrong broker whether
+or not it would have served the request.
 
 ### Versioning
 
@@ -98,6 +119,22 @@ assignment generation it resolved against; the owner compares it with its own.
 That asymmetry is the point. A generation mismatch in either direction is an
 explicit typed answer, and **never a successful ownership claim**.
 
+### Handshake
+
+```mermaid
+sequenceDiagram
+    participant A as Broker A (caller)
+    participant B as Broker B
+
+    A->>B: Hello(correlation, node_id = A)
+    alt B speaks this version
+        B-->>A: HelloOk(correlation, node_id = B)
+        Note over A: check the id matches the peer dialled
+    else version B does not know
+        B--xA: connection closed
+    end
+```
+
 ### Subscribe
 
 Whether a subscription is redirected to the owner or proxied through the
@@ -115,6 +152,7 @@ Typed, because they need different responses:
 | Code | Meaning | What the requester does |
 | --- | --- | --- |
 | `NotLeader` | the shard is owned elsewhere | retry against the named owner |
+| version mismatch | the peer speaks a version this broker does not know | the connection closes; there is no frame to answer with, because a reply would carry the version the peer just rejected |
 | `StaleRoute` | the *responder* is behind the requester's generation | retry shortly; the owner is catching up |
 | `Unavailable` | the owner cannot serve right now, e.g. still opening | retry with backoff |
 | `Unauthorized` | the peer is not permitted | do not retry |
@@ -124,6 +162,39 @@ Typed, because they need different responses:
 
 `NotLeader` is a distinct kind rather than an error code, because it carries a
 routing answer rather than only a reason.
+
+## The transport
+
+Peers reach each other over a QUIC endpoint of their own. What it guarantees,
+and what it refuses:
+
+**Connections are pooled and reused.** Repeated requests to one peer share a
+connection; several multiplexed streams carry them, because a QUIC stream is
+ordered and one large forwarded batch would otherwise hold up every smaller
+request behind it.
+
+**Every request terminates.** A connection that drops fails every request
+waiting on it at that moment, rather than leaving each to reach its own timeout.
+This is what makes the correlation rule above true in practice: a forwarded
+publish is never left pending.
+
+**An unhealthy peer cannot consume this broker.** Three bounds, each failing
+differently:
+
+| Bound | What crossing it means |
+| --- | --- |
+| In-flight requests per peer | Requests are shed immediately, not queued. Nothing was sent, so the caller may retry elsewhere at once |
+| Reconnect backoff | A peer that refuses connections is redialled on a jittered exponential schedule, and requests arriving inside the window fail without a dial. Jitter matters because every broker notices the same peer restart at the same moment |
+| Request timeout | A peer that accepts a request and never answers still releases its waiter |
+
+**A dropped connection and a timeout are not retryable.** The peer may have
+applied the write before the answer was lost, so retrying is a duplicate rather
+than a repair. Only a shed request — where nothing was sent — is safe to retry
+as-is.
+
+Idle connections are closed: rebalancing changes which peers a broker forwards
+to, and a connection to one it no longer talks to is a file descriptor and a
+keepalive with nothing to do.
 
 ## Limits and validation
 

@@ -42,6 +42,14 @@ fn every_message() -> Vec<InternalMessage> {
             advertise_addr: "10.0.0.5:7000".to_string(),
             generation: 9,
         }),
+        InternalMessage::Hello(Hello {
+            correlation_id: 42,
+            node_id: "broker-a".to_string(),
+        }),
+        InternalMessage::HelloOk(HelloOk {
+            correlation_id: 42,
+            node_id: "broker-b".to_string(),
+        }),
     ]
 }
 
@@ -310,6 +318,7 @@ fn an_empty_batch_round_trips() {
 #[test]
 fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
+    assert!(Kind::from_u16(7).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
