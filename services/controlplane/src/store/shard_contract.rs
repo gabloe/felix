@@ -59,6 +59,7 @@ async fn seed(store: &dyn ControlPlaneStore) {
             stream: STREAM.to_string(),
             kind: StreamKind::Stream,
             shards: SHARDS,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,

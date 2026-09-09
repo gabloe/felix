@@ -224,6 +224,25 @@ acknowledged record, so any failure within the configured majority preserves it.
 | Broker suspended past expiry | Refused at the durable-append check on waking. |
 | Stale broker after reassignment | Its lease has expired, so it refuses. This is what closes #239 by construction rather than by racing a watch. |
 
+## What is implemented so far
+
+`#111` builds the leadership half:
+
+- **Leases**, renewed by the heartbeat, with the duration taken from the control
+  plane's expiry window. Checked at admission (cheap, cached) and again at commit
+  (authoritative, reads the clock).
+- **Replica sets**, chosen by the same score as leadership so the whole set is a
+  deterministic function of the shard and the cluster. `replication_factor`
+  defaults to 1, so a stream that never asked for replication is unchanged.
+- **Promotion**, gated on a caught-up follower.
+
+The gate matters more than the promotion. A replica that holds no log can be
+promoted perfectly well and will then serve an empty shard — the failover *is*
+the data loss. So promotion requires a follower within the catch-up bound, and
+until records are actually replicated (#112) nothing reports being caught up, so
+promotion does not fire and placement behaves exactly as it did. The gate starts
+permitting failover at the moment replication starts working, and not before.
+
 ## What this does to the other M5 issues
 
 - **#111 (fenced leadership)** — this is now specific: the epoch is the

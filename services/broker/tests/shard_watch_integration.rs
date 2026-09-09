@@ -130,6 +130,7 @@ impl Cluster {
                 stream: "orders".to_string(),
                 kind: StreamKind::Stream,
                 shards: 4,
+                replication_factor: 1,
                 retention: RetentionPolicy {
                     max_age_seconds: None,
                     max_size_bytes: None,

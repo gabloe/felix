@@ -188,6 +188,7 @@ async fn pg_stream_sequences_monotonic() {
         stream: "orders".to_string(),
         kind: StreamKind::Stream,
         shards: 1,
+        replication_factor: 1,
         retention: RetentionPolicy {
             max_age_seconds: Some(3600),
             max_size_bytes: None,
@@ -266,6 +267,7 @@ async fn pg_delete_namespace_emits_cascades() {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -531,6 +533,7 @@ async fn pg_store_stream_conflict_and_not_found() {
             stream: "updates".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -549,6 +552,7 @@ async fn pg_store_stream_conflict_and_not_found() {
         stream: "updates".to_string(),
         kind: StreamKind::Stream,
         shards: 1,
+        replication_factor: 1,
         retention: RetentionPolicy {
             max_age_seconds: None,
             max_size_bytes: None,
@@ -725,6 +729,7 @@ async fn pg_store_list_get_and_exists_roundtrip() {
             stream: "updates".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: None,
                 max_size_bytes: None,
@@ -845,6 +850,7 @@ async fn pg_delete_tenant_emits_stream_retention_max_size() {
             stream: "orders".to_string(),
             kind: StreamKind::Stream,
             shards: 1,
+            replication_factor: 1,
             retention: RetentionPolicy {
                 max_age_seconds: Some(60),
                 max_size_bytes: Some(4096),

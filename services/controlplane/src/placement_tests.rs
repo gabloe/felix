@@ -7,12 +7,18 @@ use crate::model::{
 use std::collections::{BTreeMap, BTreeSet};
 
 fn stream(name: &str, shards: u32) -> Stream {
+    replicated_stream(name, shards, 1)
+}
+
+/// A stream that keeps `replication_factor` copies of each shard.
+fn replicated_stream(name: &str, shards: u32, replication_factor: u32) -> Stream {
     Stream {
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
         stream: name.to_string(),
         kind: StreamKind::Stream,
         shards,
+        replication_factor,
         retention: RetentionPolicy {
             max_age_seconds: None,
             max_size_bytes: None,
@@ -54,7 +60,9 @@ fn placements(plan: &Plan) -> BTreeMap<(String, u32), String> {
     plan.shards
         .iter()
         .filter_map(|p| match &p.decision {
-            Decision::Place(leader) => Some(((p.key.stream.clone(), p.key.shard), leader.clone())),
+            Decision::Place(leader, _) => {
+                Some(((p.key.stream.clone(), p.key.shard), leader.clone()))
+            }
             _ => None,
         })
         .collect()
@@ -67,9 +75,9 @@ fn placement_is_deterministic() {
     let streams = vec![stream("orders", 8), stream("payments", 5)];
     let nodes = live(&["broker-a", "broker-b", "broker-c"]);
 
-    let first = plan(&streams, &nodes, &[]);
+    let first = plan(&streams, &nodes, &[], &NothingCaughtUp);
     for _ in 0..20 {
-        assert_eq!(plan(&streams, &nodes, &[]), first);
+        assert_eq!(plan(&streams, &nodes, &[], &NothingCaughtUp), first);
     }
 }
 
@@ -79,7 +87,7 @@ fn placement_is_deterministic() {
 fn placement_does_not_depend_on_input_order() {
     let streams = vec![stream("orders", 8), stream("payments", 5)];
     let nodes = live(&["broker-a", "broker-b", "broker-c"]);
-    let expected = placements(&plan(&streams, &nodes, &[]));
+    let expected = placements(&plan(&streams, &nodes, &[], &NothingCaughtUp));
 
     let mut reversed_streams = streams.clone();
     reversed_streams.reverse();
@@ -87,18 +95,29 @@ fn placement_does_not_depend_on_input_order() {
     reversed_nodes.reverse();
 
     assert_eq!(
-        placements(&plan(&reversed_streams, &reversed_nodes, &[])),
+        placements(&plan(
+            &reversed_streams,
+            &reversed_nodes,
+            &[],
+            &NothingCaughtUp
+        )),
         expected,
     );
-    assert_eq!(placements(&plan(&streams, &reversed_nodes, &[])), expected);
-    assert_eq!(placements(&plan(&reversed_streams, &nodes, &[])), expected);
+    assert_eq!(
+        placements(&plan(&streams, &reversed_nodes, &[], &NothingCaughtUp)),
+        expected
+    );
+    assert_eq!(
+        placements(&plan(&reversed_streams, &nodes, &[], &NothingCaughtUp)),
+        expected
+    );
 }
 
 #[test]
 fn every_shard_gets_exactly_one_leader() {
     let streams = vec![stream("orders", 8), stream("payments", 5)];
     let nodes = live(&["broker-a", "broker-b", "broker-c"]);
-    let plan = plan(&streams, &nodes, &[]);
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
 
     assert_eq!(plan.shards.len(), 13);
     let keys: BTreeSet<(String, u32)> = plan
@@ -110,7 +129,7 @@ fn every_shard_gets_exactly_one_leader() {
     assert!(
         plan.shards
             .iter()
-            .all(|p| matches!(p.decision, Decision::Place(_))),
+            .all(|p| matches!(p.decision, Decision::Place(..))),
         "every shard should be placeable with three live nodes",
     );
 }
@@ -122,10 +141,10 @@ fn every_shard_gets_exactly_one_leader() {
 fn placement_skew_stays_bounded() {
     let streams = vec![stream("orders", 300)];
     let nodes = live(&["broker-a", "broker-b", "broker-c", "broker-d"]);
-    let plan = plan(&streams, &nodes, &[]);
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
 
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for (_, leader) in plan.to_place() {
+    for (_, leader, _) in plan.to_place() {
         *counts.entry(leader.to_string()).or_default() += 1;
     }
 
@@ -150,13 +169,13 @@ fn reconciliation_is_idempotent() {
     let streams = vec![stream("orders", 8)];
     let nodes = live(&["broker-a", "broker-b", "broker-c"]);
 
-    let first = plan(&streams, &nodes, &[]);
+    let first = plan(&streams, &nodes, &[], &NothingCaughtUp);
     let applied: Vec<ShardAssignment> = first
         .to_place()
-        .map(|(key, leader)| assignment_for(key, leader))
+        .map(|(key, leader, replicas)| assignment_for(key, leader, replicas.to_vec()))
         .collect();
 
-    let second = plan(&streams, &nodes, &applied);
+    let second = plan(&streams, &nodes, &applied, &NothingCaughtUp);
     assert_eq!(second.kept(), 8, "a second pass should keep everything");
     assert_eq!(second.to_place().count(), 0, "and write nothing");
 }
@@ -184,7 +203,7 @@ fn a_valid_assignment_is_kept_even_if_the_hash_disagrees() {
         })
         .collect();
 
-    let plan = plan(&streams, &nodes, &pinned);
+    let plan = plan(&streams, &nodes, &pinned, &NothingCaughtUp);
     assert_eq!(plan.kept(), 4);
     assert_eq!(plan.to_place().count(), 0, "no reshuffling");
 }
@@ -195,15 +214,15 @@ fn losing_a_node_moves_only_its_shards() {
     let streams = vec![stream("orders", 30)];
     let all = live(&["broker-a", "broker-b", "broker-c"]);
 
-    let initial = plan(&streams, &all, &[]);
+    let initial = plan(&streams, &all, &[], &NothingCaughtUp);
     let applied: Vec<ShardAssignment> = initial
         .to_place()
-        .map(|(key, leader)| assignment_for(key, leader))
+        .map(|(key, leader, replicas)| assignment_for(key, leader, replicas.to_vec()))
         .collect();
 
     let mut degraded = all.clone();
     degraded[0].status.lifecycle = NodeLifecycle::Down;
-    let after = plan(&streams, &degraded, &applied);
+    let after = plan(&streams, &degraded, &applied, &NothingCaughtUp);
 
     let lost = applied.iter().filter(|a| a.leader == "broker-a").count();
     assert!(lost > 0, "the test needs broker-a to have held something");
@@ -214,7 +233,7 @@ fn losing_a_node_moves_only_its_shards() {
     );
     assert_eq!(after.kept(), 30 - lost);
     assert!(
-        after.to_place().all(|(_, leader)| leader != "broker-a"),
+        after.to_place().all(|(_, leader, _)| leader != "broker-a"),
         "nothing may be placed on a node that is down",
     );
 }
@@ -233,9 +252,9 @@ fn only_live_nodes_are_eligible() {
             node("broker-a", lifecycle, None),
             node("broker-b", NodeLifecycle::Live, None),
         ];
-        let plan = plan(&streams, &nodes, &[]);
+        let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
         assert!(
-            plan.to_place().all(|(_, leader)| leader == "broker-b"),
+            plan.to_place().all(|(_, leader, _)| leader == "broker-b"),
             "{lifecycle:?} must not receive placement",
         );
     }
@@ -259,14 +278,15 @@ fn an_assignment_on_an_ineligible_node_is_replaced() {
                     shard,
                 },
                 "broker-a",
+                Vec::new(),
             )
         })
         .collect();
 
-    let plan = plan(&streams, &nodes, &stale);
+    let plan = plan(&streams, &nodes, &stale, &NothingCaughtUp);
     assert_eq!(plan.kept(), 0);
     assert_eq!(plan.to_place().count(), 2);
-    assert!(plan.to_place().all(|(_, leader)| leader == "broker-b"));
+    assert!(plan.to_place().all(|(_, leader, _)| leader == "broker-b"));
 }
 
 #[test]
@@ -274,7 +294,7 @@ fn with_no_live_nodes_every_shard_says_why() {
     let streams = vec![stream("orders", 3)];
     let nodes = vec![node("broker-a", NodeLifecycle::Down, None)];
 
-    let plan = plan(&streams, &nodes, &[]);
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
     assert_eq!(plan.unplaceable().count(), 3);
     assert!(
         plan.unplaceable()
@@ -292,7 +312,7 @@ fn capacity_is_respected_and_exhaustion_is_distinguishable() {
         node("broker-b", NodeLifecycle::Live, Some(1)),
     ];
 
-    let plan = plan(&streams, &nodes, &[]);
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
     assert_eq!(plan.to_place().count(), 2, "two nodes, one shard each");
 
     let unplaceable: Vec<&Unplaceable> = plan.unplaceable().map(|(_, r)| r).collect();
@@ -319,9 +339,10 @@ fn existing_assignments_count_towards_capacity() {
             shard: 0,
         },
         "broker-a",
+        Vec::new(),
     )];
 
-    let plan = plan(&streams, &nodes, &existing);
+    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
     assert_eq!(plan.kept(), 1);
     assert_eq!(
         plan.to_place().count(),
@@ -368,7 +389,12 @@ fn scores_are_stable_across_runs() {
 
 #[test]
 fn a_stream_with_no_shards_plans_nothing() {
-    let plan = plan(&[stream("orders", 0)], &live(&["broker-a"]), &[]);
+    let plan = plan(
+        &[stream("orders", 0)],
+        &live(&["broker-a"]),
+        &[],
+        &NothingCaughtUp,
+    );
     assert!(plan.shards.is_empty());
 }
 
@@ -504,4 +530,242 @@ mod reconcile {
                 .is_empty()
         );
     }
+}
+
+/// A replicated stream gets followers, and they are not the leader.
+#[test]
+fn a_replicated_shard_is_given_followers() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, None),
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
+
+    let (_, leader, replicas) = plan.to_place().next().expect("placed");
+    assert_eq!(replicas.len(), 2, "three copies means the leader plus two");
+    assert!(
+        !replicas.contains(&leader.to_string()),
+        "the leader must not also be listed as its own follower",
+    );
+    let unique: BTreeSet<_> = replicas.iter().collect();
+    assert_eq!(
+        unique.len(),
+        replicas.len(),
+        "a node cannot hold two copies"
+    );
+}
+
+/// Fewer nodes than copies is not an error. Placement records what it achieved,
+/// because an assignment naming a node that holds nothing is the lie failover
+/// would act on.
+#[test]
+fn asking_for_more_copies_than_nodes_records_what_exists() {
+    let streams = vec![replicated_stream("orders", 1, 5)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, None),
+        node("broker-b", NodeLifecycle::Live, None),
+    ];
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
+
+    let (_, leader, replicas) = plan.to_place().next().expect("placed");
+    assert_eq!(replicas.len(), 1, "two nodes can hold two copies, not five");
+    assert!(!replicas.contains(&leader.to_string()));
+}
+
+/// The default is leader-only, so a stream that never asked for replication
+/// behaves exactly as it did before replication existed.
+#[test]
+fn an_unreplicated_stream_gets_no_followers() {
+    let streams = vec![stream("orders", 1)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, None),
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
+
+    let (_, _, replicas) = plan.to_place().next().expect("placed");
+    assert!(replicas.is_empty(), "replication_factor 1 is leader-only");
+}
+
+/// The whole replica set is a deterministic function of the shard key and the
+/// cluster, so two control-plane instances planning the same cluster agree.
+#[test]
+fn replica_selection_is_deterministic() {
+    let streams = vec![replicated_stream("orders", 4, 3)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, None),
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+        node("broker-d", NodeLifecycle::Live, None),
+    ];
+
+    let first: Vec<_> = plan(&streams, &nodes, &[], &NothingCaughtUp)
+        .to_place()
+        .map(|(k, l, r)| (k.clone(), l.to_string(), r.to_vec()))
+        .collect();
+
+    // Same cluster, nodes presented in a different order.
+    let mut shuffled = nodes.clone();
+    shuffled.reverse();
+    let second: Vec<_> = plan(&streams, &shuffled, &[], &NothingCaughtUp)
+        .to_place()
+        .map(|(k, l, r)| (k.clone(), l.to_string(), r.to_vec()))
+        .collect();
+
+    assert_eq!(first, second, "placement must not depend on input order");
+}
+
+/// A replica holds a copy, so it consumes capacity exactly as leadership does.
+#[test]
+fn replicas_count_against_node_capacity() {
+    let streams = vec![replicated_stream("orders", 2, 2)];
+    // Room for one copy each, of any kind.
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, Some(1)),
+        node("broker-b", NodeLifecycle::Live, Some(1)),
+    ];
+
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
+    let placed: Vec<_> = plan.to_place().collect();
+
+    // Two nodes with room for one copy each can hold one shard's leader and one
+    // follower, and nothing more.
+    let total_copies: usize = placed.iter().map(|(_, _, r)| 1 + r.len()).sum();
+    assert!(
+        total_copies <= 2,
+        "capacity was exceeded: {total_copies} copies across two single-slot nodes",
+    );
+}
+
+/// A follower that holds the log, for the promotion tests.
+struct CaughtUpNodes(BTreeSet<String>);
+
+impl CaughtUp for CaughtUpNodes {
+    fn is_caught_up(&self, _key: &ShardKey, node_id: &str) -> bool {
+        self.0.contains(node_id)
+    }
+}
+
+fn assigned(stream: &str, leader: &str, replicas: &[&str]) -> ShardAssignment {
+    ShardAssignment {
+        key: ShardKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: stream.to_string(),
+            shard: 0,
+        },
+        leader: leader.to_string(),
+        replicas: replicas.iter().map(|r| r.to_string()).collect(),
+        generation: 3,
+        state: ShardState::Active,
+    }
+}
+
+/// A lost leader is replaced by a follower that holds the log.
+#[test]
+fn a_caught_up_follower_is_promoted() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    // broker-a is gone.
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+    let caught_up = CaughtUpNodes(["broker-c".to_string()].into_iter().collect());
+
+    let plan = plan(&streams, &nodes, &existing, &caught_up);
+    let (_, leader, _) = plan.to_place().next().expect("placed");
+    assert_eq!(
+        leader, "broker-c",
+        "the caught-up follower must be promoted, not the other one",
+    );
+}
+
+/// **The gate.** A follower that holds nothing is not promoted, however
+/// eligible it looks: promoting it would serve an empty shard, which is the data
+/// loss a failover is supposed to prevent.
+///
+/// Asserted against a baseline with no replica set recorded, because "did not
+/// promote" and "promoted the node it would have chosen anyway" are otherwise
+/// the same outcome. Both single-node replica sets are tried, so at least one
+/// names a follower that scoring would *not* have picked — without that, the
+/// two paths coincide and the assertion proves nothing.
+#[test]
+fn a_follower_that_holds_nothing_is_not_promoted() {
+    let streams = vec![replicated_stream("orders", 1, 2)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+
+    let baseline = plan(
+        &streams,
+        &nodes,
+        &[assigned("orders", "broker-a", &[])],
+        &NothingCaughtUp,
+    );
+    let expected: Vec<_> = baseline
+        .to_place()
+        .map(|(k, l, _)| (k.clone(), l.to_string()))
+        .collect();
+
+    for replica in ["broker-b", "broker-c"] {
+        let existing = vec![assigned("orders", "broker-a", &[replica])];
+        let chosen: Vec<_> = plan(&streams, &nodes, &existing, &NothingCaughtUp)
+            .to_place()
+            .map(|(k, l, _)| (k.clone(), l.to_string()))
+            .collect();
+        assert_eq!(
+            chosen, expected,
+            "a replica ({replica}) holding nothing was promoted; with no caught-up \
+             follower, placement must ignore the replica set entirely",
+        );
+    }
+}
+
+/// A node that was never a replica is never promoted, even if it reports being
+/// caught up. Only the recorded replica set is promotable.
+#[test]
+fn only_a_recorded_replica_is_promotable() {
+    let streams = vec![replicated_stream("orders", 1, 2)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-z", NodeLifecycle::Live, None),
+    ];
+    // broker-z is not in the replica set, but claims to be caught up.
+    let existing = vec![assigned("orders", "broker-a", &["broker-b"])];
+    let caught_up = CaughtUpNodes(
+        ["broker-b".to_string(), "broker-z".to_string()]
+            .into_iter()
+            .collect(),
+    );
+
+    let plan = plan(&streams, &nodes, &existing, &caught_up);
+    let (_, leader, _) = plan.to_place().next().expect("placed");
+    assert_eq!(
+        leader, "broker-b",
+        "promotion must come from the recorded replica set",
+    );
+}
+
+/// A promoted follower is not left listed as its own follower.
+#[test]
+fn promotion_rebuilds_the_replica_set_without_the_new_leader() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+    let caught_up = CaughtUpNodes(["broker-b".to_string(), "broker-c".to_string()].into());
+
+    let plan = plan(&streams, &nodes, &existing, &caught_up);
+    let (_, leader, replicas) = plan.to_place().next().expect("placed");
+    assert!(
+        !replicas.contains(&leader.to_string()),
+        "{leader} was promoted and is still listed as a follower of itself",
+    );
 }

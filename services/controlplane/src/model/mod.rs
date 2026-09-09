@@ -6,7 +6,7 @@ mod cache;
 mod namespace;
 mod node;
 mod shard;
-mod stream;
+pub mod stream;
 mod tenant;
 
 pub use cache::{Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest};

@@ -1441,6 +1441,7 @@ mod tests {
                 stream: "orders".to_string(),
                 kind: StreamKind::Stream,
                 shards: 1,
+                replication_factor: 1,
                 retention: RetentionPolicy {
                     max_age_seconds: Some(3600),
                     max_size_bytes: None,
