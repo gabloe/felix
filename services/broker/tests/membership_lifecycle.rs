@@ -288,6 +288,7 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
         config("broker-a", 7001, &cluster.token),
         serving,
         shutdown.clone(),
+        std::sync::Arc::new(broker::lease::LeaseState::new(Duration::from_secs(30))),
     );
 
     // Wait for registration to land.

@@ -31,6 +31,7 @@ fn make_publish_context(
     let context = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx.clone()]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -83,6 +84,7 @@ async fn enqueue_publish_drop_sheds_load_when_byte_budget_exhausted() {
     let ctx = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -109,6 +111,7 @@ async fn enqueue_publish_drop_sheds_load_when_conn_byte_budget_exhausted() {
     let ctx = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -136,6 +139,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let ctx_a = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx.clone()]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -149,6 +153,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let ctx_b = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         conn_admission: Arc::new(PublishAdmission::new(4)),
         subscriptions: Arc::new(SubscriptionLimiter::new()),
         lane_manager: test_lane_manager(),
@@ -289,6 +294,7 @@ async fn enqueue_publish_wait_times_out_when_queue_full() {
     let ctx = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -312,6 +318,7 @@ async fn enqueue_publish_returns_error_when_queue_closed() {
     let ctx = PublishContext {
         ingress: None,
         peers: None,
+        lease: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -1753,7 +1760,19 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     let mut cache = HashMap::new();
     let mut key = String::new();
 
-    let handle = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    let handle = resolve_route(
+        &broker,
+        Authority {
+            ingress: None,
+            lease: None,
+        },
+        &mut cache,
+        &mut key,
+        "t1",
+        "ns",
+        "stream",
+    )
+    .await;
     assert!(
         matches!(handle, PublishRoute::Refused),
         "no tenant/namespace yet"
@@ -1774,14 +1793,38 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         .await
         .expect("stream");
 
-    let cached = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    let cached = resolve_route(
+        &broker,
+        Authority {
+            ingress: None,
+            lease: None,
+        },
+        &mut cache,
+        &mut key,
+        "t1",
+        "ns",
+        "stream",
+    )
+    .await;
     assert!(
         matches!(cached, PublishRoute::Refused),
         "cached miss should be returned until cache expires or clears"
     );
 
     cache.clear();
-    let refreshed = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    let refreshed = resolve_route(
+        &broker,
+        Authority {
+            ingress: None,
+            lease: None,
+        },
+        &mut cache,
+        &mut key,
+        "t1",
+        "ns",
+        "stream",
+    )
+    .await;
     assert!(
         matches!(refreshed, PublishRoute::Local(_)),
         "cache refresh should see stream"
@@ -2743,7 +2786,10 @@ mod ownership_gate {
 
         let route = resolve_route(
             &broker,
-            Some(&ingress),
+            Authority {
+                ingress: Some(&ingress),
+                lease: None,
+            },
             &mut cache,
             &mut key,
             "t1",
@@ -2769,7 +2815,10 @@ mod ownership_gate {
 
         let route = resolve_route(
             &broker,
-            Some(&ingress),
+            Authority {
+                ingress: Some(&ingress),
+                lease: None,
+            },
             &mut cache,
             &mut key,
             "t1",
@@ -2794,7 +2843,10 @@ mod ownership_gate {
 
         let route = resolve_route(
             &broker,
-            Some(&ingress),
+            Authority {
+                ingress: Some(&ingress),
+                lease: None,
+            },
             &mut cache,
             &mut key,
             "t1",
@@ -2821,7 +2873,10 @@ mod ownership_gate {
             matches!(
                 resolve_route(
                     &broker,
-                    Some(&ingress),
+                    Authority {
+                        ingress: Some(&ingress),
+                        lease: None
+                    },
                     &mut cache,
                     &mut key,
                     "t1",
@@ -2841,7 +2896,10 @@ mod ownership_gate {
             matches!(
                 resolve_route(
                     &broker,
-                    Some(&moved),
+                    Authority {
+                        ingress: Some(&moved),
+                        lease: None
+                    },
                     &mut cache,
                     &mut key,
                     "t1",
@@ -2862,7 +2920,19 @@ mod ownership_gate {
         let mut cache = HashMap::new();
         let mut key = String::new();
 
-        let route = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+        let route = resolve_route(
+            &broker,
+            Authority {
+                ingress: None,
+                lease: None,
+            },
+            &mut cache,
+            &mut key,
+            "t1",
+            "ns",
+            "stream",
+        )
+        .await;
         assert!(matches!(route, PublishRoute::Local(_)));
     }
 }

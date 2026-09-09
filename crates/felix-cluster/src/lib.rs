@@ -182,6 +182,9 @@ impl Cluster {
             .expect("control plane is only taken during shutdown")
     }
 
+    /// The control plane's address. Panics once it has been stopped, which is
+    /// deliberate: a caller reading this after `stop_control_plane` is asking
+    /// for a service that is gone.
     pub fn control_plane_url(&self) -> &str {
         &self.control_plane().base_url
     }
@@ -596,6 +599,24 @@ impl Cluster {
 
     pub fn node(&self, node_id: &str) -> Option<&BrokerNode> {
         self.nodes.iter().find(|node| node.node_id == node_id)
+    }
+
+    /// Stop the control plane, leaving the brokers running.
+    ///
+    /// A failure primitive rather than a teardown: brokers keep serving on the
+    /// authority they already hold, and lose it when their leases lapse. That is
+    /// the partition this cluster can produce without touching the network.
+    pub async fn stop_control_plane(&mut self) {
+        if let Some(control_plane) = self.control_plane.take() {
+            control_plane.shutdown().await;
+        }
+    }
+
+    /// Whether the control plane is still running. `false` once
+    /// [`Self::stop_control_plane`] has been called, after which the assignment
+    /// and node endpoints are unreachable.
+    pub fn control_plane_running(&self) -> bool {
+        self.control_plane.is_some()
     }
 
     /// Stop one broker, and wait until the control plane agrees it is gone.

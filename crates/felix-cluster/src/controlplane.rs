@@ -233,6 +233,12 @@ impl ControlPlane {
 
     pub async fn shutdown(self) {
         self.shutdown.cancel();
+        // Aborted, not drained. A graceful shutdown keeps serving the keep-alive
+        // connections brokers already hold, so their heartbeats would go on
+        // succeeding and the control plane would not be gone in any sense a
+        // broker could detect -- which is the whole point when this is used as a
+        // fault rather than a teardown.
+        self.task.abort();
         let _ = tokio::time::timeout(Duration::from_secs(5), self.task).await;
     }
 }
