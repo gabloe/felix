@@ -65,6 +65,46 @@ impl Session {
     pub fn node(&self, node_id: &str) -> Option<&SessionNode> {
         self.nodes.iter().find(|node| node.node_id == node_id)
     }
+
+    /// Remove the session file, but only if it still describes this cluster.
+    ///
+    /// Two clusters share one path, so the second to start overwrites the
+    /// first's session. Without this check the second to *stop* then deletes a
+    /// file describing a cluster that is still running, leaving it alive and
+    /// unreachable — the CLI reports no session while three brokers keep
+    /// serving.
+    pub fn remove_if_ours(&self, path: &Path) {
+        match Self::read(path) {
+            Ok(current) if current.control_plane == self.control_plane => {
+                let _ = std::fs::remove_file(path);
+            }
+            // Someone else's, or already gone. Either way not ours to delete.
+            _ => {}
+        }
+    }
+}
+
+/// A session already on disk whose cluster is still answering.
+///
+/// Starting a second cluster is allowed — the tests do it — but it takes over
+/// the session file, and the first cluster becomes unreachable through the CLI
+/// while still holding its ports. Worth saying out loud rather than letting it
+/// be discovered.
+pub async fn live_session(path: &Path) -> Option<Session> {
+    let session = Session::read(path).ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .no_proxy()
+        .build()
+        .ok()?;
+    let url = format!("{}/v1/nodes", session.control_plane);
+    let response = client
+        .get(&url)
+        .bearer_auth(&session.admin_token)
+        .send()
+        .await
+        .ok()?;
+    response.status().is_success().then_some(session)
 }
 
 /// Owner-only, because the file holds a bearer token.
