@@ -56,9 +56,9 @@ felix-cluster — a local multi-node Felix cluster
   up [--nodes N]            start a cluster and hold it until Ctrl-C
   status [--nodes N]        start, print membership and ownership, exit
   smoke [--nodes N]         publish through a non-owner, receive from the owner
-  owners                    who leads each shard of a running cluster
-  subscribe [--on NODE]     stream events from a running cluster
-  publish [--via NODE] MSG  publish to a running cluster
+  owners                          who leads each shard of a running cluster
+  subscribe STREAM [--on NODE]    stream events from a running cluster
+  publish STREAM MSG [--via NODE] publish to a running cluster
 
 `up` first; the rest attach to it."
     );
@@ -73,7 +73,17 @@ async fn up(args: &[String]) -> Result<()> {
     let cluster = Cluster::start(cluster_config(nodes, true)).await?;
 
     let path = session::default_path();
-    cluster.session().write(&path)?;
+    if let Some(existing) = session::live_session(&path).await {
+        eprintln!(
+            "\nwarning: a cluster is already running at {}.\n\
+             \x20        it keeps its ports and processes, but `subscribe` and `publish`\n\
+             \x20        will now talk to this one instead. stop it with Ctrl-C in its\n\
+             \x20        own window.",
+            existing.control_plane,
+        );
+    }
+    let session = cluster.session();
+    session.write(&path)?;
 
     eprintln!("\ncluster up.\n");
     print_topology(&cluster).await?;
@@ -84,7 +94,9 @@ async fn up(args: &[String]) -> Result<()> {
 
     stop_signal().await?;
     eprintln!("\ntearing down...");
-    let _ = std::fs::remove_file(&path);
+    // Only if it still describes this cluster: a second cluster may have taken
+    // the file over, and deleting that one leaves it running and unreachable.
+    session.remove_if_ours(&path);
     cluster.shutdown().await;
     Ok(())
 }
@@ -126,7 +138,10 @@ async fn owners() -> Result<()> {
 async fn subscribe(args: &[String]) -> Result<()> {
     init_tracing(false);
     let session = Session::read(&session::default_path())?;
-    let stream = flag(args, "--stream")?.unwrap_or_else(|| STREAM.to_string());
+    let stream = match positionals(args).first() {
+        Some(stream) => stream.clone(),
+        None => bail!("subscribe takes a stream: felix-cluster subscribe {STREAM}"),
+    };
 
     // Defaults to the owner, because that is the only broker that serves a
     // subscription today -- a non-owner has no copy to read from, and routing a
@@ -191,8 +206,16 @@ async fn subscribe(args: &[String]) -> Result<()> {
 async fn publish(args: &[String]) -> Result<()> {
     init_tracing(false);
     let session = Session::read(&session::default_path())?;
-    let stream = flag(args, "--stream")?.unwrap_or_else(|| STREAM.to_string());
-    let message = positional(args).unwrap_or_else(|| "hello".to_string());
+    let words = positionals(args);
+    let (stream, message) = match words.split_first() {
+        // The rest is the message, so it can contain spaces without quoting --
+        // `publish orders order placed` reads better on camera than escaping.
+        Some((stream, rest)) if !rest.is_empty() => (stream.clone(), rest.join(" ")),
+        _ => bail!(
+            "publish takes a stream and a message: \
+             felix-cluster publish {STREAM} \"order placed\""
+        ),
+    };
 
     let owner = owner_of(&session, &stream).await?;
     // Defaults to a broker that does *not* own the shard, because that is the
@@ -229,14 +252,21 @@ async fn publish(args: &[String]) -> Result<()> {
 
     // The acknowledgement already proves it was written. What a cluster adds is
     // *where*, and the forward counter is how that is visible from outside.
+    // The stream and the payload are named on both sides on purpose: a viewer
+    // watching two terminals has nothing else linking what was published to what
+    // arrived.
     if node_id == owner {
-        println!("published via {node_id} (the owner) — written locally, no hop");
+        println!(
+            "published {message:?} to {stream} via {node_id} (the owner) — written locally, no hop"
+        );
     } else if after > before {
-        println!("published via {node_id} → forwarded to {owner} → acknowledged");
+        println!(
+            "published {message:?} to {stream} via {node_id} → forwarded to {owner} → acknowledged"
+        );
     } else {
         println!(
-            "published via {node_id}, but it did not forward — it served a shard owned \
-             by {owner} locally"
+            "published {message:?} to {stream} via {node_id}, but it did not forward — \
+             it served a shard owned by {owner} locally"
         );
     }
     Ok(())
@@ -305,8 +335,9 @@ fn flag_usize(args: &[String], name: &str) -> Result<Option<usize>> {
     }
 }
 
-/// The first argument that is neither the subcommand nor a flag or its value.
-fn positional(args: &[String]) -> Option<String> {
+/// Everything that is neither the subcommand nor a flag or its value, in order.
+fn positionals(args: &[String]) -> Vec<String> {
+    let mut found = Vec::new();
     let mut skip_next = false;
     for arg in args.iter().skip(1) {
         if skip_next {
@@ -317,9 +348,9 @@ fn positional(args: &[String]) -> Option<String> {
             skip_next = true;
             continue;
         }
-        return Some(arg.clone());
+        found.push(arg.clone());
     }
-    None
+    found
 }
 
 async fn http() -> reqwest::Client {

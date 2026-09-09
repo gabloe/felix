@@ -22,10 +22,10 @@ terminal has something to attach to. The other commands find it themselves.
 task cluster:up
 
 # window 2
-task cluster:subscribe
+task -s cluster:subscribe -- orders
 
 # window 3
-task cluster:publish -- hello
+task -s cluster:publish -- orders hello
 ```
 
 ```text
@@ -34,8 +34,14 @@ subscribing to orders on broker-2 (owner)
 [broker-2] offset      1  hello
 
 # window 3
-published via broker-0 → forwarded to broker-2 → acknowledged
+published "hello" to orders via broker-0 → forwarded to broker-2 → acknowledged
 ```
+
+The stream and the payload are named on both sides deliberately. Two terminals
+side by side have nothing else linking what was published to what arrived, and a
+demo that does not show that linkage is not showing anything.
+
+`-s` keeps Task from echoing its own `cargo run` line above every result.
 
 That second line is the whole point of a cluster, and it is why the commands say
 which broker they went through. A single broker produces the same records; only
@@ -45,6 +51,9 @@ the routing differs, so the routing is what the output shows.
 the path a single-node deployment cannot demonstrate. `--via broker-2` (the
 owner) prints `written locally, no hop` instead.
 
+The stream is required, not defaulted: a demo where the stream is implicit does
+not show that the publisher and the subscriber are talking about the same one.
+
 `subscribe` defaults to the owner, because the owner is the only broker that
 serves a subscription today. `--on` a different broker is allowed and says
 plainly that nothing will arrive — subscribe routing is M6, decided in
@@ -53,6 +62,11 @@ plainly that nothing will arrive — subscribe routing is M6, decided in
 `task cluster:owners` prints who leads what, which is worth having on screen
 before publishing: the owner is chosen by rendezvous hash, so it differs between
 runs.
+
+Two clusters share one session file, so a second `up` takes it over and warns
+that it has. Whichever stops first leaves the file alone unless it still
+describes that cluster — otherwise stopping the second would leave the first
+running and unreachable, holding its ports with no way to address it.
 
 The session file holds a bearer token. It is written owner-only into the temp
 directory and removed on teardown; the cluster it opens is loopback-only with dev
