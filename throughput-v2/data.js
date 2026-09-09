@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788875472063,
+  "lastUpdate": 1788925023784,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3588,6 +3588,58 @@ window.BENCHMARK_DATA = {
             "range": "18133.43",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 730560.12\nmean: 735652.15\nstdev: 18133.43\ncv: 2.46%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37346a6632cb3abe1337225eded8807fffc0b9c4",
+          "message": "feat(broker): add a pooled broker-to-broker QUIC transport (#105) (#235)\n\n* feat(broker): add a pooled broker-to-broker QUIC transport (#105)\n\nBrokers can now reach each other. The transport is complete on its own\nterms; nothing forwards through it yet, which is #106.\n\nRole separation is enforced at TLS, not at the frame. Both internal\nendpoints negotiate `felix-internal/1` and the client-facing role\nnegotiates none, so a client pointed at the internal port has no protocol\nin common and the handshake is refused before a frame is read. Startup\nalso refuses a configuration where the two listeners share a port.\n\nOutbound is a lazy per-peer pool: one connection by default, four\nmultiplexed streams on it because a QUIC stream is ordered and a large\nforwarded batch would otherwise hold up everything queued behind it.\nThree bounds keep an unhealthy peer from consuming the broker, and each\nfails differently — in-flight requests are shed without being sent,\nreconnects back off on a jittered exponential schedule, and every request\nhas a timeout. Only a shed request is retryable: a dropped connection or\na timeout may have applied the write, so retrying is a duplicate.\n\n`Hello`/`HelloOk` are added to the internal protocol. The version is in\nevery frame header already, so a mismatched peer would be rejected on its\nfirst request either way — but that request would be a real forwarded\npublish. The handshake moves the rejection to connect time, and its node\nids catch a connection to a broker that is not the one the catalog named.\n\nTwo bugs the tests found rather than confirmed:\n\n- The connection watcher held an `Arc<PeerConnection>` while the\n  connection owned its join handle. That cycle meant the connection never\n  dropped.\n- A peer connection stayed open through shutdown while a handler was\n  running, because cancellation cannot interrupt one. Peers waited out\n  their request timeouts to learn the broker had gone. Connections now\n  close themselves on shutdown, after client work has drained.\n\nfelix-transport gains `keep_alive_interval` (default unchanged: none) and\n`closed()`, so one task can fail every waiter the moment a connection\ndrops instead of each reaching its own timeout.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): let the peer-restart test's bind retry yield to the runtime\n\n`#[tokio::test]` runs on a current-thread runtime, so the blocking sleep in\nthe rebind loop stopped the very tasks that close the previous listener's\nconnections. quinn releases the port only once those have drained, so the\nloop starved itself: the port could never come free however long it waited.\n\nmacOS happened to free the port before the first attempt, so this only\nfailed on CI.\n\nThe wait is load-bearing — one retry is needed even when it works — so it\nstays, now on `tokio::time::sleep`.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T20:34:38-07:00",
+          "tree_id": "a750522b897b57ca5df90c6e6fdc900c2e325b8d",
+          "url": "https://github.com/gabloe/felix/commit/37346a6632cb3abe1337225eded8807fffc0b9c4"
+        },
+        "date": 1788925023097,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 225360.03,
+            "range": "2252.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225360.03\nmean: 224390.39\nstdev: 2252.63\ncv: 1.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 225360.03,
+            "range": "2252.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225360.03\nmean: 224390.39\nstdev: 2252.63\ncv: 1.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55011.96,
+            "range": "938.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55011.96\nmean: 55013.57\nstdev: 938.66\ncv: 1.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 550119.64,
+            "range": "9386.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 550119.64\nmean: 550135.69\nstdev: 9386.56\ncv: 1.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
