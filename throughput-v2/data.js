@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788969151623,
+  "lastUpdate": 1788979148957,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3952,6 +3952,58 @@ window.BENCHMARK_DATA = {
             "range": "73709.75",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 556655.87\nmean: 526910.65\nstdev: 73709.75\ncv: 13.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acc2bce87937ca1d253cbefb5980da93a2f23820",
+          "message": "fix(transport): keep idle connections alive so quiet subscriptions survive (#245)\n\nA subscription to a stream with no traffic sends nothing in either\ndirection. QUIC closes a connection idle for `max_idle_timeout`, quinn\ndefaults that to 30 seconds, and nothing in Felix set a keep-alive -- so\n**every subscriber on a quiet stream was silently disconnected after 30\nseconds**, healthy and doing nothing wrong.\n\nThis is not specific to the harness. Every client connection had it. A\nstream with a 30-second gap between records lost every subscriber, and the\nonly symptom was the subscription ending with no error.\n\n`TransportConfig` now defaults to a 10-second keep-alive against a\n30-second idle timeout, both overridable by env. The idle timeout is set\nexplicitly rather than inherited from quinn so the relationship between the\ntwo is visible in one place: changing one without the other is how this\ncomes back.\n\nTwo tests, run against a deliberately tiny idle window so they take three\nseconds rather than a minute. One asserts an idle connection survives with a\nkeep-alive; the other asserts it dies without one, so the first is known to\nbe asserting something. A third checks the two defaults keep their ratio.\n\nVerified end to end: a subscriber idle for 50 seconds -- well past the\nwindow that was killing it -- then received a publish normally.\n\nReported from a recording session, where a subscriber left waiting while\nnarrating died before anything was published.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T11:36:45-07:00",
+          "tree_id": "7db642ce7ad3fc3cce92a5f52ab3315d997564ce",
+          "url": "https://github.com/gabloe/felix/commit/acc2bce87937ca1d253cbefb5980da93a2f23820"
+        },
+        "date": 1788979148210,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232819.42,
+            "range": "3570.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232819.42\nmean: 230680.19\nstdev: 3570.02\ncv: 1.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232819.42,
+            "range": "3570.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232819.42\nmean: 230680.19\nstdev: 3570.02\ncv: 1.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55852.78,
+            "range": "1015.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55852.78\nmean: 55322.86\nstdev: 1015.73\ncv: 1.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558527.82,
+            "range": "10157.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558527.82\nmean: 553228.61\nstdev: 10157.32\ncv: 1.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
