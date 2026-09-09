@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788930440604,
+  "lastUpdate": 1788934378251,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4752,6 +4752,72 @@ window.BENCHMARK_DATA = {
             "range": "1015.73",
             "unit": "us",
             "extra": "trials: 5\nmedian: 553.00\nmean: 1002.40\nstdev: 1015.73\ncv: 101.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66ba26264eff125fc7d181dca61dbf753ebbbd7a",
+          "message": "test(cluster): cross-broker conformance on one node and on three (#109) (#238)\n\n* test(cluster): cross-broker conformance on one node and on three (#109)\n\nOne set of assertions, run against a single broker and a three-node cluster.\nThe equivalence is the claim being tested: a client must not be able to tell\nhow many brokers there are, or which one it connected to.\n\nScenarios are parameterised by which broker the publish goes through, and\ncover delivery, ordering, duplicate-freedom, payload integrity, error\nmapping for an unregistered stream, and authorization. A scenario a\ndeployment cannot express — a non-owner, on a single node — reports\n`Skipped` and says so, rather than quietly running against the owner and\nlooking like coverage.\n\nEverything goes through the client-facing API, because a test reaching into\nbroker internals cannot tell a correctly routed publish from one the wrong\nbroker handled locally. `delivery` checks the ingress broker's forward\ncounter before waiting for the record: a broker that served the publish\nitself delivers to its own subscribers and looks correct from any single\nvantage point. Failures name the ingress broker, the owner, the shard, and\nthe generation.\n\nEvery scenario was verified against the failure it claims to detect. With\nthe ownership gate disabled, four fail — including with the exact diagnosis\nthe acceptance criterion asks for. The authorization scenario now subscribes\nwith its credential before asserting the publish is refused: a token\nrejected outright would otherwise fail the publish for the wrong reason and\npass while asserting nothing.\n\nThe suite surfaced a gap rather than papering over it. Ownership reaches a\nbroker through its watch, so between the control plane moving a shard and\nthe old owner noticing, that broker still serves publishes locally and those\nrecords are invisible to subscribers on the new owner. Nothing in M4 closes\nthis: the generation check protects a forwarded publish, and a stale\nex-owner never forwards. Convergence is what is promised and what is\nasserted; the window is recorded in docs/cluster-harness.md and\ndocs/control-plane.md.\n\n`move_shard` drains the current owner and re-runs placement, so a\nreassignment can be forced without stopping a broker — the node stays up and\nonly ownership changes.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: link the stale-ownership window to its tracking issue\n\nNames it as acknowledged-write loss rather than a routing delay: the client\nis told the publish succeeded, and the record is durably on a broker nobody\nreads it from. Tracked in #239.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T23:09:33-07:00",
+          "tree_id": "17bf681c1a95e19e304bcb7aa6be894208bae85f",
+          "url": "https://github.com/gabloe/felix/commit/66ba26264eff125fc7d181dca61dbf753ebbbd7a"
+        },
+        "date": 1788934375526,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 80,
+            "range": "2.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 80.00\nmean: 79.80\nstdev: 2.49\ncv: 3.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 115,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 115.00\nmean: 113.80\nstdev: 3.27\ncv: 2.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 136,
+            "range": "4.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 136.00\nmean: 136.40\nstdev: 4.98\ncv: 3.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 98,
+            "range": "2.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 98.00\nmean: 98.80\nstdev: 2.49\ncv: 2.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 234,
+            "range": "32.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 234.00\nmean: 237.00\nstdev: 32.16\ncv: 13.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 4471,
+            "range": "2920.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 4471.00\nmean: 3632.60\nstdev: 2920.40\ncv: 80.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
