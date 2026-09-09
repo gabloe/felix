@@ -40,6 +40,10 @@ pub const OUTCOME_OK: &str = "ok";
 pub const OUTCOME_ERROR: &str = "error";
 pub const OUTCOME_TIMEOUT: &str = "timeout";
 pub const OUTCOME_DISCONNECTED: &str = "disconnected";
+/// This broker was asked for a shard it does not own, and said so.
+pub const OUTCOME_NOT_LEADER: &str = "not_leader";
+/// This broker refused before applying anything.
+pub const OUTCOME_REFUSED: &str = "refused";
 
 pub fn record_connect_attempt(outcome: &'static str) {
     metrics::counter!(CONNECT_ATTEMPTS_TOTAL, "outcome" => outcome).increment(1);
@@ -76,4 +80,25 @@ pub fn record_served(outcome: &'static str) {
 
 pub fn record_inbound_rejected(reason: &'static str) {
     metrics::counter!(INBOUND_REJECTED_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Publishes this broker forwarded to an owner, by `outcome`.
+pub const FORWARDS_TOTAL: &str = "felix_broker_forwards_total";
+/// Forward attempts that were not the first: a redirect followed, or a
+/// retryable refusal retried. Rising steadily means the routing view is
+/// churning, not that anything is broken.
+pub const FORWARD_RETRIES_TOTAL: &str = "felix_broker_forward_retries_total";
+
+/// The attempt budget ran out while the owner kept refusing or moving.
+pub const OUTCOME_EXHAUSTED: &str = "exhausted";
+/// The batch was sent and its answer never arrived. Alert on this: it is the
+/// only outcome where the broker cannot say whether the write landed.
+pub const OUTCOME_INDETERMINATE: &str = "indeterminate";
+
+pub fn record_forward(outcome: &'static str) {
+    metrics::counter!(FORWARDS_TOTAL, "outcome" => outcome).increment(1);
+}
+
+pub fn record_forward_retry() {
+    metrics::counter!(FORWARD_RETRIES_TOTAL).increment(1);
 }

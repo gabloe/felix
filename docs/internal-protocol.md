@@ -167,6 +167,57 @@ Typed, because they need different responses:
 `NotLeader` is a distinct kind rather than an error code, because it carries a
 routing answer rather than only a reason.
 
+## Acknowledging a forwarded publish
+
+**The ingress broker never acknowledges before the owner has.** A forwarded
+publish is acknowledged from the owner's answer and from nothing else.
+
+This overrides `ack_on_commit`, the broker setting that otherwise decides
+whether a publish is acknowledged on enqueue or after commit. That setting is a
+statement about a *local* write — "accepted into this broker's ingress queue is
+good enough" — and for a forward the ingress broker has accepted nothing: the
+data is not on its disk, and the owner may still refuse it. So a forward always
+takes the commit-ack path, whatever the setting says.
+
+The owner's write is durable-then-answer, so `ForwardPublishOk` means the batch
+is as safe on the owner as a local publish would have been on the ingress
+broker.
+
+## Retrying a forwarded publish
+
+One question decides it: *could the owner already have applied this batch?* If it
+could, a retry is a duplicate rather than a repair, and the ingress broker has no
+way to tell the two apart.
+
+| Outcome | Applied? | Retried |
+| --- | --- | --- |
+| Shed, backoff, unreachable | No — nothing was sent | Yes |
+| `NotLeader` | No — the refusal is the evidence | Yes, against the owner it names |
+| `StaleRoute`, `Unavailable`, `Overload` | No — refused before writing | Yes |
+| `Unauthorized`, `Malformed`, `StorageFailed` | Refused, or tried and failed | No |
+| Connection dropped, request timed out | **Unknown** | **No** |
+
+The last row is the important one. The batch may be on the owner's disk, and no
+answer is coming. The publish is reported as *indeterminate* rather than failed,
+because "failed" is a claim the ingress broker cannot make.
+
+**This is stricter than `AtLeastOnce` allows**, deliberately. A duplicate
+produced inside the broker is invisible to the client, which holds the
+`request_id` and is the only layer that could deduplicate. A client that wants
+the retry can reissue and know that it did.
+
+Retries are bounded by an attempt budget, so a shard being reassigned converges
+or fails explicitly instead of chasing `NotLeader` around the cluster. A redirect
+that does not advance the generation is refused rather than followed: it would
+send the batch back where it came from.
+
+## Chains are refused, not relayed
+
+A broker asked for a shard it does not own answers `NotLeader`. It never forwards
+onward on the requester's behalf. One publish crossing an unbounded chain of
+brokers would have unbounded latency and a failure mode nobody can reason about;
+the requester holds the decision instead.
+
 ## The transport
 
 Peers reach each other over a QUIC endpoint of their own. What it guarantees,

@@ -66,6 +66,7 @@ pub(crate) use uni::{
 // exercises directly, without widening them for the rest of the crate.
 #[cfg(test)]
 use crate::auth::AuthContext;
+use crate::peer::ForwardTarget;
 use crate::shard_routing::{Dispatch, IngressRouter, dispatch, shard_for};
 use crate::shard_watch::ShardKey;
 #[cfg(test)]
@@ -134,6 +135,10 @@ pub(crate) struct PublishContext {
     /// `None` on a single-node broker, which is the default: there is nothing
     /// to resolve against, and the gate costs one null check.
     pub(crate) ingress: Option<Arc<IngressRouter>>,
+    /// Connections to peer brokers, when this broker is in a cluster. Present so
+    /// the handlers can tell "forwardable" from "cannot forward" before
+    /// enqueueing rather than after.
+    pub(crate) peers: Option<Arc<crate::peer::PeerPool>>,
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
     pub(crate) worker_count: usize,
     pub(crate) depth: Arc<AtomicUsize>,
@@ -175,7 +180,74 @@ impl PublishContext {
     }
 }
 
-/// Resolve a stream, refusing one whose shard this broker does not own.
+/// Turn a resolved route into a publish target.
+///
+/// `None` means this broker cannot serve the publish: the stream did not
+/// resolve, or the shard belongs to a peer this broker has no transport to.
+/// Callers answer that the same way they always answered an unresolvable
+/// stream.
+pub(crate) fn publish_target(
+    route: PublishRoute,
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    ack: felix_wire::internal::AckMode,
+) -> Option<PublishTarget> {
+    match route {
+        PublishRoute::Local(handle) => Some(PublishTarget::Resolved(handle)),
+        PublishRoute::Forward(target) => {
+            if publish_ctx.peers.is_none() {
+                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
+                tracing::debug!(
+                    tenant_id, namespace, stream,
+                    owner = %target.node_id,
+                    "publish refused: shard is owned by another broker and this one cannot forward",
+                );
+                return None;
+            }
+            t_counter!("felix_publish_requests_total", "result" => "forwarded").increment(1);
+            Some(PublishTarget::Forward {
+                target,
+                key: crate::peer::ForwardKey {
+                    tenant_id: tenant_id.to_string(),
+                    namespace: namespace.to_string(),
+                    stream: stream.to_string(),
+                    // Matches `resolve_route`: no routing key on the wire yet.
+                    shard: shard_for(1, None),
+                },
+                ack,
+            })
+        }
+        PublishRoute::Refused => None,
+    }
+}
+
+/// How the owner should treat a forwarded batch, from what the client asked of
+/// this broker.
+///
+/// Anything other than "no ack" becomes `OnCommit`, because the owner's write
+/// path is durable-then-answer either way: a weaker mode would describe the
+/// answer inaccurately rather than make it cheaper.
+pub(crate) fn internal_ack(ack: Option<felix_wire::AckMode>) -> felix_wire::internal::AckMode {
+    match ack {
+        Some(felix_wire::AckMode::None) => felix_wire::internal::AckMode::None,
+        _ => felix_wire::internal::AckMode::OnCommit,
+    }
+}
+
+/// Where a publish should be applied.
+#[derive(Debug)]
+pub(crate) enum PublishRoute {
+    /// This broker owns the shard and the stream resolved here.
+    Local(StreamHandle),
+    /// Another broker owns it.
+    Forward(ForwardTarget),
+    /// Nobody can take it right now, or the stream does not resolve.
+    Refused,
+}
+
+/// Resolve a stream, or say where else the publish belongs.
 ///
 /// The single chokepoint every publish path funnels through, which is why the
 /// ownership gate is here: nothing reaches storage without passing it.
@@ -185,7 +257,7 @@ impl PublishContext {
 /// changes the instant the control plane says so, and caching it would keep a
 /// broker serving a reassigned shard for up to a TTL. The check is two atomic
 /// loads, so paying it per publish costs less than reasoning about staleness.
-pub(crate) async fn resolve_stream_cached(
+pub(crate) async fn resolve_route(
     broker: &Broker,
     ingress: Option<&IngressRouter>,
     cache: &mut StreamHandleCache,
@@ -193,7 +265,7 @@ pub(crate) async fn resolve_stream_cached(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
-) -> Option<StreamHandle> {
+) -> PublishRoute {
     // Single-node brokers short-circuit on a null check; a cluster member pays
     // two loads. Either way there is no lock and no await.
     if ingress.is_some() {
@@ -207,16 +279,16 @@ pub(crate) async fn resolve_stream_cached(
         };
         match dispatch(ingress, &key) {
             Dispatch::Local => {}
-            Dispatch::Forward { ref node_id, .. } => {
-                // M4 forwards here. Until then the frame is refused rather than
-                // written locally, which is the whole point of the gate.
-                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
-                tracing::debug!(
-                    tenant_id, namespace, stream,
-                    owner = %node_id,
-                    "publish refused: shard is owned by another broker",
-                );
-                return None;
+            Dispatch::Forward {
+                node_id,
+                advertise_addr,
+                generation,
+            } => {
+                return PublishRoute::Forward(ForwardTarget {
+                    node_id,
+                    advertise_addr,
+                    generation,
+                });
             }
             Dispatch::Unavailable(reason) => {
                 t_counter!("felix_publish_requests_total", "result" => "unroutable").increment(1);
@@ -225,7 +297,7 @@ pub(crate) async fn resolve_stream_cached(
                     reason = %reason,
                     "publish refused: shard is not servable here",
                 );
-                return None;
+                return PublishRoute::Refused;
             }
         }
     }
@@ -245,7 +317,7 @@ pub(crate) async fn resolve_stream_cached(
         && *expires > Instant::now()
         && handle.as_ref().is_none_or(StreamHandle::is_active)
     {
-        return handle.clone();
+        return PublishRoute::from(handle.clone());
     }
     let handle = broker
         .resolve_stream_handle(tenant_id, namespace, stream)
@@ -255,5 +327,14 @@ pub(crate) async fn resolve_stream_cached(
         key_scratch.clone(),
         (handle.clone(), Instant::now() + STREAM_CACHE_TTL),
     );
-    handle
+    PublishRoute::from(handle)
+}
+
+impl From<Option<StreamHandle>> for PublishRoute {
+    fn from(handle: Option<StreamHandle>) -> Self {
+        match handle {
+            Some(handle) => Self::Local(handle),
+            None => Self::Refused,
+        }
+    }
 }

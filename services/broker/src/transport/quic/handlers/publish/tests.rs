@@ -30,6 +30,7 @@ fn make_publish_context(
     let (tx, rx) = mpsc::channel(buffer);
     let context = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx.clone()]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -81,6 +82,7 @@ async fn enqueue_publish_drop_sheds_load_when_byte_budget_exhausted() {
     let (tx, _rx) = mpsc::channel(8);
     let ctx = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -106,6 +108,7 @@ async fn enqueue_publish_drop_sheds_load_when_conn_byte_budget_exhausted() {
     let (tx, _rx) = mpsc::channel(8);
     let ctx = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -132,6 +135,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let admission = Arc::new(PublishAdmission::new(8));
     let ctx_a = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx.clone()]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -144,6 +148,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     };
     let ctx_b = PublishContext {
         ingress: None,
+        peers: None,
         conn_admission: Arc::new(PublishAdmission::new(4)),
         subscriptions: Arc::new(SubscriptionLimiter::new()),
         lane_manager: test_lane_manager(),
@@ -283,6 +288,7 @@ async fn enqueue_publish_wait_times_out_when_queue_full() {
     tx.try_send(make_job()).unwrap();
     let ctx = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -305,6 +311,7 @@ async fn enqueue_publish_returns_error_when_queue_closed() {
     drop(rx);
     let ctx = PublishContext {
         ingress: None,
+        peers: None,
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(AtomicUsize::new(0)),
@@ -1720,9 +1727,11 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     let mut cache = HashMap::new();
     let mut key = String::new();
 
-    let handle =
-        resolve_stream_cached(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
-    assert!(handle.is_none(), "no tenant/namespace yet");
+    let handle = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    assert!(
+        matches!(handle, PublishRoute::Refused),
+        "no tenant/namespace yet"
+    );
 
     broker.register_tenant("t1").await.expect("tenant");
     broker
@@ -1739,17 +1748,18 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         .await
         .expect("stream");
 
-    let cached =
-        resolve_stream_cached(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    let cached = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
     assert!(
-        cached.is_none(),
+        matches!(cached, PublishRoute::Refused),
         "cached miss should be returned until cache expires or clears"
     );
 
     cache.clear();
-    let refreshed =
-        resolve_stream_cached(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
-    assert!(refreshed.is_some(), "cache refresh should see stream");
+    let refreshed = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+    assert!(
+        matches!(refreshed, PublishRoute::Local(_)),
+        "cache refresh should see stream"
+    );
 }
 
 #[tokio::test]
@@ -2666,7 +2676,28 @@ mod ownership_gate {
         };
         let assignments: HashMap<WatchKey, ShardAssignment> =
             [(watch_key(), assignment)].into_iter().collect();
-        let nodes = HashMap::new();
+        // A catalog with both brokers in it, because a route is only usable when
+        // the owner's id has an address behind it. An empty catalog would make
+        // every remote shard look unavailable rather than forwardable, which is
+        // the wrong thing for these tests to be asserting against.
+        let nodes: HashMap<String, felix_router::NodeRef> = ["broker-a", "broker-b"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, node_id)| {
+                (
+                    node_id.to_string(),
+                    felix_router::NodeRef {
+                        node_id: node_id.to_string(),
+                        advertise_addr: std::net::SocketAddr::from((
+                            [127, 0, 0, 1],
+                            7000 + index as u16,
+                        )),
+                        region: "us-west-2".to_string(),
+                        live: true,
+                    },
+                )
+            })
+            .collect();
         router.publish(routing_table_from(&assignments, &nodes), &nodes);
 
         let ingress = IngressRouter::new(router);
@@ -2684,29 +2715,7 @@ mod ownership_gate {
         let mut cache = HashMap::new();
         let mut key = String::new();
 
-        let handle = resolve_stream_cached(
-            &broker,
-            Some(&ingress),
-            &mut cache,
-            &mut key,
-            "t1",
-            "ns",
-            "stream",
-        )
-        .await;
-        assert!(handle.is_some(), "an owned, open shard must be servable");
-    }
-
-    /// The acceptance criterion, on the real path: a broker must not write a
-    /// shard it does not own, however healthy the stream is locally.
-    #[tokio::test]
-    async fn a_shard_owned_elsewhere_is_refused() {
-        let broker = broker_with_stream().await;
-        let ingress = ingress_for("broker-b", false);
-        let mut cache = HashMap::new();
-        let mut key = String::new();
-
-        let handle = resolve_stream_cached(
+        let route = resolve_route(
             &broker,
             Some(&ingress),
             &mut cache,
@@ -2717,9 +2726,35 @@ mod ownership_gate {
         )
         .await;
         assert!(
-            handle.is_none(),
-            "a shard owned by another broker must not resolve locally",
+            matches!(route, PublishRoute::Local(_)),
+            "an owned, open shard must be servable",
         );
+    }
+
+    /// The acceptance criterion, on the real path: a broker must not write a
+    /// shard it does not own, however healthy the stream is locally. It routes
+    /// the publish to the owner instead.
+    #[tokio::test]
+    async fn a_shard_owned_elsewhere_is_forwarded_not_served_locally() {
+        let broker = broker_with_stream().await;
+        let ingress = ingress_for("broker-b", false);
+        let mut cache = HashMap::new();
+        let mut key = String::new();
+
+        let route = resolve_route(
+            &broker,
+            Some(&ingress),
+            &mut cache,
+            &mut key,
+            "t1",
+            "ns",
+            "stream",
+        )
+        .await;
+        match route {
+            PublishRoute::Forward(target) => assert_eq!(target.node_id, "broker-b"),
+            other => panic!("must route to the owner, not serve locally: {other:?}"),
+        }
     }
 
     /// Owned but not yet opened. The stream exists locally, so only the gate
@@ -2731,7 +2766,7 @@ mod ownership_gate {
         let mut cache = HashMap::new();
         let mut key = String::new();
 
-        let handle = resolve_stream_cached(
+        let route = resolve_route(
             &broker,
             Some(&ingress),
             &mut cache,
@@ -2741,7 +2776,10 @@ mod ownership_gate {
             "stream",
         )
         .await;
-        assert!(handle.is_none(), "an unopened shard must not accept writes");
+        assert!(
+            matches!(route, PublishRoute::Refused),
+            "an unopened shard must not accept writes",
+        );
     }
 
     /// Ownership is checked outside the handle cache, so a reassignment takes
@@ -2754,34 +2792,39 @@ mod ownership_gate {
         let mut key = String::new();
 
         assert!(
-            resolve_stream_cached(
-                &broker,
-                Some(&ingress),
-                &mut cache,
-                &mut key,
-                "t1",
-                "ns",
-                "stream"
-            )
-            .await
-            .is_some(),
+            matches!(
+                resolve_route(
+                    &broker,
+                    Some(&ingress),
+                    &mut cache,
+                    &mut key,
+                    "t1",
+                    "ns",
+                    "stream"
+                )
+                .await,
+                PublishRoute::Local(_)
+            ),
             "warm the handle cache while the shard is ours",
         );
 
-        // The shard moves away. The stream handle is still cached and valid.
+        // The shard moves away. The stream handle is still cached and valid, so
+        // only the gate can notice.
         let moved = ingress_for("broker-b", false);
         assert!(
-            resolve_stream_cached(
-                &broker,
-                Some(&moved),
-                &mut cache,
-                &mut key,
-                "t1",
-                "ns",
-                "stream"
-            )
-            .await
-            .is_none(),
+            matches!(
+                resolve_route(
+                    &broker,
+                    Some(&moved),
+                    &mut cache,
+                    &mut key,
+                    "t1",
+                    "ns",
+                    "stream"
+                )
+                .await,
+                PublishRoute::Forward(_)
+            ),
             "a cached handle must not outlive ownership",
         );
     }
@@ -2793,8 +2836,7 @@ mod ownership_gate {
         let mut cache = HashMap::new();
         let mut key = String::new();
 
-        let handle =
-            resolve_stream_cached(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
-        assert!(handle.is_some());
+        let route = resolve_route(&broker, None, &mut cache, &mut key, "t1", "ns", "stream").await;
+        assert!(matches!(route, PublishRoute::Local(_)));
     }
 }

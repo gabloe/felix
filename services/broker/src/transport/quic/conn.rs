@@ -76,8 +76,8 @@ pub async fn serve(
         CancellationToken::new(),
         TaskTracker::new(),
         // The simple entry point is single-node; a cluster member goes through
-        // `serve_with_shutdown` so it can pass its ownership view.
-        None,
+        // `serve_with_shutdown` so it can pass its ownership view and its peers.
+        ClusterContext::default(),
     )
     .await
 }
@@ -102,9 +102,9 @@ pub async fn serve_with_shutdown(
     auth: Arc<BrokerAuth>,
     shutdown: CancellationToken,
     connections: TaskTracker,
-    ingress: Option<Arc<IngressRouter>>,
+    cluster: ClusterContext,
 ) -> Result<()> {
-    let publish_ctx = build_publish_context(Arc::clone(&broker), &config, ingress);
+    let publish_ctx = build_publish_context(Arc::clone(&broker), &config, cluster);
     // Main accept loop: spawn a task per incoming QUIC connection.
     if config.disable_timings {
         timings::set_enabled(false);
@@ -147,11 +147,23 @@ pub async fn serve_with_shutdown(
     }
 }
 
+/// What a broker needs to serve traffic as part of a cluster.
+///
+/// Both halves or neither: a broker that can resolve a remote owner and has no
+/// way to reach it would refuse publishes it should forward. `Default` is a
+/// single-node broker, which has neither.
+#[derive(Clone, Default)]
+pub struct ClusterContext {
+    pub ingress: Option<Arc<IngressRouter>>,
+    pub peers: Option<Arc<crate::peer::PeerPool>>,
+}
+
 fn build_publish_context(
     broker: Arc<Broker>,
     config: &BrokerConfig,
-    ingress: Option<Arc<IngressRouter>>,
+    cluster: ClusterContext,
 ) -> PublishContext {
+    let ClusterContext { ingress, peers } = cluster;
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
@@ -175,6 +187,7 @@ fn build_publish_context(
         let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(publish_queue_depth);
         let queue_depth_worker = Arc::clone(&queue_depth);
         let broker_for_worker = Arc::clone(&broker);
+        let peers_for_worker = peers.clone();
         let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
@@ -190,25 +203,48 @@ fn build_publish_context(
                 );
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
-                let result = match &job.target {
-                    PublishTarget::Resolved(handle) => {
-                        broker_for_worker
-                            .publish_batch_to_handle(handle, &job.payloads)
-                            .await
-                    }
+                let result: Result<(), anyhow::Error> = match &job.target {
+                    PublishTarget::Resolved(handle) => broker_for_worker
+                        .publish_batch_to_handle(handle, &job.payloads)
+                        .await
+                        .map(|_| ())
+                        .map_err(Into::into),
                     #[cfg(test)]
                     PublishTarget::Named {
                         tenant_id,
                         namespace,
                         stream,
-                    } => {
-                        broker_for_worker
-                            .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                    } => broker_for_worker
+                        .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                        .await
+                        .map(|_| ())
+                        .map_err(Into::into),
+                    PublishTarget::Forward { target, key, ack } => {
+                        // Forwarding runs on the publish worker, not inline on
+                        // the read loop, so a slow peer backs up the same queue
+                        // a slow disk would and the existing backpressure and
+                        // ack plumbing apply unchanged.
+                        match &peers_for_worker {
+                            Some(pool) => crate::peer::forward_publish(
+                                pool,
+                                target,
+                                key,
+                                *ack,
+                                job.payloads.clone(),
+                            )
                             .await
+                            .map(|_| ())
+                            .map_err(|err| anyhow::anyhow!("{err}")),
+                            // The route said forward and there is nothing to
+                            // forward with. Refusing beats writing another
+                            // broker's shard locally.
+                            None => Err(anyhow::anyhow!(
+                                "no peer transport: this broker cannot forward to {}",
+                                target.node_id
+                            )),
+                        }
                     }
-                }
-                .map(|_| ())
-                .map_err(Into::into);
+                };
                 #[cfg(feature = "perf_debug")]
                 {
                     let ns = worker_start.elapsed().as_nanos() as u64;
@@ -237,6 +273,7 @@ fn build_publish_context(
     }
     PublishContext {
         ingress,
+        peers,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,
@@ -485,7 +522,8 @@ mod tests {
             publish_queue_wait_timeout_ms: 17,
             ..BrokerConfig::default()
         };
-        let publish_ctx = build_publish_context(Arc::clone(&broker), &config, None);
+        let publish_ctx =
+            build_publish_context(Arc::clone(&broker), &config, ClusterContext::default());
         assert_eq!(publish_ctx.worker_count, 1);
         assert_eq!(publish_ctx.workers.len(), 1);
         assert_eq!(publish_ctx.wait_timeout, Duration::from_millis(17));
@@ -514,7 +552,7 @@ mod tests {
         broker.register_tenant("t1").await?;
         broker.register_namespace("t1", "default").await?;
         let config = BrokerConfig::default();
-        let publish_ctx = build_publish_context(broker, &config, None);
+        let publish_ctx = build_publish_context(broker, &config, ClusterContext::default());
 
         let (response_tx, response_rx) = oneshot::channel();
         publish_ctx.workers[0]
@@ -545,7 +583,8 @@ mod tests {
         broker.register_namespace("t1", "default").await?;
 
         let config = BrokerConfig::default();
-        let publish_ctx = build_publish_context(Arc::clone(&broker), &config, None);
+        let publish_ctx =
+            build_publish_context(Arc::clone(&broker), &config, ClusterContext::default());
         let auth = Arc::new(BrokerAuth::new("http://127.0.0.1".to_string()));
 
         let cert = generate_simple_self_signed(vec!["localhost".into()])?;

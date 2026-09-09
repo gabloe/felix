@@ -12,6 +12,7 @@ pub mod core_shards;
 pub mod durable_config;
 pub mod membership;
 pub mod membership_metrics;
+pub mod node_catalog;
 pub mod peer;
 pub mod quic;
 pub mod shard_lifecycle;

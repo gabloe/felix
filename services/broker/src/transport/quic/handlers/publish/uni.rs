@@ -9,9 +9,9 @@ use felix_wire::Frame;
 use std::sync::atomic::Ordering;
 
 use crate::auth::AuthContext;
-use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
+use crate::transport::quic::handlers::publish::ingress::enqueue_publish;
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, resolve_stream_cached,
+    PublishContext, PublishJob, StreamHandleCache, publish_target, resolve_route,
 };
 use crate::transport::quic::telemetry::log_decode_error;
 
@@ -63,17 +63,25 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             .pub_items_in_ok
             .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
     }
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let Some(target) = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &batch.tenant_id,
+            &batch.namespace,
+            &batch.stream,
+        )
+        .await,
+        publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
-    )
-    .await
-    else {
+        // Fire-and-forget: the owner is told no acknowledgement is expected, the
+        // same contract the client gave this broker.
+        felix_wire::internal::AckMode::None,
+    ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
     };
@@ -85,7 +93,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
     match enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads,
             response: None,
             admission_permit: None,
@@ -127,17 +135,25 @@ pub(crate) async fn handle_publish_message_uni(
         counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
         counters.pub_items_in_ok.fetch_add(1, Ordering::Relaxed);
     }
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let Some(target) = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &tenant_id,
+            &namespace,
+            &stream,
+        )
+        .await,
+        publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
-    )
-    .await
-    else {
+        // Fire-and-forget: the owner is told no acknowledgement is expected, the
+        // same contract the client gave this broker.
+        felix_wire::internal::AckMode::None,
+    ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
     };
@@ -145,7 +161,7 @@ pub(crate) async fn handle_publish_message_uni(
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads: vec![Bytes::from(payload)],
             response: None,
             admission_permit: None,
@@ -190,17 +206,25 @@ pub(crate) async fn handle_publish_batch_message_uni(
             .pub_items_in_ok
             .fetch_add(payloads.len() as u64, Ordering::Relaxed);
     }
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let Some(target) = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &tenant_id,
+            &namespace,
+            &stream,
+        )
+        .await,
+        publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
-    )
-    .await
-    else {
+        // Fire-and-forget: the owner is told no acknowledgement is expected, the
+        // same contract the client gave this broker.
+        felix_wire::internal::AckMode::None,
+    ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
     };
@@ -209,7 +233,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads,
             response: None,
             admission_permit: None,

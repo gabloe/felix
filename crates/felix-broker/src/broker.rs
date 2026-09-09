@@ -104,6 +104,16 @@ pub struct StreamMetadata {
     pub shards: u32,
 }
 
+/// What a publish did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublishOutcome {
+    /// Subscribers the batch was enqueued to.
+    pub subscribers: usize,
+    /// First and last log offset, inclusive. `None` for an ephemeral stream,
+    /// which has no log and therefore no offsets to report.
+    pub offsets: Option<(u64, u64)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamHandle {
     pub(crate) state: Arc<StreamState>,
@@ -256,6 +266,21 @@ impl Broker {
         handle: &StreamHandle,
         payloads: &[Bytes],
     ) -> Result<usize> {
+        Ok(self
+            .publish_batch_with_outcome(handle, payloads)
+            .await?
+            .subscribers)
+    }
+
+    /// Publish, and report the log offsets the batch was assigned.
+    ///
+    /// Same path as [`Self::publish_batch_to_handle`]; the offsets are what a
+    /// forwarding broker relays to the requester, which cannot see this log.
+    pub async fn publish_batch_with_outcome(
+        &self,
+        handle: &StreamHandle,
+        payloads: &[Bytes],
+    ) -> Result<PublishOutcome> {
         if !handle.state.active.load(Ordering::Acquire) {
             return Err(BrokerError::StreamHandleInactive(handle.id()));
         }
@@ -265,7 +290,10 @@ impl Broker {
         // each subscriber has a bounded queue and publish uses try_send so a slow consumer
         // drops locally instead of stalling all publishers.
         if payloads.is_empty() {
-            return Ok(0);
+            return Ok(PublishOutcome {
+                subscribers: 0,
+                offsets: None,
+            });
         }
 
         let sample = t_should_sample();
@@ -444,7 +472,12 @@ impl Broker {
                 .record(send_ns as f64);
             }
         }
-        Ok(sent)
+        Ok(PublishOutcome {
+            subscribers: sent,
+            // Inclusive, and contiguous by construction: a batch consumes one
+            // run of offsets.
+            offsets: durable_first_offset.map(|first| (first, first + item_count as u64 - 1)),
+        })
     }
 
     pub async fn subscribe(

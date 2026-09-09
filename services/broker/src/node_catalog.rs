@@ -1,0 +1,92 @@
+//! The address book: which broker is where.
+//!
+//! Shard assignments name an owner by node id. Forwarding needs an address, and
+//! only the control plane's node catalog has one. Without this the router
+//! resolves every remote shard to "owner unavailable" — the assignment is known
+//! and the node behind it is not.
+//!
+//! Read with the same credential as the assignment feed: `/v1/nodes` requires
+//! `node.view:cluster:*`, which a broker already holds to read assignments at
+//! all.
+use std::collections::HashMap;
+
+use anyhow::{Context, Result, anyhow};
+use felix_router::NodeRef;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct NodeListResponse {
+    items: Vec<NodeView>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeView {
+    node: Node,
+    placement: Placement,
+}
+
+#[derive(Debug, Deserialize)]
+struct Node {
+    node_id: String,
+    spec: NodeSpec,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeSpec {
+    advertise_addr: String,
+    region: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Placement {
+    eligible: bool,
+}
+
+/// Fetch the catalog.
+///
+/// A node whose advertised address does not parse is skipped rather than
+/// failing the fetch: one malformed registration must not cost this broker every
+/// other route it knows.
+pub async fn fetch(
+    client: &reqwest::Client,
+    base_url: &str,
+    bearer: Option<&str>,
+) -> Result<HashMap<String, NodeRef>> {
+    let mut request = client.get(format!("{base_url}/v1/nodes"));
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
+    let response = request.send().await.context("send node list request")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("{status}: {body}"));
+    }
+    let response: NodeListResponse = response.json().await.context("decode node list")?;
+
+    let mut catalog = HashMap::with_capacity(response.items.len());
+    for item in response.items {
+        let Ok(advertise_addr) = item.node.spec.advertise_addr.parse() else {
+            tracing::warn!(
+                node_id = %item.node.node_id,
+                advertise_addr = %item.node.spec.advertise_addr,
+                "skipping node: advertised address does not parse",
+            );
+            continue;
+        };
+        catalog.insert(
+            item.node.node_id.clone(),
+            NodeRef {
+                node_id: item.node.node_id,
+                advertise_addr,
+                region: item.node.spec.region,
+                // The control plane's own verdict, which folds in lifecycle and
+                // heartbeat age together. A broker re-deriving that from the
+                // lifecycle alone would keep forwarding to a node whose
+                // heartbeat has lapsed but whose sweep has not yet run.
+                live: item.placement.eligible,
+            },
+        );
+    }
+    Ok(catalog)
+}

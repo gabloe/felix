@@ -21,7 +21,7 @@ use crate::transport::quic::handlers::publish::ack::{
 };
 use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, resolve_stream_cached,
+    PublishContext, PublishJob, StreamHandleCache, internal_ack, publish_target, resolve_route,
 };
 use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
 
@@ -81,17 +81,25 @@ pub(crate) async fn handle_binary_publish_batch_control(
         timings::record_decode_ns(decode_ns);
         t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
     }
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let Some(target) = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &batch.tenant_id,
+            &batch.namespace,
+            &batch.stream,
+        )
+        .await,
+        publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
-    )
-    .await
-    else {
+        // Fire-and-forget: the owner is told no acknowledgement is expected, the
+        // same contract the client gave this broker.
+        felix_wire::internal::AckMode::None,
+    ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(());
     };
@@ -112,7 +120,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads,
             response: None,
             admission_permit: None,
@@ -390,23 +398,38 @@ pub(crate) async fn handle_publish_message(
         .await?;
         return Ok(());
     }
-    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && ack_on_commit {
-        let (response_tx, response_rx) = oneshot::channel();
-        (Some(response_tx), Some(response_rx))
-    } else {
-        (None, None)
-    };
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let target = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &tenant_id,
+            &namespace,
+            &stream,
+        )
+        .await,
+        publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
-    )
-    .await
-    else {
+        internal_ack(ack),
+    );
+
+    // A forwarded publish is acknowledged only once the owner has answered,
+    // whatever `ack_on_commit` says. That setting is a local policy — "accepted
+    // by this broker is good enough" — and for a forward this broker has
+    // accepted nothing: the data is not on its disk, and the owner may still
+    // refuse it.
+    let forwarding = matches!(target, Some(PublishTarget::Forward { .. }));
+    let (response_tx, response_rx) =
+        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding) {
+            let (response_tx, response_rx) = oneshot::channel();
+            (Some(response_tx), Some(response_rx))
+        } else {
+            (None, None)
+        };
+    let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
@@ -435,14 +458,14 @@ pub(crate) async fn handle_publish_message(
     let enqueue_result = enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads: vec![Bytes::from(payload)],
             response: response_tx,
             admission_permit: None,
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit {
+        } else if ack_on_commit || forwarding {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -520,7 +543,10 @@ pub(crate) async fn handle_publish_message(
     if ack_mode == felix_wire::AckMode::None {
         return Ok(());
     }
-    if !ack_on_commit {
+    // A forward has no enqueue-ack mode: this broker enqueued the batch to send
+    // it somewhere else, which is not a fact worth acknowledging. The commit-ack
+    // path below waits for the owner's answer instead.
+    if !ack_on_commit && !forwarding {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.
@@ -751,17 +777,27 @@ pub(crate) async fn handle_publish_batch_message(
         .await?;
         return Ok(());
     }
-    let Some(stream_handle) = resolve_stream_cached(
-        broker,
-        publish_ctx.ingress.as_deref(),
-        stream_cache,
-        stream_cache_key,
+    let target = publish_target(
+        resolve_route(
+            broker,
+            publish_ctx.ingress.as_deref(),
+            stream_cache,
+            stream_cache_key,
+            &tenant_id,
+            &namespace,
+            &stream,
+        )
+        .await,
+        publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
-    )
-    .await
-    else {
+        internal_ack(ack),
+    );
+    // See the single-publish path: a forward is acknowledged only once the owner
+    // has answered, whatever `ack_on_commit` says.
+    let forwarding = matches!(target, Some(PublishTarget::Forward { .. }));
+    let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
@@ -789,24 +825,25 @@ pub(crate) async fn handle_publish_batch_message(
         .map(|payload| payload.len())
         .collect::<Vec<_>>();
     let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
-    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && ack_on_commit {
-        let (response_tx, response_rx) = oneshot::channel();
-        (Some(response_tx), Some(response_rx))
-    } else {
-        (None, None)
-    };
+    let (response_tx, response_rx) =
+        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding) {
+            let (response_tx, response_rx) = oneshot::channel();
+            (Some(response_tx), Some(response_rx))
+        } else {
+            (None, None)
+        };
     let fanout_start = t_now_if(sample);
     let enqueue_result = enqueue_publish(
         publish_ctx,
         PublishJob {
-            target: PublishTarget::Resolved(stream_handle),
+            target,
             payloads,
             response: response_tx,
             admission_permit: None,
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit {
+        } else if ack_on_commit || forwarding {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -871,7 +908,10 @@ pub(crate) async fn handle_publish_batch_message(
     if ack_mode == felix_wire::AckMode::None {
         return Ok(());
     }
-    if !ack_on_commit {
+    // A forward has no enqueue-ack mode: this broker enqueued the batch to send
+    // it somewhere else, which is not a fact worth acknowledging. The commit-ack
+    // path below waits for the owner's answer instead.
+    if !ack_on_commit && !forwarding {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.

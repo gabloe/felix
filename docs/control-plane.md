@@ -99,6 +99,14 @@ peers are the only thing that reads it. A broker that advertises a port it does
 not bind logs a warning at startup rather than refusing, because a deployment
 may legitimately map ports.
 
+A broker also polls `/v1/nodes` on the same interval to build its address book.
+Shard assignments name an owner by node id, and only the catalog turns that into
+an address to forward to — without it a broker knows a shard is owned elsewhere
+and cannot reach it. A refresh that fails keeps the previous catalog rather than
+emptying it, because a control-plane blip must not turn a healthy cluster into
+one that refuses every remote publish. `felix_broker_node_catalog_nodes` reading
+zero while assignments are known is exactly that failure.
+
 The internal transport is described in
 [the broker-internal forwarding protocol](internal-protocol.md); its remaining
 settings (`FELIX_INTERNAL_CONNS_PER_PEER`, `FELIX_INTERNAL_STREAMS_PER_CONN`,
