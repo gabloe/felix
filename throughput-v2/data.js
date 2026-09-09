@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788934381373,
+  "lastUpdate": 1788967317023,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3796,6 +3796,58 @@ window.BENCHMARK_DATA = {
             "range": "10322.97",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 817185.45\nmean: 820783.23\nstdev: 10322.97\ncv: 1.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0518aa110b2c500417d51812a9ee8d0826d87ffe",
+          "message": "feat(cluster): drive the cluster by hand from a second terminal (#243)\n\n`up` now writes a session file -- the broker addresses and a credential -- so\nanother window has something to attach to, and adds `subscribe`, `publish`,\nand `owners` that find it themselves. Everything the cluster needed to be\ntalked to previously lived in the one process and nowhere else.\n\nThe output names the broker each thing went through and whether the record\ncrossed a node boundary:\n\n    subscribing to orders on broker-2 (owner)\n    [broker-2] offset      1  hello\n\n    published via broker-0 -> forwarded to broker-2 -> acknowledged\n\nThat second line is the only part a single broker does differently, so it is\nwhat the output shows. `publish` defaults to a broker that does *not* own the\nshard for the same reason; `--via` the owner prints \"no hop\" instead.\n\n`subscribe` defaults to the owner because the owner is the only broker that\nserves a subscription today. Pointing it elsewhere is allowed and says so\nplainly rather than appearing to hang -- subscribe routing is M6.\n\n`up` also handles SIGTERM, not just Ctrl-C. The brokers are child processes,\nso this process dying without running its teardown orphans three of them,\neach holding a port and a data directory. Verified: without the handler a\nplain `kill` leaves all three behind; with it, three go to zero.\n\nThe session file holds a bearer token, so it is written owner-only and\nremoved on teardown. The cluster it opens is loopback-only with dev\ncertificates and disappears with the process.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T08:19:17-07:00",
+          "tree_id": "467071371a5d8c6dea1c2f43c6060a42a5a8c7ed",
+          "url": "https://github.com/gabloe/felix/commit/0518aa110b2c500417d51812a9ee8d0826d87ffe"
+        },
+        "date": 1788967316283,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 225486.58,
+            "range": "4383.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225486.58\nmean: 226426.87\nstdev: 4383.55\ncv: 1.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 225486.58,
+            "range": "4383.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225486.58\nmean: 226426.87\nstdev: 4383.55\ncv: 1.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 53129.53,
+            "range": "677.25",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 53129.53\nmean: 53089.54\nstdev: 677.25\ncv: 1.28%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 531295.27,
+            "range": "6772.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 531295.27\nmean: 530895.41\nstdev: 6772.52\ncv: 1.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
