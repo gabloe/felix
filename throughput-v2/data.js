@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788967317023,
+  "lastUpdate": 1788968205175,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -3848,6 +3848,58 @@ window.BENCHMARK_DATA = {
             "range": "6772.52",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 531295.27\nmean: 530895.41\nstdev: 6772.52\ncv: 1.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6fb77486398cb95a4cb833cf5d7cafe178726d3",
+          "message": "feat: fenced shard leadership, replica sets, and gated promotion (#111) (#242)\n\n* feat(broker): fence writes behind a lease renewed by the heartbeat (#111)\n\nA broker may now serve only while it holds an unexpired lease, and the lease\nis the heartbeat it already sends. No new protocol: the control plane grants\nby keeping the node live, the broker renews by heartbeating, and the duration\nis the control plane's own expiry window, taken from the heartbeat response\nfor the same reason the interval is.\n\nMeasured on the broker's own monotonic clock, so the two ends never compare\nwall clocks and no synchronisation is assumed.\n\nThe fence is checked twice, and the two checks are not the same:\n\n- **Admission** reads one atomic and may lag a refresh interval. It sheds\n  early on a path that prides itself on costing two atomic loads.\n- **Commit** reads the clock, immediately before the record is written. It is\n  the authoritative one, and it is why a process suspended past its expiry\n  cannot write on waking: the cached flag still says yes and the clock does\n  not.\n\nThe safety interval falls out of what already exists rather than needing new\ncontrol-plane code. The broker surrenders a quarter of the lease as margin,\nso it stops at 0.75 of the expiry window while the control plane will not\nreassign before the full window has passed — and the broker's window starts\nlater, since it records success on receipt of the response.\n\nThis closes the write-loss path in #239: a stale ex-owner is a broker whose\nlease has lapsed, and it refuses rather than racing its watch.\n\nDeterministic tests throughout: `LeaseState` reads `tokio::time::Instant`, so\nexpiry is driven by advancing a paused clock rather than sleeping. That\nimmediately found a real defect — zero was both the \"never renewed\" sentinel\nand a genuine renewal in the first millisecond of the process.\n\n`Cluster::stop_control_plane` is a fault primitive #115 needs. It aborts\nrather than drains: a graceful shutdown keeps serving the keep-alive\nconnections brokers already hold, so their heartbeats go on succeeding and\nthe control plane is not gone in any sense a broker can detect.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(controlplane): assign replica sets and gate promotion on catch-up\n\nReplica sets are real. `Stream.replication_factor` defaults to 1, so a stream\nthat never asked for replication is leader-only exactly as before, and every\nstream written before the column existed reads back that way. Followers are\nthe next best-scoring nodes for the shard, chosen by the same function as\nleadership, so the whole set is a deterministic function of the shard and the\ncluster — two control-plane instances planning the same cluster agree. A\nreplica holds a copy, so it counts against `max_shards` as leadership does.\n\nFewer nodes than copies is recorded rather than refused: an assignment naming\na node that holds nothing is the lie failover would act on.\n\nPromotion prefers a follower when the leader is gone, gated on that follower\nbeing caught up. The gate is the point. A replica holding no log can be\npromoted perfectly well and will serve an empty shard — the failover would be\nthe data loss. Nothing reports being caught up until records are replicated\n(#112), so promotion does not fire and placement behaves as it did; the gate\nstarts permitting failover when replication starts working, and not before.\n\nBoth promotion tests were verified to fail with the gate removed. The first\nversion of the \"holds nothing\" test did not: promotion and ordinary placement\npick by the same score over the same candidates, so they coincided. It now\nasserts against a no-replica baseline across both single-node replica sets,\nso at least one names a follower scoring would not have chosen.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(demos): set replication_factor in the standalone demo crates\n\n`StreamCreateRequest` gained a required field, and the demo crates are not\nworkspace members, so `task lint` and `task test` cannot see them. I ran\nthose and `publish:check` but not `task demo:check` — the exact trap\nCLAUDE.md documents.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T08:34:14-07:00",
+          "tree_id": "3cd1beb6d1140251621d579e12e83d81e9e311bb",
+          "url": "https://github.com/gabloe/felix/commit/d6fb77486398cb95a4cb833cf5d7cafe178726d3"
+        },
+        "date": 1788968204476,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 225031,
+            "range": "4350.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225031.00\nmean: 224732.24\nstdev: 4350.81\ncv: 1.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 225031,
+            "range": "4350.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225031.00\nmean: 224732.24\nstdev: 4350.81\ncv: 1.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54655.78,
+            "range": "860.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54655.78\nmean: 54702.60\nstdev: 860.60\ncv: 1.57%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 546557.78,
+            "range": "8606.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 546557.78\nmean: 547026.01\nstdev: 8606.02\ncv: 1.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
