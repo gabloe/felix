@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788925020773,
+  "lastUpdate": 1788927303507,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -4620,6 +4620,72 @@ window.BENCHMARK_DATA = {
             "range": "342.40",
             "unit": "us",
             "extra": "trials: 5\nmedian: 603.00\nmean: 793.60\nstdev: 342.40\ncv: 43.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d7fe5634e9040d3ff4ce5727a17f9fbf047be59",
+          "message": "feat(broker): forward remote publishes to the owner and relay its ack (#106) (#236)\n\nA publish that reaches the wrong broker is now sent to the one that owns\nits shard, instead of being refused.\n\nThree pieces had to exist for that. The address book came first: shard\nassignments name an owner by node id, and nothing turned that into an\naddress, so every remote shard resolved to \"owner unavailable\". Brokers now\npoll `/v1/nodes` on the routing tick, with the credential they already hold\nfor assignments. A failed refresh keeps the previous catalog — a\ncontrol-plane blip must not turn a healthy cluster into one that refuses\nevery remote publish.\n\nForwarding then runs on the publish worker rather than inline on the read\nloop, as a new `PublishTarget::Forward`. A slow peer therefore backs up the\nsame queue a slow disk would, and the existing ack, backpressure and\ncancellation plumbing apply unchanged.\n\nThe owner re-checks ownership at the generation the requester named, and\nanswers rather than guesses: requester behind is `NotLeader` naming the\ncurrent owner, requester ahead is `StaleRoute`. It never relays onward — a\nchain of brokers each forwarding to the next has unbounded latency and a\nfailure mode nobody can reason about.\n\nTwo rules are load-bearing:\n\n**The ingress broker cannot acknowledge before the owner has.** This\noverrides `ack_on_commit`, which is off by default and would otherwise ack\nright after enqueue. That setting is a statement about a local write; for a\nforward this broker has accepted nothing.\n\n**An ambiguous outcome is never retried.** A dropped connection or a\ntimeout may have applied the batch, so a retry is a duplicate rather than a\nrepair, and the publish is reported as indeterminate rather than failed.\nRefusals are retried, because the refusal is the evidence nothing was\nwritten. This is stricter than AtLeastOnce allows, deliberately: a\nduplicate produced inside the broker is invisible to the client, which\nholds the request_id and is the only layer that could deduplicate.\n\n`publish_batch_with_outcome` reports the log offsets a batch was assigned,\nso the owner's acknowledgement is truthful rather than a fabricated zero;\n`publish_batch_to_handle` is now a wrapper and the hot path is unchanged.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-08T21:13:08-07:00",
+          "tree_id": "565198b3dc6e58239b18f9d3b7d8a175e7addbe8",
+          "url": "https://github.com/gabloe/felix/commit/2d7fe5634e9040d3ff4ce5727a17f9fbf047be59"
+        },
+        "date": 1788927301075,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 77,
+            "range": "2.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 77.00\nmean: 77.40\nstdev: 2.70\ncv: 3.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 107,
+            "range": "32.01",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 107.00\nmean: 120.00\nstdev: 32.01\ncv: 26.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 124,
+            "range": "44.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 124.00\nmean: 141.20\nstdev: 44.78\ncv: 31.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 94,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 94.00\nmean: 94.20\nstdev: 0.45\ncv: 0.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 198,
+            "range": "6.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 201.80\nstdev: 6.42\ncv: 3.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 307,
+            "range": "302.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 307.00\nmean: 442.40\nstdev: 302.63\ncv: 68.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
