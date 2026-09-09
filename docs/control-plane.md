@@ -110,6 +110,18 @@ zero while assignments are known is exactly that failure.
 A three-node cluster can be run locally with
 [the cluster harness](cluster-harness.md).
 
+**Ownership is eventually consistent at the broker.** A shard that moves is not
+known to its old owner until that broker's next sync, and until then it serves
+publishes for the shard locally — those records land in its log and no
+subscriber on the new owner sees them. There is no fencing today, and the
+generation check in the forwarding protocol does not cover this: a stale ex-owner
+never forwards, so nothing compares generations. A publish acknowledged in that
+window is durably written to a broker nobody reads it from, so this is write loss
+rather than a delay — tracked in
+[#239](https://github.com/gabloe/felix/issues/239). What holds is convergence
+within the sync interval. See
+[the stale-ownership window](cluster-harness.md#a-gap-the-suite-does-not-paper-over-the-stale-ownership-window).
+
 The internal transport is described in
 [the broker-internal forwarding protocol](internal-protocol.md); its remaining
 settings (`FELIX_INTERNAL_CONNS_PER_PEER`, `FELIX_INTERNAL_STREAMS_PER_CONN`,

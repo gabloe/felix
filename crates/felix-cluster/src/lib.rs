@@ -23,6 +23,7 @@
 pub mod client;
 pub mod controlplane;
 pub mod ports;
+pub mod scenarios;
 pub mod wait;
 
 use std::collections::HashMap;
@@ -37,6 +38,13 @@ pub use controlplane::ControlPlane;
 
 /// How long any single start-up wait may take before the harness gives up.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Who leads a shard, and at which generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment {
+    pub leader: String,
+    pub generation: u64,
+}
 
 /// One broker process.
 pub struct BrokerNode {
@@ -74,8 +82,12 @@ pub struct Cluster {
     pub namespace: String,
     /// Presented to brokers over QUIC.
     pub client_token: String,
-    /// Presented to the control plane's HTTP API.
+    /// Presented to the control plane's HTTP API for reads.
     pub admin_token: String,
+    /// Presented for membership writes, which reads alone cannot do.
+    pub operator_token: String,
+    /// May subscribe, may not publish.
+    pub subscribe_only_token: String,
     http: reqwest::Client,
     /// Held so the data directories outlive the brokers and are removed with
     /// the cluster.
@@ -126,6 +138,8 @@ impl Cluster {
         let control_plane = ControlPlane::start(&config.tenant_id).await?;
         let client_token = control_plane.client_token(&config.tenant_id)?;
         let admin_token = control_plane.admin_token(&config.tenant_id)?;
+        let operator_token = control_plane.operator_token(&config.tenant_id)?;
+        let subscribe_only_token = control_plane.subscribe_only_token(&config.tenant_id)?;
 
         // Metadata first: a broker syncs streams at startup, and one that starts
         // before its streams exist has to wait for the next sync to become
@@ -149,6 +163,8 @@ impl Cluster {
             namespace: config.namespace.clone(),
             client_token,
             admin_token,
+            operator_token,
+            subscribe_only_token,
             http,
             _root: root,
         };
@@ -273,10 +289,22 @@ impl Cluster {
     /// Publish one record through a named broker, whether or not it owns the
     /// shard.
     pub async fn publish_via(&self, node_id: &str, stream: &str, payload: Vec<u8>) -> Result<()> {
+        self.publish_via_token(node_id, stream, payload, &self.client_token)
+            .await
+    }
+
+    /// Publish through a named broker with a chosen credential.
+    pub async fn publish_via_token(
+        &self,
+        node_id: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        token: &str,
+    ) -> Result<()> {
         let node = self
             .node(node_id)
             .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
-        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let client = client::connect(node.client_addr, &self.tenant_id, token).await?;
         let publisher = client.publisher().await.context("open publisher")?;
         // Acked, because an unacked publish would make every failure look like
         // success and the wait above would pass instantly.
@@ -301,10 +329,21 @@ impl Cluster {
         node_id: &str,
         stream: &str,
     ) -> Result<(felix_client::Client, felix_client::Subscription)> {
+        self.subscribe_on_with_token(node_id, stream, &self.client_token)
+            .await
+    }
+
+    /// Subscribe on a named broker with a chosen credential.
+    pub async fn subscribe_on_with_token(
+        &self,
+        node_id: &str,
+        stream: &str,
+        token: &str,
+    ) -> Result<(felix_client::Client, felix_client::Subscription)> {
         let node = self
             .node(node_id)
             .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
-        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let client = client::connect(node.client_addr, &self.tenant_id, token).await?;
         let subscription = client
             .subscribe(&self.tenant_id, &self.namespace, stream)
             .await
@@ -343,6 +382,118 @@ impl Cluster {
             .collect())
     }
 
+    /// Full assignment detail: leader and generation, keyed by
+    /// `tenant/namespace/stream/shard`.
+    ///
+    /// The generation is what a cross-broker failure needs in its diagnosis: a
+    /// publish refused as stale and one refused because the shard moved look the
+    /// same without it.
+    pub async fn shard_assignments(&self) -> Result<HashMap<String, Assignment>> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            items: Vec<Row>,
+        }
+        // `ShardAssignment` flattens its key, so the JSON is flat too.
+        #[derive(serde::Deserialize)]
+        struct Row {
+            tenant_id: String,
+            namespace: String,
+            stream: String,
+            shard: u32,
+            leader: String,
+            generation: u64,
+        }
+
+        let response: Response = self
+            .get(&format!(
+                "{}/v1/shard-assignments",
+                self.control_plane_url()
+            ))
+            .await?;
+        Ok(response
+            .items
+            .into_iter()
+            .map(|row| {
+                (
+                    format!(
+                        "{}/{}/{}/{}",
+                        row.tenant_id, row.namespace, row.stream, row.shard
+                    ),
+                    Assignment {
+                        leader: row.leader,
+                        generation: row.generation,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// Move a stream's shard off its current owner.
+    ///
+    /// Drains the owner so placement will not choose it, re-runs placement, and
+    /// waits for the assignment to name someone else at a higher generation.
+    /// Draining rather than stopping the broker on purpose: the node stays up
+    /// and reachable, so what changes is ownership alone.
+    ///
+    /// Returns the new owner.
+    pub async fn move_shard(&self, stream: &str) -> Result<String> {
+        let key = format!("{}/{}/{}/0", self.tenant_id, self.namespace, stream);
+        let before = self
+            .shard_assignments()
+            .await?
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| anyhow!("no assignment for {key}"))?;
+
+        let url = format!(
+            "{}/v1/nodes/{}/drain",
+            self.control_plane_url(),
+            before.leader
+        );
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.operator_token)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .with_context(|| format!("drain {}", before.leader))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("drain {}: {status}: {body}", before.leader);
+        }
+
+        let key_for_wait = key.clone();
+        let before_for_wait = before.clone();
+        wait::until(
+            READY_TIMEOUT,
+            &format!("{key} to move off {}", before.leader),
+            || {
+                let key = key_for_wait.clone();
+                let before = before_for_wait.clone();
+                async move {
+                    self.control_plane().place_shards().await;
+                    match self.shard_assignments().await {
+                        Ok(current) => current.get(&key).is_some_and(|now| {
+                            now.leader != before.leader && now.generation > before.generation
+                        }),
+                        Err(_) => false,
+                    }
+                }
+            },
+        )
+        .await?;
+
+        let after = self
+            .shard_assignments()
+            .await?
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| anyhow!("no assignment for {key} after the move"))?;
+        Ok(after.leader)
+    }
+
     /// Which broker leads each shard, keyed by `tenant/namespace/stream/shard`.
     pub async fn shard_owners(&self) -> Result<HashMap<String, String>> {
         #[derive(serde::Deserialize)]
@@ -377,17 +528,22 @@ impl Cluster {
             .collect())
     }
 
+    /// The node that owns `stream`'s shard 0.
+    pub async fn owner(&self, stream: &str) -> Result<String> {
+        let owners = self.shard_owners().await?;
+        let key = format!("{}/{}/{}/0", self.tenant_id, self.namespace, stream);
+        owners
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| anyhow!("no owner for {key}"))
+    }
+
     /// The node that owns `stream`'s shard 0, and one that does not.
     ///
     /// This pair is the whole point of a multi-node harness: it is what lets a
     /// test publish somewhere the data does not belong.
     pub async fn owner_and_non_owner(&self, stream: &str) -> Result<(String, String)> {
-        let owners = self.shard_owners().await?;
-        let key = format!("{}/{}/{}/0", self.tenant_id, self.namespace, stream);
-        let owner = owners
-            .get(&key)
-            .ok_or_else(|| anyhow!("no owner for {key}"))?
-            .clone();
+        let owner = self.owner(stream).await?;
         let other = self
             .nodes
             .iter()
