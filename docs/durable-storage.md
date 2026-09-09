@@ -498,7 +498,10 @@ fail rather than print the wrong numbers.
   local segments. See [Tiered storage](#tiered-storage-what-m1-set-up-for-it)
   below for what this milestone deliberately left in place for it.
 - **Single node.** Replication (M5) is what `seal`'s checksum and `read_range`'s
-  bounded paging exist to serve.
+  bounded paging exist to serve. They are the primitives of *log shipping*, which
+  is what [the replication design](replication-design.md) selects — and the
+  never-rewritten invariant below is the reason it selects that over per-shard
+  Raft.
 
 ## Retention
 
