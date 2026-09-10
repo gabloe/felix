@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789008268452,
+  "lastUpdate": 1789008748407,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4160,6 +4160,58 @@ window.BENCHMARK_DATA = {
             "range": "6954.98",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 573972.43\nmean: 572604.30\nstdev: 6954.98\ncv: 1.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9346c783aebe2636ad989b3996d88f58809cb439",
+          "message": "fix(cluster): restart a broker that loses its port instead of failing the cluster (#251)\n\nCI failed with `broker-2 exited before becoming ready (exit status: 1)`. Port\nselection is racy by construction: the harness probes a port, releases it, and\nonly then hands it to the child, so anything on the machine can take it in\nbetween. `ports.rs` documented that window and nothing acted on it — one\nbroker losing the race failed the whole cluster start.\n\nA broker that exits during start-up is now started again with fresh ports, up\nto three times. Three because a genuine misconfiguration fails identically\nevery time and still surfaces, rather than being masked.\n\nWhen it does surface, it now says why. Broker output goes to `broker.log` in\nthe node's data directory instead of `/dev/null`, and a start-up failure\nquotes the tail — \"exit status: 1\" cannot distinguish a lost port from a\nrefused credential, and those need opposite responses.\n\nVerified by injecting the failure rather than waiting to observe it: broker-0's\nfirst start is given a credential the control plane refuses, which is exactly\nhow CI's broker died. That found a bug in this fix — the readiness URL was\ncaptured before the retry loop, so after a respawn the harness kept polling\nthe dead process's port and timed out anyway. The URL is now re-read each\npass. With that corrected: inject, exit, respawn, ready, pass in 1.06s.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T19:50:06-07:00",
+          "tree_id": "ec7638d71ddb92da235efedb85cab76ea6a12f61",
+          "url": "https://github.com/gabloe/felix/commit/9346c783aebe2636ad989b3996d88f58809cb439"
+        },
+        "date": 1789008747384,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 255424.29,
+            "range": "6200.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255424.29\nmean: 253089.37\nstdev: 6200.89\ncv: 2.45%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 255424.29,
+            "range": "6200.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255424.29\nmean: 253089.37\nstdev: 6200.89\ncv: 2.45%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 58253.18,
+            "range": "3035.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 58253.18\nmean: 57689.05\nstdev: 3035.66\ncv: 5.26%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 582531.82,
+            "range": "30356.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 582531.82\nmean: 576890.54\nstdev: 30356.61\ncv: 5.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
