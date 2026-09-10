@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789000672030,
+  "lastUpdate": 1789002384522,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5148,6 +5148,72 @@ window.BENCHMARK_DATA = {
             "range": "93.65",
             "unit": "us",
             "extra": "trials: 5\nmedian: 577.00\nmean: 590.20\nstdev: 93.65\ncv: 15.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7af3428c44153c7986c8ae6be5f7305800263903",
+          "message": "docs: add the cross-broker cluster demo recording (#249)\n\n* feat(cluster): make the three-pane demo discoverable as a task\n\n`task cluster:demo` runs the one-pane version, and the three-pane one was a\nscript with no task entry -- so the obvious command gave the version without\npanes, with nothing pointing at the other. `task cluster:demo:tmux` now runs\nit, and both descriptions say which they are.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(cluster): show sequential and concurrent bursts in the tmux demo\n\nThe burst ran at parallel=1, which shows records arriving but not the thing\nworth showing. It now runs twice: six one at a time, then twenty-four twelve\nat a time, with distinct prefixes so the subscriber's panel says which is\nwhich.\n\nThe narration claims arrival order stops matching send order, so that claim\nhad to be true rather than likely. At the previous size it was not --\ntwelve records at parallel=6 arrived in order, and the pane would have\nasserted otherwise on camera. Measured at twenty-four and parallel=12:\nreordered in 3 of 3 runs.\n\nThe publisher sequence moves into its own script. A shell echoes whatever\n`tmux send-keys` hands it, so a thirty-line command filled the pane with\nitself before printing any output.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: add the cross-broker cluster demo recording\n\nEmbedded as video rather than an animated GIF. The recording is 45 seconds of\nterminal output — sharp-edged text on flat colour, which is GIF's worst case.\nThe same content would be tens of megabytes against 2.5 MB of h264, look\nworse, and could not be paused on the line that matters. A docs video whose\nwhole point is reading output needs controls.\n\nNo autoplay and no loop: a page that starts moving while someone reads the\nparagraph above it is hostile, and it interacts badly with reduced-motion\npreferences. A poster frame is extracted from twelve seconds in, so the embed\nshows the cluster rather than a black rectangle.\n\nThe page is `.mdx`, not `.md`. Astro escaped the `<video>` element in\nmarkdown and rendered it as literal text; MDX treats it as JSX, which also\nmeans `playsInline` and a style object rather than a style string. Verified\nin the built output rather than assumed.\n\n`docs/cluster-harness.md` links to the page rather than embedding, because\nthat file is also read on GitHub and GitHub will not render a repo-relative\nvideo inline.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T18:04:00-07:00",
+          "tree_id": "96661d6c784f4093ddb5d670b56e0cf1088d2f4e",
+          "url": "https://github.com/gabloe/felix/commit/7af3428c44153c7986c8ae6be5f7305800263903"
+        },
+        "date": 1789002382275,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 126,
+            "range": "2.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 126.00\nmean: 125.60\nstdev: 2.07\ncv: 1.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 174,
+            "range": "9.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 174.00\nmean: 176.60\nstdev: 9.89\ncv: 5.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 224,
+            "range": "21.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 224.00\nmean: 225.20\nstdev: 21.32\ncv: 9.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 167,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.00\nstdev: 1.00\ncv: 0.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 339,
+            "range": "9.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 339.00\nmean: 339.40\nstdev: 9.21\ncv: 2.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 793,
+            "range": "323.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 793.00\nmean: 868.80\nstdev: 323.84\ncv: 37.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
