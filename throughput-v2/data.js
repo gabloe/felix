@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789000674483,
+  "lastUpdate": 1789002387726,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4056,6 +4056,58 @@ window.BENCHMARK_DATA = {
             "range": "13075.72",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557354.15\nmean: 558046.31\nstdev: 13075.72\ncv: 2.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7af3428c44153c7986c8ae6be5f7305800263903",
+          "message": "docs: add the cross-broker cluster demo recording (#249)\n\n* feat(cluster): make the three-pane demo discoverable as a task\n\n`task cluster:demo` runs the one-pane version, and the three-pane one was a\nscript with no task entry -- so the obvious command gave the version without\npanes, with nothing pointing at the other. `task cluster:demo:tmux` now runs\nit, and both descriptions say which they are.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(cluster): show sequential and concurrent bursts in the tmux demo\n\nThe burst ran at parallel=1, which shows records arriving but not the thing\nworth showing. It now runs twice: six one at a time, then twenty-four twelve\nat a time, with distinct prefixes so the subscriber's panel says which is\nwhich.\n\nThe narration claims arrival order stops matching send order, so that claim\nhad to be true rather than likely. At the previous size it was not --\ntwelve records at parallel=6 arrived in order, and the pane would have\nasserted otherwise on camera. Measured at twenty-four and parallel=12:\nreordered in 3 of 3 runs.\n\nThe publisher sequence moves into its own script. A shell echoes whatever\n`tmux send-keys` hands it, so a thirty-line command filled the pane with\nitself before printing any output.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* docs: add the cross-broker cluster demo recording\n\nEmbedded as video rather than an animated GIF. The recording is 45 seconds of\nterminal output — sharp-edged text on flat colour, which is GIF's worst case.\nThe same content would be tens of megabytes against 2.5 MB of h264, look\nworse, and could not be paused on the line that matters. A docs video whose\nwhole point is reading output needs controls.\n\nNo autoplay and no loop: a page that starts moving while someone reads the\nparagraph above it is hostile, and it interacts badly with reduced-motion\npreferences. A poster frame is extracted from twelve seconds in, so the embed\nshows the cluster rather than a black rectangle.\n\nThe page is `.mdx`, not `.md`. Astro escaped the `<video>` element in\nmarkdown and rendered it as literal text; MDX treats it as JSX, which also\nmeans `playsInline` and a style object rather than a style string. Verified\nin the built output rather than assumed.\n\n`docs/cluster-harness.md` links to the page rather than embedding, because\nthat file is also read on GitHub and GitHub will not render a repo-relative\nvideo inline.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T18:04:00-07:00",
+          "tree_id": "96661d6c784f4093ddb5d670b56e0cf1088d2f4e",
+          "url": "https://github.com/gabloe/felix/commit/7af3428c44153c7986c8ae6be5f7305800263903"
+        },
+        "date": 1789002386653,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 254231.97,
+            "range": "1494.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254231.97\nmean: 254188.76\nstdev: 1494.50\ncv: 0.59%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 254231.97,
+            "range": "1494.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254231.97\nmean: 254188.76\nstdev: 1494.50\ncv: 0.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60298.24,
+            "range": "907.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60298.24\nmean: 60581.49\nstdev: 907.44\ncv: 1.50%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 602982.41,
+            "range": "9074.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 602982.41\nmean: 605814.89\nstdev: 9074.36\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
