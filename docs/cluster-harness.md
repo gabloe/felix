@@ -160,6 +160,28 @@ Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing in M4 required it.
 
+## Running it hands-free
+
+Two ways, depending on whether you want the three-panel view.
+
+```bash
+task cluster:demo          # one pane, drives itself, narrated headings
+scripts/cluster-demo-tmux.sh   # three panes, driven automatically
+```
+
+`cluster:demo` runs the whole sequence in a single process: the cluster comes
+up, a subscriber attaches to the owner, a record is published through a broker
+that does *not* own the shard, then through the one that does, then a burst
+across all of them. Records arriving at the subscriber are indented with an
+arrow so they read as a separate voice from the publisher's lines. `--pace 0`
+runs it flat out, which is what a test wants; the default leaves room to narrate.
+
+The tmux script does the same thing across three real panes, which reads better
+on camera. It needs `tmux`. Both wait on `owners` rather than `nodes` to decide
+the cluster is up: `nodes` only reads the session file, so a file left by a
+previous cluster satisfies it immediately and the pane then talks to a control
+plane that is gone.
+
 ## Running the tests
 
 They are `#[serial]`. Each starts three broker processes, and a two-core CI
