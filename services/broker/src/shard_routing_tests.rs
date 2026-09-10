@@ -260,3 +260,196 @@ fn a_single_shard_stream_always_maps_to_zero() {
     assert_eq!(shard_for(0, Some(b"anything")), 0);
     assert_eq!(shard_for(1, Some(b"anything")), 0);
 }
+
+/// The feed task: it keeps local shard state, the servable set, and the routing
+/// table in step, and it is the only thing that refreshes the address book.
+mod feed {
+    use super::*;
+    use crate::shard_lifecycle::EphemeralShardStore;
+    use crate::shard_watch::ShardOwnership;
+    use axum::Router;
+    use axum::routing::get;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    /// A `/v1/nodes` endpoint that can be told to start failing, so the
+    /// refresh-failure path is exercised without stopping a server.
+    async fn nodes_endpoint(failing: Arc<AtomicBool>) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/v1/nodes",
+            get(move || {
+                let failing = Arc::clone(&failing);
+                async move {
+                    if failing.load(Ordering::Acquire) {
+                        return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+                    }
+                    Ok(axum::Json(serde_json::json!({
+                        "items": [{
+                            "node": {
+                                "node_id": "broker-b",
+                                "spec": {
+                                    "advertise_addr": "10.0.0.4:7002",
+                                    "region": "us-west-2",
+                                },
+                            },
+                            "placement": { "eligible": true },
+                        }],
+                    })))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service()).await;
+        });
+        (format!("http://{addr}"), task)
+    }
+
+    fn state(assignments: &[ShardAssignment]) -> (FeedState, Arc<ShardRouter>) {
+        let router = Arc::new(ShardRouter::new(
+            "broker-a",
+            "us-west-2",
+            RegionRouter::new("us-west-2".to_string()),
+        ));
+        let ingress = Arc::new(IngressRouter::new(Arc::clone(&router)));
+        (
+            FeedState {
+                ownership: Arc::new(tokio::sync::RwLock::new({
+                    let mut ownership = ShardOwnership::default();
+                    ownership.reset(assignments.to_vec());
+                    ownership
+                })),
+                lifecycle: Arc::new(tokio::sync::Mutex::new(ShardLifecycle::new("broker-a"))),
+                store: Arc::new(EphemeralShardStore),
+                ingress,
+                router: Arc::clone(&router),
+            },
+            router,
+        )
+    }
+
+    /// Poll rather than sleep a fixed amount: the feed ticks on its own clock.
+    async fn until<F: Fn() -> bool>(what: &str, condition: F) {
+        for _ in 0..200 {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// A shard this broker leads becomes servable without anything else acting.
+    #[tokio::test]
+    async fn the_feed_opens_and_publishes_a_led_shard() {
+        let (state, _router) = state(&[assignment(0, "broker-a", 1)]);
+        let ingress = Arc::clone(&state.ingress);
+        let shutdown = CancellationToken::new();
+
+        let feed = spawn_feed(state, None, Duration::from_millis(20), shutdown.clone());
+        until("the shard to be served locally", || {
+            ingress.dispatch(&key(0)) == Dispatch::Local
+        })
+        .await;
+
+        shutdown.cancel();
+        let _ = feed.await;
+    }
+
+    /// A shard led elsewhere is only forwardable once the catalog supplies an
+    /// address. Before that it is known and unreachable, which is the state the
+    /// address book exists to leave.
+    #[tokio::test]
+    async fn the_feed_makes_a_remote_shard_forwardable_once_the_catalog_arrives() {
+        let failing = Arc::new(AtomicBool::new(false));
+        let (base_url, server) = nodes_endpoint(Arc::clone(&failing)).await;
+        let (state, _router) = state(&[assignment(0, "broker-b", 1)]);
+        let ingress = Arc::clone(&state.ingress);
+        let shutdown = CancellationToken::new();
+
+        let feed = spawn_feed(
+            state,
+            Some(CatalogSource {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .expect("client"),
+                base_url,
+                token: Some("a-token".to_string()),
+            }),
+            Duration::from_millis(20),
+            shutdown.clone(),
+        );
+
+        until("the remote shard to become forwardable", || {
+            matches!(ingress.dispatch(&key(0)), Dispatch::Forward { .. })
+        })
+        .await;
+
+        shutdown.cancel();
+        let _ = feed.await;
+        server.abort();
+    }
+
+    /// **A control-plane blip must not erase the address book.** Dropping it
+    /// would turn every remote publish into a refusal, which looks exactly like
+    /// a cluster with no brokers in it.
+    #[tokio::test]
+    async fn a_failed_catalog_refresh_keeps_the_previous_one() {
+        let failing = Arc::new(AtomicBool::new(false));
+        let (base_url, server) = nodes_endpoint(Arc::clone(&failing)).await;
+        let (state, _router) = state(&[assignment(0, "broker-b", 1)]);
+        let ingress = Arc::clone(&state.ingress);
+        let shutdown = CancellationToken::new();
+
+        let feed = spawn_feed(
+            state,
+            Some(CatalogSource {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .expect("client"),
+                base_url,
+                token: None,
+            }),
+            Duration::from_millis(20),
+            shutdown.clone(),
+        );
+
+        until("the catalog to arrive", || {
+            matches!(ingress.dispatch(&key(0)), Dispatch::Forward { .. })
+        })
+        .await;
+
+        // The control plane starts refusing. Several ticks pass.
+        failing.store(true, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert!(
+            matches!(ingress.dispatch(&key(0)), Dispatch::Forward { .. }),
+            "the route was dropped when the catalog refresh failed",
+        );
+
+        shutdown.cancel();
+        let _ = feed.await;
+        server.abort();
+    }
+
+    /// Cancellation ends the task rather than leaving it ticking.
+    #[tokio::test]
+    async fn the_feed_stops_when_cancelled() {
+        let (state, _router) = state(&[assignment(0, "broker-a", 1)]);
+        let shutdown = CancellationToken::new();
+        let feed = spawn_feed(state, None, Duration::from_millis(20), shutdown.clone());
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), feed)
+            .await
+            .expect("the feed should stop when cancelled")
+            .expect("join");
+    }
+}

@@ -63,7 +63,14 @@ pub async fn fetch(
         return Err(anyhow!("{status}: {body}"));
     }
     let response: NodeListResponse = response.json().await.context("decode node list")?;
+    Ok(into_catalog(response))
+}
 
+/// Turn the control plane's answer into routable entries.
+///
+/// Separate from the request so the skipping rule above is testable without a
+/// server standing in for the control plane.
+fn into_catalog(response: NodeListResponse) -> HashMap<String, NodeRef> {
     let mut catalog = HashMap::with_capacity(response.items.len());
     for item in response.items {
         let Ok(advertise_addr) = item.node.spec.advertise_addr.parse() else {
@@ -88,5 +95,9 @@ pub async fn fetch(
             },
         );
     }
-    Ok(catalog)
+    catalog
 }
+
+#[cfg(test)]
+#[path = "node_catalog_tests.rs"]
+mod tests;

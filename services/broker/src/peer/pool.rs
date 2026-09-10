@@ -347,15 +347,55 @@ impl Peer {
     }
 }
 
-#[derive(Default)]
-struct PeerState {
-    connections: Vec<Arc<PeerConnection>>,
+/// What the pool needs of a connection in order to manage one.
+///
+/// Named as a trait so the pooling policy below — growth before reuse, backoff,
+/// idle eviction — can be tested without a QUIC endpoint behind every
+/// connection.
+trait Pooled {
+    fn is_live(&self) -> bool;
+    fn has_pending(&self) -> bool;
+    fn idle_for(&self) -> Duration;
+    fn close(&self, reason: &str);
+}
+
+impl Pooled for PeerConnection {
+    fn is_live(&self) -> bool {
+        PeerConnection::is_live(self)
+    }
+
+    fn has_pending(&self) -> bool {
+        PeerConnection::has_pending(self)
+    }
+
+    fn idle_for(&self) -> Duration {
+        PeerConnection::idle_for(self)
+    }
+
+    fn close(&self, reason: &str) {
+        PeerConnection::close(self, reason);
+    }
+}
+
+struct PeerState<C = PeerConnection> {
+    connections: Vec<Arc<C>>,
     cursor: usize,
     attempts: u32,
     backoff_until: Option<Instant>,
 }
 
-impl PeerState {
+impl<C> Default for PeerState<C> {
+    fn default() -> Self {
+        Self {
+            connections: Vec::new(),
+            cursor: 0,
+            attempts: 0,
+            backoff_until: None,
+        }
+    }
+}
+
+impl<C: Pooled> PeerState<C> {
     fn drop_dead(&mut self) {
         self.connections.retain(|connection| connection.is_live());
     }
@@ -381,8 +421,10 @@ impl PeerState {
     /// Growing to the configured size takes precedence over reuse: a pool of one
     /// connection would otherwise never reach two, since the first is always
     /// available.
-    fn next(&mut self, target: usize) -> Option<Arc<PeerConnection>> {
-        if self.connections.len() < target {
+    fn next(&mut self, target: usize) -> Option<Arc<C>> {
+        // Also guards the remainder below: a target of zero would otherwise
+        // divide by an empty pool's length, panicking the forwarding path.
+        if self.connections.is_empty() || self.connections.len() < target {
             return None;
         }
         let connection = self.connections.get(self.cursor % self.connections.len())?;
@@ -742,3 +784,7 @@ fn close_reason_label(reason: &quinn::ConnectionError) -> &'static str {
         _ => "other",
     }
 }
+
+#[cfg(test)]
+#[path = "pool_tests.rs"]
+mod tests;
