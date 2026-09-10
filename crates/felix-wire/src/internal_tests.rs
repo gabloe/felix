@@ -50,7 +50,29 @@ fn every_message() -> Vec<InternalMessage> {
             correlation_id: 42,
             node_id: "broker-b".to_string(),
         }),
+        replicate(),
+        InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 42,
+            durable_offset: 102,
+        }),
+        InternalMessage::ReplicateError(ReplicateError {
+            correlation_id: 42,
+            code: ErrorCode::LogGap,
+            expected_offset: 100,
+            detail: "batch starts at 105, expected 100".to_string(),
+        }),
     ]
+}
+
+fn replicate() -> InternalMessage {
+    let payloads = vec![Bytes::from_static(b"a"), Bytes::from_static(b"bb")];
+    InternalMessage::ReplicateRecords(ReplicateRecords {
+        correlation_id: 42,
+        shard: shard(),
+        first_offset: 100,
+        checksum: 0x0102_0304,
+        payloads,
+    })
 }
 
 #[test]
@@ -318,7 +340,9 @@ fn an_empty_batch_round_trips() {
 #[test]
 fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
-    assert!(Kind::from_u16(7).is_err());
+    // One past the highest kind: an unknown kind must be rejected rather than
+    // skipped, because the kind is what selects how to read the body.
+    assert!(Kind::from_u16(10).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
@@ -342,5 +366,122 @@ fn error_codes_say_whether_to_retry() {
         ErrorCode::StorageFailed,
     ] {
         assert!(!code.is_retryable(), "{code:?}");
+    }
+}
+
+#[test]
+fn replicate_records_matches_its_golden_vector() {
+    let encoded = replicate().encode().expect("encode");
+    let expected: Vec<u8> = [
+        // header: magic "FLXI", version 1, kind 7, length
+        &[0x46, 0x4C, 0x58, 0x49][..],
+        &[0x00, 0x01][..],
+        &[0x00, 0x07][..],
+        &[0x00, 0x00, 0x00, 0x49][..],
+        // correlation_id 42
+        &[0, 0, 0, 0, 0, 0, 0, 42][..],
+        // "t1", "ns", "orders"
+        &[0, 0, 0, 2][..],
+        b"t1",
+        &[0, 0, 0, 2][..],
+        b"ns",
+        &[0, 0, 0, 6][..],
+        b"orders",
+        // shard 3, generation 7
+        &[0, 0, 0, 3][..],
+        &[0, 0, 0, 0, 0, 0, 0, 7][..],
+        // first_offset 100, checksum 0x01020304
+        &[0, 0, 0, 0, 0, 0, 0, 100][..],
+        &[0, 0, 0, 0, 0x01, 0x02, 0x03, 0x04][..],
+        // two payloads
+        &[0, 0, 0, 2][..],
+        &[0, 0, 0, 1][..],
+        b"a",
+        &[0, 0, 0, 2][..],
+        b"bb",
+    ]
+    .concat();
+    assert_eq!(encoded.as_ref(), expected.as_slice());
+}
+
+/// **The checksum covers each payload's length as well as its bytes.** Without
+/// the length, a batch resplit in transit hashes the same as the original, and
+/// a resplit batch is a different set of records — exactly the divergence the
+/// checksum exists to catch.
+#[test]
+fn the_batch_checksum_separates_a_different_split_of_the_same_bytes() {
+    let one = batch_checksum(&[Bytes::from_static(b"ab"), Bytes::from_static(b"c")]);
+    let other = batch_checksum(&[Bytes::from_static(b"a"), Bytes::from_static(b"bc")]);
+
+    assert_ne!(one, other);
+}
+
+#[test]
+fn the_batch_checksum_is_stable_and_order_sensitive() {
+    let batch = [Bytes::from_static(b"a"), Bytes::from_static(b"bb")];
+    let reversed = [Bytes::from_static(b"bb"), Bytes::from_static(b"a")];
+
+    assert_eq!(batch_checksum(&batch), batch_checksum(&batch));
+    assert_ne!(batch_checksum(&batch), batch_checksum(&reversed));
+    assert_eq!(batch_checksum(&[]), batch_checksum(&[]));
+}
+
+/// The divergence codes say what a leader may do next, and getting these
+/// backwards is how a diverged follower gets hammered or a lagging one gets
+/// abandoned.
+#[test]
+fn a_gap_is_retryable_and_a_conflict_is_not() {
+    assert!(
+        ErrorCode::LogGap.is_retryable(),
+        "a follower that named the offset it wants was told not to retry",
+    );
+    assert!(
+        !ErrorCode::LogConflict.is_retryable(),
+        "diverged logs do not converge by retrying",
+    );
+    assert!(
+        !ErrorCode::FencedEpoch.is_retryable(),
+        "the fence does not lift",
+    );
+}
+
+/// Every code survives the wire as itself. A code that decoded as a neighbour
+/// would turn "stop, we have diverged" into "try again".
+#[test]
+fn every_error_code_round_trips() {
+    for code in [
+        ErrorCode::StaleRoute,
+        ErrorCode::Unavailable,
+        ErrorCode::Unauthorized,
+        ErrorCode::Overload,
+        ErrorCode::ProtocolVersion,
+        ErrorCode::Malformed,
+        ErrorCode::StorageFailed,
+        ErrorCode::LogGap,
+        ErrorCode::LogConflict,
+        ErrorCode::FencedEpoch,
+    ] {
+        assert_eq!(ErrorCode::from_u16(code as u16).expect("known"), code);
+    }
+}
+
+/// The kinds already on the wire keep their discriminants. A peer mid-upgrade
+/// decodes by number, so renumbering one silently reinterprets every frame of
+/// that kind.
+#[test]
+fn the_existing_kind_discriminants_are_unchanged() {
+    for (value, kind) in [
+        (1, Kind::ForwardPublish),
+        (2, Kind::ForwardPublishOk),
+        (3, Kind::ForwardPublishError),
+        (4, Kind::NotLeader),
+        (5, Kind::Hello),
+        (6, Kind::HelloOk),
+        (7, Kind::ReplicateRecords),
+        (8, Kind::ReplicateOk),
+        (9, Kind::ReplicateError),
+    ] {
+        assert_eq!(Kind::from_u16(value).expect("known"), kind);
+        assert_eq!(kind as u16, value);
     }
 }

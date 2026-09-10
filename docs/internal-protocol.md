@@ -149,6 +149,53 @@ No relay kinds are defined, because nothing relays. Should proxying ever be
 added they are additive: an unknown kind is already a typed error rather than a
 misparse, so it needs no version bump.
 
+### Replication
+
+A shard leader ships records it has committed to the followers in the shard's
+replica set. `ReplicateRecords` carries the leader's epoch, the offset its first
+payload belongs at, a checksum over the batch, and the payloads.
+
+The offsets are the **leader's**. A follower stores a record at the leader's
+offset or not at all, which is what makes the two logs comparable by offset —
+the acknowledged mark, the catch-up range, and the caught-up test that gates
+promotion all rest on it.
+
+The follower cannot tell its log where to put a record; the log appends at its
+own tail. So position is *verified* rather than commanded: the batch must begin
+exactly at the follower's tail.
+
+| The batch | Answer | What the leader does |
+| --- | --- | --- |
+| begins at the tail | `ReplicateOk` | send the next batch from `durable_offset` |
+| begins past the tail | `LogGap`, with `expected_offset` | resume from `expected_offset` |
+| lies entirely below the tail | `ReplicateOk` | nothing; it was already stored |
+| straddles the tail | `ReplicateOk` | nothing; the new suffix was stored |
+| disagrees on stored bytes | `LogConflict` | **stop** |
+| fails its checksum | `Malformed` | resend the same records |
+| names an older epoch | `FencedEpoch` | stop; this broker is no longer the leader |
+| names a newer epoch than the follower knows | `StaleRoute` | retry shortly |
+
+The middle two rows are what make a resend safe. Replication has to be able to
+resend a batch whose acknowledgement was lost, and resending must not duplicate
+a record: an overlap is resolved by position, and the overlapping bytes are
+compared rather than assumed.
+
+`ReplicateOk.durable_offset` is one past the last record the follower holds **on
+disk**. It is both the acknowledgement and the offset to send next. It never
+reports buffered data: a follower acknowledging before its own fsync would let
+the leader believe a record had survived a failure it would not have survived,
+and under `Quorum` that belief is the guarantee.
+
+The batch checksum covers each payload's length as well as its bytes. Without
+the length, a batch resplit in transit hashes the same as the original — and a
+resplit batch is a different set of records, which is exactly the divergence the
+checksum is there to catch. `felix_wire::internal::batch_checksum` is the single
+definition, so the two sides cannot compute it differently.
+
+`LogConflict` has no repair. Records are never rewritten, so two logs that
+disagree at an offset do not converge by retrying; progress stops and the
+condition is surfaced.
+
 ## Errors
 
 Typed, because they need different responses:
@@ -163,6 +210,10 @@ Typed, because they need different responses:
 | `Overload` | the owner is shedding load | retry with backoff |
 | `ProtocolVersion` | version not understood | do not retry; close |
 | `Malformed` | the body did not decode | do not retry; close |
+| `StorageFailed` | the responder tried and its own disk failed | do not retry; nothing is wrong with the request |
+| `LogGap` | a replication batch starts past the follower's tail | resume from `expected_offset` |
+| `LogConflict` | a replication batch disagrees with stored bytes | do not retry; the logs have diverged |
+| `FencedEpoch` | the sender named an epoch older than the responder's | do not retry; it is no longer the leader |
 
 `NotLeader` is a distinct kind rather than an error code, because it carries a
 routing answer rather than only a reason.

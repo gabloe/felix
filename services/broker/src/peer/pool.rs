@@ -771,6 +771,20 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
             correlation_id,
             ..m
         }),
+        InternalMessage::ReplicateRecords(m) => {
+            InternalMessage::ReplicateRecords(ReplicateRecords {
+                correlation_id,
+                ..m
+            })
+        }
+        InternalMessage::ReplicateOk(m) => InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id,
+            ..m
+        }),
+        InternalMessage::ReplicateError(m) => InternalMessage::ReplicateError(ReplicateError {
+            correlation_id,
+            ..m
+        }),
     }
 }
 

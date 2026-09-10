@@ -7,7 +7,9 @@
 //! together would make a placement decision look like a policy decision.
 pub mod shard;
 
-pub use shard::{NodeRef, Resolution, RoutingTable, ShardKey, ShardRouter, Unavailable};
+pub use shard::{
+    NodeRef, ReplicaRole, Resolution, RoutingTable, ShardKey, ShardRouter, Unavailable,
+};
 
 use felix_common::ids::RegionId;
 use std::collections::HashSet;

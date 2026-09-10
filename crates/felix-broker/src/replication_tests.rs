@@ -1,0 +1,257 @@
+//! The follower's append rule, against a real log on disk.
+//!
+//! Every case here is about *position*: where a batch claims to belong versus
+//! where the follower actually is. A fake log would decide that itself, so
+//! these use the same `DiskLog` a broker runs on and read the records back.
+use felix_storage::log::{FsyncMode, LogConfig};
+use tempfile::TempDir;
+
+use super::*;
+use crate::durable::DurableStorage;
+
+const TENANT: &str = "t1";
+const NAMESPACE: &str = "ns";
+const STREAM: &str = "orders";
+
+/// A follower's log for one shard, with `OnCommit` so "durable" means the
+/// bytes reached the device rather than a buffer.
+async fn follower() -> (StreamLog, TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = DurableStorage::open(
+        dir.path(),
+        LogConfig {
+            segment_size_bytes: 4 * 1024,
+            index_spacing_bytes: 256,
+            fsync_mode: FsyncMode::OnCommit,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        },
+    )
+    .expect("storage");
+    let log = storage
+        .open_stream(TENANT, NAMESPACE, STREAM, 0)
+        .expect("open the shard log");
+    (log, dir)
+}
+
+fn payload(value: &str) -> Bytes {
+    Bytes::copy_from_slice(value.as_bytes())
+}
+
+fn batch(values: &[&str]) -> Vec<Bytes> {
+    values.iter().map(|value| payload(value)).collect()
+}
+
+/// Ship a batch the way a leader would, with a checksum it computed itself.
+async fn ship(
+    log: &StreamLog,
+    first_offset: u64,
+    values: &[&str],
+) -> std::result::Result<Applied, Divergence> {
+    let payloads = batch(values);
+    let checksum = felix_wire::internal::batch_checksum(&payloads);
+    apply(log, first_offset, checksum, &payloads)
+        .await
+        .expect("apply")
+}
+
+/// Everything the follower holds, in offset order.
+async fn stored(log: &StreamLog) -> Vec<String> {
+    log.read_from(0, 1024 * 1024)
+        .await
+        .expect("read")
+        .into_iter()
+        .map(|record| String::from_utf8(record.payload.to_vec()).expect("utf8"))
+        .collect()
+}
+
+/// The ordinary case: batches arrive in order and land at the leader's offsets.
+#[tokio::test]
+async fn batches_in_order_land_at_the_leaders_offsets() {
+    let (log, _dir) = follower().await;
+
+    let first = ship(&log, 0, &["a", "b"]).await.expect("applied");
+    assert_eq!(first.durable_offset, 2);
+    assert_eq!(first.appended, 2);
+
+    let second = ship(&log, 2, &["c"]).await.expect("applied");
+    assert_eq!(second.durable_offset, 3);
+    assert_eq!(second.appended, 1);
+
+    assert_eq!(stored(&log).await, vec!["a", "b", "c"]);
+}
+
+/// **A batch starting past the tail is refused, and says where to resume.**
+/// Applying it would leave a hole, and a log with a hole cannot be read back —
+/// the follower would report a durable offset covering records it does not have.
+#[tokio::test]
+async fn a_batch_that_would_leave_a_hole_is_refused() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    let divergence = ship(&log, 5, &["f"]).await.expect_err("should be a gap");
+
+    assert_eq!(
+        divergence,
+        Divergence::Gap {
+            expected: 2,
+            first_offset: 5,
+        },
+    );
+    assert_eq!(
+        divergence.expected_offset(),
+        2,
+        "the leader must resume at 2"
+    );
+    assert_eq!(
+        stored(&log).await,
+        vec!["a", "b"],
+        "the hole was written anyway"
+    );
+}
+
+/// **A resent batch is not stored twice.** Replication has to be able to resend
+/// a batch whose acknowledgement was lost, and a duplicate record is invisible
+/// to a subscriber until the offsets stop matching the leader's.
+#[tokio::test]
+async fn a_resent_batch_is_acknowledged_without_being_stored_again() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    let retry = ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    assert_eq!(
+        retry.durable_offset, 2,
+        "the retry moved the acknowledged mark"
+    );
+    assert_eq!(retry.appended, 0, "the retry stored the records again");
+    assert_eq!(stored(&log).await, vec!["a", "b"]);
+}
+
+/// A retry that overlaps the tail stores only the part the follower is missing.
+#[tokio::test]
+async fn a_retry_that_overlaps_the_tail_stores_only_the_new_suffix() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    // The leader resends from 1, having not heard about 1 landing.
+    let applied = ship(&log, 1, &["b", "c", "d"]).await.expect("applied");
+
+    assert_eq!(applied.appended, 2, "the overlap was stored again");
+    assert_eq!(applied.durable_offset, 4);
+    assert_eq!(stored(&log).await, vec!["a", "b", "c", "d"]);
+}
+
+/// **Bytes that disagree with what is stored stop replication.** Records are
+/// never rewritten, so there is no repair — and continuing would leave two logs
+/// that agree on offsets while disagreeing on contents, which nothing
+/// downstream could detect.
+#[tokio::test]
+async fn a_batch_that_disagrees_with_stored_bytes_stops_progress() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    let divergence = ship(&log, 0, &["a", "DIFFERENT", "c"])
+        .await
+        .expect_err("should conflict");
+
+    assert!(
+        matches!(divergence, Divergence::Conflict { offset: 1, .. }),
+        "{divergence:?}",
+    );
+    assert_eq!(
+        stored(&log).await,
+        vec!["a", "b"],
+        "a conflicting batch appended its suffix anyway",
+    );
+}
+
+/// A batch corrupted in transit is refused before anything is written, so a bad
+/// frame cannot become a stored record.
+#[tokio::test]
+async fn a_batch_that_did_not_survive_the_trip_is_refused() {
+    let (log, _dir) = follower().await;
+    let payloads = batch(&["a", "b"]);
+
+    let divergence = apply(&log, 0, 0xdead_beef, &payloads)
+        .await
+        .expect("apply")
+        .expect_err("should be corrupt");
+
+    assert!(
+        matches!(divergence, Divergence::Corrupt { .. }),
+        "{divergence:?}"
+    );
+    assert!(stored(&log).await.is_empty(), "a corrupt batch was stored");
+}
+
+/// **The checksum distinguishes a different split of the same bytes.** Without
+/// the length in the hash, `["ab", "c"]` and `["a", "bc"]` are the same input —
+/// and they are different records, which is exactly the divergence this exists
+/// to catch.
+#[test]
+fn the_checksum_separates_records_that_concatenate_alike() {
+    let one = felix_wire::internal::batch_checksum(&batch(&["ab", "c"]));
+    let other = felix_wire::internal::batch_checksum(&batch(&["a", "bc"]));
+
+    assert_ne!(one, other);
+}
+
+/// An empty batch is a position probe: it asks where the follower is without
+/// claiming anything, so it is answered rather than refused.
+#[tokio::test]
+async fn an_empty_batch_reports_the_tail() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    let applied = ship(&log, 2, &[]).await.expect("applied");
+
+    assert_eq!(applied.durable_offset, 2);
+    assert_eq!(applied.appended, 0);
+}
+
+/// A fresh follower starts at zero, so the leader's first batch has to start
+/// there too.
+#[tokio::test]
+async fn a_fresh_follower_expects_the_first_offset() {
+    let (log, _dir) = follower().await;
+
+    let divergence = ship(&log, 1, &["b"]).await.expect_err("should be a gap");
+
+    assert_eq!(divergence.expected_offset(), 0);
+}
+
+/// **The acknowledged offset is durable, not buffered.** Under `OnCommit` the
+/// records are readable back from disk the instant `apply` returns; a follower
+/// that acknowledged before its own fsync would let the leader count a record
+/// toward a quorum it would not survive.
+#[tokio::test]
+async fn the_acknowledged_offset_is_on_disk_before_it_is_reported() {
+    let (log, _dir) = follower().await;
+
+    let applied = ship(&log, 0, &["a", "b", "c"]).await.expect("applied");
+
+    assert_eq!(applied.durable_offset, 3);
+    assert_eq!(
+        log.durable_offset(),
+        3,
+        "the batch was acknowledged before it was durable",
+    );
+    assert_eq!(stored(&log).await, vec!["a", "b", "c"]);
+}
+
+/// Applying the same sequence twice, in any resend pattern, converges on the
+/// leader's log rather than accumulating.
+#[tokio::test]
+async fn resends_converge_rather_than_accumulate() {
+    let (log, _dir) = follower().await;
+
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+    ship(&log, 0, &["a", "b"]).await.expect("applied");
+    ship(&log, 1, &["b", "c"]).await.expect("applied");
+    ship(&log, 2, &["c"]).await.expect("applied");
+    let last = ship(&log, 3, &["d"]).await.expect("applied");
+
+    assert_eq!(last.durable_offset, 4);
+    assert_eq!(stored(&log).await, vec!["a", "b", "c", "d"]);
+}

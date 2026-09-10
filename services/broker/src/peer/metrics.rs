@@ -102,3 +102,30 @@ pub fn record_forward(outcome: &'static str) {
 pub fn record_forward_retry() {
     metrics::counter!(FORWARD_RETRIES_TOTAL).increment(1);
 }
+
+/// Replication batches this broker stored as a follower, by `outcome`.
+///
+/// The failure outcomes are separated because they need different responses.
+/// `gap` is ordinary during catch-up and self-repairing. `conflict` and
+/// `fenced` are not: the first means two logs have diverged, the second that a
+/// superseded leader is still shipping. Either one standing is worth waking
+/// someone for.
+pub const REPLICATED_TOTAL: &str = "felix_broker_replicated_total";
+
+/// The sender named an epoch older than this broker's, so it is no longer the
+/// leader.
+pub const OUTCOME_FENCED: &str = "fenced";
+/// This broker's routing view has not caught up with the epoch the sender
+/// named. Transient by nature.
+pub const OUTCOME_BEHIND: &str = "behind";
+/// The batch starts past this broker's tail. The leader resumes from the offset
+/// in the answer.
+pub const OUTCOME_GAP: &str = "gap";
+/// The batch disagrees with bytes already stored.
+pub const OUTCOME_CONFLICT: &str = "conflict";
+/// The batch did not survive the trip.
+pub const OUTCOME_CORRUPT: &str = "corrupt";
+
+pub fn record_replicated(outcome: &'static str) {
+    metrics::counter!(REPLICATED_TOTAL, "outcome" => outcome).increment(1);
+}

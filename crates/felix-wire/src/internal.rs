@@ -53,6 +53,9 @@ pub enum Kind {
     NotLeader = 4,
     Hello = 5,
     HelloOk = 6,
+    ReplicateRecords = 7,
+    ReplicateOk = 8,
+    ReplicateError = 9,
 }
 
 impl Kind {
@@ -66,6 +69,9 @@ impl Kind {
             4 => Ok(Kind::NotLeader),
             5 => Ok(Kind::Hello),
             6 => Ok(Kind::HelloOk),
+            7 => Ok(Kind::ReplicateRecords),
+            8 => Ok(Kind::ReplicateOk),
+            9 => Ok(Kind::ReplicateError),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -93,6 +99,19 @@ pub enum ErrorCode {
     Malformed = 6,
     /// The owner accepted the request and the local write failed.
     StorageFailed = 7,
+    /// A replication batch starts past the follower's tail. Applying it would
+    /// leave a hole, and a log with a hole cannot be read back. The follower
+    /// reports the offset it does want; the leader resumes there.
+    LogGap = 8,
+    /// A replication batch disagrees with bytes the follower has already
+    /// stored. Records are never rewritten, so there is no repair for this:
+    /// the two logs have diverged and progress stops here.
+    LogConflict = 9,
+    /// The sender named an epoch older than the responder's. It has been
+    /// superseded and is no longer the leader, so its records must not be
+    /// stored: it may have written them after losing the shard. Not retryable —
+    /// the fence does not lift.
+    FencedEpoch = 10,
 }
 
 impl ErrorCode {
@@ -105,15 +124,25 @@ impl ErrorCode {
             5 => Ok(ErrorCode::ProtocolVersion),
             6 => Ok(ErrorCode::Malformed),
             7 => Ok(ErrorCode::StorageFailed),
+            8 => Ok(ErrorCode::LogGap),
+            9 => Ok(ErrorCode::LogConflict),
+            10 => Ok(ErrorCode::FencedEpoch),
             other => Err(Error::UnknownInternalErrorCode(other)),
         }
     }
 
     /// Whether a requester should try the same peer again.
+    ///
+    /// `LogGap` is retryable but not by re-sending the same batch: the follower
+    /// names the offset it wants, and the leader resumes from there. `LogConflict`
+    /// is absent deliberately — divergent logs do not converge by retrying.
     pub fn is_retryable(self) -> bool {
         matches!(
             self,
-            ErrorCode::StaleRoute | ErrorCode::Unavailable | ErrorCode::Overload
+            ErrorCode::StaleRoute
+                | ErrorCode::Unavailable
+                | ErrorCode::Overload
+                | ErrorCode::LogGap
         )
     }
 }
@@ -223,6 +252,54 @@ pub struct HelloOk {
     pub node_id: String,
 }
 
+/// Records the leader has committed, shipped to a follower.
+///
+/// Append-only, and identified by the offsets the *leader* assigned: a follower
+/// stores a record at the leader's offset or not at all. That is what makes the
+/// two logs comparable by offset, which every other part of replication relies
+/// on.
+///
+/// `shard.generation` is the leader's epoch. A follower that knows of a newer
+/// one refuses, because a leader at an older epoch may already have been
+/// replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicateRecords {
+    pub correlation_id: u64,
+    pub shard: ShardRef,
+    /// Offset of `payloads[0]`. Payload `i` belongs at `first_offset + i`.
+    pub first_offset: u64,
+    /// Over the payload bytes, in order. Checked before anything is written, so
+    /// a batch corrupted in transit is refused rather than stored.
+    pub checksum: u64,
+    pub payloads: Vec<Bytes>,
+}
+
+/// The follower stored the batch.
+///
+/// `durable_offset` is one past the last record the follower has on disk, so it
+/// is both an acknowledgement and the offset the leader should send next. It
+/// reports **durable** data, never buffered: a follower that acknowledged
+/// before its own fsync would let the leader believe a record survived a
+/// failure it would not have survived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplicateOk {
+    pub correlation_id: u64,
+    pub durable_offset: u64,
+}
+
+/// The follower refused, and where it stands.
+///
+/// `expected_offset` is what the follower wants next. For `LogGap` it is how
+/// the leader repairs without a separate negotiation; for the rest it is
+/// diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicateError {
+    pub correlation_id: u64,
+    pub code: ErrorCode,
+    pub expected_offset: u64,
+    pub detail: String,
+}
+
 /// A decoded internal message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalMessage {
@@ -232,6 +309,9 @@ pub enum InternalMessage {
     NotLeader(NotLeader),
     Hello(Hello),
     HelloOk(HelloOk),
+    ReplicateRecords(ReplicateRecords),
+    ReplicateOk(ReplicateOk),
+    ReplicateError(ReplicateError),
 }
 
 impl InternalMessage {
@@ -243,6 +323,9 @@ impl InternalMessage {
             Self::NotLeader(_) => Kind::NotLeader,
             Self::Hello(_) => Kind::Hello,
             Self::HelloOk(_) => Kind::HelloOk,
+            Self::ReplicateRecords(_) => Kind::ReplicateRecords,
+            Self::ReplicateOk(_) => Kind::ReplicateOk,
+            Self::ReplicateError(_) => Kind::ReplicateError,
         }
     }
 
@@ -259,6 +342,9 @@ impl InternalMessage {
             Self::NotLeader(m) => m.correlation_id,
             Self::Hello(m) => m.correlation_id,
             Self::HelloOk(m) => m.correlation_id,
+            Self::ReplicateRecords(m) => m.correlation_id,
+            Self::ReplicateOk(m) => m.correlation_id,
+            Self::ReplicateError(m) => m.correlation_id,
         }
     }
 
@@ -306,6 +392,34 @@ impl InternalMessage {
             Self::HelloOk(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.node_id)?;
+            }
+            Self::ReplicateRecords(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.shard.tenant_id)?;
+                put_str(&mut body, &m.shard.namespace)?;
+                put_str(&mut body, &m.shard.stream)?;
+                body.put_u32(m.shard.shard);
+                body.put_u64(m.shard.generation);
+                body.put_u64(m.first_offset);
+                body.put_u64(m.checksum);
+                if m.payloads.len() > MAX_BATCH_PAYLOADS {
+                    return Err(Error::FrameTooLarge);
+                }
+                body.put_u32(m.payloads.len() as u32);
+                for payload in &m.payloads {
+                    body.put_u32(u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?);
+                    body.extend_from_slice(payload);
+                }
+            }
+            Self::ReplicateOk(m) => {
+                body.put_u64(m.correlation_id);
+                body.put_u64(m.durable_offset);
+            }
+            Self::ReplicateError(m) => {
+                body.put_u64(m.correlation_id);
+                body.put_u16(m.code as u16);
+                body.put_u64(m.expected_offset);
+                put_str(&mut body, &m.detail)?;
             }
         }
 
@@ -426,8 +540,85 @@ impl InternalMessage {
                 expect_empty(&body)?;
                 Ok(Self::HelloOk(message))
             }
+            Kind::ReplicateRecords => {
+                let correlation_id = take_u64(&mut body)?;
+                let tenant_id = take_str(&mut body)?;
+                let namespace = take_str(&mut body)?;
+                let stream = take_str(&mut body)?;
+                let shard = take_u32(&mut body)?;
+                let generation = take_u64(&mut body)?;
+                let first_offset = take_u64(&mut body)?;
+                let checksum = take_u64(&mut body)?;
+
+                let declared = take_u32(&mut body)? as usize;
+                // Bounded against what the body could hold before it reaches
+                // `with_capacity`, exactly as `ForwardPublish` documents.
+                if declared > MAX_BATCH_PAYLOADS || declared > body.remaining() / LEN_PREFIX {
+                    return Err(Error::Incomplete);
+                }
+                let mut payloads = Vec::with_capacity(declared);
+                for _ in 0..declared {
+                    let len = take_u32(&mut body)? as usize;
+                    if len > body.remaining() {
+                        return Err(Error::Incomplete);
+                    }
+                    payloads.push(body.split_to(len));
+                }
+                expect_empty(&body)?;
+
+                Ok(Self::ReplicateRecords(ReplicateRecords {
+                    correlation_id,
+                    shard: ShardRef {
+                        tenant_id,
+                        namespace,
+                        stream,
+                        shard,
+                        generation,
+                    },
+                    first_offset,
+                    checksum,
+                    payloads,
+                }))
+            }
+            Kind::ReplicateOk => {
+                let message = ReplicateOk {
+                    correlation_id: take_u64(&mut body)?,
+                    durable_offset: take_u64(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::ReplicateOk(message))
+            }
+            Kind::ReplicateError => {
+                let message = ReplicateError {
+                    correlation_id: take_u64(&mut body)?,
+                    code: ErrorCode::from_u16(take_u16(&mut body)?)?,
+                    expected_offset: take_u64(&mut body)?,
+                    detail: take_str(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::ReplicateError(message))
+            }
         }
     }
+}
+
+/// The checksum a [`ReplicateRecords`] batch carries.
+///
+/// Defined once, here, so the leader and the follower cannot compute it
+/// differently — a checksum the two sides disagree about reports corruption on
+/// every healthy batch, which is worse than not having one.
+///
+/// It covers each payload's length and its bytes, in order. Including the
+/// length is what stops `["ab", "c"]` and `["a", "bc"]` hashing alike: they are
+/// different records, and a follower storing one where the leader has the other
+/// is exactly the divergence this is here to catch.
+pub fn batch_checksum(payloads: &[Bytes]) -> u64 {
+    let mut hasher = crc32fast::Hasher::new();
+    for payload in payloads {
+        hasher.update(&(payload.len() as u32).to_be_bytes());
+        hasher.update(payload);
+    }
+    u64::from(hasher.finalize())
 }
 
 /// Fixed-size header preceding every internal body.
