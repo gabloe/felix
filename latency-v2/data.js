@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789008745769,
+  "lastUpdate": 1789057205964,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5346,6 +5346,72 @@ window.BENCHMARK_DATA = {
             "range": "104.22",
             "unit": "us",
             "extra": "trials: 5\nmedian: 476.00\nmean: 512.60\nstdev: 104.22\ncv: 20.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f904ff099456eda0586cc22cd6993ec2de6875c2",
+          "message": "test: recover the coverage badge (90.7% -> 93.2%) (#254)\n\n* test: cover the cluster paths that regressed the coverage badge\n\nCoverage fell to 90% as the cluster work landed: three of its modules\nshipped with no tests at all, and the two `felix-cluster` binaries count\nas product lines while being tools nobody tests.\n\n- Exclude `src/bin/` from the coverage run rather than only `src/bin/soak/`.\n  A tool's `main` is not the product, and the existing exclusion already\n  said so for one of them.\n- `node_catalog.rs` was at 0%. Split `into_catalog` out of `fetch` so the\n  \"skip a node with an unusable address, keep the rest\" rule is testable\n  without a server, and cover the transport separately over a real axum\n  endpoint.\n- `session.rs` was at 0%. The tests pin the invariant that matters: a\n  cluster does not delete a session file another cluster took over.\n- `config.rs` in both services: extract `apply` so precedence between the\n  environment and the YAML file is testable without mutating the process\n  environment.\n- `spawn_feed`: a failed catalog refresh keeps the previous catalog. Losing\n  it would make a control-plane blip look like a cluster with no brokers,\n  refusing every remote publish.\n- `peer/pool.rs`: an empty pool now returns `None` instead of taking a\n  remainder by zero. Not reachable through `from_env`, which filters the\n  setting to non-zero, but the field is public and the function documents\n  `None`.\n\nLine coverage 90.67% -> 92.40%.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* test: cover the transport and config paths the badge was missing\n\nLine coverage 90.67% -> 93.24%. The regression was mostly new subsystems\nlanding with thinner tests than the code around them, plus two ways the\nmeasurement itself was wrong.\n\nMeasurement:\n\n- Tool binaries counted as product code. The exclusion covered\n  `src/bin/soak/` only, so `felix-cluster` and `log_tool` -- ~600 lines of\n  argument parsing and process wiring that no test should target -- were\n  measured as if they were the broker.\n- `task coverage` could not reach Postgres locally. `host.docker.internal`\n  does not resolve on the host, where the tests actually run, so six store\n  tests failed and `store/postgres.rs` was undercounted. Now `127.0.0.1`,\n  which is where `pg:up` publishes the port. CI is unaffected: it sets\n  FELIX_TEST_DATABASE_URL and takes the branch above.\n\nSeams, so the rules are testable without the transport underneath them:\n\n- `into_catalog` splits parsing from the request, so \"one malformed\n  registration must not cost every other route\" is testable without a\n  server standing in for the control plane.\n- `Pooled` lets the pooling policy -- growth before reuse, backoff, idle\n  eviction -- be driven without a QUIC endpoint per connection.\n- `PeerRequester` lets forwarding's retry rules be driven against an owner\n  that answers on command, including answers a healthy cluster almost never\n  gives.\n- `EventSink` lets replay and the handover to live delivery be checked by\n  reading back the offsets a subscriber would have received.\n\nEach of the three invariant tests was confirmed against a reverted fix:\ndropping the catalog on a failed refresh, skipping the gap-fill, and\nskipping the catch-up pass each fail the test that names them.\n\nTwo defects the tests found:\n\n- `PeerState::next` divided by the pool's length before checking it was\n  non-empty. A target of zero panicked the forwarding path; it is\n  unreachable today only because config filters the environment variable\n  three files away.\n- The control plane's override path moved out of `config.postgres` behind\n  `&mut self`, which the extraction surfaced.\n\nStill short of 95%. What remains is concentrated in the broker's 580-line\nstartup function (196 lines), the cluster harness (104), and the QUIC\nconnection and control-stream loops (~190) -- all of which need a process\nor a network to drive, and none of which I wanted to reach by excluding\nproduct code.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T09:17:43-07:00",
+          "tree_id": "1f3e25c8f2a7b7bb52f8bdbd5a93d6099683f6db",
+          "url": "https://github.com/gabloe/felix/commit/f904ff099456eda0586cc22cd6993ec2de6875c2"
+        },
+        "date": 1789057203811,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.40\nstdev: 1.67\ncv: 1.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "3.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 208.60\nstdev: 3.58\ncv: 1.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 244,
+            "range": "85.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 244.00\nmean: 278.00\nstdev: 85.94\ncv: 30.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 203,
+            "range": "3.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 203.40\nstdev: 3.29\ncv: 1.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 419,
+            "range": "284.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 419.00\nmean: 580.00\nstdev: 284.28\ncv: 49.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 561,
+            "range": "1290.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 561.00\nmean: 1447.20\nstdev: 1290.16\ncv: 89.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
