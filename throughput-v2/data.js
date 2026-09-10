@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789002387726,
+  "lastUpdate": 1789008268452,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4108,6 +4108,58 @@ window.BENCHMARK_DATA = {
             "range": "9074.36",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 602982.41\nmean: 605814.89\nstdev: 9074.36\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9974c5d8d5f503b7ab86f1598d356754e00d9af1",
+          "message": "ci: authenticate the tool installs so they stop hitting the anonymous rate limit (#252)\n\n`coverage` failed on #251 in 34 seconds, before any code ran:\n\n    Install Task\n    ##[error]API rate limit exceeded for 135.232.216.64.\n\n`arduino/setup-task` and `taiki-e/install-action` resolve a release through\nthe GitHub API. Unauthenticated, that budget is 60 requests an hour **per\nIP**, and runners share their IP with everything else scheduled on it — so\nthe budget is routinely already spent by jobs belonging to other people.\n\nBoth now pass `GITHUB_TOKEN`, which moves them onto the repository's 1000/hr\nbudget. `secrets.GITHUB_TOKEN` needs only `contents: read`, which is the\ndefault; the coverage job already declares `contents: write` for its badge.\n\nThis is the same failure an earlier `main` coverage run hit, which I had\nrecorded at the time as unrelated to the branch it appeared on. It was\nunrelated to the branch, and it was not a one-off.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T19:42:01-07:00",
+          "tree_id": "7d8fe47079439b49fc574dc7df5fbb66fca9ffda",
+          "url": "https://github.com/gabloe/felix/commit/9974c5d8d5f503b7ab86f1598d356754e00d9af1"
+        },
+        "date": 1789008267304,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 238464.08,
+            "range": "5757.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238464.08\nmean: 237584.82\nstdev: 5757.29\ncv: 2.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 238464.08,
+            "range": "5757.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238464.08\nmean: 237584.82\nstdev: 5757.29\ncv: 2.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57397.24,
+            "range": "695.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57397.24\nmean: 57260.43\nstdev: 695.50\ncv: 1.21%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 573972.43,
+            "range": "6954.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 573972.43\nmean: 572604.30\nstdev: 6954.98\ncv: 1.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
