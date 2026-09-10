@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788979146280,
+  "lastUpdate": 1789000672030,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5082,6 +5082,72 @@ window.BENCHMARK_DATA = {
             "range": "1330.85",
             "unit": "us",
             "extra": "trials: 5\nmedian: 572.00\nmean: 1148.20\nstdev: 1330.85\ncv: 115.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9534c611fcc95f439fd9aeeaf0324632a09c6b79",
+          "message": "feat(cluster): add a burst publisher for filling a subscriber's panel (#246)\n\n* feat(cluster): add a burst publisher for filling a subscriber's panel\n\n`task cluster:burst` publishes a run of messages across every broker in a\nrunning cluster. `COUNT`, `PARALLEL`, `GAP`, and `STREAM` tune it.\n\nAdds `felix-cluster nodes`, which the script uses to learn the cluster's\nshape. Deliberately not `owners`: that lists shard leaders, and a broker\nholding no shard is exactly the one worth publishing through here.\n\nOrdering is documented rather than left to be discovered. At PARALLEL=1\nrecords arrive in the order sent; above that they interleave, and that is\ncorrect — concurrent publishes through different brokers have no defined\nrelative order, and the owner assigns offsets as it commits. Felix orders a\npublisher's own sequence, not a race between three of them. Measured at\nPARALLEL=10: all 30 arrive, order interleaved.\n\nWritten for macOS's bash 3.2, which has neither `wait -n` nor `mapfile`, and\ntrips `set -u` on an empty array's length. Both caught by running it.\n\nFails once with a usable message when no cluster is running, rather than\nprinting the same error per message.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(cluster): drive the whole demo automatically, in one pane or three (#247)\n\nTwo ways to run the cross-broker story without typing it:\n\n`task cluster:demo` runs it in a single process — cluster up, subscriber on\nthe owner, a publish through a broker that does not own the shard, the same\npublish through the one that does, then a burst across all of them. Records\narriving at the subscriber are indented with an arrow so they read as a\nseparate voice from the publisher's lines. `--pace` sets the gap between\nsteps; `--pace 0` runs it flat out.\n\n`scripts/cluster-demo-tmux.sh` does the same across three real panes, which\nreads better on camera.\n\nBoth wait on `owners` rather than `nodes` to decide the cluster is up. That\ndistinction is the bug this cost: `nodes` only reads the session file, so a\nfile left by a previous cluster satisfied it instantly and the subscriber\npane then tried to reach a control plane that was gone, failing with a\nconnection refused against a stale port. `owners` has to reach the control\nplane, so it fails until this cluster answers. The tmux script also removes a\nstale session file before starting.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T17:35:32-07:00",
+          "tree_id": "bed60142f59b235fbfaa44219eb2ab5cf5d4cbe4",
+          "url": "https://github.com/gabloe/felix/commit/9534c611fcc95f439fd9aeeaf0324632a09c6b79"
+        },
+        "date": 1789000669940,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "2.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 158.60\nstdev: 2.07\ncv: 1.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "7.02",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 205.60\nstdev: 7.02\ncv: 3.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 244,
+            "range": "169.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 244.00\nmean: 334.60\nstdev: 169.71\ncv: 50.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.20\nstdev: 0.84\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 395,
+            "range": "14.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 395.00\nmean: 401.40\nstdev: 14.33\ncv: 3.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 577,
+            "range": "93.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 577.00\nmean: 590.20\nstdev: 93.65\ncv: 15.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
