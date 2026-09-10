@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788979148957,
+  "lastUpdate": 1789000674483,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4004,6 +4004,58 @@ window.BENCHMARK_DATA = {
             "range": "10157.32",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 558527.82\nmean: 553228.61\nstdev: 10157.32\ncv: 1.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9534c611fcc95f439fd9aeeaf0324632a09c6b79",
+          "message": "feat(cluster): add a burst publisher for filling a subscriber's panel (#246)\n\n* feat(cluster): add a burst publisher for filling a subscriber's panel\n\n`task cluster:burst` publishes a run of messages across every broker in a\nrunning cluster. `COUNT`, `PARALLEL`, `GAP`, and `STREAM` tune it.\n\nAdds `felix-cluster nodes`, which the script uses to learn the cluster's\nshape. Deliberately not `owners`: that lists shard leaders, and a broker\nholding no shard is exactly the one worth publishing through here.\n\nOrdering is documented rather than left to be discovered. At PARALLEL=1\nrecords arrive in the order sent; above that they interleave, and that is\ncorrect — concurrent publishes through different brokers have no defined\nrelative order, and the owner assigns offsets as it commits. Felix orders a\npublisher's own sequence, not a race between three of them. Measured at\nPARALLEL=10: all 30 arrive, order interleaved.\n\nWritten for macOS's bash 3.2, which has neither `wait -n` nor `mapfile`, and\ntrips `set -u` on an empty array's length. Both caught by running it.\n\nFails once with a usable message when no cluster is running, rather than\nprinting the same error per message.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(cluster): drive the whole demo automatically, in one pane or three (#247)\n\nTwo ways to run the cross-broker story without typing it:\n\n`task cluster:demo` runs it in a single process — cluster up, subscriber on\nthe owner, a publish through a broker that does not own the shard, the same\npublish through the one that does, then a burst across all of them. Records\narriving at the subscriber are indented with an arrow so they read as a\nseparate voice from the publisher's lines. `--pace` sets the gap between\nsteps; `--pace 0` runs it flat out.\n\n`scripts/cluster-demo-tmux.sh` does the same across three real panes, which\nreads better on camera.\n\nBoth wait on `owners` rather than `nodes` to decide the cluster is up. That\ndistinction is the bug this cost: `nodes` only reads the session file, so a\nfile left by a previous cluster satisfied it instantly and the subscriber\npane then tried to reach a control plane that was gone, failing with a\nconnection refused against a stale port. `owners` has to reach the control\nplane, so it fails until this cluster answers. The tmux script also removes a\nstale session file before starting.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T17:35:32-07:00",
+          "tree_id": "bed60142f59b235fbfaa44219eb2ab5cf5d4cbe4",
+          "url": "https://github.com/gabloe/felix/commit/9534c611fcc95f439fd9aeeaf0324632a09c6b79"
+        },
+        "date": 1789000673499,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231550.4,
+            "range": "4965.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231550.40\nmean: 230846.46\nstdev: 4965.16\ncv: 2.15%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231550.4,
+            "range": "4965.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231550.40\nmean: 230846.46\nstdev: 4965.16\ncv: 2.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55735.41,
+            "range": "1307.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55735.41\nmean: 55804.63\nstdev: 1307.57\ncv: 2.34%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557354.15,
+            "range": "13075.72",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557354.15\nmean: 558046.31\nstdev: 13075.72\ncv: 2.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
