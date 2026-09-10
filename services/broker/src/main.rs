@@ -398,11 +398,14 @@ where
             let server = peer::PeerServer::bind(
                 membership_config.node_id.clone(),
                 peer_config,
-                Arc::new(peer::ForwardingHandler::new(
-                    Arc::clone(&broker),
-                    Arc::clone(ingress),
-                    Arc::clone(router),
-                    membership_config.advertise_addr.clone(),
+                Arc::new(peer::BrokerPeerHandler::new(
+                    peer::ForwardingHandler::new(
+                        Arc::clone(&broker),
+                        Arc::clone(ingress),
+                        Arc::clone(router),
+                        membership_config.advertise_addr.clone(),
+                    ),
+                    peer::ReplicaHandler::new(Arc::clone(&broker), Arc::clone(router)),
                 )),
             )
             .context("bind broker-internal listener")?;

@@ -1001,6 +1001,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "crc32fast",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

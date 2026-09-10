@@ -28,6 +28,7 @@ pub mod durable;
 mod error;
 mod keys;
 mod registry;
+pub mod replication;
 mod stream_state;
 mod subscription;
 

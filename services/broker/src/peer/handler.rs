@@ -51,7 +51,7 @@ impl ForwardingHandler {
         }
     }
 
-    async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
+    pub(super) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
         let correlation_id = publish.correlation_id;
         let key = ShardKey {
             tenant_id: publish.shard.tenant_id.clone(),

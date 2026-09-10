@@ -225,7 +225,68 @@ impl ShardRouter {
     pub fn snapshot(&self) -> Arc<RoutingTable> {
         self.table.load_full()
     }
+}
 
+/// Whether this node may store records another broker replicates to it.
+///
+/// Separate from [`Resolution`], which answers "who serves reads and writes".
+/// A follower serves neither and still has to store, so the two questions have
+/// different answers for the same shard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplicaRole {
+    /// This node is in the shard's replica set at the epoch the leader named.
+    Follower,
+    /// The leader named an epoch older than this node's. It has been
+    /// superseded, and a superseded leader's records must not be stored: it may
+    /// have written them after losing the shard.
+    Fenced { have: u64, named: u64 },
+    /// This node's view is older than the epoch named. Its copy is behind, so
+    /// it cannot yet tell whether it is a replica at that epoch.
+    Behind { have: u64, named: u64 },
+    /// This node is not in the shard's replica set. Includes leading it: a
+    /// leader does not replicate to itself.
+    NotAReplica,
+}
+
+impl ShardRouter {
+    /// Whether this node should store records for `key` shipped at `generation`.
+    pub fn replica_role(&self, key: &ShardKey, generation: u64) -> ReplicaRole {
+        let table = self.table.load();
+        let Some(route) = table.get(key) else {
+            // Nothing known about the shard at all, so this node cannot confirm
+            // membership. Behind rather than NotAReplica: the assignment may
+            // simply not have arrived, and refusing permanently would strand a
+            // follower whose watch is a moment late.
+            return ReplicaRole::Behind {
+                have: 0,
+                named: generation,
+            };
+        };
+        if generation < route.generation {
+            return ReplicaRole::Fenced {
+                have: route.generation,
+                named: generation,
+            };
+        }
+        if generation > route.generation {
+            return ReplicaRole::Behind {
+                have: route.generation,
+                named: generation,
+            };
+        }
+        if route
+            .replicas
+            .iter()
+            .any(|replica| replica.node_id == self.local_node_id)
+        {
+            ReplicaRole::Follower
+        } else {
+            ReplicaRole::NotAReplica
+        }
+    }
+}
+
+impl ShardRouter {
     /// Resolve a shard against the current table.
     pub fn resolve(&self, key: &ShardKey) -> Resolution {
         self.resolve_in(&self.table.load(), key, None)

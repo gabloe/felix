@@ -1,5 +1,9 @@
 /target
 **/target
+# Cross-platform build trees (e.g. a Linux container reproducing a CI failure
+# against a bind-mounted checkout). These are cargo output like any other, and
+# 700MB of them showing as untracked is alarming in a way it should not be.
+/target-*
 **/*.rs.bk
 **/*.pdb
 **/*.dSYM/

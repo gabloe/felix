@@ -352,6 +352,9 @@ mod correlation {
             InternalMessage::NotLeader(m) => m.correlation_id,
             InternalMessage::Hello(m) => m.correlation_id,
             InternalMessage::HelloOk(m) => m.correlation_id,
+            InternalMessage::ReplicateRecords(m) => m.correlation_id,
+            InternalMessage::ReplicateOk(m) => m.correlation_id,
+            InternalMessage::ReplicateError(m) => m.correlation_id,
         }
     }
 
@@ -397,6 +400,23 @@ mod correlation {
             InternalMessage::HelloOk(HelloOk {
                 correlation_id: 7,
                 node_id: "broker-b".to_string(),
+            }),
+            InternalMessage::ReplicateRecords(ReplicateRecords {
+                correlation_id: 7,
+                shard: shard(),
+                first_offset: 12,
+                checksum: 0xabcd,
+                payloads: vec![Bytes::from_static(b"hello")],
+            }),
+            InternalMessage::ReplicateOk(ReplicateOk {
+                correlation_id: 7,
+                durable_offset: 13,
+            }),
+            InternalMessage::ReplicateError(ReplicateError {
+                correlation_id: 7,
+                code: ErrorCode::LogGap,
+                expected_offset: 9,
+                detail: "behind".to_string(),
             }),
         ]
     }

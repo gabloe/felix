@@ -243,6 +243,11 @@ until records are actually replicated (#112) nothing reports being caught up, so
 promotion does not fire and placement behaves exactly as it did. The gate starts
 permitting failover at the moment replication starts working, and not before.
 
+The follower's half of this is implemented (#112): the exchange, the append
+rule, and the fence at the storing end. What ships records — the leader's side —
+is not, so nothing replicates yet and the promotion gate above still does not
+fire. The rule and its refusals are in `docs/internal-protocol.md`.
+
 ## What this does to the other M5 issues
 
 - **#111 (fenced leadership)** — this is now specific: the epoch is the
