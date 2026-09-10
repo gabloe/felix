@@ -160,13 +160,21 @@ Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing in M4 required it.
 
+## Watching it
+
+A recording of the three-pane demo is on the docs site:
+[Demo: Cross-broker Publishing](https://gabloe.github.io/felix/demos/cross-broker-cluster/).
+Embedded as video rather than an animated GIF — the same 45 seconds of terminal
+output would be tens of megabytes as a GIF, and could not be paused on the line
+that matters.
+
 ## Running it hands-free
 
 Two ways, depending on whether you want the three-panel view.
 
 ```bash
-task cluster:demo          # one pane, drives itself, narrated headings
-scripts/cluster-demo-tmux.sh   # three panes, driven automatically
+task cluster:demo         # ONE pane, drives itself, narrated headings
+task cluster:demo:tmux    # THREE panes: cluster, subscriber, publisher
 ```
 
 `cluster:demo` runs the whole sequence in a single process: the cluster comes
@@ -176,8 +184,16 @@ across all of them. Records arriving at the subscriber are indented with an
 arrow so they read as a separate voice from the publisher's lines. `--pace 0`
 runs it flat out, which is what a test wants; the default leaves room to narrate.
 
-The tmux script does the same thing across three real panes, which reads better
-on camera. It needs `tmux`. Both wait on `owners` rather than `nodes` to decide
+`cluster:demo:tmux` does the same thing across three real panes, which reads
+better on camera. It needs `tmux`, and `PACE=6 task cluster:demo:tmux` slows it
+down to narrate over.
+
+The tmux version ends with two bursts rather than one: six records sent one at a
+time, which arrive in order, then twenty-four sent twelve at a time, which do
+not. Both prefixes are distinct (`seq-`, `par-`) so the subscriber's panel shows
+which is which. The second burst is the interesting one — it makes visible that
+concurrent publishes through different brokers have no relative order, which is
+a property worth showing rather than a defect worth hiding. Both wait on `owners` rather than `nodes` to decide
 the cluster is up: `nodes` only reads the session file, so a file left by a
 previous cluster satisfies it immediately and the pane then talks to a control
 plane that is gone.

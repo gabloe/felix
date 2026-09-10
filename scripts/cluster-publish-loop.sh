@@ -20,6 +20,7 @@ set -euo pipefail
 
 STREAM=${STREAM:-orders}
 COUNT=${COUNT:-30}
+PREFIX=${PREFIX:-msg}
 PARALLEL=${PARALLEL:-1}
 GAP=${GAP:-0}
 
@@ -64,7 +65,7 @@ echo "publishing $COUNT messages to $STREAM across $BROKER_COUNT broker(s), para
 
 for i in $(seq 1 "$COUNT"); do
   via=${BROKERS[$(( (i - 1) % BROKER_COUNT ))]}
-  "$BIN" publish "$STREAM" "$(printf 'msg-%03d' "$i")" --via "$via" >/dev/null &
+  "$BIN" publish "$STREAM" "$(printf '%s-%03d' "$PREFIX" "$i")" --via "$via" >/dev/null &
 
   # Hold in-flight publishes at PARALLEL. Polled rather than `wait -n`, which
   # macOS's bash 3.2 does not have.

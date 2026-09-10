@@ -12,6 +12,9 @@ set -euo pipefail
 
 PACE=${PACE:-4}
 STREAM=${STREAM:-orders}
+# The second burst runs concurrently, so the panel shows records arriving out of
+# the order they were sent -- which is the point of showing it.
+BURST_PARALLEL=${BURST_PARALLEL:-12}
 SESSION=${SESSION:-felix-demo}
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -45,17 +48,10 @@ wait_for_cluster="until '$BIN' owners >/dev/null 2>&1; do sleep 0.3; done"
 tmux send-keys -t "$SESSION:0.1" \
   "clear; $wait_for_cluster; '$BIN' subscribe $STREAM" C-m
 
-# The publisher narrates itself with `echo` so the pane reads as a sequence
-# rather than as bare output.
-tmux send-keys -t "$SESSION:0.2" "clear; $wait_for_cluster; sleep 2; \
-OWNER=\$('$BIN' owners | awk '{print \$3}'); \
-OTHER=\$('$BIN' nodes | grep -v \"\$OWNER\" | head -1); \
-echo \"owner of $STREAM is \$OWNER; publishing through \$OTHER\"; sleep $PACE; \
-'$BIN' publish $STREAM hello --via \$OTHER; sleep $PACE; \
-'$BIN' publish $STREAM direct --via \$OWNER; sleep $PACE; \
-echo; echo 'a burst across every broker'; sleep 1; \
-COUNT=9 GAP=0.4 '$REPO_ROOT/scripts/cluster-publish-loop.sh'; \
-echo; echo 'done — every record reached the subscriber'" C-m
+# The publisher runs from a file so the pane shows its output rather than a
+# screenful of the command that produced it.
+tmux send-keys -t "$SESSION:0.2" \
+  "clear; STREAM=$STREAM PACE=$PACE BURST_PARALLEL=$BURST_PARALLEL '$REPO_ROOT/scripts/cluster-demo-publisher.sh'" C-m
 
 tmux select-pane -t "$SESSION:0.2"
 
