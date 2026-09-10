@@ -65,6 +65,25 @@ serves a subscription today. `--on` a different broker is allowed and says
 plainly that nothing will arrive — subscribe routing is M6, decided in
 [subscribe routing](subscribe-routing.md).
 
+A burst, for filling a subscriber's panel:
+
+```bash
+task cluster:burst                      # 30 messages, in order
+COUNT=60 GAP=0.2 task cluster:burst     # slower, readable on camera
+PARALLEL=10 task cluster:burst          # concurrent, and visibly reordered
+```
+
+It spreads messages across every broker, asking the cluster which ones exist so
+it keeps working with `--nodes 5`.
+
+**Ordering is worth understanding before demonstrating anything with it.** At
+`PARALLEL=1` records arrive in the order they were sent. Above that they do not,
+and that is correct rather than a defect: concurrent publishes through different
+brokers have no defined relative order, and the owner assigns offsets in the
+order it commits them. Felix orders a publisher's own sequence, not a race
+between three of them. Measured at `PARALLEL=10`, all 30 records arrive and the
+order interleaves.
+
 `task cluster:owners` prints who leads what, which is worth having on screen
 before publishing: the owner is chosen by rendezvous hash, so it differs between
 runs.
@@ -140,6 +159,28 @@ about a second.
 Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing in M4 required it.
+
+## Running it hands-free
+
+Two ways, depending on whether you want the three-panel view.
+
+```bash
+task cluster:demo          # one pane, drives itself, narrated headings
+scripts/cluster-demo-tmux.sh   # three panes, driven automatically
+```
+
+`cluster:demo` runs the whole sequence in a single process: the cluster comes
+up, a subscriber attaches to the owner, a record is published through a broker
+that does *not* own the shard, then through the one that does, then a burst
+across all of them. Records arriving at the subscriber are indented with an
+arrow so they read as a separate voice from the publisher's lines. `--pace 0`
+runs it flat out, which is what a test wants; the default leaves room to narrate.
+
+The tmux script does the same thing across three real panes, which reads better
+on camera. It needs `tmux`. Both wait on `owners` rather than `nodes` to decide
+the cluster is up: `nodes` only reads the session file, so a file left by a
+previous cluster satisfies it immediately and the pane then talks to a control
+plane that is gone.
 
 ## Running the tests
 
