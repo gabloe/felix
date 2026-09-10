@@ -119,3 +119,7 @@ fn restrict(path: &Path) -> Result<()> {
 fn restrict(_path: &Path) -> Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

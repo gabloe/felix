@@ -292,6 +292,89 @@ impl ControlPlaneConfig {
         Ok(config)
     }
 
+    /// Fold a parsed config file over the values already taken from the
+    /// environment.
+    ///
+    /// Separate from the read so the precedence rules — including a postgres
+    /// block selecting the backend — are testable without a file on disk.
+    fn apply(&mut self, override_cfg: ControlPlaneConfigOverride) -> Result<()> {
+        let config = self;
+
+        if let Some(value) = override_cfg.bind_addr {
+            config.bind_addr = value.parse().with_context(|| "parse bind_addr")?;
+        }
+        if let Some(value) = override_cfg.metrics_bind {
+            config.metrics_bind = value.parse().with_context(|| "parse metrics_bind")?;
+        }
+        if let Some(value) = override_cfg.region_id {
+            config.region_id = value;
+        }
+        if let Some(value) = override_cfg.changes_limit {
+            config.changes_limit = value;
+        }
+        if let Some(value) = override_cfg.change_retention_max_rows {
+            config.change_retention_max_rows = Some(value);
+        }
+        if let Some(liveness) = override_cfg.node_liveness {
+            if let Some(value) = liveness.heartbeat_interval_ms {
+                config.node_liveness.heartbeat_interval_ms = value;
+            }
+            if let Some(value) = liveness.expiry_timeout_ms {
+                config.node_liveness.expiry_timeout_ms = value;
+            }
+            if let Some(value) = liveness.sweep_interval_ms {
+                config.node_liveness.sweep_interval_ms = value;
+            }
+            if let Some(value) = liveness.shard_reconcile_interval_ms {
+                config.node_liveness.shard_reconcile_interval_ms = value;
+            }
+        }
+        if let Some(value) = override_cfg.shutdown_drain_timeout_ms
+            && value > 0
+        {
+            config.shutdown_drain_timeout_ms = value;
+        }
+        if let Some(values) = override_cfg.oidc_allowed_algorithms {
+            config.oidc_allowed_algorithms = parse_oidc_allowed_algorithms(values)?;
+        }
+        if let Some(storage_override) = override_cfg.storage
+            && let Some(backend) = storage_override.backend
+        {
+            config.storage = StorageBackend::from_str(&backend)?;
+        }
+        if let Some(pg_override) = override_cfg.postgres {
+            let mut pg_cfg = config.postgres.take().unwrap_or_default();
+            if let Some(url) = pg_override.url {
+                pg_cfg.url = url;
+            }
+            if let Some(max) = pg_override.max_connections {
+                pg_cfg.max_connections = max;
+            }
+            if let Some(timeout) = pg_override.connect_timeout_ms {
+                pg_cfg.connect_timeout_ms = timeout;
+            }
+            if let Some(timeout) = pg_override.acquire_timeout_ms {
+                pg_cfg.acquire_timeout_ms = timeout;
+            }
+            config.postgres = Some(pg_cfg);
+            if matches!(config.storage, StorageBackend::Memory) {
+                config.storage = StorageBackend::Postgres;
+            }
+        }
+        if let Some(bootstrap_override) = override_cfg.bootstrap {
+            if let Some(enabled) = bootstrap_override.enabled {
+                config.bootstrap.enabled = enabled;
+            }
+            if let Some(value) = bootstrap_override.bind_addr {
+                config.bootstrap.bind_addr = value.parse().with_context(|| "parse bind_addr")?;
+            }
+            if let Some(token) = bootstrap_override.token {
+                config.bootstrap.token = Some(token);
+            }
+        }
+        Ok(())
+    }
+
     pub fn from_env_or_yaml() -> Result<Self> {
         let mut config = Self::from_env()?;
         if let Ok(path) = std::env::var("FELIX_CONTROLPLANE_CONFIG") {
@@ -299,80 +382,7 @@ impl ControlPlaneConfig {
                 .with_context(|| format!("read FELIX_CONTROLPLANE_CONFIG: {path}"))?;
             let override_cfg: ControlPlaneConfigOverride = serde_yaml_ng::from_str(&contents)
                 .with_context(|| "parse control plane config yaml")?;
-
-            if let Some(value) = override_cfg.bind_addr {
-                config.bind_addr = value.parse().with_context(|| "parse bind_addr")?;
-            }
-            if let Some(value) = override_cfg.metrics_bind {
-                config.metrics_bind = value.parse().with_context(|| "parse metrics_bind")?;
-            }
-            if let Some(value) = override_cfg.region_id {
-                config.region_id = value;
-            }
-            if let Some(value) = override_cfg.changes_limit {
-                config.changes_limit = value;
-            }
-            if let Some(value) = override_cfg.change_retention_max_rows {
-                config.change_retention_max_rows = Some(value);
-            }
-            if let Some(liveness) = override_cfg.node_liveness {
-                if let Some(value) = liveness.heartbeat_interval_ms {
-                    config.node_liveness.heartbeat_interval_ms = value;
-                }
-                if let Some(value) = liveness.expiry_timeout_ms {
-                    config.node_liveness.expiry_timeout_ms = value;
-                }
-                if let Some(value) = liveness.sweep_interval_ms {
-                    config.node_liveness.sweep_interval_ms = value;
-                }
-                if let Some(value) = liveness.shard_reconcile_interval_ms {
-                    config.node_liveness.shard_reconcile_interval_ms = value;
-                }
-            }
-            if let Some(value) = override_cfg.shutdown_drain_timeout_ms
-                && value > 0
-            {
-                config.shutdown_drain_timeout_ms = value;
-            }
-            if let Some(values) = override_cfg.oidc_allowed_algorithms {
-                config.oidc_allowed_algorithms = parse_oidc_allowed_algorithms(values)?;
-            }
-            if let Some(storage_override) = override_cfg.storage
-                && let Some(backend) = storage_override.backend
-            {
-                config.storage = StorageBackend::from_str(&backend)?;
-            }
-            if let Some(pg_override) = override_cfg.postgres {
-                let mut pg_cfg = config.postgres.unwrap_or_default();
-                if let Some(url) = pg_override.url {
-                    pg_cfg.url = url;
-                }
-                if let Some(max) = pg_override.max_connections {
-                    pg_cfg.max_connections = max;
-                }
-                if let Some(timeout) = pg_override.connect_timeout_ms {
-                    pg_cfg.connect_timeout_ms = timeout;
-                }
-                if let Some(timeout) = pg_override.acquire_timeout_ms {
-                    pg_cfg.acquire_timeout_ms = timeout;
-                }
-                config.postgres = Some(pg_cfg);
-                if matches!(config.storage, StorageBackend::Memory) {
-                    config.storage = StorageBackend::Postgres;
-                }
-            }
-            if let Some(bootstrap_override) = override_cfg.bootstrap {
-                if let Some(enabled) = bootstrap_override.enabled {
-                    config.bootstrap.enabled = enabled;
-                }
-                if let Some(value) = bootstrap_override.bind_addr {
-                    config.bootstrap.bind_addr =
-                        value.parse().with_context(|| "parse bind_addr")?;
-                }
-                if let Some(token) = bootstrap_override.token {
-                    config.bootstrap.token = Some(token);
-                }
-            }
+            config.apply(override_cfg)?;
         }
         config.validate()?;
         Ok(config)
@@ -779,5 +789,180 @@ storage:
         let result = ControlPlaneConfig::from_env();
         assert!(result.is_err());
         let _env = clear_felix_env();
+    }
+
+    /// The YAML config file, folded over what the environment already gave.
+    ///
+    /// Driven through `apply` so the precedence table is one test rather than
+    /// one per key: an override that parses but is never assigned is invisible
+    /// until an operator sets it and nothing happens.
+    mod yaml_overrides {
+        use super::*;
+
+        fn parse(yaml: &str) -> ControlPlaneConfigOverride {
+            serde_yaml_ng::from_str(yaml).expect("parse the override")
+        }
+
+        /// A base taken from an empty environment, which is what a config file
+        /// is folded over in production.
+        fn base() -> (ControlPlaneConfig, EnvRestore) {
+            let restore = clear_felix_env();
+            (ControlPlaneConfig::from_env().expect("config"), restore)
+        }
+
+        /// **Every key in the file has to reach the config**, nested ones
+        /// included — the liveness and bootstrap blocks are the settings an
+        /// operator is most likely to tune, and a dropped assignment there
+        /// looks like a broker that never expires.
+        #[serial]
+        #[test]
+        fn every_key_in_the_file_reaches_the_config() {
+            let (mut config, _restore) = base();
+            config
+                .apply(parse(
+                    r#"
+bind_addr: "127.0.0.1:9443"
+metrics_bind: "127.0.0.1:9444"
+region_id: "eu-west-1"
+changes_limit: 4096
+change_retention_max_rows: 100000
+shutdown_drain_timeout_ms: 12000
+oidc_allowed_algorithms: ["ES256", "RS256"]
+node_liveness:
+  heartbeat_interval_ms: 1100
+  expiry_timeout_ms: 4400
+  sweep_interval_ms: 2200
+  shard_reconcile_interval_ms: 3300
+bootstrap:
+  enabled: true
+  bind_addr: "127.0.0.1:9445"
+  token: "a-bootstrap-token"
+"#,
+                ))
+                .expect("apply");
+
+            assert_eq!(config.bind_addr, "127.0.0.1:9443".parse().unwrap());
+            assert_eq!(config.metrics_bind, "127.0.0.1:9444".parse().unwrap());
+            assert_eq!(config.region_id, "eu-west-1");
+            assert_eq!(config.changes_limit, 4096);
+            assert_eq!(config.change_retention_max_rows, Some(100000));
+            assert_eq!(config.shutdown_drain_timeout_ms, 12000);
+            assert_eq!(config.oidc_allowed_algorithms.len(), 2);
+            assert_eq!(config.node_liveness.heartbeat_interval_ms, 1100);
+            assert_eq!(config.node_liveness.expiry_timeout_ms, 4400);
+            assert_eq!(config.node_liveness.sweep_interval_ms, 2200);
+            assert_eq!(config.node_liveness.shard_reconcile_interval_ms, 3300);
+            assert!(config.bootstrap.enabled);
+            assert_eq!(
+                config.bootstrap.bind_addr,
+                "127.0.0.1:9445".parse().unwrap()
+            );
+            assert_eq!(config.bootstrap.token.as_deref(), Some("a-bootstrap-token"));
+        }
+
+        /// A file that names no keys changes nothing. Absent is not zero: what
+        /// the environment set has to survive a file that says nothing about it.
+        #[serial]
+        #[test]
+        fn an_empty_file_leaves_the_config_alone() {
+            let (mut config, _restore) = base();
+            let before = config.region_id.clone();
+            let changes_limit = config.changes_limit;
+
+            config.apply(parse("{}")).expect("apply");
+
+            assert_eq!(config.region_id, before);
+            assert_eq!(config.changes_limit, changes_limit);
+        }
+
+        /// **Naming a postgres block selects postgres.** Writing a database URL
+        /// and still running against memory would look like a control plane
+        /// that had lost every registration on restart.
+        #[serial]
+        #[test]
+        fn a_postgres_block_selects_the_postgres_backend() {
+            let (mut config, _restore) = base();
+            assert!(matches!(config.storage, StorageBackend::Memory));
+
+            config
+                .apply(parse(
+                    r#"
+postgres:
+  url: "postgres://localhost/felix"
+  max_connections: 12
+  connect_timeout_ms: 3000
+  acquire_timeout_ms: 4000
+"#,
+                ))
+                .expect("apply");
+
+            assert!(matches!(config.storage, StorageBackend::Postgres));
+            let pg = config.postgres.expect("postgres config");
+            assert_eq!(pg.url, "postgres://localhost/felix");
+            assert_eq!(pg.max_connections, 12);
+            assert_eq!(pg.connect_timeout_ms, 3000);
+            assert_eq!(pg.acquire_timeout_ms, 4000);
+        }
+
+        /// An explicit backend is not overridden by supplying connection
+        /// details. Only an unset (memory) backend is inferred from them.
+        #[serial]
+        #[test]
+        fn an_explicitly_chosen_backend_survives_a_postgres_block() {
+            let (mut config, _restore) = base();
+            config
+                .apply(parse(
+                    r#"
+storage:
+  backend: "postgres"
+postgres:
+  url: "postgres://localhost/felix"
+"#,
+                ))
+                .expect("apply");
+
+            assert!(matches!(config.storage, StorageBackend::Postgres));
+        }
+
+        /// A zero drain budget means "cancel everything immediately", which is
+        /// not a shorter graceful shutdown but the absence of one.
+        #[serial]
+        #[test]
+        fn a_zero_drain_timeout_is_ignored() {
+            let (mut config, _restore) = base();
+            let before = config.shutdown_drain_timeout_ms;
+
+            config
+                .apply(parse("shutdown_drain_timeout_ms: 0"))
+                .expect("apply");
+
+            assert_eq!(config.shutdown_drain_timeout_ms, before);
+        }
+
+        /// An address that does not parse fails the load and names the key, so
+        /// the control plane does not come up bound somewhere unasked for.
+        #[serial]
+        #[test]
+        fn an_unparseable_address_names_the_key_it_came_from() {
+            let (mut config, _restore) = base();
+            let err = config
+                .apply(parse("bind_addr: not-an-address"))
+                .expect_err("an unparseable address should fail");
+            assert!(err.to_string().contains("bind_addr"), "{err}");
+        }
+
+        /// An unknown signing algorithm is refused rather than dropped: a
+        /// control plane silently accepting fewer algorithms than the operator
+        /// listed would reject tokens it was configured to trust.
+        #[serial]
+        #[test]
+        fn an_unknown_signing_algorithm_is_refused() {
+            let (mut config, _restore) = base();
+            assert!(
+                config
+                    .apply(parse(r#"oidc_allowed_algorithms: ["ES256", "MD5"]"#))
+                    .is_err()
+            );
+        }
     }
 }
