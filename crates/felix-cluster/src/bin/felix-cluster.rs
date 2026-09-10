@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
         "subscribe" => subscribe(&args).await,
         "publish" => publish(&args).await,
         "owners" => owners().await,
+        "nodes" => nodes(),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -56,6 +57,7 @@ felix-cluster — a local multi-node Felix cluster
   up [--nodes N]            start a cluster and hold it until Ctrl-C
   status [--nodes N]        start, print membership and ownership, exit
   smoke [--nodes N]         publish through a non-owner, receive from the owner
+  nodes                           every broker in a running cluster, one per line
   owners                          who leads each shard of a running cluster
   subscribe STREAM [--on NODE]    stream events from a running cluster
   publish STREAM MSG [--via NODE] publish to a running cluster
@@ -130,6 +132,19 @@ async fn owners() -> Result<()> {
     rows.sort();
     for (shard, leader) in rows {
         println!("{shard} -> {leader}");
+    }
+    Ok(())
+}
+
+/// Every broker in the cluster, one per line.
+///
+/// Distinct from `owners`, which lists shard leaders: a broker holding no shard
+/// is still a broker you can publish through, and that is exactly the case the
+/// demo is about.
+fn nodes() -> Result<()> {
+    let session = Session::read(&session::default_path())?;
+    for node in &session.nodes {
+        println!("{}", node.node_id);
     }
     Ok(())
 }

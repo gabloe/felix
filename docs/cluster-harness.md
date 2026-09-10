@@ -65,6 +65,25 @@ serves a subscription today. `--on` a different broker is allowed and says
 plainly that nothing will arrive — subscribe routing is M6, decided in
 [subscribe routing](subscribe-routing.md).
 
+A burst, for filling a subscriber's panel:
+
+```bash
+task cluster:burst                      # 30 messages, in order
+COUNT=60 GAP=0.2 task cluster:burst     # slower, readable on camera
+PARALLEL=10 task cluster:burst          # concurrent, and visibly reordered
+```
+
+It spreads messages across every broker, asking the cluster which ones exist so
+it keeps working with `--nodes 5`.
+
+**Ordering is worth understanding before demonstrating anything with it.** At
+`PARALLEL=1` records arrive in the order they were sent. Above that they do not,
+and that is correct rather than a defect: concurrent publishes through different
+brokers have no defined relative order, and the owner assigns offsets in the
+order it commits them. Felix orders a publisher's own sequence, not a race
+between three of them. Measured at `PARALLEL=10`, all 30 records arrive and the
+order interleaves.
+
 `task cluster:owners` prints who leads what, which is worth having on screen
 before publishing: the owner is chosen by rendezvous hash, so it differs between
 runs.
