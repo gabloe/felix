@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789008265133,
+  "lastUpdate": 1789008745769,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5280,6 +5280,72 @@ window.BENCHMARK_DATA = {
             "range": "488.74",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1945.00\nmean: 1823.00\nstdev: 488.74\ncv: 26.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9346c783aebe2636ad989b3996d88f58809cb439",
+          "message": "fix(cluster): restart a broker that loses its port instead of failing the cluster (#251)\n\nCI failed with `broker-2 exited before becoming ready (exit status: 1)`. Port\nselection is racy by construction: the harness probes a port, releases it, and\nonly then hands it to the child, so anything on the machine can take it in\nbetween. `ports.rs` documented that window and nothing acted on it — one\nbroker losing the race failed the whole cluster start.\n\nA broker that exits during start-up is now started again with fresh ports, up\nto three times. Three because a genuine misconfiguration fails identically\nevery time and still surfaces, rather than being masked.\n\nWhen it does surface, it now says why. Broker output goes to `broker.log` in\nthe node's data directory instead of `/dev/null`, and a start-up failure\nquotes the tail — \"exit status: 1\" cannot distinguish a lost port from a\nrefused credential, and those need opposite responses.\n\nVerified by injecting the failure rather than waiting to observe it: broker-0's\nfirst start is given a credential the control plane refuses, which is exactly\nhow CI's broker died. That found a bug in this fix — the readiness URL was\ncaptured before the retry loop, so after a respawn the harness kept polling\nthe dead process's port and timed out anyway. The URL is now re-read each\npass. With that corrected: inject, exit, respawn, ready, pass in 1.06s.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T19:50:06-07:00",
+          "tree_id": "ec7638d71ddb92da235efedb85cab76ea6a12f61",
+          "url": "https://github.com/gabloe/felix/commit/9346c783aebe2636ad989b3996d88f58809cb439"
+        },
+        "date": 1789008743639,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 121,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 121.00\nmean: 121.00\nstdev: 1.00\ncv: 0.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 163,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.20\nstdev: 0.84\ncv: 0.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 213,
+            "range": "6.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 213.40\nstdev: 6.35\ncv: 2.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.80\nstdev: 1.10\ncv: 0.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 328,
+            "range": "6.02",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 328.00\nmean: 326.60\nstdev: 6.02\ncv: 1.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 476,
+            "range": "104.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 476.00\nmean: 512.60\nstdev: 104.22\ncv: 20.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
