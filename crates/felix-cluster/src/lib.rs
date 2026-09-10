@@ -40,6 +40,15 @@ pub use controlplane::ControlPlane;
 /// How long any single start-up wait may take before the harness gives up.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How many times a broker may be started before the cluster gives up on it.
+///
+/// More than one because port selection is inherently racy: a port is probed,
+/// released, and only then handed to the child, and anything on the machine can
+/// take it in between. Three attempts make that vanishingly unlikely without
+/// masking a broker that is genuinely misconfigured — which fails identically
+/// every time and still surfaces, with its log.
+const MAX_SPAWN_ATTEMPTS: u32 = 3;
+
 /// Who leads a shard, and at which generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
@@ -73,6 +82,28 @@ impl BrokerNode {
     fn exited(&mut self) -> Option<std::process::ExitStatus> {
         self.process.as_mut()?.try_wait().ok().flatten()
     }
+
+    /// The tail of this broker's log, for a start-up failure to quote.
+    ///
+    /// An exit status alone cannot distinguish a lost port from a refused
+    /// credential, and those need opposite responses.
+    fn failure_reason(&self) -> String {
+        let Ok(log) = std::fs::read_to_string(self.data_dir.join("broker.log")) else {
+            return String::new();
+        };
+        let tail: Vec<&str> = log
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .rev()
+            .take(5)
+            .collect();
+        if tail.is_empty() {
+            return String::new();
+        }
+        let mut lines = tail;
+        lines.reverse();
+        format!(":\n  {}", lines.join("\n  "))
+    }
 }
 
 /// A running cluster.
@@ -90,12 +121,16 @@ pub struct Cluster {
     /// May subscribe, may not publish.
     pub subscribe_only_token: String,
     http: reqwest::Client,
+    /// Kept so a broker that loses the port race can be started again.
+    binary: PathBuf,
+    config: ClusterConfig,
     /// Held so the data directories outlive the brokers and are removed with
     /// the cluster.
     _root: tempfile::TempDir,
 }
 
 /// How to build a cluster.
+#[derive(Clone)]
 pub struct ClusterConfig {
     pub nodes: usize,
     pub tenant_id: String,
@@ -167,6 +202,8 @@ impl Cluster {
             operator_token,
             subscribe_only_token,
             http,
+            binary: binary.clone(),
+            config: config.clone(),
             _root: root,
         };
 
@@ -196,12 +233,29 @@ impl Cluster {
         // has already exited can be reported as such, with its status, instead
         // of timing out.
         for index in 0..self.nodes.len() {
-            let url = format!("http://{}/ready", self.nodes[index].metrics_addr);
             let deadline = std::time::Instant::now() + READY_TIMEOUT;
+            let mut attempts = 1;
             loop {
+                // Re-read each pass: a respawn gives this broker new ports, and
+                // a URL captured before the loop would keep polling the address
+                // the dead process had.
+                let url = format!("http://{}/ready", self.nodes[index].metrics_addr);
                 if let Some(status) = self.nodes[index].exited() {
+                    // Ports are handed to the child after being probed and
+                    // released, so another process can take one in between.
+                    // Losing that race is not a cluster failure, it is a retry
+                    // with different ports.
+                    if attempts < MAX_SPAWN_ATTEMPTS {
+                        attempts += 1;
+                        self.respawn(index)?;
+                        continue;
+                    }
                     let node_id = &self.nodes[index].node_id;
-                    bail!("{node_id} exited before becoming ready ({status})");
+                    let reason = self.nodes[index].failure_reason();
+                    bail!(
+                        "{node_id} exited before becoming ready after \
+                         {MAX_SPAWN_ATTEMPTS} attempts ({status}){reason}"
+                    );
                 }
                 let ok = matches!(
                     self.http.get(&url).send().await,
@@ -622,6 +676,29 @@ impl Cluster {
         self.nodes.iter().find(|node| node.node_id == node_id)
     }
 
+    /// Start one broker again, with fresh ports.
+    ///
+    /// Keeps the node id and data directory: this is the same broker having
+    /// another go, not a different one, and a durable log it already wrote must
+    /// still be there.
+    fn respawn(&mut self, index: usize) -> Result<()> {
+        let node_id = self.nodes[index].node_id.clone();
+        tracing::warn!(%node_id, "broker exited during start-up; starting it again");
+        let control_plane = self
+            .control_plane
+            .as_ref()
+            .ok_or_else(|| anyhow!("control plane is gone"))?;
+        let replacement = spawn_broker(
+            &self.binary,
+            control_plane,
+            &self.config,
+            self._root.path(),
+            index,
+        )?;
+        self.nodes[index] = replacement;
+        Ok(())
+    }
+
     /// Stop the control plane, leaving the brokers running.
     ///
     /// A failure primitive rather than a teardown: brokers keep serving on the
@@ -847,7 +924,13 @@ fn spawn_broker(
     if config.inherit_output {
         command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
+        // To a file rather than discarded: a broker that exits during start-up
+        // takes its reason with it otherwise, and "exit status: 1" says nothing
+        // about whether it lost a port or was refused by the control plane.
+        let log = std::fs::File::create(data_dir.join("broker.log"))
+            .with_context(|| format!("create log for {node_id}"))?;
+        let errors = log.try_clone().context("clone log handle")?;
+        command.stdout(Stdio::from(log)).stderr(Stdio::from(errors));
     }
 
     let process = command
