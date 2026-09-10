@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789057210198,
+  "lastUpdate": 1789084620095,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4264,6 +4264,58 @@ window.BENCHMARK_DATA = {
             "range": "10693.59",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 533630.57\nmean: 538111.38\nstdev: 10693.59\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4919c4a607090958eedd35068f4573ee55cecee",
+          "message": "feat(replication): accept records a shard leader ships (M5.3) (#255)\n\n* feat(replication): accept records a shard leader ships (M5.3)\n\nThe follower's half of #112: the exchange, the append rule, and the fence at\nthe storing end. Nothing ships records yet, so nothing replicates and the\npromotion gate from #111 still does not fire — it starts permitting failover\nwhen the leader's side lands, and not before.\n\n## Offsets are the leader's\n\nA follower stores a record at the leader's offset or not at all. That is what\nmakes the two logs comparable by offset, and the acknowledged mark, the\ncatch-up range, and the caught-up test that gates promotion all rest on it.\n\nThe log underneath appends at its own tail and cannot be told where to put a\nrecord. So the follower does not ask it to: it checks the batch begins exactly\nat its tail and refuses otherwise. Position is verified rather than commanded,\nwhich is stricter and needs nothing new from the storage layer.\n\n## Why a resend is safe\n\nReplication has to resend a batch whose acknowledgement was lost, and a resend\nmust not duplicate a record. A batch entirely below the tail is acknowledged\nwithout being stored; one that straddles the tail stores only the suffix. The\noverlapping bytes are compared against what is on disk rather than assumed, so\na resend that is *not* a resend is caught instead of appended.\n\n## What each refusal means\n\n`LogGap` names the offset the follower wants, so the repair needs no separate\nnegotiation. `LogConflict` has none: records are never rewritten, so two logs\nthat disagree at an offset do not converge by retrying, and progress stops.\n`FencedEpoch` refuses a superseded leader — it may have written those records\nafter losing the shard. Only `LogGap` is retryable.\n\n## Durable, not buffered\n\nThe acknowledged offset is on disk before it is reported. A follower that\nacknowledged sooner would let the leader believe a record had survived a\nfailure it would not have survived, and under `Quorum` that belief is the\nguarantee.\n\n## The checksum\n\nCovers each payload's length as well as its bytes: without the length a batch\nresplit in transit hashes the same as the original, and a resplit batch is a\ndifferent set of records. Defined once in `felix_wire`, so the two sides cannot\ncompute it differently.\n\nEvery rule was confirmed against a reverted check — dropping the gap test, the\noverlap comparison, the suffix-only append, or the commit each fails exactly\nthe tests that name it. The new kinds join `every_message()`, which already\ndrives round-trip, truncation, single-byte corruption, and trailing-byte\nrejection.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* ci(perf): print a failed benchmark run's own output\n\nA failing trial captured the demo's stdout and stderr to `data/raw/stdout/`\nand printed only \"nonzero exit\". In CI that directory goes away with the\nrunner, so the log said a run failed and offered no way to find out why --\nwhich is where this branch's perf job currently stands.\n\nThe tail of the captured output now goes to the log at the point the trial is\ngiven up on.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* chore: ignore cross-platform build trees\n\nA Linux container reproducing a CI failure against a bind-mounted checkout\nneeds its own CARGO_TARGET_DIR, and `target-linux/` is not covered by\n`/target`. 700MB of untracked cargo output is alarming in a way it should\nnot be.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(ci): stop the perf job building two checkouts into one target dir\n\nThe job builds the merge-base worktree and the PR checkout back-to-back and\nshared `CARGO_TARGET_DIR` between them, so unchanged third-party dependencies\nwould compile once instead of twice.\n\nThey are two copies of the same workspace. Cargo derives a path dependency's\nmetadata hash from its name and version, not from which checkout it came\nfrom, so both copies of `felix-router` claim the same unit and whichever\nbuilds last wins. The shared directory holds exactly one `felix_router`\nrmeta and one fingerprint for the two source trees.\n\nThe loud failure is not the one that matters. This branch adds a cross-crate\nAPI, so the candidate failed to compile against the baseline's `felix-router`\nand every trial reported \"nonzero exit\". A PR that only changes a function\nbody compiles fine -- against the baseline's code -- and the job then\nbenchmarks the merge-base twice and reports no change, which is the answer a\nregression would also produce.\n\nEach side now gets its own target directory. Third-party crates compile twice;\nthe registry cache is still shared, and correctness is worth the minutes.\n\nVerified by reproducing both directions locally: baseline then candidate into\none directory fails to compile, into separate directories both succeed.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T16:55:00-07:00",
+          "tree_id": "cda0c8c4a18592cdefb12cc4fd5941637c427ee8",
+          "url": "https://github.com/gabloe/felix/commit/b4919c4a607090958eedd35068f4573ee55cecee"
+        },
+        "date": 1789084618859,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 320219.84,
+            "range": "2540.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320219.84\nmean: 321311.46\nstdev: 2540.42\ncv: 0.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 320219.84,
+            "range": "2540.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320219.84\nmean: 321311.46\nstdev: 2540.42\ncv: 0.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74747.33,
+            "range": "1012.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74747.33\nmean: 75348.27\nstdev: 1012.30\ncv: 1.34%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 747473.26,
+            "range": "10123.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 747473.26\nmean: 753482.68\nstdev: 10123.02\ncv: 1.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
