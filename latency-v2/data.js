@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789002384522,
+  "lastUpdate": 1789008265133,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5214,6 +5214,72 @@ window.BENCHMARK_DATA = {
             "range": "323.84",
             "unit": "us",
             "extra": "trials: 5\nmedian: 793.00\nmean: 868.80\nstdev: 323.84\ncv: 37.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9974c5d8d5f503b7ab86f1598d356754e00d9af1",
+          "message": "ci: authenticate the tool installs so they stop hitting the anonymous rate limit (#252)\n\n`coverage` failed on #251 in 34 seconds, before any code ran:\n\n    Install Task\n    ##[error]API rate limit exceeded for 135.232.216.64.\n\n`arduino/setup-task` and `taiki-e/install-action` resolve a release through\nthe GitHub API. Unauthenticated, that budget is 60 requests an hour **per\nIP**, and runners share their IP with everything else scheduled on it — so\nthe budget is routinely already spent by jobs belonging to other people.\n\nBoth now pass `GITHUB_TOKEN`, which moves them onto the repository's 1000/hr\nbudget. `secrets.GITHUB_TOKEN` needs only `contents: read`, which is the\ndefault; the coverage job already declares `contents: write` for its badge.\n\nThis is the same failure an earlier `main` coverage run hit, which I had\nrecorded at the time as unrelated to the branch it appeared on. It was\nunrelated to the branch, and it was not a one-off.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-09T19:42:01-07:00",
+          "tree_id": "7d8fe47079439b49fc574dc7df5fbb66fca9ffda",
+          "url": "https://github.com/gabloe/felix/commit/9974c5d8d5f503b7ab86f1598d356754e00d9af1"
+        },
+        "date": 1789008262868,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 155,
+            "range": "2.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 155.00\nmean: 154.40\nstdev: 2.41\ncv: 1.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "7.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 203.20\nstdev: 7.36\ncv: 3.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 257,
+            "range": "1161.31",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 257.00\nmean: 773.40\nstdev: 1161.31\ncv: 150.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 196.60\nstdev: 0.55\ncv: 0.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 475,
+            "range": "138.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 475.00\nmean: 533.40\nstdev: 138.92\ncv: 26.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1945,
+            "range": "488.74",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1945.00\nmean: 1823.00\nstdev: 488.74\ncv: 26.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
