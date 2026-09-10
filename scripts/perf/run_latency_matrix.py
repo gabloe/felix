@@ -208,6 +208,21 @@ def effective_total(workload: dict, batch: int, payload: int) -> int:
     return max(total, min(needed, max_total))
 
 
+def tail_of(path, lines: int = 40) -> str:
+    """The last few lines of a failed run's captured output, for the log."""
+    try:
+        captured = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as err:
+        return f"  (could not read {path}: {err})"
+    if not captured:
+        return f"  (no output captured in {path})"
+    shown = captured[-lines:]
+    elided = len(captured) - len(shown)
+    header = f"  --- last {len(shown)} line(s) of {path.name}"
+    header += f", {elided} earlier line(s) elided ---" if elided else " ---"
+    return "\n".join([header] + [f"  {line}" for line in shown])
+
+
 def build_matrix(config: dict, trials: int, binary_override=None):
     workload = config["workload"]
     profiles = config["profiles"]
@@ -499,6 +514,11 @@ def main():
                         f"[{idx}/{len(matrix)}] {label} failed after {attempt} "
                         f"attempt(s): {record['parse_error']}"
                     )
+                    # The run's own output is the only thing that says *why*, and
+                    # in CI the file it was captured to is thrown away with the
+                    # runner. Printing the tail is what makes a failure here
+                    # diagnosable from the log alone.
+                    print(tail_of(stdout_path))
                     if args.fail_fast:
                         raise SystemExit(msg)
                     print(f"WARNING: {msg} -- recording as failed, continuing")
