@@ -165,8 +165,8 @@ nothing in M4 required it.
 Two ways, depending on whether you want the three-panel view.
 
 ```bash
-task cluster:demo          # one pane, drives itself, narrated headings
-scripts/cluster-demo-tmux.sh   # three panes, driven automatically
+task cluster:demo         # ONE pane, drives itself, narrated headings
+task cluster:demo:tmux    # THREE panes: cluster, subscriber, publisher
 ```
 
 `cluster:demo` runs the whole sequence in a single process: the cluster comes
@@ -176,8 +176,9 @@ across all of them. Records arriving at the subscriber are indented with an
 arrow so they read as a separate voice from the publisher's lines. `--pace 0`
 runs it flat out, which is what a test wants; the default leaves room to narrate.
 
-The tmux script does the same thing across three real panes, which reads better
-on camera. It needs `tmux`. Both wait on `owners` rather than `nodes` to decide
+`cluster:demo:tmux` does the same thing across three real panes, which reads
+better on camera. It needs `tmux`, and `PACE=6 task cluster:demo:tmux` slows it
+down to narrate over. Both wait on `owners` rather than `nodes` to decide
 the cluster is up: `nodes` only reads the session file, so a file left by a
 previous cluster satisfies it immediately and the pane then talks to a control
 plane that is gone.
