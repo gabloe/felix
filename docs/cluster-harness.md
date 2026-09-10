@@ -178,7 +178,14 @@ runs it flat out, which is what a test wants; the default leaves room to narrate
 
 `cluster:demo:tmux` does the same thing across three real panes, which reads
 better on camera. It needs `tmux`, and `PACE=6 task cluster:demo:tmux` slows it
-down to narrate over. Both wait on `owners` rather than `nodes` to decide
+down to narrate over.
+
+The tmux version ends with two bursts rather than one: six records sent one at a
+time, which arrive in order, then twenty-four sent twelve at a time, which do
+not. Both prefixes are distinct (`seq-`, `par-`) so the subscriber's panel shows
+which is which. The second burst is the interesting one — it makes visible that
+concurrent publishes through different brokers have no relative order, which is
+a property worth showing rather than a defect worth hiding. Both wait on `owners` rather than `nodes` to decide
 the cluster is up: `nodes` only reads the session file, so a file left by a
 previous cluster satisfies it immediately and the pane then talks to a control
 plane that is gone.
