@@ -160,6 +160,14 @@ Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing in M4 required it.
 
+## Watching it
+
+A recording of the three-pane demo is on the docs site:
+[Demo: Cross-broker Publishing](https://gabloe.github.io/felix/demos/cross-broker-cluster/).
+Embedded as video rather than an animated GIF — the same 45 seconds of terminal
+output would be tens of megabytes as a GIF, and could not be paused on the line
+that matters.
+
 ## Running it hands-free
 
 Two ways, depending on whether you want the three-panel view.

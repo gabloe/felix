@@ -65,6 +65,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'demos/overview' },
+            { label: 'Cross-broker Publishing', slug: 'demos/cross-broker-cluster' },
             { label: 'Slow-consumer Isolation', slug: 'demos/slow-consumer-isolation' },
             { label: 'Local State Divergence', slug: 'demos/state-divergence' },
             { label: 'Notifications', slug: 'demos/notifications' },
