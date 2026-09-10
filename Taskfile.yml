@@ -230,6 +230,11 @@ tasks:
   cluster:publish:
     desc: Publish to a running cluster, through a broker that does not own the shard.
     cmds: ["cargo run -q -p felix-cluster -- publish {{.CLI_ARGS}}"]
+  cluster:demo:
+    desc: Run the whole cross-broker demo in one pane, start to finish.
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -q -p felix-cluster -- demo {{.CLI_ARGS}}
   cluster:burst:
     desc: Publish a burst of messages to a running cluster, across every broker.
     cmds: ["scripts/cluster-publish-loop.sh"]
