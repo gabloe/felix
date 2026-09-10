@@ -69,11 +69,48 @@ pub enum ForwardError {
     Indeterminate { node_id: String, detail: String },
 }
 
+/// The one thing forwarding asks of the connection pool.
+///
+/// A trait rather than the pool itself so the retry rules above — which decide
+/// whether a batch may be sent a second time — can be tested against an owner
+/// that answers on command, including with the answers a healthy cluster
+/// almost never produces.
+pub trait PeerRequester {
+    fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>>;
+}
+
+impl<T: PeerRequester> PeerRequester for std::sync::Arc<T> {
+    fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> {
+        T::request(self, node_id, addr, message)
+    }
+}
+
+impl PeerRequester for PeerPool {
+    async fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        PeerPool::request(self, node_id, addr, message).await
+    }
+}
+
 /// Forward one batch and wait for the owner's answer.
 ///
 /// Returns the log offsets the owner assigned, when the stream has a log.
 pub async fn forward_publish(
-    pool: &PeerPool,
+    pool: &impl PeerRequester,
     target: &ForwardTarget,
     key: &ForwardKey,
     ack: AckMode,
@@ -100,10 +137,7 @@ pub async fn forward_publish(
             payloads: payloads.clone(),
         });
 
-        match pool
-            .request(&target.node_id, target.advertise_addr, request)
-            .await
-        {
+        match PeerRequester::request(pool, &target.node_id, target.advertise_addr, request).await {
             Ok(InternalMessage::ForwardPublishOk(ok)) => {
                 metrics::record_forward(metrics::OUTCOME_OK);
                 return Ok(Some((ok.first_offset, ok.last_offset)));
@@ -201,3 +235,7 @@ pub async fn forward_publish(
 fn retry_delay(attempt: u32) -> Duration {
     Duration::from_millis(5 << attempt.min(4))
 }
+
+#[cfg(test)]
+#[path = "forward_tests.rs"]
+mod tests;

@@ -35,6 +35,8 @@ mod lane;
 mod writer;
 
 #[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use lane::{LaneCommand, WriterLaneManager};
@@ -123,6 +125,23 @@ async fn subscribe_failed(
     Ok(true)
 }
 
+/// Where replayed events are written.
+///
+/// A trait rather than the QUIC stream itself, so the rules below — paging
+/// history, detecting a gap the subscriber queue dropped, and not re-sending
+/// what history already covered — are testable without a subscriber on the
+/// other end of a connection.
+pub(crate) trait EventSink {
+    fn write_all(&mut self, bytes: &[u8]) -> impl std::future::Future<Output = Result<()>> + Send;
+}
+
+impl EventSink for quinn::SendStream {
+    async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        quinn::SendStream::write_all(self, bytes).await?;
+        Ok(())
+    }
+}
+
 /// Write a resumed subscription's stored history and ring backlog.
 ///
 /// Disk history is *paged*, never collected: `read_durable` returns at most
@@ -132,8 +151,8 @@ async fn subscribe_failed(
 /// is read, so backpressure from a slow client propagates naturally into slower
 /// reading rather than unbounded buffering.
 #[allow(clippy::too_many_arguments)]
-async fn write_replay(
-    event_send: &mut quinn::SendStream,
+async fn write_replay<S: EventSink>(
+    event_send: &mut S,
     broker: &Arc<Broker>,
     tenant_id: &str,
     namespace: &str,
@@ -260,8 +279,8 @@ const MAX_CATCH_UP_PASSES: usize = 8;
 
 /// Write `[from, until)` from disk, returning the offset reached.
 #[allow(clippy::too_many_arguments)]
-async fn write_history_range(
-    event_send: &mut quinn::SendStream,
+async fn write_history_range<S: EventSink>(
+    event_send: &mut S,
     broker: &Arc<Broker>,
     tenant_id: &str,
     namespace: &str,
@@ -373,8 +392,8 @@ impl ReplayBatch {
 }
 
 /// Encode and write one replay batch, with or without offsets as negotiated.
-async fn write_replay_batch(
-    event_send: &mut quinn::SendStream,
+async fn write_replay_batch<S: EventSink>(
+    event_send: &mut S,
     subscription_id: u64,
     records: &[(u64, bytes::Bytes)],
     offsets_enabled: bool,
@@ -394,7 +413,7 @@ async fn write_replay_batch(
     } else {
         felix_wire::binary::encode_event_batch_bytes(subscription_id, payloads)?
     };
-    event_send.write_all(&frame).await?;
+    EventSink::write_all(event_send, &frame).await?;
     Ok(())
 }
 

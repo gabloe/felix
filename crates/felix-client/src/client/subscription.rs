@@ -508,3 +508,7 @@ impl Drop for Subscription {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "subscription_tests.rs"]
+mod tests;
