@@ -49,6 +49,12 @@ jobs:
 
       - name: Install Task
         uses: arduino/setup-task@v3
+        with:
+          # Authenticated, so this reads the repo's 1000/hr budget rather than
+          # the 60/hr GitHub allows an unauthenticated IP. Runners share their
+          # IP, so the anonymous budget is routinely spent by other jobs and the
+          # install fails with "API rate limit exceeded" before any code runs.
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lint
         run: task lint
