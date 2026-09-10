@@ -206,9 +206,15 @@ readiness timeout that looks like a bug in the broker rather than in the test
 setup. Serial runs also narrow the window in which two clusters can be handed
 the same ephemeral port.
 
-A broker that exits during start-up is reported with its exit status
-immediately, rather than as a readiness timeout tens of seconds later that says
-nothing about why.
+A broker that exits during start-up is started again, up to three times, with
+fresh ports. Port selection is inherently racy — a port is probed, released, and
+only then handed to the child — so losing it is a retry rather than a cluster
+failure. A broker that fails every time is genuinely misconfigured and is
+reported with its exit status and the tail of its own log, which is the
+difference between "lost a port" and "the control plane refused this identity".
+
+Broker output goes to `broker.log` in each node's data directory rather than
+being discarded, so that reason exists to be quoted.
 
 ## The conformance suite
 
