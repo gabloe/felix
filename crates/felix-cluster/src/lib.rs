@@ -129,14 +129,65 @@ pub struct Cluster {
     _root: tempfile::TempDir,
 }
 
+/// A stream to create when the cluster starts.
+///
+/// Replication and consistency are separate from the shard count because a
+/// failure test needs them apart: a shard with no replicas has nothing to fail
+/// over to, and a `Leader` stream acknowledges before a follower has the record,
+/// so neither proves anything about the other.
+#[derive(Clone, Debug)]
+pub struct StreamSpec {
+    pub name: String,
+    pub shards: u32,
+    /// Copies of each shard, leader included. `1` is leader-only.
+    pub replication_factor: u32,
+    /// `"Leader"` or `"Quorum"`, as the control plane spells them.
+    pub consistency: String,
+}
+
+impl StreamSpec {
+    /// An unreplicated, leader-acknowledged stream — the default a cluster gets
+    /// when a test says nothing about replication.
+    pub fn new(name: impl Into<String>, shards: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor: 1,
+            consistency: "Leader".to_string(),
+        }
+    }
+
+    /// Replicated across `replication_factor` brokers, acknowledged by a
+    /// majority. What a failover test needs: records that are on more than one
+    /// broker by the time the publish returns.
+    pub fn quorum(name: impl Into<String>, shards: u32, replication_factor: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor,
+            consistency: "Quorum".to_string(),
+        }
+    }
+
+    /// Replicated, but acknowledged by the leader alone.
+    pub fn replicated(name: impl Into<String>, shards: u32, replication_factor: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor,
+            consistency: "Leader".to_string(),
+        }
+    }
+}
+
 /// How to build a cluster.
 #[derive(Clone)]
 pub struct ClusterConfig {
     pub nodes: usize,
     pub tenant_id: String,
     pub namespace: String,
-    /// Streams to create, and how many shards each has.
-    pub streams: Vec<(String, u32)>,
+    /// Streams to create.
+    pub streams: Vec<StreamSpec>,
     /// Inherit the parent's stdout/stderr rather than discarding it. Useful when
     /// running the harness by hand; noisy inside a test.
     pub inherit_output: bool,
@@ -148,7 +199,7 @@ impl Default for ClusterConfig {
             nodes: 3,
             tenant_id: "t1".to_string(),
             namespace: "ns".to_string(),
-            streams: vec![("orders".to_string(), 1)],
+            streams: vec![StreamSpec::new("orders", 1)],
             inherit_output: false,
         }
     }
@@ -212,6 +263,16 @@ impl Cluster {
         cluster.await_brokers_ready().await?;
         cluster.await_cluster_ready(&config).await?;
         Ok(cluster)
+    }
+
+    /// Step placement once.
+    ///
+    /// Exposed because the harness's control plane does not run the reconciler
+    /// on a timer: a test that slept for one would be timing-dependent in
+    /// exactly the way the acceptance criteria rule out. A failure test has to
+    /// drive placement while it waits, or nothing re-plans after the fault.
+    pub async fn place_shards(&self) -> ::controlplane::placement::ReconcileOutcome {
+        self.control_plane().place_shards().await
     }
 
     fn control_plane(&self) -> &ControlPlane {
@@ -296,7 +357,7 @@ impl Cluster {
 
         // Placement is stepped rather than waited on, then the result is
         // verified: a leader for every shard of every stream.
-        let total_shards: usize = config.streams.iter().map(|(_, s)| *s as usize).sum();
+        let total_shards: usize = config.streams.iter().map(|spec| spec.shards as usize).sum();
         wait::until(
             READY_TIMEOUT,
             "every shard assigned a leader",
@@ -314,7 +375,8 @@ impl Cluster {
         // That gap is exactly where a publish is refused as `NotReady`, and no
         // control-plane state distinguishes the two — so the only honest check
         // is a publish that succeeds.
-        for (stream, _) in &config.streams {
+        for spec in &config.streams {
+            let stream = &spec.name;
             let stream = stream.clone();
             wait::until(
                 READY_TIMEOUT,
@@ -406,6 +468,33 @@ impl Cluster {
             .subscribe(&self.tenant_id, &self.namespace, stream)
             .await
             .with_context(|| format!("subscribe to {stream} on {node_id}"))?;
+        Ok((client, subscription))
+    }
+
+    /// Subscribe on a named broker, replaying from the start of the stream.
+    ///
+    /// A failure test needs this: the records it cares about were published
+    /// before the fault, and a live subscription would not replay them. Asking
+    /// for history is also the stronger check — it reads what the broker has on
+    /// disk rather than what it happens to fan out next.
+    pub async fn replay_on(
+        &self,
+        node_id: &str,
+        stream: &str,
+    ) -> Result<(felix_client::Client, felix_client::Subscription)> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let subscription = client
+            .subscribe_from(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                Some(felix_client::StartPosition::Earliest),
+            )
+            .await
+            .with_context(|| format!("replay {stream} on {node_id}"))?;
         Ok((client, subscription))
     }
 
@@ -896,7 +985,8 @@ async fn seed_metadata(
     .await
     .context("create namespace")?;
 
-    for (stream, shards) in &config.streams {
+    for spec in &config.streams {
+        let stream = &spec.name;
         post(
             http,
             &format!(
@@ -909,9 +999,10 @@ async fn seed_metadata(
                 "namespace": config.namespace,
                 "stream": stream,
                 "kind": "Stream",
-                "shards": shards,
+                "shards": spec.shards,
+                "replication_factor": spec.replication_factor,
                 "retention": { "max_age_seconds": null, "max_size_bytes": null },
-                "consistency": "Leader",
+                "consistency": spec.consistency,
                 "delivery": "AtLeastOnce",
                 // Durable, so the brokers gate readiness on having actually
                 // recovered their logs. An ephemeral stream would let a broker

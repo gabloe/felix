@@ -162,10 +162,21 @@ Felix provides **tunable consistency** configured per stream:
 - **Ordering:** Per-stream ordering preserved for each subscriber
 - **Acknowledgements:** Broker acknowledges receipt, not delivery to subscribers
 
+### Multi-Node
+
+- **Leader-only acks:** Low latency, no replication wait. The default, and what
+  a stream gets unless it asks otherwise
+- **Quorum acks:** Acknowledged once a majority of the replica set — counting
+  the leader — holds the record durably. Implemented; set `consistency` on the
+  stream
+- **Leader failover:** A lost leader is replaced only by a replica that holds
+  the log. **Not usable yet:** a promoted broker does not currently serve the
+  shard it was promoted to
+  ([#266](https://github.com/gabloe/felix/issues/266)), so treat a replicated
+  stream as single-node for availability until that is fixed
+
 ### Planned Multi-Node
 
-- **Leader-only acks:** Low latency, no replication wait
-- **Quorum acks:** Higher durability, waits for replica confirmation
 - **At-least-once:** With durable storage and replay
 - **Exactly-once:** (future) via idempotent producers and transactions
 

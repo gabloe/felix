@@ -216,6 +216,26 @@ impl ReplicaHandler {
 
         match replication::apply(&log, batch.first_offset, batch.checksum, &batch.payloads).await {
             Ok(Ok(applied)) => {
+                // The records went straight to the log, so the stream's own view
+                // of its tail has to be told. Without this the first publish
+                // this broker accepts once promoted waits on commit turns that
+                // were never taken.
+                if let Err(err) = self
+                    .broker
+                    .adopt_replicated(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        applied.durable_offset,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        stream = %key.stream,
+                        error = %err,
+                        "stored a replicated batch but could not advance the stream's tail",
+                    );
+                }
                 metrics::record_replicated(metrics::OUTCOME_OK);
                 InternalMessage::ReplicateOk(ReplicateOk {
                     correlation_id,

@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use felix_cluster::session::{self, Session};
-use felix_cluster::{Cluster, ClusterConfig};
+use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 
 const STREAM: &str = "orders";
 
@@ -454,7 +454,7 @@ async fn stop_signal() -> Result<()> {
 fn cluster_config(nodes: usize, inherit_output: bool) -> ClusterConfig {
     ClusterConfig {
         nodes,
-        streams: vec![(STREAM.to_string(), 1)],
+        streams: vec![StreamSpec::new(STREAM, 1)],
         inherit_output: inherit_output && std::env::var("FELIX_CLUSTER_VERBOSE").is_ok(),
         ..Default::default()
     }

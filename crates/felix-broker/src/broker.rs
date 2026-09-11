@@ -597,6 +597,26 @@ impl Broker {
         ))
     }
 
+    /// Tell a stream that records reached its log without passing through it.
+    ///
+    /// Replication writes the shard's log directly, so a follower's in-memory
+    /// view of the stream stays at zero while its disk fills. Left that way, the
+    /// first publish this broker accepts after being promoted waits on commit
+    /// turns that were never taken, and never returns.
+    pub async fn adopt_replicated(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        durable_offset: u64,
+    ) -> Result<()> {
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream)
+            .await?;
+        handle.state.advance_to(durable_offset);
+        Ok(())
+    }
+
     /// Read persisted records for a durable stream, starting at `from_offset`.
     ///
     /// This is the historical replay path, and it is deliberately separate from

@@ -9,7 +9,7 @@
 //! the `felix-broker` binary these need.
 use std::time::Duration;
 
-use felix_cluster::{Cluster, ClusterConfig};
+use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 
 const STREAM: &str = "orders";
@@ -17,7 +17,7 @@ const STREAM: &str = "orders";
 fn config() -> ClusterConfig {
     ClusterConfig {
         nodes: 3,
-        streams: vec![(STREAM.to_string(), 1)],
+        streams: vec![StreamSpec::new(STREAM, 1)],
         ..Default::default()
     }
 }
