@@ -66,8 +66,13 @@ impl ControlPlane {
 
         // Shared with `place_shards`, so a harness driving placement by hand
         // sees the same reports the API recorded.
+        // Built from this harness's own liveness settings, not the defaults.
+        // The report TTL is derived from them, so `Default::default()` here gave
+        // reports a 20-second life against a cluster tuned to notice a dead
+        // broker in one — long enough that a follower reported caught up at one
+        // tail was still promoted after the leader had written past it.
         let replica_positions = Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-            &Default::default(),
+            &LIVENESS,
         ));
         let state = AppState {
             region: Region {

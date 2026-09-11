@@ -28,6 +28,12 @@ fn caught_up(nodes: &[&str]) -> BTreeSet<String> {
     nodes.iter().map(|n| n.to_string()).collect()
 }
 
+/// Every caught-up node at the same offset, for tests that are about freshness
+/// and generations rather than about which replica is furthest ahead.
+fn offsets_for(nodes: &BTreeSet<String>) -> std::collections::HashMap<String, u64> {
+    nodes.iter().map(|n| (n.clone(), 10)).collect()
+}
+
 fn at(positions: &ReplicaPositions, now_millis: u64) -> CaughtUpAt<'_> {
     CaughtUpAt {
         positions,
@@ -39,7 +45,13 @@ fn at(positions: &ReplicaPositions, now_millis: u64) -> CaughtUpAt<'_> {
 #[test]
 fn a_reported_follower_is_caught_up_and_others_are_not() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
 
     let view = at(&positions, 1_000);
     assert!(view.is_caught_up(&key("orders"), "broker-b"));
@@ -61,7 +73,13 @@ fn an_unreported_shard_has_nothing_caught_up() {
 #[test]
 fn a_report_is_not_believed_forever() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
 
     assert!(
         at(&positions, 1_000 + TTL_MS).is_caught_up(&key("orders"), "broker-b"),
@@ -81,7 +99,13 @@ fn a_report_is_not_believed_forever() {
 fn a_report_outlives_the_window_a_dead_leader_is_noticed_in() {
     let positions = positions();
     let last_report = 1_000;
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), last_report);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        last_report,
+    );
 
     // The leader dies just after reporting; the cluster notices an expiry
     // timeout later and plans then.
@@ -98,8 +122,20 @@ fn a_report_outlives_the_window_a_dead_leader_is_noticed_in() {
 #[test]
 fn a_later_report_replaces_an_earlier_one() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
-    positions.record(key("orders"), 4, caught_up(&[]), 1_100);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&[]),
+        offsets_for(&caught_up(&[])),
+        1_100,
+    );
 
     assert!(!at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"));
 }
@@ -109,9 +145,21 @@ fn a_later_report_replaces_an_earlier_one() {
 #[test]
 fn a_report_from_a_superseded_leader_is_dropped() {
     let positions = positions();
-    positions.record(key("orders"), 5, caught_up(&[]), 1_000);
+    positions.record(
+        key("orders"),
+        5,
+        caught_up(&[]),
+        offsets_for(&caught_up(&[])),
+        1_000,
+    );
 
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_100);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_100,
+    );
 
     assert!(
         !at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"),
@@ -124,8 +172,20 @@ fn a_report_from_a_superseded_leader_is_dropped() {
 #[test]
 fn a_report_at_the_same_generation_is_an_update() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&[]), 1_000);
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_100);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&[]),
+        offsets_for(&caught_up(&[])),
+        1_000,
+    );
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_100,
+    );
 
     assert!(at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"));
 }
@@ -134,7 +194,13 @@ fn a_report_at_the_same_generation_is_an_update() {
 #[test]
 fn shards_do_not_share_reports() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
 
     assert!(!at(&positions, 1_000).is_caught_up(&key("payments"), "broker-b"));
 }
@@ -144,8 +210,20 @@ fn shards_do_not_share_reports() {
 #[test]
 fn one_pass_judges_every_shard_at_the_same_instant() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
-    positions.record(key("payments"), 4, caught_up(&["broker-b"]), 1_000);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
+    positions.record(
+        key("payments"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
 
     let view = at(&positions, 1_000 + TTL_MS);
 
@@ -158,7 +236,13 @@ fn one_pass_judges_every_shard_at_the_same_instant() {
 #[test]
 fn a_forgotten_shard_reports_nothing() {
     let positions = positions();
-    positions.record(key("orders"), 4, caught_up(&["broker-b"]), 1_000);
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        1_000,
+    );
 
     positions.forget(&key("orders"));
 

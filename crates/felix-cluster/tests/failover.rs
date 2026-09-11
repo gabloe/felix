@@ -30,16 +30,33 @@ fn quorum_config() -> ClusterConfig {
 /// leader, and this is what makes it one: zero lag means every follower holds
 /// what the leader does, and the leader has said so.
 async fn replication_settled(cluster: &Cluster, leader: &str) {
+    // The lag gauge is written once per replication pass, so reading zero can
+    // mean "every follower is level" or "every follower was level one pass ago,
+    // before the record this test just published". Waiting for a *rising* number
+    // of shipped batches first is what makes the zero afterwards be about this
+    // record rather than the state before it.
+    let shipped_before = cluster
+        .metric(leader, "felix_broker_replication_shipped_total")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0.0);
     felix_cluster::wait::until(
         Duration::from_secs(30),
-        "replication to reach every follower",
+        "the published record to be shipped and acknowledged",
         || async {
-            matches!(
-                cluster
-                    .metric(leader, "felix_broker_replication_lag_records")
-                    .await,
-                Ok(Some(lag)) if lag == 0.0
-            )
+            let shipped = cluster
+                .metric(leader, "felix_broker_replication_shipped_total")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            let lag = cluster
+                .metric(leader, "felix_broker_replication_lag_records")
+                .await
+                .ok()
+                .flatten();
+            shipped > shipped_before && matches!(lag, Some(lag) if lag == 0.0)
         },
     )
     .await
