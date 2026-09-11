@@ -65,6 +65,14 @@ File names are zero-padded to 20 digits so lexicographic and numeric order agree
 Recovery still parses the number and sorts on it rather than trusting directory
 iteration order, which is filesystem-defined.
 
+A file name is a **segment id**, not an offset. The two coincide for the common
+log — segment 0 begins at offset 0 — but they are independent, and a shard's
+first segment may begin anywhere. That is what lets a replica be given a shard
+whose early history is already gone everywhere: its log *begins* at the oldest
+surviving offset, and the offset is read back from the segment's own header
+rather than inferred from its name. A read below that offset is `Trimmed`,
+exactly as it is on a leader whose retention removed the same records.
+
 ## Segment file
 
 A 32-byte header, then records back to back, with a sparse index in a companion

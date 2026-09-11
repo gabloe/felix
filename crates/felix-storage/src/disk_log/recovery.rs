@@ -84,6 +84,37 @@ pub fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
 }
 
 /// Open, validate and repair every segment for one shard.
+/// Create a shard's first segment so its log begins at `base_offset`.
+///
+/// A no-op when the directory already holds segments: a shard that is already
+/// here keeps the base recorded in its own first segment, and a restart must
+/// not reinterpret it. Only an empty directory is a shard being placed.
+///
+/// The segment carries `base_offset` in its header, so recovery reads it back
+/// without needing to be told again.
+pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) -> Result<bool> {
+    std::fs::create_dir_all(dir)?;
+    if let Some(parent) = dir.parent() {
+        sync_dir(parent)?;
+    }
+    if !discover_segment_ids(dir)?.is_empty() {
+        return Ok(false);
+    }
+    let mut writer = SegmentWriter::create(
+        dir,
+        0,
+        base_offset,
+        now_micros(),
+        preallocate_bytes(config),
+        config.index_spacing_bytes,
+    )?;
+    // Flushed before anything can append to it: a base offset that did not
+    // survive a crash would leave the shard reading back as one starting at
+    // zero, which is a hole rather than a shorter log.
+    writer.sync()?;
+    Ok(true)
+}
+
 pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Recovered> {
     let started = std::time::Instant::now();
     std::fs::create_dir_all(dir)?;
