@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789141032565,
+  "lastUpdate": 1789150499886,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4888,6 +4888,58 @@ window.BENCHMARK_DATA = {
             "range": "4819.23",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 551385.32\nmean: 553436.87\nstdev: 4819.23\ncv: 0.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff7d29dc12f79d219ce3744409e59d6119c93a28",
+          "message": "feat(client): connect to a cluster rather than to one broker (M6.1) (#270)\n\nM5 made a cluster survive losing a leader. A client could not: it took a single\naddress, so the broker it was pointed at could be the one that just died while\nevery other broker sat there able to serve.\n\n`Client::connect_any` takes several and uses the first that answers. Any broker\nwill serve a publish — one that does not own the shard forwards it — so a seed\nlist is enough to reach a healthy cluster without knowing which broker leads\nwhat.\n\nThe errors are collected rather than discarded. \"Nothing answered\" is the only\noutcome worth reporting, but *why* each endpoint refused is what an operator\nneeds: a bare \"connection refused\" from the last address in the list hides the\ncredential error from the first.\n\nThe server name stays a parameter. The harness passes `\"localhost\"` for every\nbroker, which is sound only because it installs a verifier that accepts any\ncertificate — a deployment that verified them would need a name per broker or a\ncertificate naming them all, and the comment there now says so rather than\nleaving the hardcoding to be read as a client limitation.\n\n## What this does not do\n\nThe client does not learn the rest of the cluster from the broker it reaches,\nand does not move if that broker later dies. Both are the rest of M6.\n\n## A gap this surfaced\n\nA publish through a *non-owner* fails for a window after a failover: the\nforwarding broker's routing view still names the dead leader, so the forward\ngoes to a corpse and the publish waits out its commit timeout. Filed as #269,\nwith the two separable halves — the forward should fail fast rather than hang,\nand the client should retry a retryable failure (#119).\n\n`a_seed_list_survives_losing_the_leader` retries, and says why: that retry is\nwhat an application has to write today, so the test pins the behaviour and\nleaves the gap visible instead of hiding it behind a passing assertion.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T11:12:30-07:00",
+          "tree_id": "e68f4a88e1717fdb92160cd88cde622a996bc43e",
+          "url": "https://github.com/gabloe/felix/commit/ff7d29dc12f79d219ce3744409e59d6119c93a28"
+        },
+        "date": 1789150499123,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 255623.02,
+            "range": "19949.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255623.02\nmean: 247496.49\nstdev: 19949.85\ncv: 8.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 255623.02,
+            "range": "19949.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 255623.02\nmean: 247496.49\nstdev: 19949.85\ncv: 8.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60004.11,
+            "range": "832.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60004.11\nmean: 59986.62\nstdev: 832.34\ncv: 1.39%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 600041.14,
+            "range": "8323.41",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 600041.14\nmean: 599866.26\nstdev: 8323.41\ncv: 1.39%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
