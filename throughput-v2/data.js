@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789099567703,
+  "lastUpdate": 1789133639801,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4784,6 +4784,58 @@ window.BENCHMARK_DATA = {
             "range": "8903.46",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 561566.90\nmean: 559525.91\nstdev: 8903.46\ncv: 1.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a5fd65a2326f12f6382863b5383469cd785c9e51",
+          "message": "fix(broker): unblock writes on a promoted broker, and tell the docs the truth (#267)\n\nThree things, all from writing M5.6's failover scenarios (#115).\n\n## The CI failure on main is mine\n\n`a_paused_broker_stops_answering_without_dying` (#263) used\n`timeout(..).await.is_ok()`, which is true whenever the call *returns* —\nincluding returning an error. A suspended process refuses fast on Linux, so\n\"errored quickly\" read as \"answering\" and the test failed there while passing\non macOS. It now requires a successful scrape. The fault it was written to\nprove was going untested.\n\n## A promoted broker could not accept writes\n\n`StreamState::hydrate` sets `next_seq` *and rebases the commit order*, and it\nruns only at stream registration. A follower registers when its log is empty,\nso `next_seq` stays at zero while replication fills its disk directly — the\nreplication path writes the shard's log and never touches the stream state.\n\nThe commit order is keyed on disk offsets. With `next_seq` at zero and records\non disk, the first publish a promoted broker accepts reserves an offset past\nthem and then waits for turns that were never taken. It never returns. The\ncluster showed this as a publish that \"succeeded\" — the client was not waiting\nfor an ack, and the write never committed.\n\nReplication now tells the stream its tail moved, which rebases the commit order\nfor the same reason recovery does after a restart.\n\nConfirmed by reverting: `a_publish_after_promotion_follows_the_replicated_history`\nhangs without it.\n\nI first \"fixed\" the read path separately, by falling back to the durable tail\nwhen the in-memory backlog was empty. Reverting that changed nothing once the\ntail was being advanced — it was redundant — so it is not in this change.\n\n## Failover still does not work end to end\n\nPromotion is correct: a replica that holds the log is chosen, in about a\nsecond, and never a broker that does not. But a promoted broker still serves\nnothing for the shard (#266), so a subscriber gets an empty stream. The\nscenario asserting the milestone's own acceptance criterion is `#[ignore]`d\npointing at that issue rather than deleted or quietly passing.\n\n## Docs\n\n`what-felix-is-for.md` said there is \"no replication and no failover\". That has\nbeen false for several merges. Replication, quorum acknowledgement, and leader\nfailover moved out of \"none of the following exists today\" into the implemented\ntable as `🚧 Partial`, and the failover row says plainly that it is not usable\nyet and why. `overview.md` no longer lists quorum acks as planned. The design\nnote no longer says promotion cannot fire.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T06:31:57-07:00",
+          "tree_id": "2342c19323b1ba39cda8e0a9561949affa29e152",
+          "url": "https://github.com/gabloe/felix/commit/a5fd65a2326f12f6382863b5383469cd785c9e51"
+        },
+        "date": 1789133639449,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 309082.3,
+            "range": "3133.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 309082.30\nmean: 308610.95\nstdev: 3133.05\ncv: 1.02%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 309082.3,
+            "range": "3133.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 309082.30\nmean: 308610.95\nstdev: 3133.05\ncv: 1.02%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74339.63,
+            "range": "2416.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74339.63\nmean: 73989.22\nstdev: 2416.95\ncv: 3.27%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 743396.26,
+            "range": "24169.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 743396.26\nmean: 739892.23\nstdev: 24169.48\ncv: 3.27%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
