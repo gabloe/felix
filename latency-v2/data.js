@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789095271267,
+  "lastUpdate": 1789095414556,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5940,6 +5940,72 @@ window.BENCHMARK_DATA = {
             "range": "697.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 607.00\nmean: 922.00\nstdev: 697.04\ncv: 75.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a49b579e54e96becf75c749b72c4deb3404af2ab",
+          "message": "test(cluster): give the harness the faults M5.6 needs (#263)\n\n#115 asks for failures injected at controlled points in the write and\nreplication pipeline. The harness could kill a broker and nothing else, so the\nfaults that matter most to a lease-fenced design were unreachable.\n\n`pause_node` and `resume_node` suspend and resume a broker with `SIGSTOP` and\n`SIGCONT`. This is the fault a kill cannot produce: the process stays alive,\nkeeps every lease and connection it holds, and answers nothing. It is what the\ncommit-boundary lease check exists for — a broker suspended past its lease\nexpiry has to refuse the write it was in the middle of when it wakes, rather\nthan committing to a shard someone else now leads. A kill cannot test that,\nbecause a dead broker never wakes.\n\n`kill_node` kills without waiting for the control plane to react. `stop_node`\nwaits until the node is no longer placeable, which is right for a test that\nneeds the cluster settled and wrong for one timing failover: the clock has to\nstart at the kill, not after the cluster has already responded.\n\nEach fault is tested as a fault. A \"paused\" broker that was really just slow,\nor a \"killed\" one still answering, would make every scenario built on it pass\nfor the wrong reason — so a paused broker is asserted to stop answering *and*\nstay alive, a resumed one to come back, and a kill to return immediately.\nTeardown is pinned too: a test panicking mid-fault has to fail on its own\nrather than wedging the suite.\n\nOne comment written here was wrong and is not in the diff: teardown does\nreclaim a suspended broker, because `SIGKILL` terminates a stopped process.\nChecked rather than assumed, and now a test.\n\nClock skew is still not injectable, and `docs/cluster-harness.md` says so:\nlease expiry reads the system clock, so testing it needs either an injectable\nclock in the broker or `libfaketime` around the process.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T19:52:29-07:00",
+          "tree_id": "b76aae91d2293e3ca286e1f6374bddecb2c97a28",
+          "url": "https://github.com/gabloe/felix/commit/a49b579e54e96becf75c749b72c4deb3404af2ab"
+        },
+        "date": 1789095413628,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.20\nstdev: 1.48\ncv: 0.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "4.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 208.40\nstdev: 4.16\ncv: 2.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 251,
+            "range": "12.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 251.00\nmean: 251.40\nstdev: 12.46\ncv: 4.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "5.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 199.20\nstdev: 5.67\ncv: 2.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 395,
+            "range": "341.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 395.00\nmean: 552.20\nstdev: 341.22\ncv: 61.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 567,
+            "range": "896.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 567.00\nmean: 1099.60\nstdev: 896.81\ncv: 81.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
