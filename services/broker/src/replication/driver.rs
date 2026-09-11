@@ -38,6 +38,7 @@ pub async fn replicate_once<R: PeerRequester>(
     broker: &Arc<Broker>,
     router: &ShardRouter,
     marks: &QuorumMarks,
+    report_to: Option<&ReportTo>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
     let Some(storage) = broker.durable_storage() else {
@@ -104,14 +105,48 @@ pub async fn replicate_once<R: PeerRequester>(
             {}
         }
 
-        // Who could take this shard over, as of this pass. Collected for the
-        // control plane, which gates promotion on it: without this a lost
-        // leader cannot be replaced at all.
-        reports.push(ShardReport {
+        // Re-read after shipping, not before.
+        //
+        // A publish landing between the earlier read and here leaves `tail`
+        // describing a log that is already shorter than the one on disk. Both
+        // the report and the mark below are relative to it, so a follower level
+        // with the *old* tail would be reported caught up and counted toward the
+        // quorum for a record it does not have — which is exactly how a
+        // quorum-acknowledged record ends up on a promoted broker that never
+        // stored it.
+        let tail = log.tail_offset().await.unwrap_or(tail);
+
+        // Who could take this shard over, as of this pass.
+        let report = ShardReport {
             key: key.clone(),
             generation: route.generation,
             caught_up: caught_up(tail, &entry.followers),
-        });
+            offsets: entry
+                .followers
+                .iter()
+                .filter(|follower| follower.halted.is_none())
+                .map(|follower| (follower.node_id.clone(), follower.next_offset))
+                .collect(),
+        };
+        reports.push(report.clone());
+
+        // **Reported before the mark is published, and awaited.**
+        //
+        // The mark is what releases a `Quorum` publish, and the report is what
+        // promotion later reads. Releasing the publish first leaves a window in
+        // which a leader has told a client its record is on a majority and has
+        // told the control plane nothing about which replica holds it — and a
+        // leader that dies in that window is replaced by whichever replica
+        // scores highest, which may be the one that does not have it. The
+        // acknowledged record is then gone, which is the one thing `Quorum` is
+        // supposed to rule out.
+        //
+        // Reporting first costs a round trip to the control plane on the path
+        // of a quorum publish. That is the price of the acknowledgement meaning
+        // what it says.
+        if let Some(report_to) = report_to {
+            send_reports(report_to, std::slice::from_ref(&report)).await;
+        }
 
         // Published after shipping, so a publish waiting on this shard sees the
         // majority move as soon as this pass establishes it.
@@ -176,6 +211,11 @@ pub struct ShardReport {
     pub key: ShardKey,
     pub generation: u64,
     pub caught_up: Vec<String>,
+    /// How far each follower had got. Sent as well as `caught_up` because
+    /// "caught up" is only true of the tail it was measured against, and a
+    /// leader that reports and then writes more before dying leaves a report
+    /// that says every replica was level without saying level with what.
+    pub offsets: Vec<(String, u64)>,
 }
 
 /// Add cursors for new replicas and drop those no longer in the set.
@@ -236,6 +276,14 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
                 "shard": report.key.shard,
                 "generation": report.generation,
                 "caught_up": report.caught_up,
+                "replica_offsets": report
+                    .offsets
+                    .iter()
+                    .map(|(node_id, durable_offset)| serde_json::json!({
+                        "node_id": node_id,
+                        "durable_offset": durable_offset,
+                    }))
+                    .collect::<Vec<_>>(),
             }))
             .collect::<Vec<_>>(),
     });
@@ -277,11 +325,15 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
             }
-            let pass =
-                replicate_once(requester.as_ref(), &broker, &router, &marks, &mut cursors).await;
-            if let Some(report_to) = &report_to {
-                send_reports(report_to, &pass.reports).await;
-            }
+            replicate_once(
+                requester.as_ref(),
+                &broker,
+                &router,
+                &marks,
+                report_to.as_ref(),
+                &mut cursors,
+            )
+            .await;
         }
     })
 }

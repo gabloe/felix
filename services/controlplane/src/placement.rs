@@ -117,6 +117,19 @@ impl Plan {
 pub trait CaughtUp {
     /// Whether `node_id` is within the catch-up bound for `key`.
     fn is_caught_up(&self, key: &ShardKey, node_id: &str) -> bool;
+
+    /// How far `node_id` had got, as last reported.
+    ///
+    /// Used to choose *between* caught-up replicas. "Caught up" is only ever
+    /// true of the tail it was measured against, so a report made before the
+    /// leader's last writes can call two replicas level when one holds more.
+    /// Preferring the higher offset picks the replica a quorum-acknowledged
+    /// record is guaranteed to be on.
+    ///
+    /// `None` means nothing is known, which orders below any known offset.
+    fn reported_offset(&self, _key: &ShardKey, _node_id: &str) -> Option<u64> {
+        None
+    }
 }
 
 /// Nothing is caught up.
@@ -288,8 +301,13 @@ fn promote<'a>(
         .filter(|node| previous.replicas.iter().any(|r| r == &node.node_id))
         .filter(|node| caught_up.is_caught_up(key, &node.node_id))
         .max_by(|a, b| {
-            score(key, &a.node_id)
-                .cmp(&score(key, &b.node_id))
+            // Furthest ahead first. Score only breaks ties, so a replica that
+            // holds more is never passed over for one that merely scores
+            // better — the failover would otherwise discard the difference.
+            caught_up
+                .reported_offset(key, &a.node_id)
+                .cmp(&caught_up.reported_offset(key, &b.node_id))
+                .then_with(|| score(key, &a.node_id).cmp(&score(key, &b.node_id)))
                 .then_with(|| a.node_id.cmp(&b.node_id))
         })
         .map(|node| node.node_id.as_str())

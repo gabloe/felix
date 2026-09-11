@@ -36,6 +36,8 @@ struct Report {
     /// may be different.
     generation: u64,
     caught_up: BTreeSet<String>,
+    /// How far each replica had got when this was reported.
+    offsets: HashMap<String, u64>,
     reported_at_millis: u64,
 }
 
@@ -75,6 +77,7 @@ impl ReplicaPositions {
         key: ShardKey,
         generation: u64,
         caught_up: BTreeSet<String>,
+        offsets: HashMap<String, u64>,
         now_millis: u64,
     ) {
         let mut shards = self.shards.lock().expect("replica positions lock");
@@ -88,6 +91,7 @@ impl ReplicaPositions {
             Report {
                 generation,
                 caught_up,
+                offsets,
                 reported_at_millis: now_millis,
             },
         );
@@ -99,6 +103,18 @@ impl ReplicaPositions {
             .lock()
             .expect("replica positions lock")
             .remove(key);
+    }
+
+    /// How far `node_id` had got for `key`, as last reported and still believed.
+    ///
+    /// `None` when there is no fresh report, which is also "do not promote it".
+    fn offset_at(&self, key: &ShardKey, node_id: &str, now_millis: u64) -> Option<u64> {
+        let shards = self.shards.lock().expect("replica positions lock");
+        let report = shards.get(key)?;
+        if now_millis.saturating_sub(report.reported_at_millis) > self.ttl_millis {
+            return None;
+        }
+        report.offsets.get(node_id).copied()
     }
 
     fn is_caught_up_at(&self, key: &ShardKey, node_id: &str, now_millis: u64) -> bool {
@@ -127,6 +143,10 @@ impl CaughtUp for CaughtUpAt<'_> {
     fn is_caught_up(&self, key: &ShardKey, node_id: &str) -> bool {
         self.positions
             .is_caught_up_at(key, node_id, self.now_millis)
+    }
+
+    fn reported_offset(&self, key: &ShardKey, node_id: &str) -> Option<u64> {
+        self.positions.offset_at(key, node_id, self.now_millis)
     }
 }
 

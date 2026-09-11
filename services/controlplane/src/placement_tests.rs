@@ -884,3 +884,106 @@ fn a_live_leader_keeps_its_shard() {
     assert_eq!(plan.kept(), 1);
     assert_eq!(plan.to_place().count(), 0);
 }
+
+/// A follower that holds the log, with a position, for the promotion tests.
+struct ReplicasAt(std::collections::HashMap<String, u64>);
+
+impl CaughtUp for ReplicasAt {
+    fn is_caught_up(&self, _key: &ShardKey, node_id: &str) -> bool {
+        self.0.contains_key(node_id)
+    }
+
+    fn reported_offset(&self, _key: &ShardKey, node_id: &str) -> Option<u64> {
+        self.0.get(node_id).copied()
+    }
+}
+
+/// **The replica holding the most is promoted**, not the one that scores best.
+///
+/// "Caught up" is only ever true of the tail it was measured against, so a
+/// report made before the leader's last writes can call two replicas level when
+/// one holds more. Preferring the higher offset picks the replica a
+/// quorum-acknowledged record is guaranteed to be on — choosing by score would
+/// discard the difference, and with it the record.
+#[test]
+fn the_furthest_ahead_replica_is_promoted() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+
+    // Whichever scoring would have picked, the one at the higher offset wins.
+    for (ahead, behind) in [("broker-b", "broker-c"), ("broker-c", "broker-b")] {
+        let caught_up = ReplicasAt(
+            [(ahead.to_string(), 100u64), (behind.to_string(), 50u64)]
+                .into_iter()
+                .collect(),
+        );
+
+        let plan = plan(&streams, &nodes, &existing, &caught_up);
+
+        let (_, leader, _) = plan.to_place().next().expect("placed");
+        assert_eq!(
+            leader, ahead,
+            "{behind} was promoted over {ahead}, which held more",
+        );
+    }
+}
+
+/// Replicas level with each other fall back to the deterministic score, so the
+/// choice stays a function of the shard and the cluster rather than of report
+/// arrival order.
+#[test]
+fn replicas_at_the_same_offset_break_the_tie_deterministically() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+    let level: std::collections::HashMap<String, u64> = [
+        ("broker-b".to_string(), 100u64),
+        ("broker-c".to_string(), 100u64),
+    ]
+    .into_iter()
+    .collect();
+
+    let first = {
+        let plan = plan(&streams, &nodes, &existing, &ReplicasAt(level.clone()));
+        plan.to_place().next().expect("placed").1.to_string()
+    };
+    let again = {
+        let plan = plan(&streams, &nodes, &existing, &ReplicasAt(level));
+        plan.to_place().next().expect("placed").1.to_string()
+    };
+
+    assert_eq!(first, again);
+}
+
+/// A replica with no reported position is not preferred over one with a
+/// position, and is not promoted at all unless it is also reported caught up.
+#[test]
+fn a_replica_with_no_reported_position_loses_to_one_with_a_position() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+    // Both are "caught up"; only broker-c has a position.
+    struct OnlyOneKnown;
+    impl CaughtUp for OnlyOneKnown {
+        fn is_caught_up(&self, _key: &ShardKey, _node_id: &str) -> bool {
+            true
+        }
+        fn reported_offset(&self, _key: &ShardKey, node_id: &str) -> Option<u64> {
+            (node_id == "broker-c").then_some(7)
+        }
+    }
+
+    let plan = plan(&streams, &nodes, &existing, &OnlyOneKnown);
+
+    assert_eq!(plan.to_place().next().expect("placed").1, "broker-c");
+}

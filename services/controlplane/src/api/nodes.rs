@@ -137,6 +137,11 @@ pub(crate) async fn report_replica_status(
             },
             shard.generation,
             shard.caught_up.into_iter().collect(),
+            shard
+                .replica_offsets
+                .into_iter()
+                .map(|replica| (replica.node_id, replica.durable_offset))
+                .collect(),
             now,
         );
     }

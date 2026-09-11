@@ -145,8 +145,8 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
 | Sharding | 🚧 Partial | Streams carry a shard count, the control plane assigns each shard an owner, and a publish resolves against that ownership before anything else happens. A publish for a shard this broker does not own is forwarded to the owner and acknowledged only once the owner has written it. The wire protocol still carries no routing key, so every record of a stream lands on shard 0, which is what keeps this partial |
 | Multi-node clustering and replication | 🚧 Partial | Brokers register, their liveness is tracked, shards are assigned to owners, and a publish that reaches the wrong broker is forwarded to the right one. Shard leaders now replicate committed records to followers, and a follower whose history is gone is given a log starting where the leader's surviving log does. Subscribe is still served only by the broker holding the shard |
-| Leader failover | 🚧 Partial | A lost leader is replaced by a replica that holds the log — never by a broker that does not, and the shard is left unavailable rather than served empty if no replica qualifies. **But a promoted broker does not yet serve the shard it was promoted to ([#266](https://github.com/gabloe/felix/issues/266)), so failover is not usable yet** |
-| Quorum acknowledgement | 🚧 Partial | `Stream.consistency` is honoured: a `Quorum` publish waits for a majority of the replica set, counting the leader, to hold the record durably. Bounded by a timeout, and a timeout is reported as "this broker cannot vouch for the write" rather than as failure. Depends on failover above to be worth choosing |
+| Leader failover | 🚧 Partial | A lost leader is replaced by a replica that holds the log — never by a broker that does not — in about a second on a local three-node cluster, and a quorum-acknowledged record is readable from the replacement. A shard with no qualifying replica is left unavailable rather than served empty. Partial rather than done because the failure injection it has been proven against is process kill: partitions and clock skew are not yet testable |
+| Quorum acknowledgement | 🚧 Partial | `Stream.consistency` is honoured: a `Quorum` publish waits for a majority of the replica set, counting the leader, to hold the record durably, and the acknowledgement survives losing the leader. Bounded by a timeout, and a timeout is reported as "this broker cannot vouch for the write" rather than as failure. Partial for the same reason as failover: the failure model it is proven against is process kill |
 
 ### Measured performance
 
@@ -242,9 +242,9 @@ whether you could build it on the current release.
 | Internal service event bus | Moderate | Mostly | Works, but NATS and RabbitMQ serve this well already — weak differentiation |
 | Distributed live-state synchronization | Strong | **No** | Needs gap-free snapshot + change stream; drops corrupt local state |
 | Infrastructure / control-plane state distribution | Strong | **No** | Same gap, plus needs multi-node |
-| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node. Records replicate to followers, but a lost leader cannot yet serve its shard (#266), so this is still one node in practice |
-| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist. Replication does, and retention does not; failover does not yet complete (#266) |
-| Durable event log, replay, event sourcing | Weak | Partly | A durable log with offset replay exists, and records now replicate to followers. No retention and no tiering, and a lost leader cannot yet serve its shard (#266) — use Kafka for anything that needs history to outlive one machine today |
+| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node. Records replicate to followers and a lost leader fails over to one that holds the log |
+| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist. Replication does, and retention does not |
+| Durable event log, replay, event sourcing | Weak | Partly | A durable log with offset replay exists, and records now replicate to followers. No retention and no tiering, — use Kafka for anything that needs history to outlive one machine today |
 | Primary datastore | Weak | No | Use a database |
 | General-purpose key-value store | Weak | No | Use Redis or Valkey |
 | Complex broker routing, workflow messaging | Weak | No | Use RabbitMQ |

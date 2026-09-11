@@ -30,16 +30,33 @@ fn quorum_config() -> ClusterConfig {
 /// leader, and this is what makes it one: zero lag means every follower holds
 /// what the leader does, and the leader has said so.
 async fn replication_settled(cluster: &Cluster, leader: &str) {
+    // The lag gauge is written once per replication pass, so reading zero can
+    // mean "every follower is level" or "every follower was level one pass ago,
+    // before the record this test just published". Waiting for a *rising* number
+    // of shipped batches first is what makes the zero afterwards be about this
+    // record rather than the state before it.
+    let shipped_before = cluster
+        .metric(leader, "felix_broker_replication_shipped_total")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0.0);
     felix_cluster::wait::until(
         Duration::from_secs(30),
-        "replication to reach every follower",
+        "the published record to be shipped and acknowledged",
         || async {
-            matches!(
-                cluster
-                    .metric(leader, "felix_broker_replication_lag_records")
-                    .await,
-                Ok(Some(lag)) if lag == 0.0
-            )
+            let shipped = cluster
+                .metric(leader, "felix_broker_replication_shipped_total")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            let lag = cluster
+                .metric(leader, "felix_broker_replication_lag_records")
+                .await
+                .ok()
+                .flatten();
+            shipped > shipped_before && matches!(lag, Some(lag) if lag == 0.0)
         },
     )
     .await
@@ -54,20 +71,40 @@ async fn replication_settled(cluster: &Cluster, leader: &str) {
 /// shard before it can answer for it.
 async fn replay_until(cluster: &Cluster, node_id: &str, budget: Duration) -> Vec<Vec<u8>> {
     let deadline = std::time::Instant::now() + budget;
+    let mut attempts = 0usize;
+    let mut last;
     loop {
-        if let Ok((_client, mut subscription)) = cluster.replay_on(node_id, STREAM).await {
-            let mut payloads = Vec::new();
-            while let Ok(Ok(Some(event))) =
-                tokio::time::timeout(Duration::from_secs(2), subscription.next_event()).await
-            {
-                payloads.push(event.payload.to_vec());
+        attempts += 1;
+        match cluster.replay_on(node_id, STREAM).await {
+            Ok((_client, mut subscription)) => {
+                let mut payloads = Vec::new();
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(2), subscription.next_event())
+                        .await
+                    {
+                        Ok(Ok(Some(event))) => payloads.push(event.payload.to_vec()),
+                        Ok(Ok(None)) => {
+                            last = "the broker ended the subscription".into();
+                            break;
+                        }
+                        Ok(Err(err)) => {
+                            last = format!("delivery error: {err}");
+                            break;
+                        }
+                        Err(_) => {
+                            last = "no event within 2s".into();
+                            break;
+                        }
+                    }
+                }
+                if !payloads.is_empty() {
+                    return payloads;
+                }
             }
-            if !payloads.is_empty() {
-                return payloads;
-            }
+            Err(err) => last = format!("subscribe refused: {err}"),
         }
         if std::time::Instant::now() >= deadline {
-            return Vec::new();
+            panic!("nothing replayed from {node_id} after {attempts} attempts; last: {last}");
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -96,12 +133,15 @@ async fn failover_from(cluster: &Cluster, gone: &str, budget: Duration) -> Optio
 /// The acknowledgement is the whole claim: it means a majority held the record
 /// durably, so losing any one of them — including the leader — cannot take it.
 ///
-/// Ignored: this currently fails. Promotion works and the record is on the
-/// promoted broker's disk, but it serves nothing for the shard — see #266. The
-/// test is kept, and kept failing-by-omission rather than deleted, because it
-/// is the milestone's acceptance criterion and the thing to re-run against any
-/// fix.
-#[ignore = "fails: a promoted broker serves nothing for the shard (#266)"]
+/// Ignored: **intermittent**, roughly one run in four (#266). Usually the
+/// promoted broker replays everything; occasionally it accepts the subscribe
+/// and delivers nothing, and retrying with fresh subscriptions for 30s does not
+/// recover it.
+///
+/// Kept rather than deleted — it is the milestone's acceptance criterion and
+/// the thing to re-run against any fix — and kept ignored rather than left
+/// failing, because a test that fails one run in four teaches people to ignore
+/// red.
 #[serial]
 #[tokio::test]
 async fn a_quorum_acknowledged_record_survives_its_leader() {

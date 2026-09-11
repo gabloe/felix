@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use slab::Slab;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 use crate::commit_order::CommitSequencer;
@@ -62,7 +62,12 @@ pub(crate) struct StreamState {
     /// What an acknowledgement of a publish to this stream means. Carried on
     /// the state so the publish path reads it from the handle it already has,
     /// rather than looking the stream up again on the hot path.
-    pub(crate) consistency: crate::broker::ConsistencyLevel,
+    ///
+    /// Atomic because it can change under a live stream: an operator raising a
+    /// stream to `Quorum` must take effect on the next publish, not on the next
+    /// broker restart. Read on the publish path, so an atomic rather than a
+    /// lock.
+    consistency: AtomicU8,
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +99,7 @@ impl StreamState {
     ) -> Self {
         Self {
             handle_id,
-            consistency,
+            consistency: AtomicU8::new(consistency.as_u8()),
             active: AtomicBool::new(true),
             subscribers_snapshot: ArcSwap::from_pointee(Vec::new()),
             subscribers: Mutex::new(SubscriberRegistry::default()),
@@ -181,6 +186,23 @@ impl StreamState {
         state.next_seq = next_seq;
         drop(state);
         self.commit_sequencer.reset(next_seq);
+    }
+
+    /// What an acknowledgement of a publish to this stream currently means.
+    pub(crate) fn consistency(&self) -> crate::broker::ConsistencyLevel {
+        crate::broker::ConsistencyLevel::from_u8(self.consistency.load(Ordering::Acquire))
+    }
+
+    /// Apply a consistency change to a stream that is already live.
+    ///
+    /// Registering a stream that already exists takes a fast path that only
+    /// refreshes the metadata map. Without this the live state kept whatever it
+    /// was built with, so raising a stream to `Quorum` did nothing until the
+    /// broker restarted — publishes carried on acknowledging on the leader
+    /// alone while the catalog said a majority was required.
+    pub(crate) fn set_consistency(&self, consistency: crate::broker::ConsistencyLevel) {
+        self.consistency
+            .store(consistency.as_u8(), Ordering::Release);
     }
 
     pub(crate) fn deactivate(&self) {
