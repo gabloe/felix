@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789164553120,
+  "lastUpdate": 1789166392535,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5044,6 +5044,58 @@ window.BENCHMARK_DATA = {
             "range": "6432.76",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 558161.70\nmean: 555945.61\nstdev: 6432.76\ncv: 1.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c55f72ced2bdac47c8fe027acdac125e07a45ec",
+          "message": "refactor: remove the felix-consensus stub, which describes an architecture Felix rejected (#273)\n\n* refactor: remove the felix-consensus stub, which describes an architecture Felix rejected\n\n`felix-consensus` was 48 lines: a `RaftConfig` struct with defaults and two\ntests asserting those defaults. Nothing depended on it, and no protocol was\never behind it.\n\nIt is worse than dead code because it is wrong about the design. #110 (M5.1)\ndecided against per-shard Raft for payload replication, and\n`docs/replication-design.md` records why: Raft requires a leader to overwrite\na follower's divergent uncommitted suffix, and this log never rewrites\nrecords -- the property torn-tail repair, index rebuilding, and preallocation\nall rest on. Shard leadership is a control-plane lease with a generation as\nits epoch, and replication is log shipping. A crate advertising \"Raft\nimplementation (planned), leader election, log replication\" tells a reader\nthe opposite of what the code does.\n\nRaft remains the intended mechanism for control-plane *metadata* HA in M7,\nwhich is a different problem from replicating stream records; the status\ntable row now says that and points at the design note rather than at a\nstruct.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix: drop felix-consensus from the publish-readiness licence table\n\nThe check keeps its own copy of the licence split and asserts it matches the\nworkspace, so removing the crate without removing it here fails the check --\nwhich is the guard working. It is a separate CI step from `task test`, which\nis why a green local suite did not catch it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T15:37:45-07:00",
+          "tree_id": "b32d8f80f05e40d0bb74f5d0f28b9584666ab131",
+          "url": "https://github.com/gabloe/felix/commit/0c55f72ced2bdac47c8fe027acdac125e07a45ec"
+        },
+        "date": 1789166391802,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 315793.06,
+            "range": "7694.70",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 315793.06\nmean: 313563.79\nstdev: 7694.70\ncv: 2.45%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 315793.06,
+            "range": "7694.70",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 315793.06\nmean: 313563.79\nstdev: 7694.70\ncv: 2.45%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75070.76,
+            "range": "1498.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75070.76\nmean: 75439.88\nstdev: 1498.88\ncv: 1.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 750707.64,
+            "range": "14988.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 750707.64\nmean: 754398.82\nstdev: 14988.76\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
