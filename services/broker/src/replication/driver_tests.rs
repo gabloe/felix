@@ -329,7 +329,9 @@ async fn a_broker_without_durable_storage_ships_nothing() {
     let mut cursors = HashMap::new();
 
     assert_eq!(
-        replicate_once(&follower, &broker, &router, &marks, &mut cursors).await,
+        replicate_once(&follower, &broker, &router, &marks, &mut cursors)
+            .await
+            .worst_lag,
         None,
     );
     assert!(follower.batches().is_empty());
@@ -346,7 +348,99 @@ async fn the_reported_lag_is_the_distance_from_the_tail() {
 
     // Caught up after a full pass.
     assert_eq!(
-        replicate_once(&follower, &broker, &router, &marks, &mut cursors).await,
+        replicate_once(&follower, &broker, &router, &marks, &mut cursors)
+            .await
+            .worst_lag,
         Some(0),
     );
+}
+
+/// What the leader tells the control plane about its replicas.
+mod reports {
+    use super::*;
+
+    /// A pass reports the shard, its generation, and who could take it over.
+    #[tokio::test]
+    async fn a_pass_reports_who_could_take_the_shard_over() {
+        let (broker, _dir) = leader_with(3).await;
+        let router = router(LOCAL, &["broker-b"], 4);
+        let follower = AcceptingFollower::default();
+        let marks = QuorumMarks::new();
+        let mut cursors = HashMap::new();
+
+        let pass = replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
+
+        assert_eq!(pass.reports.len(), 1);
+        let report = &pass.reports[0];
+        assert_eq!(report.key, key());
+        assert_eq!(report.generation, 4);
+        assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
+    }
+
+    /// **A follower that did not keep up is not reported as able to lead.**
+    /// This is the whole point of the signal: the control plane promotes on it,
+    /// and a follower named here while behind would be promoted into a shard it
+    /// cannot serve.
+    #[tokio::test]
+    async fn a_follower_that_refused_is_not_reported_as_able_to_lead() {
+        let (broker, _dir) = leader_with(3).await;
+        let router = router(LOCAL, &["broker-b"], 4);
+        let follower = RefusingFollower;
+        let marks = QuorumMarks::new();
+        let mut cursors = HashMap::new();
+
+        let pass = replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
+
+        assert_eq!(pass.reports.len(), 1);
+        assert!(
+            pass.reports[0].caught_up.is_empty(),
+            "a follower holding nothing was reported as able to lead",
+        );
+    }
+
+    /// A shard this broker only follows is not reported on. Reporting about a
+    /// shard it does not lead would be an opinion it has no basis for.
+    #[tokio::test]
+    async fn a_shard_led_elsewhere_is_not_reported() {
+        let (broker, _dir) = leader_with(3).await;
+        let router = router("broker-b", &[LOCAL], 4);
+        let follower = AcceptingFollower::default();
+        let marks = QuorumMarks::new();
+        let mut cursors = HashMap::new();
+
+        let pass = replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
+
+        assert!(pass.reports.is_empty());
+    }
+
+    /// A shard with no replicas reports nobody rather than an empty promise.
+    #[tokio::test]
+    async fn a_shard_with_no_replicas_is_not_reported() {
+        let (broker, _dir) = leader_with(3).await;
+        let router = router(LOCAL, &[], 4);
+        let follower = AcceptingFollower::default();
+        let marks = QuorumMarks::new();
+        let mut cursors = HashMap::new();
+
+        let pass = replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
+
+        assert!(pass.reports.is_empty());
+    }
+}
+
+/// A follower that refuses everything, so it never advances.
+struct RefusingFollower;
+
+impl PeerRequester for RefusingFollower {
+    async fn request(
+        &self,
+        _node_id: &str,
+        _addr: SocketAddr,
+        _message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        Err(PeerError::Unavailable {
+            node_id: "broker-b".to_string(),
+            detail: "not now".to_string(),
+        })
+    }
 }

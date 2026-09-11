@@ -35,6 +35,9 @@ fn build_state(store: Arc<InMemoryStore>) -> AppState {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     }
 }
 

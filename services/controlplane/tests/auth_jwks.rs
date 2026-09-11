@@ -62,6 +62,9 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app = build_router(state).into_service();
 
@@ -110,6 +113,9 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app = build_router(state).into_service();
 

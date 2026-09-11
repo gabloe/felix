@@ -313,6 +313,37 @@ fn unreachable_outcome(err: &PeerError) -> &'static str {
     }
 }
 
+/// How far a follower may be behind and still be fit to lead.
+///
+/// Zero: a follower is caught up when it holds every record the leader does.
+///
+/// A bound above zero is a bound on how much a promotion may silently lose, and
+/// there is no honest value for it that is not a policy decision. Zero needs no
+/// such decision, and a follower reaches it constantly on a healthy shard — the
+/// leader only has to be momentarily idle. Loosening it is a change to make
+/// deliberately, with a measurement behind it, rather than a default nobody
+/// chose.
+pub const CATCH_UP_BOUND: u64 = 0;
+
+/// Which followers hold enough of the log to lead it.
+///
+/// Reported to the control plane, which gates promotion on it. A halted
+/// follower never qualifies however close its last position was: it has stopped
+/// rather than fallen behind, and its position is no longer moving toward the
+/// leader's.
+// The bound is zero today, so "within it" is an equality and clippy says so.
+// Written as a comparison because the bound is the thing meant to change: if it
+// is ever raised, this reads correctly without being rediscovered.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn caught_up(tail: u64, followers: &[FollowerCursor]) -> Vec<String> {
+    followers
+        .iter()
+        .filter(|follower| follower.halted.is_none())
+        .filter(|follower| tail.saturating_sub(follower.next_offset) <= CATCH_UP_BOUND)
+        .map(|follower| follower.node_id.clone())
+        .collect()
+}
+
 /// How far behind the slowest follower is, in records.
 ///
 /// This is the `Leader` consistency level's loss window, and the design note is

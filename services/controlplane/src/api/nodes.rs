@@ -26,8 +26,8 @@ use crate::api::error::{
 };
 use crate::api::types::{
     NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
-    NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ShardAssignmentChangesResponse,
-    ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
+    NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ReplicaStatusRequest,
+    ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
 };
 use crate::app::AppState;
 use crate::auth::felix_token::verify_token;
@@ -89,6 +89,58 @@ pub(crate) async fn report_health(
         heartbeat_interval_ms: state.node_liveness.heartbeat_interval_ms,
         expiry_timeout_ms: state.node_liveness.expiry_timeout_ms,
     }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/nodes/{node_id}/replica-status",
+    tag = "nodes",
+    params(("node_id" = String, Path, description = "Broker node identifier")),
+    request_body = ReplicaStatusRequest,
+    responses(
+        (status = 204, description = "Report recorded"),
+        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse)
+    )
+)]
+/// Record which replicas a leader believes hold each of its shards.
+///
+/// Promotion is gated on this. Without it a lost leader cannot be replaced at
+/// all, and with a stale answer it can be replaced by a broker holding less
+/// than it claims — so reports expire, and the expiry is derived from the
+/// liveness settings rather than trusted from the caller.
+///
+/// Authorised exactly as a heartbeat is: a broker may speak for itself and no
+/// one else. A broker that could report on another's behalf could nominate
+/// itself for promotion.
+///
+/// # Errors
+/// - 404 when the node is not registered.
+pub(crate) async fn report_replica_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+    Json(request): Json<ReplicaStatusRequest>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
+    // The control plane's clock, deliberately, exactly as for a heartbeat:
+    // letting a caller supply the time would let it keep a stale report alive.
+    let now = now_millis();
+    let _ = request.incarnation;
+
+    for shard in request.shards {
+        state.replica_positions.record(
+            crate::model::ShardKey {
+                tenant_id: shard.tenant_id,
+                namespace: shard.namespace,
+                stream: shard.stream,
+                shard: shard.shard,
+            },
+            shard.generation,
+            shard.caught_up.into_iter().collect(),
+            now,
+        );
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// Wall-clock milliseconds since the Unix epoch.

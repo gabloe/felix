@@ -439,7 +439,10 @@ pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> Sh
 ///
 /// Idempotent. A pass over an already-placed cluster writes nothing, so running
 /// it on a timer does not churn the persisted rows or the changefeed.
-pub async fn reconcile_once(store: &dyn crate::store::ControlPlaneStore) -> ReconcileOutcome {
+pub async fn reconcile_once(
+    store: &dyn crate::store::ControlPlaneStore,
+    positions: &crate::replica_positions::ReplicaPositions,
+) -> ReconcileOutcome {
     let (streams, nodes, existing) = match load(store).await {
         Ok(loaded) => loaded,
         Err(err) => {
@@ -449,12 +452,13 @@ pub async fn reconcile_once(store: &dyn crate::store::ControlPlaneStore) -> Reco
         }
     };
 
-    // Nothing reports being caught up yet: replication ships records (#112) but
-    // no replica's position reaches the control plane, so promotion cannot
-    // fire. A replicated shard whose leader is lost therefore stays unplaced
-    // until the leader returns -- unavailable, and recoverable, rather than
-    // handed to a broker holding none of it.
-    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
+    // One instant for the whole pass, so a report cannot be fresh for one shard
+    // and stale for the next within the same plan.
+    let caught_up = crate::replica_positions::CaughtUpAt {
+        positions,
+        now_millis: crate::api::nodes::now_millis(),
+    };
+    let plan = plan(&streams, &nodes, &existing, &caught_up);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
         ..ReconcileOutcome::default()
@@ -537,6 +541,7 @@ pub const RECONCILE_FAILURES_TOTAL: &str = "felix_shard_reconcile_failures_total
 /// Place shards on an interval until `shutdown` fires.
 pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
+    positions: std::sync::Arc<crate::replica_positions::ReplicaPositions>,
     interval: std::time::Duration,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -548,7 +553,7 @@ pub fn spawn_reconciler(
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {
-                    reconcile_once(store.as_ref()).await;
+                    reconcile_once(store.as_ref(), positions.as_ref()).await;
                 }
             }
         }

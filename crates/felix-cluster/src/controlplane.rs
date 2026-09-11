@@ -42,6 +42,9 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
 pub struct ControlPlane {
     pub base_url: String,
     pub store: Arc<InMemoryStore>,
+    /// Shared with the running API, so a harness driving placement by hand sees
+    /// the same reports leaders have sent.
+    pub replica_positions: Arc<controlplane::replica_positions::ReplicaPositions>,
     keys: TenantSigningKeys,
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<()>,
@@ -61,6 +64,11 @@ impl ControlPlane {
             .await
             .context("seed tenant signing keys")?;
 
+        // Shared with `place_shards`, so a harness driving placement by hand
+        // sees the same reports the API recorded.
+        let replica_positions = Arc::new(controlplane::replica_positions::ReplicaPositions::new(
+            &Default::default(),
+        ));
         let state = AppState {
             region: Region {
                 region_id: "local".to_string(),
@@ -78,6 +86,7 @@ impl ControlPlane {
             bootstrap_enabled: false,
             bootstrap_token: None,
             node_liveness: LIVENESS,
+            replica_positions: Arc::clone(&replica_positions),
         };
 
         let addr = ports::free_tcp()?;
@@ -108,6 +117,7 @@ impl ControlPlane {
         Ok(Self {
             base_url: format!("http://{addr}"),
             store,
+            replica_positions,
             keys,
             shutdown,
             task,
@@ -228,7 +238,11 @@ impl ControlPlane {
     /// and a harness that slept for one would be timing-dependent in exactly the
     /// way the acceptance criteria rule out.
     pub async fn place_shards(&self) -> controlplane::placement::ReconcileOutcome {
-        controlplane::placement::reconcile_once(self.store.as_ref()).await
+        controlplane::placement::reconcile_once(
+            self.store.as_ref(),
+            self.replica_positions.as_ref(),
+        )
+        .await
     }
 
     pub async fn shutdown(self) {

@@ -158,6 +158,31 @@ pub struct NodeHeartbeatRequest {
     pub incarnation: u64,
 }
 
+/// A leader's account of which replicas hold a shard's log.
+///
+/// Sent by the shard's leader, because it is the only party that knows both
+/// ends of the comparison: its own tail, and how far each follower has
+/// acknowledged. A follower knows where it is, not whether that is caught up.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct ReplicaStatusRequest {
+    /// The reporting process's own incarnation, from its last registration.
+    pub incarnation: u64,
+    pub shards: Vec<ShardReplicaStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct ShardReplicaStatus {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub stream: String,
+    pub shard: u32,
+    /// The assignment generation the reporting broker held. A report from an
+    /// older generation is dropped: the replica set may have changed with it.
+    pub generation: u64,
+    /// Replicas within the catch-up bound, as this leader last saw them.
+    pub caught_up: Vec<String>,
+}
+
 /// What the control plane tells a broker in return.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct NodeHeartbeatResponse {

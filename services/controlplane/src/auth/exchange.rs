@@ -402,6 +402,9 @@ mod tests {
             bootstrap_enabled: false,
             bootstrap_token: None,
             node_liveness: Default::default(),
+            replica_positions: std::sync::Arc::new(
+                crate::replica_positions::ReplicaPositions::new(&Default::default()),
+            ),
         }
     }
 

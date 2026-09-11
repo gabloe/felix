@@ -43,6 +43,9 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     build_router(state).into_service()
 }
@@ -1141,6 +1144,9 @@ async fn system_health_reports_internal_error_on_store_failure() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1171,6 +1177,9 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1234,6 +1243,9 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1350,6 +1362,9 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1412,6 +1427,9 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
         bootstrap_enabled: true,
         bootstrap_token: Some("secret".to_string()),
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_bootstrap_router(state).into_service();

@@ -15,7 +15,7 @@ use felix_wire::internal::ShardRef;
 use tokio_util::sync::CancellationToken;
 
 use super::quorum::QuorumMarks;
-use super::{FollowerCursor, Progress, lag_records, metrics, quorum_offset, ship_once};
+use super::{FollowerCursor, Progress, caught_up, lag_records, metrics, quorum_offset, ship_once};
 use crate::peer::PeerRequester;
 
 /// Cursors for one shard, valid only at `generation`.
@@ -39,17 +39,18 @@ pub async fn replicate_once<R: PeerRequester>(
     router: &ShardRouter,
     marks: &QuorumMarks,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
-) -> Option<u64> {
+) -> Pass {
     let Some(storage) = broker.durable_storage() else {
         // Nothing to replicate from. A broker without durable storage leads
         // only ephemeral streams, which have no log to ship.
-        return None;
+        return Pass::default();
     };
 
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
     let mut halted = 0usize;
     let mut live_shards = Vec::new();
+    let mut reports = Vec::new();
 
     for (key, route) in table.iter() {
         if route.leader.node_id != router.local_node_id() || route.replicas.is_empty() {
@@ -103,6 +104,15 @@ pub async fn replicate_once<R: PeerRequester>(
             {}
         }
 
+        // Who could take this shard over, as of this pass. Collected for the
+        // control plane, which gates promotion on it: without this a lost
+        // leader cannot be replaced at all.
+        reports.push(ShardReport {
+            key: key.clone(),
+            generation: route.generation,
+            caught_up: caught_up(tail, &entry.followers),
+        });
+
         // Published after shipping, so a publish waiting on this shard sees the
         // majority move as soon as this pass establishes it.
         marks.publish(
@@ -148,7 +158,24 @@ pub async fn replicate_once<R: PeerRequester>(
     if let Some(lag) = worst_lag {
         metrics::record_lag(lag);
     }
-    worst_lag
+    Pass { worst_lag, reports }
+}
+
+/// What one replication pass established.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Pass {
+    /// How far the slowest follower is behind, across every shard led here.
+    pub worst_lag: Option<u64>,
+    /// Per shard, who could take it over.
+    pub reports: Vec<ShardReport>,
+}
+
+/// One shard's replicas, as this leader currently sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardReport {
+    pub key: ShardKey,
+    pub generation: u64,
+    pub caught_up: Vec<String>,
 }
 
 /// Add cursors for new replicas and drop those no longer in the set.
@@ -176,12 +203,68 @@ fn reconcile_followers(entry: &mut ShardCursors, route: &Route) {
     }
 }
 
+/// Where a leader sends its replica reports.
+///
+/// Optional: a broker with no control plane has nobody to tell, and the reports
+/// are only ever read by one.
+pub struct ReportTo {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    pub node_id: String,
+    pub token: Option<String>,
+    pub incarnation: u64,
+}
+
+/// Tell the control plane which replicas could take each shard over.
+///
+/// A failure here is logged and dropped rather than retried. The next pass
+/// sends a fresher report anyway, and a queue of stale ones is worse than none:
+/// promotion is gated on *recent* positions, so a late report is at best
+/// ignored and at worst believed after it stopped being true.
+async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
+    if reports.is_empty() {
+        return;
+    }
+    let body = serde_json::json!({
+        "incarnation": to.incarnation,
+        "shards": reports
+            .iter()
+            .map(|report| serde_json::json!({
+                "tenant_id": report.key.tenant_id,
+                "namespace": report.key.namespace,
+                "stream": report.key.stream,
+                "shard": report.key.shard,
+                "generation": report.generation,
+                "caught_up": report.caught_up,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
+    let mut request = to.client.post(&url).json(&body);
+    if let Some(token) = &to.token {
+        request = request.bearer_auth(token);
+    }
+    match request.send().await {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            tracing::warn!(
+                status = %response.status(),
+                "the control plane refused a replica report",
+            );
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not send a replica report");
+        }
+    }
+}
+
 /// Run replication until cancelled.
 pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
     broker: Arc<Broker>,
     router: Arc<ShardRouter>,
     marks: Arc<QuorumMarks>,
+    report_to: Option<ReportTo>,
     interval: Duration,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -194,7 +277,11 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
             }
-            replicate_once(requester.as_ref(), &broker, &router, &marks, &mut cursors).await;
+            let pass =
+                replicate_once(requester.as_ref(), &broker, &router, &marks, &mut cursors).await;
+            if let Some(report_to) = &report_to {
+                send_reports(report_to, &pass.reports).await;
+            }
         }
     })
 }
