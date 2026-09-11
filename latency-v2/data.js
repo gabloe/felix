@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789141030181,
+  "lastUpdate": 1789150497220,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6204,6 +6204,72 @@ window.BENCHMARK_DATA = {
             "range": "502.43",
             "unit": "us",
             "extra": "trials: 5\nmedian: 855.00\nmean: 1017.60\nstdev: 502.43\ncv: 49.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff7d29dc12f79d219ce3744409e59d6119c93a28",
+          "message": "feat(client): connect to a cluster rather than to one broker (M6.1) (#270)\n\nM5 made a cluster survive losing a leader. A client could not: it took a single\naddress, so the broker it was pointed at could be the one that just died while\nevery other broker sat there able to serve.\n\n`Client::connect_any` takes several and uses the first that answers. Any broker\nwill serve a publish — one that does not own the shard forwards it — so a seed\nlist is enough to reach a healthy cluster without knowing which broker leads\nwhat.\n\nThe errors are collected rather than discarded. \"Nothing answered\" is the only\noutcome worth reporting, but *why* each endpoint refused is what an operator\nneeds: a bare \"connection refused\" from the last address in the list hides the\ncredential error from the first.\n\nThe server name stays a parameter. The harness passes `\"localhost\"` for every\nbroker, which is sound only because it installs a verifier that accepts any\ncertificate — a deployment that verified them would need a name per broker or a\ncertificate naming them all, and the comment there now says so rather than\nleaving the hardcoding to be read as a client limitation.\n\n## What this does not do\n\nThe client does not learn the rest of the cluster from the broker it reaches,\nand does not move if that broker later dies. Both are the rest of M6.\n\n## A gap this surfaced\n\nA publish through a *non-owner* fails for a window after a failover: the\nforwarding broker's routing view still names the dead leader, so the forward\ngoes to a corpse and the publish waits out its commit timeout. Filed as #269,\nwith the two separable halves — the forward should fail fast rather than hang,\nand the client should retry a retryable failure (#119).\n\n`a_seed_list_survives_losing_the_leader` retries, and says why: that retry is\nwhat an application has to write today, so the test pins the behaviour and\nleaves the gap visible instead of hiding it behind a passing assertion.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T11:12:30-07:00",
+          "tree_id": "e68f4a88e1717fdb92160cd88cde622a996bc43e",
+          "url": "https://github.com/gabloe/felix/commit/ff7d29dc12f79d219ce3744409e59d6119c93a28"
+        },
+        "date": 1789150494258,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 120,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 120.00\nmean: 119.80\nstdev: 0.45\ncv: 0.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 164,
+            "range": "1.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 164.00\nstdev: 1.58\ncv: 0.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 210,
+            "range": "6.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 210.00\nmean: 209.60\nstdev: 6.35\ncv: 3.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.40\nstdev: 0.55\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 335,
+            "range": "9.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 335.00\nmean: 332.80\nstdev: 9.52\ncv: 2.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 498,
+            "range": "697.90",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 498.00\nmean: 835.00\nstdev: 697.90\ncv: 83.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
