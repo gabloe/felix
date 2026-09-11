@@ -280,7 +280,7 @@ pub async fn unauthorized_publish_is_refused(
     stream: &str,
     ingress: Ingress,
 ) -> Result<Outcome> {
-    let (via, _) = match ingress_node(cluster, stream, ingress).await? {
+    let (via, owner) = match ingress_node(cluster, stream, ingress).await? {
         Ok(pair) => pair,
         Err(skipped) => return Ok(skipped),
     };
@@ -289,8 +289,13 @@ pub async fn unauthorized_publish_is_refused(
     // outright — a malformed one, or one carrying an action the broker does not
     // recognise — would fail the publish below for the wrong reason and make
     // this scenario pass while asserting nothing.
+    //
+    // Checked against the owner, not `via`. A subscribe to a broker that does
+    // not own the shard is answered with a redirect (#118), which says nothing
+    // about the credential — and this is a question about the credential.
+    // Routing is what the publish below exercises.
     cluster
-        .subscribe_on_with_token(&via, stream, &cluster.subscribe_only_token)
+        .subscribe_on_with_token(&owner, stream, &cluster.subscribe_only_token)
         .await
         .context("the subscribe-only credential could not subscribe, so the publish check below would prove nothing")?;
 

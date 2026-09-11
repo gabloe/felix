@@ -67,8 +67,17 @@ pub const ORIGINAL_V1_FLAGS: u16 =
 /// broker's control loop, so probing costs the connection.
 pub const FEATURE_TOPOLOGY: u32 = 0x0000_0001;
 
+/// The peer understands `NotLeader`.
+///
+/// Offered by a *client*, and read by the broker, which is the direction that
+/// matters here: `NotLeader` travels broker to client, and a client that cannot
+/// decode it would lose the connection to a message meant to help it. A broker
+/// talking to a client that did not offer this bit answers with an ordinary
+/// error instead.
+pub const FEATURE_REDIRECT: u32 = 0x0000_0002;
+
 /// Every feature bit this version implements.
-pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY;
+pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY | FEATURE_REDIRECT;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

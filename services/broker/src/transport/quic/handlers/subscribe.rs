@@ -10,6 +10,14 @@
 //! drops that batch (counted by `felix_subscribe_dropped_total`) rather than
 //! stalling publish. Backpressure stays local to the slow subscriber.
 //!
+//! # Subscribing to a shard this broker does not own
+//!
+//! Answered with a redirect naming the owner, never served locally.
+//! `docs/subscribe-routing.md` records that decision and the measurements
+//! behind it. Serving it locally is the one answer that must not happen: the
+//! subscription succeeds, delivers nothing, and is indistinguishable from a
+//! stream that simply has no traffic.
+//!
 //! Delivery is sharded into independent writer lanes to cut write-path
 //! contention at high fanout. Lane assignment is deterministic so per-subscriber
 //! ordering holds. Batches coalesce until whichever comes first: `max_events`,
@@ -756,4 +764,70 @@ pub(crate) async fn handle_subscribe_message(
         }
     }
     Ok(true)
+}
+
+/// What to answer a subscribe with, when this broker should not serve it.
+///
+/// `None` means serve it here: either this broker owns the shard, or it has no
+/// cluster to resolve against and everything is local.
+///
+/// A redirect needs the owner's *client-facing* address, which is a different
+/// listener from the one brokers forward to each other on and is known only
+/// from the control plane's catalog. When the cluster has not been told one,
+/// the redirect still names the owner and omits the address: "not here, and
+/// here is who has it" is more use than "not here", and a client that already
+/// knows that broker from discovery can act on the name alone.
+pub fn redirect_for(
+    ingress: Option<&crate::shard_routing::IngressRouter>,
+    client_endpoints: Option<&crate::client_endpoints::ClientEndpoints>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    peer_features: u32,
+) -> Option<Message> {
+    use crate::shard_routing::{Dispatch, dispatch, shard_for};
+
+    let key = crate::shard_watch::ShardKey {
+        tenant_id: tenant_id.to_string(),
+        namespace: namespace.to_string(),
+        stream: stream.to_string(),
+        // No routing key on the wire yet, so every record of a stream lands on
+        // shard 0, exactly as the publish path resolves it.
+        shard: shard_for(1, None),
+    };
+
+    match dispatch(ingress, &key) {
+        Dispatch::Local => None,
+        Dispatch::Forward {
+            node_id,
+            generation,
+            ..
+        } => {
+            if !felix_wire::supports_feature(peer_features, felix_wire::FEATURE_REDIRECT) {
+                // A client that cannot decode `NotLeader` would lose the
+                // connection to a message meant to help it. An error says the
+                // same thing in a shape every client has always understood.
+                return Some(Message::Error {
+                    message: format!(
+                        "stream {stream} is served by {node_id}; this broker does not own it"
+                    ),
+                });
+            }
+            let addr = client_endpoints.and_then(|endpoints| {
+                endpoints
+                    .snapshot()
+                    .iter()
+                    .find(|endpoint| endpoint.node_id == node_id)
+                    .map(|endpoint| endpoint.addr.clone())
+            });
+            Some(Message::NotLeader {
+                node_id,
+                addr,
+                generation,
+            })
+        }
+        Dispatch::Unavailable(reason) => Some(Message::Error {
+            message: format!("stream {stream} cannot be subscribed to right now: {reason}"),
+        }),
+    }
 }

@@ -134,8 +134,10 @@ pub(super) async fn run_uni_loop<S: FrameSource + ?Sized>(
             Message::Auth {
                 tenant_id,
                 token,
-                // One-directional: there is no reply channel to advertise on.
+                // One-directional: there is no reply channel to advertise on,
+                // and nothing here would ever send an optional message back.
                 client_flags: _,
+                client_features: _,
             } => {
                 if auth_ctx.is_some() {
                     tracing::debug!("closing uni stream after duplicate auth");

@@ -158,6 +158,7 @@ async fn run_pubsub(
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -226,6 +227,7 @@ async fn publish(
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -263,6 +265,7 @@ async fn run_cache(connection: &felix_transport::QuicConnection, auth: &AuthFixt
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -371,6 +374,7 @@ async fn cache_get(
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;

@@ -7,6 +7,15 @@ Recorded for M4.4 (#107). The rejected alternative and the measurements that
 informed the choice are both below, because the reasoning matters more than the
 verdict if this is ever revisited.
 
+## Status
+
+Implemented (#118). A broker answers `NotLeader` for a shard it does not own,
+carrying the owner's node id, its client-facing address, and the generation;
+`ClusterClient::subscribe` follows it, capped at three hops and refusing to
+revisit a broker within one attempt. A client that did not offer
+`FEATURE_REDIRECT` gets an ordinary error instead, because a message it cannot
+decode would cost it the connection.
+
 ## The two designs
 
 **Redirect.** A broker that does not own the shard answers `NotLeader`, carrying

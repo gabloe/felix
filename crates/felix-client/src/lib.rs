@@ -77,7 +77,7 @@ mod wire;
 pub mod timings;
 
 pub use client::client::Client;
-pub use client::client::SubscribeCursorError;
+pub use client::client::{NotLeaderError, SubscribeCursorError};
 pub use client::cluster::{ClusterClient, ReconnectPolicy};
 #[cfg(feature = "in-process")]
 pub use client::inprocess::InProcessClient;
