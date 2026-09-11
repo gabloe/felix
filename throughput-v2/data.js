@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789093877731,
+  "lastUpdate": 1789095273582,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4628,6 +4628,58 @@ window.BENCHMARK_DATA = {
             "range": "7680.19",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544468.75\nmean: 542597.99\nstdev: 7680.19\ncv: 1.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "385293666b780d1aa556d9d75f1fa19a5b0b7ddd",
+          "message": "fix(placement): never hand a replicated shard to a broker that lacks its log (#264)\n\nFound while scoping #115's failover scenarios, which would have proved the\nopposite of what they set out to prove.\n\nPromotion is gated on a replica that holds the log — \"or the failover is the\ndata loss\", as the comment above the gate says. Directly below it, when no\nreplica qualifies, placement fell through to ordinary scoring and chose\nwhichever node scored highest. That node may never have seen the shard.\n\nReproduced before fixing: broker-a leads a shard replicated to b and c;\nbroker-a dies; broker-z, which has never held it, is made leader with b and c\ndemoted to *its* followers. The records stay on b and c, unreachable, while z\nserves an empty log at a newer generation. Nothing downstream reports it.\n\nThe gate and the fallback contradicted each other. A node that has never seen\nthe shard is exactly as empty as an uncaught-up replica, so falling back\ndefeated the gate rather than respecting it.\n\nA replicated shard with no replica able to take over is now left unplaced, with\nits own reason. Unavailable is visible and recoverable: the shard returns when\nthe old leader does, and it will fail over properly once replica positions\nreach the control plane and a caught-up follower can be promoted.\n\nNothing reports being caught up today, so in practice this makes a replicated\nshard unavailable while its leader is down, where it was previously served\nempty. That is the trade, and it is deliberate — the availability was not real,\nbecause the shard it served held nothing.\n\nA stream that never asked for replication is untouched: it has no replicas, so\nthere was never a copy to prefer, and a fresh placement stays the only thing\navailable. `replication_factor` defaults to 1, so the default path is unchanged.\n\nOne existing test asserted the old fallback — that placement \"must ignore the\nreplica set entirely\" when nothing is caught up. Its stated intent was the\ngate; its method accepted the behaviour that defeats it. Rewritten to assert\nthe intent: the shard is not placed at all.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T19:52:07-07:00",
+          "tree_id": "994f072e065d35b96ffcad43b096eca9e64d40e6",
+          "url": "https://github.com/gabloe/felix/commit/385293666b780d1aa556d9d75f1fa19a5b0b7ddd"
+        },
+        "date": 1789095272884,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 227783.1,
+            "range": "5745.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227783.10\nmean: 229734.57\nstdev: 5745.67\ncv: 2.50%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 227783.1,
+            "range": "5745.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227783.10\nmean: 229734.57\nstdev: 5745.67\ncv: 2.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54927.75,
+            "range": "3726.13",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54927.75\nmean: 53831.46\nstdev: 3726.13\ncv: 6.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 549277.53,
+            "range": "37261.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 549277.53\nmean: 538314.58\nstdev: 37261.33\ncv: 6.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
