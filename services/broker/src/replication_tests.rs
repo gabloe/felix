@@ -520,3 +520,116 @@ mod quorum {
         assert_eq!(quorum_offset(10, &[cursor(0), cursor(7)]), 7);
     }
 }
+
+/// A follower asking for records the leader has already trimmed.
+///
+/// Shipping cannot bridge this: the records are not on the leader to send.
+/// Before this was recognised, the read failed, the exchange reported a
+/// transient refusal, and the leader retried the same impossible read on every
+/// pass — forever, silently, with the follower never advancing.
+mod trimmed_history {
+    use super::*;
+
+    /// A leader whose retention has already removed the start of its log.
+    async fn trimmed_leader() -> (StreamLog, u64, TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = DurableStorage::open(
+            dir.path(),
+            LogConfig {
+                // Tiny segments and a tight bound, so a handful of records
+                // forces the trim a long-lived stream would reach in time.
+                segment_size_bytes: 128,
+                index_spacing_bytes: 64,
+                fsync_mode: FsyncMode::None,
+                preallocate_segments: false,
+                retention_bytes: Some(256),
+                ..LogConfig::default()
+            },
+        )
+        .expect("storage");
+        let log = storage
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        for i in 0..40 {
+            log.append(&[Bytes::from(format!("value-{i:03}"))])
+                .await
+                .expect("append");
+        }
+        log.enforce_retention_now().await.expect("retention");
+        let base = log.base_offset();
+        assert!(
+            base > 0,
+            "retention did not trim, so the case is not set up"
+        );
+        (log, base, dir)
+    }
+
+    /// **The leader stops rather than retrying a read that cannot succeed.**
+    #[tokio::test]
+    async fn a_follower_below_the_leaders_base_halts_for_bootstrap() {
+        let (log, base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([]);
+        let mut cursor = cursor(0);
+
+        let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        assert_eq!(progress, Progress::Halted(Halt::NeedsBootstrap));
+        assert_eq!(cursor.halted, Some(Halt::NeedsBootstrap));
+        assert!(
+            follower.sent().is_empty(),
+            "records were shipped from a range the leader no longer holds",
+        );
+        assert!(base > 0);
+    }
+
+    /// And it stays stopped, rather than trying again on the next pass.
+    #[tokio::test]
+    async fn it_stays_halted_across_passes() {
+        let (log, _base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([]);
+        let mut cursor = cursor(0);
+
+        for _ in 0..3 {
+            ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+        }
+
+        assert!(follower.sent().is_empty());
+    }
+
+    /// **A follower that cannot be caught up counts toward no quorum.** This is
+    /// what stops a replica being counted before it is eligible: it is not
+    /// merely behind, it can never arrive without a transfer.
+    #[tokio::test]
+    async fn a_follower_needing_bootstrap_counts_toward_no_quorum() {
+        let (log, _base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([]);
+        let mut cursor = cursor(0);
+        ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        let tail = log.tail_offset().await.expect("tail");
+        // A set of three: the leader plus this follower plus one healthy peer.
+        assert_eq!(
+            quorum_offset(tail, &[cursor.clone(), super::cursor(tail)]),
+            tail,
+        );
+        // And alone, it cannot make a majority of three with the leader.
+        assert_eq!(quorum_offset(tail, &[cursor.clone(), super::cursor(0)]), 0);
+    }
+
+    /// A follower at or above the leader's base is ordinary catch-up, not a
+    /// bootstrap. The line is exactly the base offset.
+    #[tokio::test]
+    async fn a_follower_at_the_base_is_ordinary_catch_up() {
+        let (log, base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([Ok(stored(base + 1))]);
+        let mut cursor = cursor(base);
+
+        let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        assert!(
+            matches!(progress, Progress::Stored { .. }),
+            "a follower at the surviving base was refused: {progress:?}",
+        );
+        assert!(cursor.halted.is_none());
+    }
+}

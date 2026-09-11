@@ -66,6 +66,11 @@ pub enum Halt {
     /// This broker is not the leader any more.
     #[error("this broker has been superseded as leader")]
     Fenced,
+    /// The follower wants records retention has already removed from the
+    /// leader, so shipping cannot reach it. It needs its history transferred
+    /// before live replication can resume.
+    #[error("the follower needs history this leader no longer holds")]
+    NeedsBootstrap,
 }
 
 impl FollowerCursor {
@@ -138,6 +143,28 @@ pub async fn ship_once<R: PeerRequester>(
 
     let records = match log.read_from(cursor.next_offset, max_batch_bytes).await {
         Ok(records) => records,
+        // The follower is asking for records this leader has already trimmed.
+        // Shipping cannot bridge that: the records are not here to send, and
+        // starting the follower at the surviving base would leave its log with
+        // a hole that nothing downstream could detect.
+        //
+        // Halting is the honest answer. It stops a retry that could never
+        // succeed, keeps the follower out of every quorum, and says plainly
+        // that the shard needs its history transferred -- which is #114's
+        // subject and is not implemented.
+        Err(felix_broker::BrokerError::CursorTooOld { oldest, requested }) => {
+            tracing::error!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                requested,
+                oldest,
+                "replication stopped: the follower needs history retention has removed",
+            );
+            cursor.halted = Some(Halt::NeedsBootstrap);
+            metrics::record_shipped(metrics::OUTCOME_NEEDS_BOOTSTRAP);
+            return Progress::Halted(Halt::NeedsBootstrap);
+        }
         Err(err) => {
             // The leader could not read its own log. Nothing is wrong with the
             // follower, so this must not look like divergence.
@@ -204,6 +231,7 @@ pub async fn ship_once<R: PeerRequester>(
             metrics::record_shipped(match halt {
                 Halt::Diverged => metrics::OUTCOME_DIVERGED,
                 Halt::Fenced => metrics::OUTCOME_FENCED,
+                Halt::NeedsBootstrap => metrics::OUTCOME_NEEDS_BOOTSTRAP,
             });
         }
         Progress::Retry => metrics::record_shipped(metrics::OUTCOME_REFUSED),
