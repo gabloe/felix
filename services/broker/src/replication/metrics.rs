@@ -38,6 +38,9 @@ pub const OUTCOME_FENCED: &str = "fenced";
 /// The follower needs records retention has removed from the leader. It cannot
 /// be caught up by shipping and needs its history transferred.
 pub const OUTCOME_NEEDS_BOOTSTRAP: &str = "needs_bootstrap";
+/// The follower took a log placed at this leader's oldest surviving offset and
+/// replication resumed. Once per replica per shard.
+pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
 
 pub fn record_shipped(outcome: &'static str) {
     metrics::counter!(SHIPPED_TOTAL, "outcome" => outcome).increment(1);

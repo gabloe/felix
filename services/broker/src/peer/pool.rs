@@ -785,6 +785,12 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
             correlation_id,
             ..m
         }),
+        InternalMessage::ReplicateBootstrap(m) => {
+            InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+                correlation_id,
+                ..m
+            })
+        }
     }
 }
 

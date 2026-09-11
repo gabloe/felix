@@ -250,3 +250,129 @@ async fn every_answer_carries_the_requests_correlation_id() {
         assert_eq!(handler.apply(request).await.correlation_id(), 99);
     }
 }
+
+/// Placing a shard log where the leader's surviving log begins.
+mod bootstrap {
+    use super::*;
+    use felix_wire::internal::ReplicateBootstrap;
+
+    const BASE: u64 = 5_000;
+
+    fn offer(generation: u64, base_offset: u64) -> ReplicateBootstrap {
+        ReplicateBootstrap {
+            correlation_id: 1,
+            shard: ShardRef {
+                tenant_id: TENANT.to_string(),
+                namespace: NAMESPACE.to_string(),
+                stream: STREAM.to_string(),
+                shard: 0,
+                generation,
+            },
+            base_offset,
+        }
+    }
+
+    /// **A replica with nothing takes the offer**, and reports that it now
+    /// stands at the offered base — which is where the leader resumes.
+    #[tokio::test]
+    async fn a_replica_holding_nothing_places_its_log_at_the_offered_base() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+        let log = broker
+            .durable_storage()
+            .expect("storage")
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        assert_eq!(log.base_offset(), BASE);
+    }
+
+    /// Records shipped after a bootstrap land at the leader's offsets, which is
+    /// the whole point of placing the log rather than starting at zero.
+    #[tokio::test]
+    async fn records_after_a_bootstrap_land_at_the_leaders_offsets() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler.bootstrap(offer(4, BASE)).await;
+
+        let answer = handler.apply(batch(4, BASE, &["a", "b"])).await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE + 2),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+    }
+
+    /// **A replica holding records refuses.** Discarding them is an operator's
+    /// decision, and a log placed over them would have a hole between what it
+    /// held and what it was given.
+    #[tokio::test]
+    async fn a_replica_holding_records_refuses_to_be_rebased() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler.apply(batch(4, 0, &["a", "b"])).await;
+
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        let refused = refusal(&answer);
+        assert_eq!(refused.code, ErrorCode::LogConflict);
+        assert!(!refused.code.is_retryable());
+    }
+
+    /// Offering the same base twice is harmless: the second finds the log
+    /// already placed there and agrees.
+    #[tokio::test]
+    async fn repeating_the_same_offer_is_harmless() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+
+        handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE),
+            other => panic!("a repeated offer was refused: {:?}", other.kind()),
+        }
+    }
+
+    /// **The same fence applies to placing a log as to storing records.** A
+    /// superseded leader must not be able to re-base a follower's shard, which
+    /// would be a way round the check that guards the records themselves.
+    #[tokio::test]
+    async fn a_superseded_leader_cannot_place_a_log() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 5));
+
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::FencedEpoch);
+    }
+
+    /// And a broker outside the replica set cannot be given a shard at all.
+    #[tokio::test]
+    async fn a_broker_outside_the_replica_set_cannot_be_given_a_shard() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(broker, router_with(&["broker-c"], 4));
+
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
+    }
+
+    /// A replica with nowhere to put records says so rather than accepting.
+    #[tokio::test]
+    async fn a_replica_without_durable_storage_refuses() {
+        let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+        let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
+
+        let answer = handler.bootstrap(offer(4, BASE)).await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
+    }
+}

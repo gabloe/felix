@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use felix_broker::StreamLog;
 use felix_wire::internal::{
-    ErrorCode, InternalMessage, ReplicateRecords, ShardRef, batch_checksum,
+    ErrorCode, InternalMessage, ReplicateBootstrap, ReplicateRecords, ShardRef, batch_checksum,
 };
 
 use crate::peer::{PeerError, PeerRequester};
@@ -153,17 +153,19 @@ pub async fn ship_once<R: PeerRequester>(
         // that the shard needs its history transferred -- which is #114's
         // subject and is not implemented.
         Err(felix_broker::BrokerError::CursorTooOld { oldest, requested }) => {
-            tracing::error!(
+            // The records between the follower's position and this leader's
+            // oldest are gone from both. Shipping cannot bridge that, so the
+            // follower is offered the one fact it cannot work out for itself:
+            // where the surviving log begins.
+            tracing::info!(
                 node_id = %cursor.node_id,
                 stream = %shard.stream,
                 shard = shard.shard,
                 requested,
                 oldest,
-                "replication stopped: the follower needs history retention has removed",
+                "the follower is below this leader's oldest record; offering a bootstrap",
             );
-            cursor.halted = Some(Halt::NeedsBootstrap);
-            metrics::record_shipped(metrics::OUTCOME_NEEDS_BOOTSTRAP);
-            return Progress::Halted(Halt::NeedsBootstrap);
+            return offer_bootstrap(requester, shard, cursor, oldest).await;
         }
         Err(err) => {
             // The leader could not read its own log. Nothing is wrong with the
@@ -238,6 +240,69 @@ pub async fn ship_once<R: PeerRequester>(
         Progress::UpToDate => {}
     }
     progress
+}
+
+/// Offer a follower a log that begins where this leader's surviving log does.
+///
+/// Only the follower can accept: one holding records of its own has a gap it
+/// cannot fill, and discarding them is an operator's decision rather than a
+/// leader's. A refusal halts this follower, which is where it stood before the
+/// offer was made.
+async fn offer_bootstrap<R: PeerRequester>(
+    requester: &R,
+    shard: &ShardRef,
+    cursor: &mut FollowerCursor,
+    base_offset: u64,
+) -> Progress {
+    let request = InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+        // The pool assigns the real id; it owns the connection this lands on.
+        correlation_id: 0,
+        shard: shard.clone(),
+        base_offset,
+    });
+    let answer = match requester
+        .request(&cursor.node_id, cursor.addr, request)
+        .await
+    {
+        Ok(answer) => answer,
+        Err(err) => {
+            // Unreachable, not unwilling. The offer stands and goes again.
+            metrics::record_shipped(unreachable_outcome(&err));
+            return Progress::Retry;
+        }
+    };
+
+    match read_answer(&answer) {
+        Progress::Stored { durable_offset } => {
+            cursor.next_offset = durable_offset;
+            tracing::info!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                base_offset,
+                "the follower placed its log and replication resumed",
+            );
+            metrics::record_shipped(metrics::OUTCOME_BOOTSTRAPPED);
+            Progress::Resume {
+                offset: durable_offset,
+            }
+        }
+        // The follower will not take it, and nothing about that resolves by
+        // asking again: it holds records of its own, so a person has to decide
+        // what becomes of them.
+        _ => {
+            tracing::error!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                base_offset,
+                "replication stopped: the follower refused a bootstrap and cannot be caught up",
+            );
+            cursor.halted = Some(Halt::NeedsBootstrap);
+            metrics::record_shipped(metrics::OUTCOME_NEEDS_BOOTSTRAP);
+            Progress::Halted(Halt::NeedsBootstrap)
+        }
+    }
 }
 
 fn unreachable_outcome(err: &PeerError) -> &'static str {

@@ -202,10 +202,11 @@ the primitives the storage layer already exposes for this purpose.
 Once retention has trimmed past a follower's position, shipping cannot reach it:
 the records are not on the leader to send, and starting the follower at the
 surviving base offset would leave its log with a hole nothing downstream could
-detect. Such a follower is halted for bootstrap — it counts toward no quorum and
-is not shipped to again — and transferring its history is #114, which is not
-implemented. Until it is, a follower that falls that far behind needs its data
-directory rebuilt by hand.
+detect. Such a follower is offered a log that *begins* at the leader's oldest surviving
+offset (`ReplicateBootstrap`). A replica holding nothing takes it and replication
+resumes; one holding records of its own refuses, because a log placed over them
+would have a hole nothing downstream could detect, and it is halted for an
+operator to resolve.
 
 ### The `Leader` loss window, precisely
 

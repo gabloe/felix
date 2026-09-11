@@ -61,6 +61,11 @@ fn every_message() -> Vec<InternalMessage> {
             expected_offset: 100,
             detail: "batch starts at 105, expected 100".to_string(),
         }),
+        InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+            correlation_id: 42,
+            shard: shard(),
+            base_offset: 5_000,
+        }),
     ]
 }
 
@@ -342,7 +347,7 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(10).is_err());
+    assert!(Kind::from_u16(11).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
@@ -480,6 +485,7 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (7, Kind::ReplicateRecords),
         (8, Kind::ReplicateOk),
         (9, Kind::ReplicateError),
+        (10, Kind::ReplicateBootstrap),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);

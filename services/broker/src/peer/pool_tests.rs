@@ -355,6 +355,7 @@ mod correlation {
             InternalMessage::ReplicateRecords(m) => m.correlation_id,
             InternalMessage::ReplicateOk(m) => m.correlation_id,
             InternalMessage::ReplicateError(m) => m.correlation_id,
+            InternalMessage::ReplicateBootstrap(m) => m.correlation_id,
         }
     }
 
@@ -417,6 +418,11 @@ mod correlation {
                 code: ErrorCode::LogGap,
                 expected_offset: 9,
                 detail: "behind".to_string(),
+            }),
+            InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+                correlation_id: 7,
+                shard: shard(),
+                base_offset: 5_000,
             }),
         ]
     }
