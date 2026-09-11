@@ -431,10 +431,41 @@ impl DiskLog {
         label: impl Into<String>,
         config: LogConfig,
     ) -> Result<Self> {
-        config.validate()?;
-        let dir = dir.into();
-        let label = label.into();
+        Self::open_inner(dir.into(), label.into(), config, None)
+    }
 
+    /// Open a shard log, creating it to begin at `base_offset` if it does not
+    /// exist yet.
+    ///
+    /// For a replica receiving history that starts partway through a stream:
+    /// the records before `base_offset` are gone from every copy in the
+    /// cluster, so a log that begins there is complete rather than truncated,
+    /// and a read below it is `Trimmed` exactly as it would be on the leader.
+    ///
+    /// **An existing log is opened as it stands and `base_offset` is ignored.**
+    /// A restart must not reinterpret a shard that is already here, and the
+    /// base it was created at is recorded in its own first segment. Only an
+    /// empty directory is a shard being placed for the first time.
+    pub fn open_at(
+        dir: impl Into<PathBuf>,
+        label: impl Into<String>,
+        config: LogConfig,
+        base_offset: Offset,
+    ) -> Result<Self> {
+        Self::open_inner(dir.into(), label.into(), config, Some(base_offset))
+    }
+
+    fn open_inner(
+        dir: PathBuf,
+        label: String,
+        config: LogConfig,
+        base_offset: Option<Offset>,
+    ) -> Result<Self> {
+        config.validate()?;
+
+        if let Some(base_offset) = base_offset.filter(|base| *base > 0) {
+            recovery::place_empty_shard(&dir, &config, base_offset)?;
+        }
         let recovered = recovery::recover_shard(&dir, &label, &config)?;
         if recovered.truncated_bytes > 0 {
             tracing::warn!(
@@ -904,6 +935,27 @@ impl DiskLogProvider {
 
     pub fn config(&self) -> &LogConfig {
         &self.config
+    }
+
+    /// Open or return the cached log for `shard`, creating it to begin at
+    /// `base_offset` if it does not exist yet.
+    ///
+    /// For a replica being given a shard whose early history is already gone.
+    /// An existing shard keeps its own base, so this is safe to call on every
+    /// contact rather than only the first.
+    pub fn open_shard_at(&self, shard: &ShardKey, base_offset: Offset) -> Result<DiskLog> {
+        let mut open_logs = self.open_logs.lock();
+        if let Some(log) = open_logs.get(shard) {
+            return Ok(log.clone());
+        }
+        let log = DiskLog::open_at(
+            layout::shard_dir(&self.root, shard),
+            layout::shard_label(shard),
+            self.config.clone(),
+            base_offset,
+        )?;
+        open_logs.insert(shard.clone(), log.clone());
+        Ok(log)
     }
 
     /// Open or return the cached log for `shard`.

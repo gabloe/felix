@@ -65,6 +65,33 @@ impl DurableStorage {
     /// Repeated calls for the same shard return the same log, so re-registering
     /// a stream — which the control-plane watcher does on every restart and
     /// resync — never opens a second writer over the same files.
+    /// Open a shard's log, creating it to begin at `base_offset` if it is not
+    /// there yet.
+    ///
+    /// For a replica receiving a shard whose early history has already been
+    /// trimmed everywhere: its log begins where the surviving records do. An
+    /// existing shard keeps the base recorded in its own first segment.
+    pub fn open_stream_at(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        base_offset: felix_storage::log::Offset,
+    ) -> Result<StreamLog> {
+        let key = ShardKey {
+            tenant: tenant.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard,
+        };
+        let log = self
+            .provider
+            .open_shard_at(&key, base_offset)
+            .map_err(storage_error)?;
+        Ok(StreamLog { log })
+    }
+
     pub fn open_stream(
         &self,
         tenant: &str,
