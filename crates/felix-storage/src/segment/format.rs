@@ -116,6 +116,29 @@ pub enum CorruptionKind {
         expected: Offset,
         found: Offset,
     },
+    /// A cache record was shorter than its own fixed header.
+    CacheRecordTooShort {
+        len: usize,
+        header_len: usize,
+    },
+    /// Written by a build whose cache record layout this one does not know.
+    ///
+    /// Refused rather than read with the layout this build happens to have: a
+    /// later version may have moved a field, and guessing produces a plausible
+    /// wrong value where an error would have been honest.
+    CacheRecordVersion {
+        found: u8,
+        expected: u8,
+    },
+    CacheRecordOp {
+        found: u8,
+    },
+    /// The record claims a key longer than the bytes it carries.
+    CacheRecordKeyLength {
+        claimed: usize,
+        available: usize,
+    },
+    CacheRecordKeyNotUtf8,
 }
 
 impl fmt::Display for CorruptionKind {
@@ -158,6 +181,24 @@ impl fmt::Display for CorruptionKind {
                     "offset out of order (expected {expected}, found {found})"
                 )
             }
+            CorruptionKind::CacheRecordTooShort { len, header_len } => write!(
+                f,
+                "cache record is {len} bytes, shorter than its {header_len}-byte header"
+            ),
+            CorruptionKind::CacheRecordVersion { found, expected } => write!(
+                f,
+                "cache record version {found} is not readable by this build (expects {expected})"
+            ),
+            CorruptionKind::CacheRecordOp { found } => {
+                write!(f, "unknown cache record op {found}")
+            }
+            CorruptionKind::CacheRecordKeyLength { claimed, available } => write!(
+                f,
+                "cache record claims a {claimed}-byte key but carries {available} bytes after it"
+            ),
+            CorruptionKind::CacheRecordKeyNotUtf8 => {
+                write!(f, "cache record key is not valid UTF-8")
+            }
         }
     }
 }
@@ -186,6 +227,13 @@ impl Corruption {
 
     /// Attach the byte position, unless a nested call already recorded a more
     /// specific one.
+    /// Attach the shard, for a decoder that knows which log it was reading but
+    /// not which segment within it.
+    pub fn in_shard(mut self, shard: impl fmt::Display) -> Self {
+        self.site.shard = Some(shard.to_string());
+        self
+    }
+
     pub fn at_position(mut self, position: u64) -> Self {
         self.site.position.get_or_insert(position);
         self

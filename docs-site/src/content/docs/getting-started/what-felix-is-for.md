@@ -135,7 +135,7 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Batched publish and batched delivery | ✅ Today | Count- and time-bounded, JSON or binary framing |
 | Bounded per-subscriber queues | ✅ Today | Explicit depth limits at every stage |
 | Slow-consumer isolation | ✅ Today | `Block`, `DropNew` (default), `DropOld` — see [`SubQueuePolicy`](/felix/reference/configuration/) |
-| Key/value cache with TTL | ✅ Today | Scoped `(tenant, namespace, cache, key)`, lazy expiry, best-effort eviction |
+| Key/value cache with TTL | ✅ Today | Scoped `(tenant, namespace, cache, key)`, lazy expiry against an absolute expiry time that survives a restart |
 | Multi-tenant scoping | ✅ Today | Tenant and namespace required on all data-plane operations |
 | Token-based authorization | ✅ Today | OIDC token exchange, tenant-scoped JWTs, broker-side permission checks on publish/subscribe/cache |
 | Control plane metadata service | ✅ Today | REST + OpenAPI, tenant/namespace/stream/cache CRUD, snapshot and changes feeds, in-memory or Postgres backing |
@@ -208,7 +208,7 @@ ship rather than being marked off here.
 
 | Capability | Status | Current state of the code |
 |---|---|---|
-| Log-backed cache (one core log, many semantics) | 🎯 Target | Cache is a separate storage handle, not a projection over the stream log |
+| Log-backed cache (one core log, many semantics) | 🚧 Partial | A cache is a log: writes append records, reads go through an index of key → offset rebuilt from the log at startup, and compaction reclaims superseded and expired records without ever rewriting one. Entries survive a restart when the broker has `FELIX_DURABLE_STORAGE_DIR`; without one the cache is in memory, because there is nowhere to write a log. Partial because cache operations are not routed across brokers — every broker serves its own cache — and the wire protocol has no cache delete |
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |

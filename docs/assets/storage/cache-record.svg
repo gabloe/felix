@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" width="760" height="430" role="img" aria-label="Cache record byte layout: version, op, expires_at_millis, key_len, then the key and the value">
+  <style>
+    .cell    { stroke: var(--edge); stroke-width: 1.25; }
+    .id      { fill: var(--c-id); }
+    .len     { fill: var(--c-len); }
+    .data    { fill: var(--c-data); }
+    .pay     { fill: var(--c-pay); }
+    .label   { fill: var(--ink); font: 500 13px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; text-anchor: middle; }
+    .sub     { fill: var(--ink-dim); font: 400 11px ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace; text-anchor: middle; }
+    .offset  { fill: var(--ink-dim); font: 400 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: end; }
+    .gutter  { fill: var(--ink-dim); font: 400 10px ui-sans-serif, system-ui, sans-serif; text-anchor: end; }
+    .title   { fill: var(--ink); font: 600 14px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .note    { fill: var(--ink-dim); font: 400 12px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .brace   { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+    .braceTx { fill: var(--accent); font: 500 12px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .dash    { stroke-dasharray: 5 4; }
+
+    :root {
+      --ink: #1a2b40; --ink-dim: #5b6b7f;
+      --edge: #4a6fa5; --edge-dim: #aab6c6; --accent: #b0653a;
+      --c-id: #dbe6f7; --c-len: #d6ecf5; --c-data: #e3f0e7; --c-pay: #f2ecf8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --ink: #dfe8f3; --ink-dim: #9aabbf;
+        --edge: #6d94cc; --edge-dim: #46536a; --accent: #d99a6c;
+        --c-id: #24344b; --c-len: #1f3a45; --c-data: #223a2c; --c-pay: #322940;
+      }
+    }
+    :root[data-theme="dark"] {
+      --ink: #dfe8f3; --ink-dim: #9aabbf;
+      --edge: #6d94cc; --edge-dim: #46536a; --accent: #d99a6c;
+      --c-id: #24344b; --c-len: #1f3a45; --c-data: #223a2c; --c-pay: #322940;
+    }
+    :root[data-theme="light"] {
+      --ink: #1a2b40; --ink-dim: #5b6b7f;
+      --edge: #4a6fa5; --edge-dim: #aab6c6; --accent: #b0653a;
+      --c-id: #dbe6f7; --c-len: #d6ecf5; --c-data: #e3f0e7; --c-pay: #f2ecf8;
+    }
+  </style>
+
+  <text class="title" x="24" y="26">Cache record — 14-byte header, then the key, then the value</text>
+
+  <rect class="cell id" x="64" y="52" width="304" height="46" rx="3"/>
+  <text class="label" x="216" y="73">version</text>
+  <text class="sub" x="216" y="89">u8 — 1</text>
+
+  <rect class="cell id" x="368" y="52" width="304" height="46" rx="3"/>
+  <text class="label" x="520" y="73">op</text>
+  <text class="sub" x="520" y="89">u8 — 0 put, 1 delete</text>
+
+  <rect class="cell data" x="64" y="98" width="608" height="92" rx="3"/>
+  <text class="label" x="368" y="142">expires_at_millis</text>
+  <text class="sub" x="368" y="158">u64 little-endian — absolute, 0 means never</text>
+
+  <rect class="cell len" x="64" y="190" width="608" height="46" rx="3"/>
+  <text class="label" x="368" y="211">key_len</text>
+  <text class="sub" x="368" y="227">u32 little-endian</text>
+
+  <rect class="cell pay" x="64" y="236" width="608" height="46" rx="3"/>
+  <text class="label" x="368" y="257">key</text>
+  <text class="sub" x="368" y="273">key_len bytes, UTF-8</text>
+
+  <rect class="cell pay dash" x="64" y="282" width="608" height="46" rx="3"/>
+  <text class="label" x="368" y="303">value</text>
+  <text class="sub" x="368" y="319">the rest of the record — put only</text>
+
+  <text class="gutter" x="54" y="44">offset</text>
+  <text class="offset" x="54" y="79">0</text>
+  <text class="offset" x="54" y="125">2</text>
+  <text class="offset" x="54" y="217">10</text>
+  <text class="offset" x="54" y="263">14</text>
+  <text class="offset" x="54" y="309">14+key_len</text>
+
+  <path class="brace" d="M 679 240 q 7 0 7 9 L 686 296 q 0 9 7 9 q -7 0 -7 9 L 686 314 q 0 9 -7 9"/>
+  <text class="braceTx" x="700" y="268">a delete stops</text>
+  <text class="braceTx" x="700" y="284">after the key</text>
+
+  <text class="note" x="24" y="366">The value needs no length of its own: the segment framing already delimits the record, so the value is simply what is left.</text>
+  <text class="note" x="24" y="386">The expiry is absolute rather than a duration, so a record read back after a restart means what it meant when it was written.</text>
+  <text class="note" x="24" y="406">An unknown version is refused rather than read with this layout — a misread record is worse than an unreadable one.</text>
+</svg>
