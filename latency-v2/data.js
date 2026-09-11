@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789088485865,
+  "lastUpdate": 1789089737192,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5676,6 +5676,72 @@ window.BENCHMARK_DATA = {
             "range": "98.46",
             "unit": "us",
             "extra": "trials: 5\nmedian: 589.00\nmean: 607.00\nstdev: 98.46\ncv: 16.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6be48c39a99fe7a7e04b5be982978e079216e106",
+          "message": "fix(replication): stop retrying a follower that needs trimmed history (#260)\n\nA follower asking for records retention has removed from the leader cannot be\ncaught up by shipping: the records are not here to send. The read failed, the\nexchange reported it as a transient refusal, and the leader tried the same\nimpossible read again on every pass — forever, silently, with the follower\nnever advancing and nothing saying why.\n\nReproduced before fixing: a leader trimmed to base offset 36 and a follower at\n0 ships nothing and reports `Retry`, on every pass.\n\nThe follower is now halted with its own reason. That stops a retry which could\nnever succeed, keeps the follower out of every quorum — it is not merely\nbehind, it can never arrive without a transfer — and says plainly in a log line\nand in `felix_broker_replication_halted` what has happened.\n\nHalting rather than starting the follower at the surviving base offset is the\npoint. Beginning there would leave the follower's log with a hole between what\nit holds and what it received, and a log with a hole is one nothing downstream\ncan detect: the offsets would still be contiguous from the follower's own point\nof view.\n\nThis is the condition #114 exists to repair, and repairing it is not\nimplemented — the storage layer cannot yet create a log at a non-zero base\noffset, which is what installing transferred history needs. Until then a\nfollower that falls this far behind needs its data directory rebuilt by hand,\nand `docs/replication-design.md` now says so rather than implying catch-up\nalways works.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T18:20:08-07:00",
+          "tree_id": "272284cc06fb3e6e0b46c1addc5d15930441f00e",
+          "url": "https://github.com/gabloe/felix/commit/6be48c39a99fe7a7e04b5be982978e079216e106"
+        },
+        "date": 1789089734422,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 79,
+            "range": "4.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 79.00\nmean: 81.40\nstdev: 4.28\ncv: 5.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 114,
+            "range": "7.31",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 114.00\nmean: 116.00\nstdev: 7.31\ncv: 6.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 130,
+            "range": "10.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 133.20\nstdev: 10.64\ncv: 7.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 107,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 107.00\nmean: 107.40\nstdev: 1.52\ncv: 1.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 231,
+            "range": "9.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 231.00\nmean: 233.00\nstdev: 9.41\ncv: 4.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 360,
+            "range": "325.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 360.00\nmean: 546.80\nstdev: 325.22\ncv: 59.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
