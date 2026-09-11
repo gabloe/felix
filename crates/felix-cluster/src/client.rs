@@ -15,7 +15,31 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
 /// Connect to a broker's client-facing port as `tenant_id`.
+/// Connect to whichever of `addrs` answers, the way an application with a seed
+/// list would.
+///
+/// The server name is `"localhost"` for every broker, which is only sound
+/// because this harness installs [`AcceptAnyBroker`] and never validates a
+/// certificate — the name reaches the wire as SNI and is not checked against
+/// anything. A deployment that verified certificates would need a name per
+/// broker, or a certificate naming them all. `Client::connect_any` takes the
+/// name as a parameter for exactly that reason; the hardcoding is the harness's,
+/// not the client's.
+pub async fn connect_any(addrs: &[SocketAddr], tenant_id: &str, token: &str) -> Result<Client> {
+    let config = client_config(tenant_id, token)?;
+    Client::connect_any(addrs, "localhost", config)
+        .await
+        .with_context(|| format!("connect to any of {addrs:?}"))
+}
+
 pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<Client> {
+    let config = client_config(tenant_id, token)?;
+    Client::connect(addr, "localhost", config)
+        .await
+        .with_context(|| format!("connect to broker at {addr}"))
+}
+
+fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig> {
     let mut tls = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(rustls::ALL_VERSIONS)
         .context("client protocol versions")?
@@ -33,9 +57,7 @@ pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<C
     config.auth_tenant_id = Some(tenant_id.to_string());
     config.auth_token = Some(token.to_string());
 
-    Client::connect(addr, "localhost", config)
-        .await
-        .with_context(|| format!("connect to broker at {addr}"))
+    Ok(config)
 }
 
 fn provider() -> Arc<rustls::crypto::CryptoProvider> {

@@ -498,6 +498,29 @@ impl Cluster {
         Ok((client, subscription))
     }
 
+    /// Every broker's client address, for a seed list.
+    pub fn broker_addrs(&self) -> Vec<SocketAddr> {
+        self.nodes.iter().map(|node| node.client_addr).collect()
+    }
+
+    /// Publish through whichever broker in the cluster answers, the way an
+    /// application with a seed list would.
+    pub async fn publish_via_any(&self, stream: &str, payload: Vec<u8>) -> Result<()> {
+        let client =
+            client::connect_any(&self.broker_addrs(), &self.tenant_id, &self.client_token).await?;
+        let publisher = client.publisher().await.context("open publisher")?;
+        publisher
+            .publish(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                payload,
+                felix_wire::AckMode::PerMessage,
+            )
+            .await
+            .with_context(|| format!("publish to {stream} through a seed endpoint"))
+    }
+
     /// Node ids the control plane currently considers placeable.
     pub async fn placeable_nodes(&self) -> Result<Vec<String>> {
         #[derive(serde::Deserialize)]
