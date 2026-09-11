@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789095416472,
+  "lastUpdate": 1789099567703,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4732,6 +4732,58 @@ window.BENCHMARK_DATA = {
             "range": "12688.45",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 555945.18\nmean: 554242.18\nstdev: 12688.45\ncv: 2.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "703414b495dcfb7aede07017ee9490648923d504",
+          "message": "feat(replication): report replica positions so failover can fire (M5.2) (#265)\n\n* feat(replication): report replica positions so failover can fire (M5.2)\n\nCompletes the promotion gate #111 left open. #264 stopped a lost leader being\nreplaced by a broker holding none of its log; this lets it be replaced by one\nthat does.\n\n## The leader reports, because only it can\n\nIt knows both ends of the comparison: its own tail, and how far each follower\nhas acknowledged. A follower knows where it is, not whether that is caught up.\nSent on every replication pass, to a control plane that was already tracking\nnothing.\n\n## The bound is zero\n\nA follower is caught up when it is missing nothing. A bound above zero is a\nbound on how much a promotion may silently lose, and there is no honest value\nfor it that is not a policy decision — zero needs no such decision, and a\nfollower reaches it constantly on a healthy shard. Written as a comparison\nrather than an equality so raising it later needs no rediscovery.\n\nA halted follower is never reported, however close its last position was. It\nhas stopped rather than fallen behind, so its position is not moving toward the\nleader's and will not without intervention.\n\n## Reports expire, and the window is not arbitrary\n\nA report says a follower *was* caught up. The leader kept writing afterwards,\nand promoting on a stale report loses whatever was written since.\n\nThe window is the node expiry timeout plus one heartbeat, derived from the\nliveness settings rather than configured separately, because it has to outlive\nexactly one thing: the time it takes to notice the leader is gone. The last\nreport a leader makes is from just before it dies, and promotion happens only\nafter the cluster has noticed — a report expiring sooner could never be used\nfor the failover it exists for. Not longer either: every extra second is a\nsecond of writes a promoted follower might be missing.\n\nA report from an older generation is dropped. Leadership has moved on and the\nold leader's view is about a replica set that may no longer exist.\n\n## Held in memory\n\nPositions change constantly, are advisory, and expire in about a second.\nPersisting them would cost a write per report for data worthless by the time it\ncould be read back. The consequence — a second control-plane instance cannot\npromote until leaders have reported to it — is documented, and belongs to M7.\n\nAuthorised exactly as a heartbeat is: a broker may speak for itself and no one\nelse. One that could report on another's behalf could nominate itself.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(demos): carry the new AppState field into the standalone crates\n\n`replica_positions` was added to a public struct two demo crates construct.\nThey are not workspace members, so `task lint` and `task test` cannot see\nthem and both passed locally while CI's demo step failed.\n\nCLAUDE.md documents this exact trap and says to run `task demo:check` after\nchanging public APIs. I did for earlier slices in this series and skipped it\nhere.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T21:03:43-07:00",
+          "tree_id": "4ab2badea37b1533a4edfcade567eb87cb948b92",
+          "url": "https://github.com/gabloe/felix/commit/703414b495dcfb7aede07017ee9490648923d504"
+        },
+        "date": 1789099566917,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228089.01,
+            "range": "4053.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228089.01\nmean: 228110.26\nstdev: 4053.03\ncv: 1.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228089.01,
+            "range": "4053.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228089.01\nmean: 228110.26\nstdev: 4053.03\ncv: 1.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56156.69,
+            "range": "890.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56156.69\nmean: 55952.59\nstdev: 890.35\ncv: 1.59%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 561566.9,
+            "range": "8903.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 561566.90\nmean: 559525.91\nstdev: 8903.46\ncv: 1.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
