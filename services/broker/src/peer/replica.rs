@@ -21,7 +21,7 @@ use felix_broker::Broker;
 use felix_broker::replication::{self, Divergence};
 use felix_router::{ReplicaRole, ShardRouter};
 use felix_wire::internal::{
-    ErrorCode, InternalMessage, ReplicateError, ReplicateOk, ReplicateRecords,
+    ErrorCode, InternalMessage, ReplicateBootstrap, ReplicateError, ReplicateOk, ReplicateRecords,
 };
 
 use super::metrics;
@@ -37,6 +37,148 @@ impl ReplicaHandler {
         Self { broker, router }
     }
 
+    /// May this broker store anything for `key` at `generation`?
+    ///
+    /// Shared by both entry points on purpose: storing records and placing the
+    /// log that holds them are the same authority question, and a fence applied
+    /// to one and not the other is a fence with a way round it.
+    fn check_role(
+        &self,
+        correlation_id: u64,
+        key: &felix_router::ShardKey,
+        generation: u64,
+    ) -> Option<InternalMessage> {
+        match self.router.replica_role(key, generation) {
+            ReplicaRole::Follower => None,
+            ReplicaRole::Fenced { have, named } => {
+                metrics::record_replicated(metrics::OUTCOME_FENCED);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::FencedEpoch,
+                    0,
+                    format!("this broker is at generation {have}, the sender at {named}"),
+                ))
+            }
+            ReplicaRole::Behind { have, named } => {
+                // Not a refusal of the leader, only of this moment: the watch
+                // has not caught up. Retryable, and the leader will find us
+                // ready once it has.
+                metrics::record_replicated(metrics::OUTCOME_BEHIND);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::StaleRoute,
+                    0,
+                    format!("this broker is at generation {have}, the sender at {named}"),
+                ))
+            }
+            ReplicaRole::NotAReplica => {
+                metrics::record_replicated(metrics::OUTCOME_REFUSED);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::Unauthorized,
+                    0,
+                    "this broker is not a replica of that shard".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Begin this shard's log where the leader's surviving log begins.
+    ///
+    /// The leader has nothing older left, so the records below `base_offset`
+    /// are gone from every copy: a log that starts there is complete rather
+    /// than truncated. The follower cannot work that out for itself, which is
+    /// why the leader has to say it.
+    ///
+    /// **A follower holding records of its own refuses.** Discarding them is an
+    /// operator's decision, not a leader's — and a log placed over them would
+    /// have a hole between what it held and what it was given, which nothing
+    /// downstream could detect.
+    pub async fn bootstrap(&self, request: ReplicateBootstrap) -> InternalMessage {
+        let correlation_id = request.correlation_id;
+        let key = felix_router::ShardKey {
+            tenant_id: request.shard.tenant_id.clone(),
+            namespace: request.shard.namespace.clone(),
+            stream: request.shard.stream.clone(),
+            shard: request.shard.shard,
+        };
+
+        if let Some(refusal) = self.check_role(correlation_id, &key, request.shard.generation) {
+            return refusal;
+        }
+        let Some(storage) = self.broker.durable_storage() else {
+            metrics::record_replicated(metrics::OUTCOME_REFUSED);
+            return refused(
+                correlation_id,
+                ErrorCode::Unauthorized,
+                0,
+                "this broker has no durable storage".to_string(),
+            );
+        };
+
+        // Creates the log at `base_offset` when this broker has never held the
+        // shard, and opens what is there otherwise. The base it comes back with
+        // is the authority either way.
+        let log = match storage.open_stream_at(
+            &key.tenant_id,
+            &key.namespace,
+            &key.stream,
+            key.shard,
+            request.base_offset,
+        ) {
+            Ok(log) => log,
+            Err(err) => {
+                metrics::record_replicated(metrics::OUTCOME_ERROR);
+                return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
+            }
+        };
+
+        let base = log.base_offset();
+        if base != request.base_offset {
+            // A log is already here and it starts somewhere else. Placing the
+            // leader's base over it would leave a hole between the two.
+            metrics::record_replicated(metrics::OUTCOME_CONFLICT);
+            let tail = log.tail_offset().await.unwrap_or(base);
+            tracing::error!(
+                stream = %key.stream,
+                shard = key.shard,
+                held_from = base,
+                held_to = tail,
+                offered_from = request.base_offset,
+                "refusing to bootstrap: this broker already holds records for that shard",
+            );
+            return refused(
+                correlation_id,
+                ErrorCode::LogConflict,
+                tail,
+                format!(
+                    "this broker holds {base}..{tail} for that shard and cannot be \
+                     re-based at {}",
+                    request.base_offset
+                ),
+            );
+        }
+
+        let tail = match log.tail_offset().await {
+            Ok(tail) => tail,
+            Err(err) => {
+                metrics::record_replicated(metrics::OUTCOME_ERROR);
+                return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
+            }
+        };
+        tracing::info!(
+            stream = %key.stream,
+            shard = key.shard,
+            base_offset = base,
+            "shard log placed for bootstrap",
+        );
+        metrics::record_replicated(metrics::OUTCOME_BOOTSTRAPPED);
+        InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id,
+            durable_offset: tail,
+        })
+    }
+
     pub async fn apply(&self, batch: ReplicateRecords) -> InternalMessage {
         let correlation_id = batch.correlation_id;
         let key = felix_router::ShardKey {
@@ -46,38 +188,8 @@ impl ReplicaHandler {
             shard: batch.shard.shard,
         };
 
-        match self.router.replica_role(&key, batch.shard.generation) {
-            ReplicaRole::Follower => {}
-            ReplicaRole::Fenced { have, named } => {
-                metrics::record_replicated(metrics::OUTCOME_FENCED);
-                return refused(
-                    correlation_id,
-                    ErrorCode::FencedEpoch,
-                    0,
-                    format!("this broker is at generation {have}, the sender at {named}"),
-                );
-            }
-            ReplicaRole::Behind { have, named } => {
-                // Not a refusal of the leader, only of this moment: the watch
-                // has not caught up. Retryable, and the leader will find us
-                // ready once it has.
-                metrics::record_replicated(metrics::OUTCOME_BEHIND);
-                return refused(
-                    correlation_id,
-                    ErrorCode::StaleRoute,
-                    0,
-                    format!("this broker is at generation {have}, the sender at {named}"),
-                );
-            }
-            ReplicaRole::NotAReplica => {
-                metrics::record_replicated(metrics::OUTCOME_REFUSED);
-                return refused(
-                    correlation_id,
-                    ErrorCode::Unauthorized,
-                    0,
-                    "this broker is not a replica of that shard".to_string(),
-                );
-            }
+        if let Some(refusal) = self.check_role(correlation_id, &key, batch.shard.generation) {
+            return refusal;
         }
 
         let Some(storage) = self.broker.durable_storage() else {

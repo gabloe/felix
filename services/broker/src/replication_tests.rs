@@ -21,6 +21,8 @@ const GENERATION: u64 = 4;
 struct ScriptedFollower {
     answers: Mutex<std::collections::VecDeque<std::result::Result<InternalMessage, PeerError>>>,
     sent: Mutex<Vec<ReplicateRecords>>,
+    /// Base offsets this follower was offered, as distinct from records sent.
+    offered: Mutex<Vec<u64>>,
 }
 
 impl ScriptedFollower {
@@ -30,7 +32,13 @@ impl ScriptedFollower {
         Self {
             answers: Mutex::new(answers.into_iter().collect()),
             sent: Mutex::new(Vec::new()),
+            offered: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Base offsets this follower was offered.
+    fn offered(&self) -> Vec<u64> {
+        self.offered.lock().expect("lock").clone()
     }
 
     /// The offsets and payloads of every batch this follower was sent.
@@ -62,6 +70,9 @@ impl PeerRequester for ScriptedFollower {
     ) -> std::result::Result<InternalMessage, PeerError> {
         match message {
             InternalMessage::ReplicateRecords(batch) => self.sent.lock().expect("lock").push(batch),
+            InternalMessage::ReplicateBootstrap(request) => {
+                self.offered.lock().expect("lock").push(request.base_offset)
+            }
             other => panic!("shipping sent a {:?}", other.kind()),
         }
         self.answers
@@ -523,10 +534,10 @@ mod quorum {
 
 /// A follower asking for records the leader has already trimmed.
 ///
-/// Shipping cannot bridge this: the records are not on the leader to send.
-/// Before this was recognised, the read failed, the exchange reported a
-/// transient refusal, and the leader retried the same impossible read on every
-/// pass — forever, silently, with the follower never advancing.
+/// Shipping cannot bridge this: the records are gone from the leader too. The
+/// leader offers the follower the one fact it cannot work out for itself —
+/// where the surviving log begins — and the follower decides whether it can
+/// take it.
 mod trimmed_history {
     use super::*;
 
@@ -564,55 +575,104 @@ mod trimmed_history {
         (log, base, dir)
     }
 
-    /// **The leader stops rather than retrying a read that cannot succeed.**
+    /// What the follower was asked, rather than sent.
+    fn offers(follower: &ScriptedFollower) -> Vec<u64> {
+        follower.offered()
+    }
+
+    /// **The leader offers a bootstrap rather than shipping a range it does not
+    /// have.** The offer names the oldest offset this leader still holds.
     #[tokio::test]
-    async fn a_follower_below_the_leaders_base_halts_for_bootstrap() {
+    async fn a_follower_below_the_leaders_base_is_offered_a_bootstrap() {
         let (log, base, _dir) = trimmed_leader().await;
-        let follower = ScriptedFollower::new([]);
+        let follower = ScriptedFollower::new([Ok(stored(base))]);
+        let mut cursor = cursor(0);
+
+        let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        assert_eq!(progress, Progress::Resume { offset: base });
+        assert_eq!(offers(&follower), vec![base]);
+        assert!(
+            follower.sent().is_empty(),
+            "records were shipped from a range the leader no longer holds",
+        );
+    }
+
+    /// Once the follower has taken the offer, the cursor sits at the surviving
+    /// base and ordinary shipping resumes from there.
+    #[tokio::test]
+    async fn an_accepted_bootstrap_resumes_ordinary_shipping() {
+        let (log, base, _dir) = trimmed_leader().await;
+        let tail = log.tail_offset().await.expect("tail");
+        let follower = ScriptedFollower::new([Ok(stored(base)), Ok(stored(tail))]);
+        let mut cursor = cursor(0);
+
+        ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+        assert_eq!(cursor.next_offset, base);
+
+        let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        assert!(matches!(progress, Progress::Stored { .. }), "{progress:?}");
+        let (first, _) = follower.sent().into_iter().next().expect("a batch");
+        assert_eq!(first, base, "shipping did not resume at the surviving base");
+    }
+
+    /// **A follower that refuses the offer is halted.** It holds records of its
+    /// own, so a person has to decide what becomes of them; asking again would
+    /// never change the answer.
+    #[tokio::test]
+    async fn a_refused_bootstrap_halts_the_follower() {
+        let (log, _base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
         let mut cursor = cursor(0);
 
         let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
 
         assert_eq!(progress, Progress::Halted(Halt::NeedsBootstrap));
         assert_eq!(cursor.halted, Some(Halt::NeedsBootstrap));
-        assert!(
-            follower.sent().is_empty(),
-            "records were shipped from a range the leader no longer holds",
-        );
-        assert!(base > 0);
     }
 
-    /// And it stays stopped, rather than trying again on the next pass.
+    /// And it stays halted: a refusal is not retried on the next pass.
     #[tokio::test]
-    async fn it_stays_halted_across_passes() {
+    async fn a_halted_follower_is_not_offered_again() {
         let (log, _base, _dir) = trimmed_leader().await;
-        let follower = ScriptedFollower::new([]);
+        let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
         let mut cursor = cursor(0);
 
         for _ in 0..3 {
             ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
         }
 
-        assert!(follower.sent().is_empty());
+        assert_eq!(offers(&follower).len(), 1, "a refused offer was repeated");
     }
 
-    /// **A follower that cannot be caught up counts toward no quorum.** This is
-    /// what stops a replica being counted before it is eligible: it is not
-    /// merely behind, it can never arrive without a transfer.
+    /// An unreachable follower keeps its offer open: nothing about the network
+    /// says the follower would refuse.
     #[tokio::test]
-    async fn a_follower_needing_bootstrap_counts_toward_no_quorum() {
+    async fn an_unreachable_follower_keeps_its_offer_open() {
         let (log, _base, _dir) = trimmed_leader().await;
-        let follower = ScriptedFollower::new([]);
+        let follower = ScriptedFollower::new([Err(PeerError::Timeout {
+            node_id: "broker-b".to_string(),
+            timeout: std::time::Duration::from_secs(5),
+        })]);
+        let mut cursor = cursor(0);
+
+        let progress = ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
+
+        assert_eq!(progress, Progress::Retry);
+        assert!(cursor.halted.is_none(), "a timeout halted replication");
+    }
+
+    /// **A follower still being offered a bootstrap counts toward no quorum.**
+    /// It is not merely behind; it cannot arrive until it accepts.
+    #[tokio::test]
+    async fn a_follower_that_refused_counts_toward_no_quorum() {
+        let (log, _base, _dir) = trimmed_leader().await;
+        let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
         let mut cursor = cursor(0);
         ship_once(&follower, &log, &shard(), &mut cursor, BATCH_BYTES).await;
 
         let tail = log.tail_offset().await.expect("tail");
-        // A set of three: the leader plus this follower plus one healthy peer.
-        assert_eq!(
-            quorum_offset(tail, &[cursor.clone(), super::cursor(tail)]),
-            tail,
-        );
-        // And alone, it cannot make a majority of three with the leader.
         assert_eq!(quorum_offset(tail, &[cursor.clone(), super::cursor(0)]), 0);
     }
 
@@ -628,8 +688,8 @@ mod trimmed_history {
 
         assert!(
             matches!(progress, Progress::Stored { .. }),
-            "a follower at the surviving base was refused: {progress:?}",
+            "a follower at the surviving base was offered a bootstrap: {progress:?}",
         );
-        assert!(cursor.halted.is_none());
+        assert!(offers(&follower).is_empty());
     }
 }

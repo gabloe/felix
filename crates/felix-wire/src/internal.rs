@@ -56,6 +56,7 @@ pub enum Kind {
     ReplicateRecords = 7,
     ReplicateOk = 8,
     ReplicateError = 9,
+    ReplicateBootstrap = 10,
 }
 
 impl Kind {
@@ -72,6 +73,7 @@ impl Kind {
             7 => Ok(Kind::ReplicateRecords),
             8 => Ok(Kind::ReplicateOk),
             9 => Ok(Kind::ReplicateError),
+            10 => Ok(Kind::ReplicateBootstrap),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -287,6 +289,28 @@ pub struct ReplicateOk {
     pub durable_offset: u64,
 }
 
+/// The leader has nothing older than `base_offset` left.
+///
+/// Sent when a follower's position is below everything the leader still holds,
+/// so shipping cannot reach it: the records in between are gone from the leader
+/// too. It says "the surviving log starts here" — which is the one fact a
+/// follower cannot work out for itself, and the fact it needs before it may
+/// place a log that begins anywhere other than zero.
+///
+/// A follower with records of its own refuses. Discarding them is an operator's
+/// decision, not a leader's.
+///
+/// A separate kind rather than a field on [`ReplicateRecords`]: this protocol
+/// freezes existing body layouts, and an older peer already rejects an unknown
+/// kind rather than misreading it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicateBootstrap {
+    pub correlation_id: u64,
+    pub shard: ShardRef,
+    /// Offset of the oldest record the leader still holds.
+    pub base_offset: u64,
+}
+
 /// The follower refused, and where it stands.
 ///
 /// `expected_offset` is what the follower wants next. For `LogGap` it is how
@@ -312,6 +336,7 @@ pub enum InternalMessage {
     ReplicateRecords(ReplicateRecords),
     ReplicateOk(ReplicateOk),
     ReplicateError(ReplicateError),
+    ReplicateBootstrap(ReplicateBootstrap),
 }
 
 impl InternalMessage {
@@ -326,6 +351,7 @@ impl InternalMessage {
             Self::ReplicateRecords(_) => Kind::ReplicateRecords,
             Self::ReplicateOk(_) => Kind::ReplicateOk,
             Self::ReplicateError(_) => Kind::ReplicateError,
+            Self::ReplicateBootstrap(_) => Kind::ReplicateBootstrap,
         }
     }
 
@@ -345,6 +371,7 @@ impl InternalMessage {
             Self::ReplicateRecords(m) => m.correlation_id,
             Self::ReplicateOk(m) => m.correlation_id,
             Self::ReplicateError(m) => m.correlation_id,
+            Self::ReplicateBootstrap(m) => m.correlation_id,
         }
     }
 
@@ -420,6 +447,15 @@ impl InternalMessage {
                 body.put_u16(m.code as u16);
                 body.put_u64(m.expected_offset);
                 put_str(&mut body, &m.detail)?;
+            }
+            Self::ReplicateBootstrap(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.shard.tenant_id)?;
+                put_str(&mut body, &m.shard.namespace)?;
+                put_str(&mut body, &m.shard.stream)?;
+                body.put_u32(m.shard.shard);
+                body.put_u64(m.shard.generation);
+                body.put_u64(m.base_offset);
             }
         }
 
@@ -597,6 +633,21 @@ impl InternalMessage {
                 };
                 expect_empty(&body)?;
                 Ok(Self::ReplicateError(message))
+            }
+            Kind::ReplicateBootstrap => {
+                let message = ReplicateBootstrap {
+                    correlation_id: take_u64(&mut body)?,
+                    shard: ShardRef {
+                        tenant_id: take_str(&mut body)?,
+                        namespace: take_str(&mut body)?,
+                        stream: take_str(&mut body)?,
+                        shard: take_u32(&mut body)?,
+                        generation: take_u64(&mut body)?,
+                    },
+                    base_offset: take_u64(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::ReplicateBootstrap(message))
             }
         }
     }

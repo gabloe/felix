@@ -125,6 +125,9 @@ pub const OUTCOME_GAP: &str = "gap";
 pub const OUTCOME_CONFLICT: &str = "conflict";
 /// The batch did not survive the trip.
 pub const OUTCOME_CORRUPT: &str = "corrupt";
+/// This broker placed a shard log to begin where the leader's surviving log
+/// begins. Rare and deliberate: it happens once per replica per shard.
+pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
 
 pub fn record_replicated(outcome: &'static str) {
     metrics::counter!(REPLICATED_TOTAL, "outcome" => outcome).increment(1);

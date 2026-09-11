@@ -196,6 +196,33 @@ definition, so the two sides cannot compute it differently.
 disagree at an offset do not converge by retrying; progress stops and the
 condition is surfaced.
 
+### Bootstrapping a follower
+
+A follower can be positioned below everything the leader still holds — a new
+replica of a stream with retention, or one that fell far enough behind. Shipping
+cannot bridge that: the records in between are gone from the leader too.
+
+`ReplicateBootstrap` carries the offset of the oldest record the leader still
+has. It is the one fact a follower cannot work out for itself, and the fact it
+needs before it may place a log that begins anywhere other than zero.
+
+| The follower | Answer |
+| --- | --- |
+| holds no log for the shard | places it at `base_offset`, `ReplicateOk` |
+| already holds a log starting there | `ReplicateOk`; the offer is idempotent |
+| holds records starting elsewhere | `LogConflict` |
+
+The last row is the point. A log placed over existing records would have a hole
+between what the follower held and what it was given, and a log with a hole is
+one nothing downstream can detect — from the follower's own view its offsets are
+still contiguous. Discarding those records is an operator's decision, not a
+leader's, so the leader halts that follower instead.
+
+The same fence applies as to storing records: a superseded leader cannot place a
+log, and a broker outside the replica set cannot be given a shard. Placing a log
+and filling it are the same authority question, and a fence applied to one and
+not the other is a fence with a way round it.
+
 ## Errors
 
 Typed, because they need different responses:
@@ -214,6 +241,10 @@ Typed, because they need different responses:
 | `LogGap` | a replication batch starts past the follower's tail | resume from `expected_offset` |
 | `LogConflict` | a replication batch disagrees with stored bytes | do not retry; the logs have diverged |
 | `FencedEpoch` | the sender named an epoch older than the responder's | do not retry; it is no longer the leader |
+
+`ReplicateBootstrap` is kind 10. A peer that predates it rejects the kind rather
+than misreading the body, which is why it is a new kind rather than a field on
+`ReplicateRecords`: this protocol freezes existing body layouts.
 
 `NotLeader` is a distinct kind rather than an error code, because it carries a
 routing answer rather than only a reason.
