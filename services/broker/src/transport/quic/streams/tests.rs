@@ -556,7 +556,7 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
                 // This harness drives local publishes only; a forward would
                 // need a peer transport it does not build.
                 PublishTarget::Forward { .. } => unreachable!("no peers in this test"),
-                PublishTarget::Resolved(handle) => {
+                PublishTarget::Resolved { handle, .. } => {
                     broker.publish_batch_to_handle(handle, &job.payloads).await
                 }
                 PublishTarget::Named {

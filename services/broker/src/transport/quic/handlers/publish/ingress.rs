@@ -18,7 +18,13 @@ use crate::transport::quic::handlers::publish::admission::AdmissionPermit;
 use crate::transport::quic::handlers::publish::{PublishContext, PublishJob};
 
 pub(crate) enum PublishTarget {
-    Resolved(StreamHandle),
+    Resolved {
+        handle: StreamHandle,
+        /// The shard this publish resolved to, when this broker is in a
+        /// cluster. `None` on a single-node broker, which has no replica set
+        /// and so nothing to wait for.
+        shard: Option<crate::shard_watch::ShardKey>,
+    },
     /// Another broker owns the shard. The batch is sent there and its answer
     /// relayed, from the same worker a local write would have used, so the ack
     /// path is identical either way.
@@ -112,7 +118,9 @@ pub(crate) async fn enqueue_publish(
     mut cancel: Option<watch::Receiver<bool>>,
 ) -> Result<bool> {
     let worker_index = match &job.target {
-        PublishTarget::Resolved(handle) => handle.id() as usize % publish_ctx.worker_count.max(1),
+        PublishTarget::Resolved { handle, .. } => {
+            handle.id() as usize % publish_ctx.worker_count.max(1)
+        }
         // Hashed by name, because there is no local handle to hash. Same
         // function the named path uses, so one stream's forwards stay on one
         // worker and keep their order.

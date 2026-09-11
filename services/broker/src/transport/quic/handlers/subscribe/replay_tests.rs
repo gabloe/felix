@@ -90,6 +90,7 @@ async fn durable_broker() -> (Arc<Broker>, TempDir) {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await

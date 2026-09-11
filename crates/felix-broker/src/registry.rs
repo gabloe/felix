@@ -90,6 +90,7 @@ impl Broker {
                 self.topic_capacity,
                 self.subscriber_queue_policy,
                 durable,
+                metadata.consistency,
             ));
             self.hydrate_durable_stream(&state).await?;
 

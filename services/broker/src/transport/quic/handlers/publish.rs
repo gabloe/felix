@@ -221,7 +221,17 @@ pub(crate) fn publish_target(
     ack: felix_wire::internal::AckMode,
 ) -> Option<PublishTarget> {
     match route {
-        PublishRoute::Local(handle) => Some(PublishTarget::Resolved(handle)),
+        PublishRoute::Local(handle) => Some(PublishTarget::Resolved {
+            handle,
+            // Built the same way `resolve_route` built the key it dispatched
+            // on, so the shard a publish waits for is the shard it landed on.
+            shard: publish_ctx.ingress.as_ref().map(|_| ShardKey {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+                shard: shard_for(1, None),
+            }),
+        }),
         PublishRoute::Forward(target) => {
             if publish_ctx.peers.is_none() {
                 t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);

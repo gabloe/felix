@@ -58,6 +58,7 @@ async fn boot(dir: &Path) -> Result<(Broker, DurableStorage)> {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;

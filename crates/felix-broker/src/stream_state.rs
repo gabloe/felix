@@ -59,6 +59,10 @@ pub(crate) struct StreamState {
     // replay and subscriber delivery agree with what is on disk. Only durable
     // streams use it; an ephemeral stream has no disk offsets to order by.
     pub(crate) commit_sequencer: CommitSequencer,
+    /// What an acknowledgement of a publish to this stream means. Carried on
+    /// the state so the publish path reads it from the handle it already has,
+    /// rather than looking the stream up again on the hot path.
+    pub(crate) consistency: crate::broker::ConsistencyLevel,
 }
 
 #[derive(Debug, Default)]
@@ -86,9 +90,11 @@ impl StreamState {
         subscriber_queue_capacity: usize,
         subscriber_queue_policy: SubQueuePolicy,
         durable: Option<StreamLog>,
+        consistency: crate::broker::ConsistencyLevel,
     ) -> Self {
         Self {
             handle_id,
+            consistency,
             active: AtomicBool::new(true),
             subscribers_snapshot: ArcSwap::from_pointee(Vec::new()),
             subscribers: Mutex::new(SubscriberRegistry::default()),

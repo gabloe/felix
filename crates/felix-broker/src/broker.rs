@@ -95,6 +95,26 @@ const _: () = {
     assert_send_sync::<Broker>();
 };
 
+/// How much of a shard's replica set must hold a record before the publish that
+/// wrote it is acknowledged.
+///
+/// The levels differ in what a client may conclude from an acknowledgement, and
+/// `docs/replication-design.md` states each precisely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsistencyLevel {
+    /// Durable on the leader. Exposes the leader-only loss window: records
+    /// acknowledged but not yet shipped are lost if the leader's storage is.
+    /// The window is bounded by the replication lag, which is exported.
+    ///
+    /// The default, so a stream created before replication existed — or by a
+    /// caller that does not ask — behaves exactly as it did.
+    #[default]
+    Leader,
+    /// Durable on a majority of the replica set, the leader included. No loss
+    /// window: any failure within that majority preserves the record.
+    Quorum,
+}
+
 #[derive(Debug, Clone)]
 pub struct StreamMetadata {
     /// When true, every publish is written to disk before it is fanned out or
@@ -102,6 +122,8 @@ pub struct StreamMetadata {
     /// [`Broker::with_durable_storage`].
     pub durable: bool,
     pub shards: u32,
+    /// What an acknowledgement of a publish to this stream means.
+    pub consistency: ConsistencyLevel,
 }
 
 /// What a publish did.
@@ -117,6 +139,13 @@ pub struct PublishOutcome {
 #[derive(Clone, Debug)]
 pub struct StreamHandle {
     pub(crate) state: Arc<StreamState>,
+}
+
+impl StreamHandle {
+    /// What an acknowledgement of a publish through this handle means.
+    pub fn consistency(&self) -> ConsistencyLevel {
+        self.state.consistency
+    }
 }
 
 impl StreamHandle {
@@ -137,6 +166,7 @@ impl Default for StreamMetadata {
         Self {
             durable: false,
             shards: 1,
+            consistency: ConsistencyLevel::Leader,
         }
     }
 }

@@ -141,6 +141,9 @@ where
     // through it, and before the accept loop for the same reason the router is:
     // a publish must never arrive at a broker that can resolve a remote owner
     // and not reach it.
+    // Shared between the replication driver, which advances it, and the publish
+    // path, which waits on it for `Quorum` streams.
+    let quorum_marks = Arc::new(replication::quorum::QuorumMarks::new());
     let peer_shutdown = CancellationToken::new();
     let peers = match (&config.peer_transport, &config.membership) {
         (Some(peer_config), Some(membership_config)) => Some(
@@ -241,6 +244,7 @@ where
         let ingress_router = ingress_router.clone();
         let peers_for_accept = peers.clone();
         let lease_for_accept = lease.clone();
+        let marks_for_accept = Arc::clone(&quorum_marks);
         tokio::spawn(async move {
             // A durable broker does not accept until its streams exist.
             // Readiness alone only steers orchestrated traffic; a client with
@@ -271,6 +275,7 @@ where
                     ingress: ingress_router,
                     peers: peers_for_accept,
                     lease: lease_for_accept,
+                    marks: Some(Arc::clone(&marks_for_accept)),
                 },
             )
             .await
@@ -466,6 +471,7 @@ where
                     Arc::clone(pool),
                     Arc::clone(&broker),
                     Arc::clone(router),
+                    Arc::clone(&quorum_marks),
                     Duration::from_millis(config.controlplane_sync_interval_ms),
                     sync_shutdown.clone(),
                 );

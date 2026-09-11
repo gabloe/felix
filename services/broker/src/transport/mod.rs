@@ -59,6 +59,7 @@ mod tests {
             subscriber_max_bytes_per_write: 256 * 1024,
             sub_streams_per_conn: 4,
             sub_stream_mode: crate::config::SubStreamMode::PerSubscriber,
+            ..Default::default()
         };
 
         let base = TransportConfig::default();

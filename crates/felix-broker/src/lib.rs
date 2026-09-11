@@ -35,8 +35,8 @@ mod subscription;
 pub mod timings;
 
 pub use broker::{
-    Broker, CacheMetadata, HistoryRange, PublishOutcome, ResumedSubscription, StartPosition,
-    StreamHandle, StreamMetadata,
+    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, PublishOutcome, ResumedSubscription,
+    StartPosition, StreamHandle, StreamMetadata,
 };
 pub use config::SubQueuePolicy;
 pub use delivery::DeliveryEnvelope;

@@ -146,6 +146,9 @@ pub struct BrokerConfig {
     pub sub_streams_per_conn: usize,
     // Strategy for mapping subscribers to streams.
     pub sub_stream_mode: SubStreamMode,
+    /// How long a publish to a `Quorum` stream waits for a majority before the
+    /// broker says it cannot vouch for the write.
+    pub publish_quorum_timeout_ms: u64,
 }
 
 impl Default for BrokerConfig {
@@ -191,6 +194,7 @@ impl Default for BrokerConfig {
             subscriber_max_bytes_per_write: DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE,
             sub_streams_per_conn: DEFAULT_SUB_STREAMS_PER_CONN,
             sub_stream_mode: DEFAULT_SUB_STREAM_MODE,
+            publish_quorum_timeout_ms: DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS,
         }
     }
 }
@@ -332,6 +336,12 @@ const DEFAULT_CACHE_STREAM_RECV_WINDOW: u64 = 64 * 1024 * 1024;
 const DEFAULT_CACHE_SEND_WINDOW: u64 = 256 * 1024 * 1024;
 const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
+/// How long a publish to a `Quorum` stream waits for a majority.
+///
+/// Generous next to a healthy replication round trip, because being too short
+/// costs a publish the broker cannot vouch for even though the record is on its
+/// disk and about to reach a majority.
+const DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 // Total budget for draining in-flight work after a termination signal. Kubernetes
@@ -586,6 +596,11 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SUB_STREAMS_PER_CONN);
+        let publish_quorum_timeout_ms = std::env::var("FELIX_PUBLISH_QUORUM_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS);
         let sub_stream_mode = std::env::var("FELIX_SUB_STREAM_MODE")
             .ok()
             .and_then(|value| SubStreamMode::parse_env(value.as_str()))
@@ -631,6 +646,7 @@ impl BrokerConfig {
             subscriber_max_bytes_per_write,
             sub_streams_per_conn,
             sub_stream_mode,
+            publish_quorum_timeout_ms,
         })
     }
 
