@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789086603142,
+  "lastUpdate": 1789088485865,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5610,6 +5610,72 @@ window.BENCHMARK_DATA = {
             "range": "601.28",
             "unit": "us",
             "extra": "trials: 5\nmedian: 920.00\nmean: 901.40\nstdev: 601.28\ncv: 66.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c609242b177e355d607a8d86e35487ce3b7d2c2d",
+          "message": "feat(replication): honour Leader and Quorum on the ack path (M5.4) (#259)\n\n`Stream.consistency` existed in the control plane and reached nobody: the\nbroker never read it, so a stream asking for `Quorum` was served exactly like\none asking for `Leader`. This wires it end to end.\n\n## Reaching the broker\n\nThe control plane already serialised the level; the broker now parses it, and\n**an unrecognised level is refused rather than defaulted**. Falling back to\n`Leader` would take a stream the operator asked to be quorum-replicated and\nserve it at the weaker guarantee, silently -- the acknowledgement keeps its\nmeaning on paper and loses it in fact. The wire names are pinned by a test on\neach side, because the two enums compile separately and nothing else would\ncatch them drifting.\n\nAn absent level reads as `Leader`, so a control plane predating replication,\nand every stream written before this existed, behave exactly as they did.\n\n## The majority\n\nOver the replica set of the generation the record was written at, always\ncounting the leader. `replication_factor: 1` is therefore a quorum of one, and\n`Quorum` on an unreplicated stream behaves like `Leader` rather than never\nacknowledging.\n\nA halted follower counts for nothing. It has stopped rather than fallen\nbehind, and letting its last position count is how an acknowledgement comes to\nmean less than it says.\n\n## The wait\n\nThe driver owns the cursors, so it publishes one number per shard -- the\nhighest offset a majority holds -- and a publish waits for that number to pass\nits own last offset. A `watch` channel: every waiter wants the same number,\nlatest-wins suits a monotonic high-water mark, and a publish arriving after\nthe mark has passed returns at once instead of waiting for an unrelated change.\n\nThe mark resets on a generation change. What a majority held under the\nprevious leadership says nothing about this one, and that is what stops an\nolder generation's acknowledgements satisfying a newer generation's quorum.\n\nLosing the shard drops the sender, which ends every wait on it immediately\nrather than running the clock out on an answer that can no longer come.\n\n## What a timeout means\n\nNot \"the write failed\". The records are durable on this broker and may yet\nreach a majority. It is \"this broker cannot say that it succeeded at the level\nthe stream asked for\", which is the honest answer and the one a client can act\non. `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` sets the budget.\n\nEach rule was confirmed against a reverted check: half a set counting as a\nmajority, and a halted follower counting toward one, each fail exactly the\ntests that name them.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T17:59:11-07:00",
+          "tree_id": "59ed486f737d14831d34a540b743803d99accc4f",
+          "url": "https://github.com/gabloe/felix/commit/c609242b177e355d607a8d86e35487ce3b7d2c2d"
+        },
+        "date": 1789088483887,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 157,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 157.00\nmean: 157.20\nstdev: 1.30\ncv: 0.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 199,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 197.80\nstdev: 2.77\ncv: 1.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 232,
+            "range": "110.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 232.00\nmean: 287.80\nstdev: 110.96\ncv: 38.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 195,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 195.00\nmean: 194.40\nstdev: 0.89\ncv: 0.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 395,
+            "range": "8.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 395.00\nmean: 393.20\nstdev: 8.41\ncv: 2.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 589,
+            "range": "98.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 589.00\nmean: 607.00\nstdev: 98.46\ncv: 16.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
