@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789163248893,
+  "lastUpdate": 1789164553120,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4992,6 +4992,58 @@ window.BENCHMARK_DATA = {
             "range": "13863.71",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 545570.32\nmean: 542562.33\nstdev: 13863.71\ncv: 2.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d72f8d47386406eaca3b4401c61a136170ea904",
+          "message": "feat(client): let a client ask a broker who else is there (#117) (#272)\n\nAn application configured with one broker address is configured with a\nsingle point of failure, however many brokers the cluster has. #271 let a\nclient hold several addresses; this is where it gets them from.\n\n**Discovery goes through a broker, not the control plane.** `/v1/nodes`\nrequires `node.view:cluster:*`, and no tenant scope contains a cluster\nobject, so an application's token can never read it -- the control plane's\nown documentation says as much. The broker a client is already\nauthenticated to has the answer and the tenant boundary is already\nestablished on that connection, which is also the \"seed-broker metadata\"\nroute the issue names.\n\n**A client-facing address had to exist first.** `NodeSpec.advertise_addr` is\nthe broker-internal listener; nothing in the cluster recorded where a client\nconnects. `NodeSpec.client_addr` is new, optional, and absent by default: a\nbroker that does not advertise one is left out of what clients are told\nrather than reported at an address that would refuse them.\n\n**Features are negotiated separately from frame flags.** A flag bit says how\na payload is laid out; a feature bit says a request exists. They are\nnumbered in separate spaces, because offering a feature as a frame flag\nwould have a client claim it can receive a shape it has no decoder for.\n`AuthOk.server_features` is optional, and absent means \"implements none\" --\nload-bearing, because an unrecognised message type is fatal to the broker's\ncontrol loop, so a client must never probe for support.\n\n**Discovery adds, it never replaces.** The configured seeds always stay in\nthe endpoint list, so a wrong or stale answer cannot leave a client with\nfewer ways in than it was given. That is what makes it safe to take the\nanswer at all. Within that, a refresh rebuilds rather than appends, so a\nbroker that has left the cluster stops being tried.\n\n`task cluster:failover` now starts its client with exactly one address and\nshows it learning the other two, which is closer to how applications are\nactually configured than handing it a correct list of every broker.\n\nTests: wire round-trips including an `auth_ok` from a broker that predates\nfeatures; the catalog rules (client address not the internal one, ineligible\nand unadvertised brokers omitted, stable order); `client_addr` validation;\nand three integration tests, the last of which is #117's acceptance\ncriterion -- a client given one seed survives that seed being killed.\nVerified load-bearing by disabling discovery: two of the three fail.\n\nStill open, and the status table says so: a broker does not redirect a\nclient to the shard's owner (#118), and a publish carries no routing key\n(#240).\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T15:06:43-07:00",
+          "tree_id": "2d461e3a31a749cb852d11c9c9978cdfca5b1fdf",
+          "url": "https://github.com/gabloe/felix/commit/1d72f8d47386406eaca3b4401c61a136170ea904"
+        },
+        "date": 1789164552275,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231206.58,
+            "range": "5696.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231206.58\nmean: 232847.92\nstdev: 5696.30\ncv: 2.45%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231206.58,
+            "range": "5696.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231206.58\nmean: 232847.92\nstdev: 5696.30\ncv: 2.45%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55816.17,
+            "range": "643.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55816.17\nmean: 55594.56\nstdev: 643.28\ncv: 1.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558161.7,
+            "range": "6432.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558161.70\nmean: 555945.61\nstdev: 6432.76\ncv: 1.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
