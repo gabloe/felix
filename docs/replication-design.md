@@ -223,25 +223,45 @@ large it currently is.
 `Quorum` has no such window: a majority including the leader holds every
 acknowledged record, so any failure within the configured majority preserves it.
 
-### What a lost leader costs today
+### Who may be promoted
 
-Promotion is gated on a replica that holds the log, and **no replica's position
-reaches the control plane yet**, so promotion cannot fire. A replicated shard
-whose leader is lost is left *unplaced* until that leader returns.
+A leader reports, on every replication pass, which of its followers hold every
+record it does. The leader is the only party that can say: it knows both its own
+tail and how far each follower has acknowledged, where a follower knows only
+where it is.
 
-That is deliberate. The alternative is what the code used to do: fall back to
-ordinary scoring and hand the shard to whichever node scores highest, which may
-never have seen it. That broker then serves an empty log at a newer generation
-while the records sit on replicas that were not chosen — a failover that *is*
-the data loss, and one nothing downstream reports as one.
+The bound is **zero** — a follower is caught up when it is missing nothing. A
+bound above zero is a bound on how much a promotion may silently lose, and there
+is no honest value for it that is not a policy decision; zero needs no such
+decision, and a follower reaches it constantly on a healthy shard.
 
-Unavailable is the better answer: it is visible, and it resolves on its own when
-the old leader returns. It resolves properly when replica positions are reported
-and a caught-up follower can be promoted, which is the work that remains.
+Reports expire, after the node expiry timeout plus one heartbeat. A report says
+a follower *was* caught up; the leader kept writing afterwards, and promoting on
+a stale report loses whatever was written since. The window is derived from the
+liveness settings rather than configured separately, because it has to outlive
+exactly one thing: the time it takes to notice the leader is gone.
+
+A halted follower is never reported, however close its last position was. It has
+stopped rather than fallen behind.
+
+**If no replica qualifies, the shard is left unplaced.** The alternative is what
+the code used to do: fall back to ordinary scoring and hand the shard to
+whichever node scores highest, which may never have seen it. That broker then
+serves an empty log at a newer generation while the records sit on replicas that
+were not chosen — a failover that *is* the data loss, and one nothing downstream
+reports as one. Unavailable is visible and recoverable; silently empty is
+neither.
 
 A stream that never asked for replication is unaffected. It has no replicas, so
 there was never a copy to prefer, and a fresh placement stays the only thing
 available.
+
+Positions are held in the control plane's memory. They change constantly, are
+advisory, and expire in about a second, so persisting them would cost a write
+per report for data that is worthless by the time it could be read back. The
+consequence is that a second control-plane instance starts knowing nothing and
+cannot promote until leaders have reported to it — which matters for M7's
+multi-instance work and not before.
 
 ## Failure model
 

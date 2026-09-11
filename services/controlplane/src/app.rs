@@ -28,6 +28,14 @@ pub struct AppState {
     pub bootstrap_enabled: bool,
     pub bootstrap_token: Option<String>,
     pub node_liveness: NodeLivenessConfig,
+    /// Which replicas their leaders last reported as holding each shard's log.
+    ///
+    /// In memory: these change constantly, are advisory, and expire in about a
+    /// second. Persisting them would cost a write per report for data that is
+    /// worthless by the time it could be read back. The consequence is that a
+    /// second control-plane instance starts knowing nothing and cannot promote
+    /// until leaders have reported to *it* — see `docs/replication-design.md`.
+    pub replica_positions: Arc<crate::replica_positions::ReplicaPositions>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -124,6 +132,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/nodes/{node_id}/heartbeat",
             axum::routing::post(api::nodes::report_health),
+        )
+        .route(
+            "/v1/nodes/{node_id}/replica-status",
+            axum::routing::post(api::nodes::report_replica_status),
         )
         .route(
             "/v1/nodes/{node_id}/drain",

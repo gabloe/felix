@@ -308,6 +308,9 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
         bootstrap_enabled: true,
         bootstrap_token: Some(BOOTSTRAP_TOKEN.to_string()),
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
 
     let app = build_router(state.clone()).merge(build_bootstrap_router(state));

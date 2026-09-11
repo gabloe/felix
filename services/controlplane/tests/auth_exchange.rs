@@ -222,6 +222,9 @@ async fn exchange_returns_tenant_scoped_token() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -331,6 +334,9 @@ async fn exchange_forbidden_without_policies() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -450,6 +456,9 @@ async fn exchange_supports_group_claim_based_rbac() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -586,6 +595,9 @@ async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -702,6 +714,9 @@ async fn exchange_supports_group_claim_values_with_group_prefix() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();

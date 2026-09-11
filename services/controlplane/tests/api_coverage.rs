@@ -33,6 +33,9 @@ fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        replica_positions: std::sync::Arc::new(
+            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
+        ),
     };
     build_router(state).into_service()
 }
