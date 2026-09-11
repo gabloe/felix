@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789099565068,
+  "lastUpdate": 1789133637642,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6072,6 +6072,72 @@ window.BENCHMARK_DATA = {
             "range": "536.92",
             "unit": "us",
             "extra": "trials: 5\nmedian: 563.00\nmean: 783.80\nstdev: 536.92\ncv: 68.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a5fd65a2326f12f6382863b5383469cd785c9e51",
+          "message": "fix(broker): unblock writes on a promoted broker, and tell the docs the truth (#267)\n\nThree things, all from writing M5.6's failover scenarios (#115).\n\n## The CI failure on main is mine\n\n`a_paused_broker_stops_answering_without_dying` (#263) used\n`timeout(..).await.is_ok()`, which is true whenever the call *returns* —\nincluding returning an error. A suspended process refuses fast on Linux, so\n\"errored quickly\" read as \"answering\" and the test failed there while passing\non macOS. It now requires a successful scrape. The fault it was written to\nprove was going untested.\n\n## A promoted broker could not accept writes\n\n`StreamState::hydrate` sets `next_seq` *and rebases the commit order*, and it\nruns only at stream registration. A follower registers when its log is empty,\nso `next_seq` stays at zero while replication fills its disk directly — the\nreplication path writes the shard's log and never touches the stream state.\n\nThe commit order is keyed on disk offsets. With `next_seq` at zero and records\non disk, the first publish a promoted broker accepts reserves an offset past\nthem and then waits for turns that were never taken. It never returns. The\ncluster showed this as a publish that \"succeeded\" — the client was not waiting\nfor an ack, and the write never committed.\n\nReplication now tells the stream its tail moved, which rebases the commit order\nfor the same reason recovery does after a restart.\n\nConfirmed by reverting: `a_publish_after_promotion_follows_the_replicated_history`\nhangs without it.\n\nI first \"fixed\" the read path separately, by falling back to the durable tail\nwhen the in-memory backlog was empty. Reverting that changed nothing once the\ntail was being advanced — it was redundant — so it is not in this change.\n\n## Failover still does not work end to end\n\nPromotion is correct: a replica that holds the log is chosen, in about a\nsecond, and never a broker that does not. But a promoted broker still serves\nnothing for the shard (#266), so a subscriber gets an empty stream. The\nscenario asserting the milestone's own acceptance criterion is `#[ignore]`d\npointing at that issue rather than deleted or quietly passing.\n\n## Docs\n\n`what-felix-is-for.md` said there is \"no replication and no failover\". That has\nbeen false for several merges. Replication, quorum acknowledgement, and leader\nfailover moved out of \"none of the following exists today\" into the implemented\ntable as `🚧 Partial`, and the failover row says plainly that it is not usable\nyet and why. `overview.md` no longer lists quorum acks as planned. The design\nnote no longer says promotion cannot fire.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T06:31:57-07:00",
+          "tree_id": "2342c19323b1ba39cda8e0a9561949affa29e152",
+          "url": "https://github.com/gabloe/felix/commit/a5fd65a2326f12f6382863b5383469cd785c9e51"
+        },
+        "date": 1789133636748,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 98,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 98.00\nmean: 97.80\nstdev: 0.84\ncv: 0.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 136,
+            "range": "12.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 136.00\nmean: 140.20\nstdev: 12.07\ncv: 8.61%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 273,
+            "range": "1234.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 273.00\nmean: 883.40\nstdev: 1234.75\ncv: 139.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 130,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 130.20\nstdev: 0.45\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 258,
+            "range": "9.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 261.20\nstdev: 9.04\ncv: 3.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 340,
+            "range": "96.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 340.00\nmean: 382.80\nstdev: 96.52\ncv: 25.21%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
