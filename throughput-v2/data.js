@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789086606409,
+  "lastUpdate": 1789088488930,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4420,6 +4420,58 @@ window.BENCHMARK_DATA = {
             "range": "15051.95",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 758697.29\nmean: 759027.30\nstdev: 15051.95\ncv: 1.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c609242b177e355d607a8d86e35487ce3b7d2c2d",
+          "message": "feat(replication): honour Leader and Quorum on the ack path (M5.4) (#259)\n\n`Stream.consistency` existed in the control plane and reached nobody: the\nbroker never read it, so a stream asking for `Quorum` was served exactly like\none asking for `Leader`. This wires it end to end.\n\n## Reaching the broker\n\nThe control plane already serialised the level; the broker now parses it, and\n**an unrecognised level is refused rather than defaulted**. Falling back to\n`Leader` would take a stream the operator asked to be quorum-replicated and\nserve it at the weaker guarantee, silently -- the acknowledgement keeps its\nmeaning on paper and loses it in fact. The wire names are pinned by a test on\neach side, because the two enums compile separately and nothing else would\ncatch them drifting.\n\nAn absent level reads as `Leader`, so a control plane predating replication,\nand every stream written before this existed, behave exactly as they did.\n\n## The majority\n\nOver the replica set of the generation the record was written at, always\ncounting the leader. `replication_factor: 1` is therefore a quorum of one, and\n`Quorum` on an unreplicated stream behaves like `Leader` rather than never\nacknowledging.\n\nA halted follower counts for nothing. It has stopped rather than fallen\nbehind, and letting its last position count is how an acknowledgement comes to\nmean less than it says.\n\n## The wait\n\nThe driver owns the cursors, so it publishes one number per shard -- the\nhighest offset a majority holds -- and a publish waits for that number to pass\nits own last offset. A `watch` channel: every waiter wants the same number,\nlatest-wins suits a monotonic high-water mark, and a publish arriving after\nthe mark has passed returns at once instead of waiting for an unrelated change.\n\nThe mark resets on a generation change. What a majority held under the\nprevious leadership says nothing about this one, and that is what stops an\nolder generation's acknowledgements satisfying a newer generation's quorum.\n\nLosing the shard drops the sender, which ends every wait on it immediately\nrather than running the clock out on an answer that can no longer come.\n\n## What a timeout means\n\nNot \"the write failed\". The records are durable on this broker and may yet\nreach a majority. It is \"this broker cannot say that it succeeded at the level\nthe stream asked for\", which is the honest answer and the one a client can act\non. `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` sets the budget.\n\nEach rule was confirmed against a reverted check: half a set counting as a\nmajority, and a halted follower counting toward one, each fail exactly the\ntests that name them.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T17:59:11-07:00",
+          "tree_id": "59ed486f737d14831d34a540b743803d99accc4f",
+          "url": "https://github.com/gabloe/felix/commit/c609242b177e355d607a8d86e35487ce3b7d2c2d"
+        },
+        "date": 1789088488045,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230259.53,
+            "range": "3415.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230259.53\nmean: 231655.69\nstdev: 3415.36\ncv: 1.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230259.53,
+            "range": "3415.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230259.53\nmean: 231655.69\nstdev: 3415.36\ncv: 1.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56229.64,
+            "range": "231.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56229.64\nmean: 56105.71\nstdev: 231.71\ncv: 0.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 562296.42,
+            "range": "2317.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 562296.42\nmean: 561057.14\nstdev: 2317.09\ncv: 0.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
