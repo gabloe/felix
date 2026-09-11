@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789090165780,
+  "lastUpdate": 1789093877731,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4576,6 +4576,58 @@ window.BENCHMARK_DATA = {
             "range": "7756.92",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 654879.14\nmean: 658207.24\nstdev: 7756.92\ncv: 1.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "179c78b60289c2957169c23715e732aaedab5ba9",
+          "message": "feat(replication): bootstrap a follower whose history is gone (M5.5) (#262)\n\n* feat(storage): let a shard's log begin at a non-zero offset (M5.5)\n\nThe blocker under #114. A replica being given a shard whose early history is\nalready gone everywhere needs its log to *begin* at the oldest surviving\noffset. Until now a log could only start at zero, so there was nowhere to put\ntransferred history: the storage layer had no way to express \"this log is\ncomplete and starts at 5000\".\n\n`DiskLog::open_at` places a shard's first segment at a given base offset when\nthe directory is empty. An existing log is opened as it stands and the base is\nignored -- a restart must not reinterpret a shard that is already here, and the\nbase it was created at is recorded in its own first segment.\n\nThat last point is what makes this safe rather than a second source of truth.\nThe offset travels in the segment header, which recovery already reads, so\nnothing has to remember it out of band and a base that survived one restart\nsurvives every later one. The first segment is flushed before anything can\nappend to it: a base that did not survive a crash would leave the log reading\nback as one starting at zero, which is a hole rather than a shorter log.\n\nA file name is a segment id, not an offset. The two coincide for the common log\nand are independent in general; `docs/storage-format.md` now says so, because\nthe assumption that they are the same is exactly what this breaks.\n\nTested: the placed base is where the first record lands, it survives a restart,\nan existing log keeps its own base when a different one is passed, a read below\nthe base is `Trimmed` just as on a leader whose retention removed the same\nrecords, rollover keeps the offsets contiguous from a non-zero base, and a base\nof zero is an ordinary log.\n\nNot the whole of #114: nothing transfers history yet. That needs a leader to\nserve its surviving range to a bootstrapping follower, and a way for the\nfollower to know the range it is being given starts where the leader's own log\nstarts -- which the current `ReplicateRecords` body cannot say, and the internal\nprotocol freezes existing body layouts.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* feat(replication): bootstrap a follower whose history is gone (M5.5)\n\nCloses the loop #260 opened. A follower positioned below everything the leader\nstill holds — a new replica of a stream with retention, or one that fell far\nenough behind — could not be caught up by shipping, and was halted for an\noperator. It is now offered a log that *begins* where the leader's surviving\nlog begins, and resumes on its own.\n\n## The one fact a follower cannot work out\n\nWhere the surviving log starts. It cannot tell \"you are being given the whole\nof what still exists\" from \"you are being sent a batch from the middle\", and\nplacing a base on the second would create exactly the undetectable hole this\nrefuses to create. So the leader states it, in `ReplicateBootstrap`.\n\nA new kind rather than a field on `ReplicateRecords`: `docs/internal-protocol.md`\nfreezes existing body layouts, and a peer that predates this rejects an unknown\nkind rather than misreading a body.\n\n## Who may accept\n\n| The follower | Answer |\n| --- | --- |\n| holds no log for the shard | places it at `base_offset`, `ReplicateOk` |\n| already holds a log starting there | `ReplicateOk`; the offer is idempotent |\n| holds records starting elsewhere | `LogConflict`, and the leader halts it |\n\nThe last row is the point. A log placed over existing records would have a hole\nbetween what the follower held and what it was given, and a log with a hole is\none nothing downstream can detect: from the follower's own view its offsets are\nstill contiguous. Discarding those records is an operator's decision.\n\n## The same fence, both paths\n\nPlacing a log and filling it are the same authority question, so the role check\nis shared rather than written twice. A fence applied to one and not the other is\na fence with a way round it — a superseded leader that could not ship records\nbut could re-base a shard would be exactly that.\n\nConfirmed against reverted checks: skipping the base comparison lets a held log\nbe re-based, and skipping the role check lets a superseded leader place one.\nEach fails the tests that name it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T19:28:49-07:00",
+          "tree_id": "5e2a89e10510d9e7c2f9101387b6e66e9bae0ab1",
+          "url": "https://github.com/gabloe/felix/commit/179c78b60289c2957169c23715e732aaedab5ba9"
+        },
+        "date": 1789093876460,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231647.55,
+            "range": "3072.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231647.55\nmean: 229753.23\nstdev: 3072.69\ncv: 1.34%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231647.55,
+            "range": "3072.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231647.55\nmean: 229753.23\nstdev: 3072.69\ncv: 1.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54446.87,
+            "range": "768.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54446.87\nmean: 54259.80\nstdev: 768.02\ncv: 1.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 544468.75,
+            "range": "7680.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 544468.75\nmean: 542597.99\nstdev: 7680.19\ncv: 1.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
