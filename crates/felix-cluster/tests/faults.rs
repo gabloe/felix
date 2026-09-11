@@ -66,6 +66,27 @@ async fn a_paused_broker_stops_answering_without_dying() {
     cluster.shutdown().await;
 }
 
+/// **`pause_node` returns only once the broker has actually stopped.** `kill`
+/// returns when the signal is queued, and the process stops at some point after
+/// that. Every test below probes the broker immediately afterwards, so a pause
+/// that returned early would have them all racing the kernel -- and on a loaded
+/// machine losing, which reads as "the fault did not happen".
+#[serial]
+#[tokio::test]
+async fn pausing_returns_only_once_the_broker_has_stopped() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+    let node_id = cluster.nodes[0].node_id.clone();
+
+    cluster.pause_node(&node_id).expect("pause");
+    assert!(
+        cluster.is_paused(&node_id),
+        "pause returned before the broker had stopped",
+    );
+
+    cluster.resume_node(&node_id).expect("resume");
+    cluster.shutdown().await;
+}
+
 /// And it answers again once resumed, which is what makes the fault a pause
 /// rather than a slower kill.
 #[serial]

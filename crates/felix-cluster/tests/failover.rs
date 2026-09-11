@@ -278,6 +278,13 @@ async fn an_unreplicated_shard_does_not_fail_over_to_an_empty_broker() {
     .expect("start cluster");
     let leader = cluster.owner(STREAM).await.expect("owner");
     let shipped_before = shipped_so_far(&cluster, &leader).await;
+    // The record this test is about. Without it nothing is ever shipped, so the
+    // wait below -- which is for the shipped counter to rise -- could only ever
+    // be satisfied by whatever the harness still had in flight from startup.
+    cluster
+        .publish_via(&leader, STREAM, b"leader-acknowledged".to_vec())
+        .await
+        .expect("publish");
     let replicas: Vec<String> = cluster
         .nodes
         .iter()

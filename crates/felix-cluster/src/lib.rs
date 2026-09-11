@@ -892,7 +892,53 @@ impl Cluster {
     /// worse than one that does not run.
     #[cfg(unix)]
     pub fn pause_node(&self, node_id: &str) -> Result<()> {
-        self.signal(node_id, libc::SIGSTOP, "pause")
+        self.signal(node_id, libc::SIGSTOP, "pause")?;
+        // `kill` returns when the signal is queued, not when the process has
+        // stopped. A test that probes straight afterwards can still be answered
+        // by a broker that has not been descheduled yet -- which reads as "the
+        // fault did not happen" and is this harness's fault, not the broker's.
+        // Waiting for the kernel to say it is stopped is what makes `pause`
+        // mean paused by the time it returns.
+        self.await_stopped(node_id)
+    }
+
+    /// Whether the kernel currently reports this broker as stopped.
+    ///
+    /// Exposed so a test can check the fault is in effect rather than infer it
+    /// from the broker failing to answer, which is the thing under test.
+    #[cfg(unix)]
+    pub fn is_paused(&self, node_id: &str) -> bool {
+        self.node(node_id)
+            .and_then(|node| node.process.as_ref())
+            .is_some_and(|process| process_is_stopped(process.id()))
+    }
+
+    /// Wait until the kernel reports the broker as stopped.
+    ///
+    /// Polled rather than waited on: `waitpid` with `WUNTRACED` would reap the
+    /// stop notification that `Child` relies on, and this harness needs the
+    /// process handle to stay usable for the resume.
+    #[cfg(unix)]
+    fn await_stopped(&self, node_id: &str) -> Result<()> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let pid = node
+            .process
+            .as_ref()
+            .ok_or_else(|| anyhow!("cannot pause {node_id}: it is not running"))?
+            .id();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if process_is_stopped(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(anyhow!(
+            "{node_id} did not stop within 5s of being sent SIGSTOP"
+        ))
     }
 
     /// Let a suspended broker run again.
@@ -961,6 +1007,25 @@ impl Cluster {
             }
         }
     }
+}
+
+/// Whether the kernel reports `pid` as stopped.
+///
+/// Read through `ps` rather than `/proc`, which does not exist on macOS, and
+/// the harness runs on developer machines as well as on Linux CI. The state
+/// letter is `T` for a job-control stop on both; anything after it (`T+`, and
+/// the extra flag letters macOS appends) is not part of the state.
+#[cfg(unix)]
+fn process_is_stopped(pid: u32) -> bool {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .starts_with('T')
 }
 
 impl Drop for Cluster {
