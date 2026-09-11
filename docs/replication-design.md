@@ -294,12 +294,24 @@ Leaders now report which followers hold everything they do, so the gate has real
 input and promotion fires: a lost leader is replaced by a replica that holds the
 log, in around a second on a local three-node cluster.
 
-**Failover is not usable yet.** A promoted broker does not currently serve the
-shard it was promoted to (#266). Promotion itself is correct — the replacement
-is always a replica that holds the log, and a shard with no such replica is left
-unavailable rather than served empty — but a subscriber on the promoted broker
-receives nothing. Treat a replicated stream as single-node for availability
-until that is fixed.
+Failover works: a lost leader is replaced by a replica that holds the log, and a
+quorum-acknowledged record is readable from the replacement.
+
+Getting there needed five separate fixes, and the common thread is worth
+recording. A `Quorum` acknowledgement is a promise about *which brokers hold a
+record*, and every one of these was a way for the cluster's own account of that
+to drift from the truth:
+
+- the commit order was not rebased when records arrived by replication, so the
+  first write a promoted broker accepted never completed
+- a stream raised to `Quorum` kept acknowledging on the leader alone until the
+  broker restarted, because the live stream state was never updated
+- the leader's tail was read before shipping and used after, so a follower level
+  with the *old* tail was reported caught up for a record it did not have
+- the acknowledgement was released before the control plane was told who held
+  the record, so a leader could die having promised a client something the
+  cluster could not act on
+- promotion chose by placement score rather than by how much a replica held
 
 Both halves of this are implemented (#112). The follower's side is the exchange,
 the append rule, and the fence at the storing end. The leader's side keeps one

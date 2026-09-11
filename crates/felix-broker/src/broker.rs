@@ -115,6 +115,24 @@ pub enum ConsistencyLevel {
     Quorum,
 }
 
+impl ConsistencyLevel {
+    pub(crate) fn as_u8(self) -> u8 {
+        match self {
+            Self::Leader => 0,
+            Self::Quorum => 1,
+        }
+    }
+
+    /// Anything unrecognised reads as `Leader`, which is unreachable: the only
+    /// writer is [`Self::as_u8`].
+    pub(crate) fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Quorum,
+            _ => Self::Leader,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StreamMetadata {
     /// When true, every publish is written to disk before it is fanned out or
@@ -144,7 +162,7 @@ pub struct StreamHandle {
 impl StreamHandle {
     /// What an acknowledgement of a publish through this handle means.
     pub fn consistency(&self) -> ConsistencyLevel {
-        self.state.consistency
+        self.state.consistency()
     }
 }
 

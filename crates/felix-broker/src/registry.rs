@@ -70,13 +70,18 @@ impl Broker {
         // the race in between. The retry then takes the fast path.
         loop {
             // Already live: nothing to build, just refresh the metadata.
-            if self.topics.read().await.contains_key(&key) {
+            if let Some(state) = self.topics.read().await.get(&key).cloned() {
                 let mut streams = self.streams.write().await;
                 if let Some(existing) = streams.get(&key)
                     && existing.durable != metadata.durable
                 {
                     return Err(Self::durability_change_error(&key, existing, &metadata));
                 }
+                // The live state carries the consistency the publish path reads,
+                // so refreshing the map alone left a raised stream acknowledging
+                // on the leader while the catalog said a majority was required —
+                // until the broker restarted.
+                state.set_consistency(metadata.consistency);
                 streams.insert(key, metadata);
                 return Ok(());
             }

@@ -162,3 +162,74 @@ async fn latest_starts_at_the_replicated_tail() {
     assert!(resumed.history.is_none());
     assert!(resumed.backlog.is_empty());
 }
+
+/// **Raising a stream to `Quorum` takes effect on the next publish.**
+///
+/// Registering a stream that already exists takes a fast path that only
+/// refreshes the metadata map. The live state kept whatever it was built with,
+/// so a stream raised to `Quorum` carried on acknowledging on the leader alone
+/// while the catalog said a majority was required — until the broker restarted.
+/// A `Quorum` that silently behaves as `Leader` is how a failover loses a
+/// record the client was told was safe.
+#[tokio::test]
+async fn a_consistency_change_reaches_a_live_stream() {
+    let (broker, _dir) = promoted_broker(&[]).await;
+    let handle = broker
+        .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+        .await
+        .expect("resolve");
+    assert_eq!(handle.consistency(), felix_broker::ConsistencyLevel::Leader);
+
+    broker
+        .register_stream(
+            TENANT,
+            NAMESPACE,
+            STREAM,
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+                consistency: felix_broker::ConsistencyLevel::Quorum,
+            },
+        )
+        .await
+        .expect("raise to quorum");
+
+    let handle = broker
+        .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+        .await
+        .expect("resolve");
+    assert_eq!(
+        handle.consistency(),
+        felix_broker::ConsistencyLevel::Quorum,
+        "the live stream kept acknowledging on the leader alone",
+    );
+}
+
+/// And lowering it takes effect too, so the setting is not one-way.
+#[tokio::test]
+async fn lowering_the_consistency_also_reaches_a_live_stream() {
+    let (broker, _dir) = promoted_broker(&[]).await;
+    for level in [
+        felix_broker::ConsistencyLevel::Quorum,
+        felix_broker::ConsistencyLevel::Leader,
+    ] {
+        broker
+            .register_stream(
+                TENANT,
+                NAMESPACE,
+                STREAM,
+                StreamMetadata {
+                    durable: true,
+                    shards: 1,
+                    consistency: level,
+                },
+            )
+            .await
+            .expect("register");
+        let handle = broker
+            .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+            .await
+            .expect("resolve");
+        assert_eq!(handle.consistency(), level);
+    }
+}

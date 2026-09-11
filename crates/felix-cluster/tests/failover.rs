@@ -142,7 +142,6 @@ async fn failover_from(cluster: &Cluster, gone: &str, budget: Duration) -> Optio
 /// the thing to re-run against any fix — and kept ignored rather than left
 /// failing, because a test that fails one run in four teaches people to ignore
 /// red.
-#[ignore = "intermittent: a promoted broker sometimes serves nothing (#266)"]
 #[serial]
 #[tokio::test]
 async fn a_quorum_acknowledged_record_survives_its_leader() {
