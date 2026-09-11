@@ -22,7 +22,7 @@ mod tls;
 
 pub use config::PeerTransportConfig;
 pub use dispatch::BrokerPeerHandler;
-pub use forward::{ForwardError, ForwardKey, ForwardTarget, forward_publish};
+pub use forward::{ForwardError, ForwardKey, ForwardTarget, PeerRequester, forward_publish};
 pub use handler::ForwardingHandler;
 pub use pool::{PeerError, PeerPool};
 pub use replica::ReplicaHandler;
