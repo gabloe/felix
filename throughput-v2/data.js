@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789088488930,
+  "lastUpdate": 1789089740308,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4472,6 +4472,58 @@ window.BENCHMARK_DATA = {
             "range": "2317.09",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 562296.42\nmean: 561057.14\nstdev: 2317.09\ncv: 0.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6be48c39a99fe7a7e04b5be982978e079216e106",
+          "message": "fix(replication): stop retrying a follower that needs trimmed history (#260)\n\nA follower asking for records retention has removed from the leader cannot be\ncaught up by shipping: the records are not here to send. The read failed, the\nexchange reported it as a transient refusal, and the leader tried the same\nimpossible read again on every pass — forever, silently, with the follower\nnever advancing and nothing saying why.\n\nReproduced before fixing: a leader trimmed to base offset 36 and a follower at\n0 ships nothing and reports `Retry`, on every pass.\n\nThe follower is now halted with its own reason. That stops a retry which could\nnever succeed, keeps the follower out of every quorum — it is not merely\nbehind, it can never arrive without a transfer — and says plainly in a log line\nand in `felix_broker_replication_halted` what has happened.\n\nHalting rather than starting the follower at the surviving base offset is the\npoint. Beginning there would leave the follower's log with a hole between what\nit holds and what it received, and a log with a hole is one nothing downstream\ncan detect: the offsets would still be contiguous from the follower's own point\nof view.\n\nThis is the condition #114 exists to repair, and repairing it is not\nimplemented — the storage layer cannot yet create a log at a non-zero base\noffset, which is what installing transferred history needs. Until then a\nfollower that falls this far behind needs its data directory rebuilt by hand,\nand `docs/replication-design.md` now says so rather than implying catch-up\nalways works.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T18:20:08-07:00",
+          "tree_id": "272284cc06fb3e6e0b46c1addc5d15930441f00e",
+          "url": "https://github.com/gabloe/felix/commit/6be48c39a99fe7a7e04b5be982978e079216e106"
+        },
+        "date": 1789089739059,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 320971.14,
+            "range": "13189.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320971.14\nmean: 319803.39\nstdev: 13189.24\ncv: 4.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 320971.14,
+            "range": "13189.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320971.14\nmean: 319803.39\nstdev: 13189.24\ncv: 4.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 72967.35,
+            "range": "703.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 72967.35\nmean: 72886.89\nstdev: 703.52\ncv: 0.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 729673.51,
+            "range": "7035.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 729673.51\nmean: 728868.90\nstdev: 7035.21\ncv: 0.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
