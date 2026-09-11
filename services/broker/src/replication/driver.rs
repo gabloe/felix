@@ -96,14 +96,29 @@ pub async fn replicate_once<R: PeerRequester>(
             shard: key.shard,
             generation: route.generation,
         };
-        for cursor in &mut entry.followers {
+        // Followers are shipped to concurrently.
+        //
+        // Sequentially, one follower that is gone holds up every follower
+        // behind it *and* the mark published below, so the cost of unreachable
+        // replicas adds up instead of overlapping. A minority failure is the
+        // case `Quorum` exists to tolerate, so it must not be the case that
+        // stalls it.
+        //
+        // Nothing here is given a deadline. A pass that cancelled a follower
+        // mid-exchange would be cancelling the slow ones as readily as the dead
+        // ones, and a dial cut short caches no connection -- so the next pass
+        // dials again and is cut again. What a peer that is gone costs is
+        // bounded by the pool's handshake timeout and then by its reconnect
+        // backoff.
+        let shipping = entry.followers.iter_mut().map(|cursor| async {
             // Keep going while there is more to send, so a follower catching up
             // is not limited to one batch per tick. It ends on the first answer
             // that is not progress, which bounds the work per pass.
             while let Progress::Stored { .. } =
                 ship_once(requester, &log, &shard, cursor, MAX_BATCH_BYTES).await
             {}
-        }
+        });
+        futures::future::join_all(shipping).await;
 
         // Re-read after shipping, not before.
         //

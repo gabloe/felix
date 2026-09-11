@@ -34,6 +34,16 @@ pub struct ForwardingHandler {
     /// This broker's own internal address, so a `NotLeader` that names *this*
     /// node at a newer generation is one the requester can act on.
     advertise_addr: String,
+    /// How far a majority of each shard's replica set has got.
+    ///
+    /// A forwarded publish is still a publish to this stream, so it owes the
+    /// client the guarantee the stream asks for. Acknowledging on local
+    /// durability alone made `Quorum` depend on which broker the client
+    /// happened to reach — honoured when it talked to the leader, silently
+    /// downgraded to `Leader` through any other broker, which is where a
+    /// failover then lost the record.
+    marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+    quorum_timeout: std::time::Duration,
 }
 
 impl ForwardingHandler {
@@ -42,12 +52,16 @@ impl ForwardingHandler {
         ingress: Arc<IngressRouter>,
         router: Arc<ShardRouter>,
         advertise_addr: String,
+        marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+        quorum_timeout: std::time::Duration,
     ) -> Self {
         Self {
             broker,
             ingress,
             router,
             advertise_addr,
+            marks,
+            quorum_timeout,
         }
     }
 
@@ -149,6 +163,23 @@ impl ForwardingHandler {
             .await
         {
             Ok(outcome) => {
+                // The same wait the direct publish path makes. A forwarded
+                // publish is still a publish to this stream, and the client on
+                // the other end of the forward asked for the stream's guarantee,
+                // not for whichever one this path happened to provide.
+                if let Err(err) = crate::replication::quorum::await_quorum(
+                    &handle,
+                    Some(&key),
+                    &outcome,
+                    self.marks.as_deref(),
+                    Some(self.ingress.as_ref()),
+                    self.quorum_timeout,
+                )
+                .await
+                {
+                    metrics::record_served(metrics::OUTCOME_ERROR);
+                    return error(correlation_id, ErrorCode::StorageFailed, err.to_string());
+                }
                 metrics::record_served(metrics::OUTCOME_OK);
                 // An ephemeral stream has no log, so there are no offsets to
                 // report. Zero is not a lie here: the requester only relays an
@@ -195,3 +226,7 @@ fn error(correlation_id: u64, code: ErrorCode, detail: String) -> InternalMessag
         detail,
     })
 }
+
+#[cfg(test)]
+#[path = "handler_tests.rs"]
+mod tests;

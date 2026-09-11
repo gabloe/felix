@@ -637,3 +637,37 @@ fn reconnect_backoff_grows_and_is_jittered() {
         "an unjittered backoff has every broker redial in step",
     );
 }
+
+/// **A peer connection gives up before a request on it does.** A broker that
+/// was killed leaves its peers holding connections nothing will tear down; if
+/// QUIC outlasts the request timeout, every forwarded publish and every
+/// replication pass sent over one waits the request timeout out in full.
+#[test]
+fn a_peer_connection_fails_before_the_request_on_it_does() {
+    let config = PeerTransportConfig::default();
+    assert!(
+        config.peer_idle_timeout() < config.request_timeout,
+        "idle window {:?} does not close before a request gives up at {:?}",
+        config.peer_idle_timeout(),
+        config.request_timeout,
+    );
+    let transport = config.quic_transport();
+    assert_eq!(
+        transport.max_idle_timeout,
+        Some(config.peer_idle_timeout()),
+        "the transport does not use the derived idle window",
+    );
+}
+
+/// The keep-alive has to fit inside the idle window, or a healthy but quiet
+/// peer connection is closed on the idle timer for having nothing to say.
+#[test]
+fn a_quiet_peer_connection_is_kept_alive_inside_its_idle_window() {
+    let transport = PeerTransportConfig::default().quic_transport();
+    let keep_alive = transport.keep_alive_interval.expect("a keep-alive");
+    let idle = transport.max_idle_timeout.expect("an idle window");
+    assert!(
+        keep_alive * 3 <= idle,
+        "keep-alive {keep_alive:?} leaves no margin inside idle window {idle:?}",
+    );
+}

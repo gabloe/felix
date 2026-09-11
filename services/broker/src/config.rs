@@ -151,6 +151,34 @@ pub struct BrokerConfig {
     pub publish_quorum_timeout_ms: u64,
 }
 
+/// A margin over the quorum wait, covering the hop from the publish worker back
+/// to the waiter. Small: its only job is to let the inner wait finish first.
+const ACK_WAIT_OVER_QUORUM_MS: u64 = 500;
+
+impl BrokerConfig {
+    /// How long a publish waits for its acknowledgement before the client is
+    /// told it timed out.
+    ///
+    /// Never shorter than the quorum wait it may be sitting on. A publish to a
+    /// `Quorum` stream is entitled to `publish_quorum_timeout_ms` to reach a
+    /// majority, so a waiter that gives up sooner reports "publish commit
+    /// timeout" for a write the broker is still correctly waiting for -- and
+    /// replaces the quorum wait's own answer, which says specifically that this
+    /// broker cannot vouch for the write, with one that says nothing about why.
+    ///
+    /// Raising the ceiling does not slow anything down. It is the point at
+    /// which a publish that is already stuck is given up on, not a delay any
+    /// successful publish pays.
+    pub fn ack_wait_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.ack_wait_timeout_ms.max(
+                self.publish_quorum_timeout_ms
+                    .saturating_add(ACK_WAIT_OVER_QUORUM_MS),
+            ),
+        )
+    }
+}
+
 impl Default for BrokerConfig {
     fn default() -> Self {
         Self {
@@ -1115,6 +1143,31 @@ mod tests {
         );
         assert_eq!(config.sub_streams_per_conn, DEFAULT_SUB_STREAMS_PER_CONN);
         assert_eq!(config.sub_stream_mode, DEFAULT_SUB_STREAM_MODE);
+    }
+
+    /// **The ack waiter outlasts the quorum wait it may be sitting on.** Giving
+    /// up first reports a timeout for a publish the broker is still correctly
+    /// waiting for, and throws away the quorum wait's more specific answer.
+    #[test]
+    fn the_ack_wait_outlasts_the_quorum_wait() {
+        let config = BrokerConfig::default();
+        assert!(
+            config.ack_wait_timeout().as_millis() as u64 > config.publish_quorum_timeout_ms,
+            "ack wait {:?} does not outlast the quorum wait {}ms",
+            config.ack_wait_timeout(),
+            config.publish_quorum_timeout_ms,
+        );
+    }
+
+    /// A configured ack wait longer than the quorum wait is kept as configured.
+    #[test]
+    fn a_longer_configured_ack_wait_is_left_alone() {
+        let config = BrokerConfig {
+            ack_wait_timeout_ms: 30_000,
+            publish_quorum_timeout_ms: 5_000,
+            ..BrokerConfig::default()
+        };
+        assert_eq!(config.ack_wait_timeout().as_millis() as u64, 30_000);
     }
 
     #[serial]

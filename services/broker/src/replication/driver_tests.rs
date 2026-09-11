@@ -62,6 +62,28 @@ impl PeerRequester for AcceptingFollower {
     }
 }
 
+/// A follower that is gone: it answers nothing, and the dial gives up on its
+/// own after `handshake` rather than hanging forever, as the pool's handshake
+/// timeout makes it.
+struct UnreachableFollowers {
+    handshake: std::time::Duration,
+}
+
+impl PeerRequester for UnreachableFollowers {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        _message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        tokio::time::sleep(self.handshake).await;
+        Err(PeerError::Unavailable {
+            node_id: node_id.to_string(),
+            detail: "no answer within the handshake timeout".to_string(),
+        })
+    }
+}
+
 fn node(node_id: &str, port: u16) -> NodeRef {
     NodeRef {
         node_id: node_id.to_string(),
@@ -137,6 +159,33 @@ async fn leader_with(count: usize) -> (Arc<Broker>, TempDir) {
     }
     let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage);
     (Arc::new(broker), dir)
+}
+
+/// **Unreachable followers cost one handshake timeout, not one each.** A pass
+/// that visited them one after another paid for every dead replica in turn,
+/// with the quorum mark -- and so every `Quorum` publish waiting on this shard
+/// -- behind the sum.
+///
+/// The clock is the assertion: visited sequentially, two unreachable followers
+/// take twice as long as one, and the pass still finishes, just far too late to
+/// be worth anything to a publish.
+#[tokio::test(start_paused = true)]
+async fn unreachable_followers_are_waited_on_at_the_same_time() {
+    let handshake = std::time::Duration::from_secs(2);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let requester = UnreachableFollowers { handshake };
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let started = tokio::time::Instant::now();
+    replicate_once(&requester, &broker, &router, &marks, None, &mut cursors).await;
+
+    let took = started.elapsed();
+    assert!(
+        took < handshake * 2,
+        "the followers were waited on one after another: {took:?}",
+    );
 }
 
 /// The shard this broker leads is shipped to every follower in its set.

@@ -50,20 +50,29 @@ pub struct ReplicaPositions {
 }
 
 impl ReplicaPositions {
-    /// Believe a report for `expiry_timeout_ms` plus one heartbeat interval.
+    /// Believe a report for twice the expiry timeout plus one heartbeat.
     ///
-    /// It has to outlive the detection window: the last report a leader makes
-    /// is from just before it dies, and promotion happens only after the
-    /// cluster has noticed, which takes the expiry timeout. A margin of one
-    /// heartbeat covers the gap between a leader's final report and its final
-    /// heartbeat.
+    /// It has to outlive the *detection* of a dead leader, and detection is
+    /// slower than it first looks. A leader is declared down an expiry timeout
+    /// after its last **heartbeat**, and its last **report** is older still —
+    /// by up to one reporting interval, which the control plane does not know
+    /// and cannot bound.
     ///
-    /// Not longer, deliberately. Every extra second is a second of writes a
-    /// promoted follower might be missing.
+    /// A window of `expiry + heartbeat` therefore closes at almost exactly the
+    /// moment the leader becomes eligible for replacement, and a report that
+    /// expires a moment too early makes the shard unpromotable *forever*:
+    /// nothing else will ever report on it, because the only broker that could
+    /// is the one that died. That failure is permanent, where believing a report
+    /// slightly too long costs at most the records written between the last
+    /// report and the death — which is the loss window `Leader` already
+    /// documents, and which `Quorum` bounds by requiring a majority anyway.
+    ///
+    /// So the asymmetry decides it: too short is a shard that never comes back,
+    /// too long is a bounded and already-documented exposure.
     pub fn new(liveness: &crate::config::NodeLivenessConfig) -> Self {
         Self {
             shards: Mutex::new(HashMap::new()),
-            ttl_millis: liveness.expiry_timeout_ms + liveness.heartbeat_interval_ms,
+            ttl_millis: liveness.expiry_timeout_ms * 2 + liveness.heartbeat_interval_ms,
         }
     }
 

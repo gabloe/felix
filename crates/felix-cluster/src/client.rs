@@ -32,6 +32,18 @@ pub async fn connect_any(addrs: &[SocketAddr], tenant_id: &str, token: &str) -> 
         .with_context(|| format!("connect to any of {addrs:?}"))
 }
 
+/// A client that reconnects to another broker when the one it is using fails.
+pub async fn connect_cluster(
+    addrs: &[SocketAddr],
+    tenant_id: &str,
+    token: &str,
+) -> Result<felix_client::ClusterClient> {
+    let config = client_config(tenant_id, token)?;
+    felix_client::ClusterClient::connect(addrs, "localhost", config)
+        .await
+        .with_context(|| format!("connect a cluster client to any of {addrs:?}"))
+}
+
 pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<Client> {
     let config = client_config(tenant_id, token)?;
     Client::connect(addr, "localhost", config)

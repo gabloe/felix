@@ -141,6 +141,10 @@ impl Owner {
             Arc::clone(&self.ingress),
             Arc::clone(&self.router),
             advertise_addr.to_string(),
+            // No quorum marks: these exercise forwarding itself, and every
+            // stream here is leader-acknowledged.
+            None,
+            std::time::Duration::from_secs(5),
         ))
     }
 }
