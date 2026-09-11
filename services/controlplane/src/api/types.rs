@@ -223,6 +223,13 @@ pub struct NodeRegistrationRequest {
     pub node_id: String,
     /// `host:port` the broker-internal QUIC listener is reachable on.
     pub advertise_addr: String,
+    /// `host:port` the client-facing QUIC listener is reachable on.
+    ///
+    /// Optional so that a broker predating client discovery registers exactly
+    /// as it did before, and is left out of what clients are told rather than
+    /// being refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_addr: Option<String>,
     pub region: String,
     #[serde(default)]
     pub labels: std::collections::BTreeMap<String, String>,

@@ -13,6 +13,7 @@ pub(crate) fn node(node_id: &str, port: u16) -> Node {
         node_id: node_id.to_string(),
         spec: NodeSpec {
             advertise_addr: format!("10.0.0.4:{port}"),
+            client_addr: None,
             region: "us-west-2".to_string(),
             labels: BTreeMap::from([("rack".to_string(), "a1".to_string())]),
             capacity: NodeCapacity {

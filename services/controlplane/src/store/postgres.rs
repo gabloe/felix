@@ -1356,10 +1356,11 @@ impl ControlPlaneStore for PostgresStore {
         };
 
         let upsert = sqlx::query(
-            r#"INSERT INTO nodes (node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            r#"INSERT INTO nodes (node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation, client_addr)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                ON CONFLICT (node_id) DO UPDATE SET
                  advertise_addr = EXCLUDED.advertise_addr,
+                 client_addr = EXCLUDED.client_addr,
                  region = EXCLUDED.region,
                  labels = EXCLUDED.labels,
                  capacity_max_shards = EXCLUDED.capacity_max_shards,
@@ -1431,6 +1432,7 @@ impl ControlPlaneStore for PostgresStore {
             r#"UPDATE nodes SET advertise_addr = $2, region = $3, labels = $4,
                  capacity_max_shards = $5, capacity_weight = $6, lifecycle = $7,
                  last_heartbeat_at_millis = $8, registered_at_millis = $9, incarnation = $10,
+                 client_addr = $11,
                  updated_at = now()
                WHERE node_id = $1"#,
         );
@@ -1533,7 +1535,7 @@ impl ControlPlaneStore for PostgresStore {
         let rows = sqlx::query_as::<_, DbNode>(
             r#"UPDATE nodes SET lifecycle = 'down', updated_at = now()
                WHERE lifecycle IN ('live', 'draining') AND last_heartbeat_at_millis < $1
-               RETURNING node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation"#,
+               RETURNING node_id, advertise_addr, client_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation"#,
         )
         .bind(expiry_before_millis as i64)
         .fetch_all(&mut *tx)
@@ -1907,11 +1909,11 @@ impl ControlPlaneStore for PostgresStore {
     }
 }
 
-const NODE_SELECT_ALL: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes ORDER BY node_id"#;
-const NODE_SELECT_BY_ID: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1"#;
+const NODE_SELECT_ALL: &str = r#"SELECT node_id, advertise_addr, client_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes ORDER BY node_id"#;
+const NODE_SELECT_BY_ID: &str = r#"SELECT node_id, advertise_addr, client_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1"#;
 /// `FOR UPDATE` so a concurrent register or patch of the same node waits rather
 /// than reading the row this transaction is about to replace.
-const NODE_SELECT_BY_ID_FOR_UPDATE: &str = r#"SELECT node_id, advertise_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1 FOR UPDATE"#;
+const NODE_SELECT_BY_ID_FOR_UPDATE: &str = r#"SELECT node_id, advertise_addr, client_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes WHERE node_id = $1 FOR UPDATE"#;
 
 /// Bind a node in the column order the insert and the update both use.
 fn bind_node<'q>(
@@ -1929,6 +1931,8 @@ fn bind_node<'q>(
         .bind(node.status.last_heartbeat_at_millis as i64)
         .bind(node.status.registered_at_millis as i64)
         .bind(node.status.incarnation as i64)
+        // Last, so both statements above can name it as $11.
+        .bind(node.spec.client_addr.as_deref())
 }
 
 /// Make the rest of the transaction read one consistent snapshot of the
@@ -2086,6 +2090,7 @@ async fn record_shard_change(
 struct DbNode {
     node_id: String,
     advertise_addr: String,
+    client_addr: Option<String>,
     region: String,
     labels: serde_json::Value,
     capacity_max_shards: Option<i32>,
@@ -2109,6 +2114,7 @@ fn node_from_db(row: DbNode) -> StoreResult<Node> {
         node_id: row.node_id,
         spec: NodeSpec {
             advertise_addr: row.advertise_addr,
+            client_addr: row.client_addr,
             region: row.region,
             labels: serde_json::from_value(row.labels)?,
             capacity: NodeCapacity {

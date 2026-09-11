@@ -6,6 +6,7 @@ fn node() -> Node {
         node_id: "broker-1".to_string(),
         spec: NodeSpec {
             advertise_addr: "10.0.0.4:7000".to_string(),
+            client_addr: None,
             region: "us-west-2".to_string(),
             labels: BTreeMap::from([("rack".to_string(), "a1".to_string())]),
             capacity: NodeCapacity {
@@ -319,4 +320,46 @@ fn a_change_round_trips_with_and_without_a_body() {
         assert_eq!(decoded.node_id, change.node_id);
         assert_eq!(decoded.node, change.node);
     }
+}
+
+/// A client address is optional, and a node without one is valid: that is every
+/// broker registered before clients could be told where to connect.
+#[test]
+fn a_node_without_a_client_address_is_valid() {
+    let node = node();
+    assert!(node.spec.client_addr.is_none());
+    assert!(node.validate().is_ok());
+}
+
+#[test]
+fn a_valid_client_address_is_accepted() {
+    let mut node = node();
+    node.spec.client_addr = Some("10.0.0.4:5000".to_string());
+    assert!(node.validate().is_ok());
+}
+
+/// Held to the same rules as the internal address: a client has to dial it,
+/// and an address that cannot be parsed or a port that cannot be connected to
+/// is worse stored than absent -- absent means "ask someone else", stored means
+/// "go here" to somewhere nothing is listening.
+#[test]
+fn an_unusable_client_address_is_rejected() {
+    for addr in ["not-an-address", "10.0.0.4", "", "10.0.0.4:"] {
+        let mut node = node();
+        node.spec.client_addr = Some(addr.to_string());
+        assert!(
+            node.validate().is_err(),
+            "client_addr {addr:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn a_zero_client_port_is_rejected() {
+    let mut node = node();
+    node.spec.client_addr = Some("10.0.0.4:0".to_string());
+    assert!(matches!(
+        node.validate(),
+        Err(NodeValidationError::ZeroClientPort)
+    ));
 }

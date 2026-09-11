@@ -23,6 +23,14 @@ pub struct MembershipConfig {
     /// `host:port` peers reach this broker on. Not the bind address: a broker
     /// bound to 0.0.0.0 has to advertise something routable.
     pub advertise_addr: String,
+    /// `host:port` *clients* reach this broker on, if it offers itself as one.
+    ///
+    /// Optional, and left unset by default. A broker that does not advertise
+    /// one is not offered to clients looking for somewhere to connect, which is
+    /// the right answer for a broker behind a load balancer whose own address
+    /// no client should hold, and the only safe answer for one whose operator
+    /// has not said where clients reach it.
+    pub client_advertise_addr: Option<String>,
     pub region: String,
 }
 
@@ -343,6 +351,10 @@ fn membership_from_env(
         node_id,
         token,
         advertise_addr,
+        client_advertise_addr: std::env::var("FELIX_CLIENT_ADVERTISE_ADDR")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         region: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
     }))
 }

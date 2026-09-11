@@ -151,6 +151,7 @@ impl Cluster {
                     node_id: id.to_string(),
                     spec: NodeSpec {
                         advertise_addr: format!("10.0.0.4:{}", 7800 + i),
+                        client_addr: None,
                         region: "us-west-2".to_string(),
                         labels: BTreeMap::new(),
                         capacity: NodeCapacity::default(),

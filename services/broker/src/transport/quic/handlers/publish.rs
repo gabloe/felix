@@ -144,6 +144,11 @@ pub(crate) struct PublishContext {
     /// `None` on a single-node broker, which leads by construction and has
     /// nobody to lose a shard to.
     pub(crate) lease: Option<Arc<crate::lease::LeaseState>>,
+    /// Where a client may connect, for answering `Topology` on the control
+    /// stream. Nothing on the publish path reads it; it rides here because this
+    /// is the per-connection bundle of what the cluster makes available, beside
+    /// `ingress` and `peers`.
+    pub(crate) client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
     pub(crate) worker_count: usize,
     pub(crate) depth: Arc<AtomicUsize>,

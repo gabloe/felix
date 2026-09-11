@@ -1089,6 +1089,10 @@ fn spawn_broker(
         .env("FELIX_CONTROLPLANE_URL", &control_plane.base_url)
         .env("FELIX_REGION_ID", "local")
         .env("FELIX_QUIC_BIND", client_addr.to_string())
+        // And where clients reach it, which is what discovery hands out. The
+        // harness binds a concrete loopback port rather than 0.0.0.0, so the
+        // bind address is also the reachable one.
+        .env("FELIX_CLIENT_ADVERTISE_ADDR", client_addr.to_string())
         .env("FELIX_INTERNAL_BIND", internal_addr.to_string())
         .env("FELIX_BROKER_METRICS_BIND", metrics_addr.to_string())
         .env("FELIX_DURABLE_STORAGE_DIR", &data_dir)

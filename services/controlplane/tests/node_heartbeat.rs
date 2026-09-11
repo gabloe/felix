@@ -29,6 +29,7 @@ fn node(node_id: &str) -> Node {
         node_id: node_id.to_string(),
         spec: NodeSpec {
             advertise_addr: "10.0.0.4:7000".to_string(),
+            client_addr: None,
             region: "us-west-2".to_string(),
             labels: BTreeMap::new(),
             capacity: NodeCapacity::default(),

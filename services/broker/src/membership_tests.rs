@@ -104,6 +104,7 @@ fn config() -> MembershipConfig {
         node_id: "broker-a".to_string(),
         token: "test-token".to_string(),
         advertise_addr: "10.0.0.4:7000".to_string(),
+        client_advertise_addr: None,
         region: "us-west-2".to_string(),
     }
 }

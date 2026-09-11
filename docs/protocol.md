@@ -308,6 +308,63 @@ A broker MUST only send `auth_ok` in response to an `auth` that offered
 `client_flags`. A client old enough not to know the variant can then never receive
 it.
 
+## Feature negotiation
+
+A *feature* bit says a request exists. A *flag* bit says how a payload is laid
+out. They are numbered in separate spaces and MUST NOT be mixed: a feature never
+appears on a frame, and offering one as a frame flag would have a client claim it
+can receive a shape it has no decoder for.
+
+Features are advertised in the same handshake, in an optional field:
+
+```json
+{"type":"auth_ok","server_flags":63,"server_features":1}
+```
+
+| Bit | Name | Meaning |
+| --- | --- | --- |
+| `0x0001` | `FEATURE_TOPOLOGY` | The broker answers `topology` |
+
+An absent `server_features` means the broker implements none. This is not a
+formality. An unrecognised message `type` is a **fatal** protocol error to the
+broker's control loop — it closes the connection rather than answering — so a
+client MUST NOT send a featured request speculatively to find out whether it is
+supported. Silence means no.
+
+A broker advertises a feature only when it can actually answer it. A broker with
+no cluster behind it has no topology to report, and advertises `0`.
+
+## Topology
+
+`topology` asks a broker which brokers a client may connect to. It is sent on an
+authenticated control stream, and only to a broker that advertised
+`FEATURE_TOPOLOGY`.
+
+```json
+{"type":"topology"}
+```
+
+```json
+{"type":"topology_view","brokers":[
+  {"node_id":"broker-a","addr":"10.0.0.4:5000"},
+  {"node_id":"broker-b","addr":"10.0.0.5:5000"}
+]}
+```
+
+`addr` is the broker's **client-facing** listener, which is a different listener
+from the one brokers forward to each other on. A broker is listed only when the
+cluster considers it able to serve and it has advertised where clients reach it;
+one that has not is omitted rather than reported at an address that would refuse
+the connection.
+
+An empty list is a valid answer, not an error: it means the cluster has named no
+client-reachable broker. A client MUST treat the answer as additive and keep the
+endpoints it was configured with, so that a wrong or stale answer can never leave
+it with fewer ways in than it started with.
+
+The response carries no placement, capacity, or liveness detail. Those are the
+cluster's business, and a tenant's client has no standing to read them.
+
 ## Shared Binary EventBatch
 When `flags & 0x0004 != 0`, the event-stream frame payload is:
 

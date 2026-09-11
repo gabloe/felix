@@ -70,6 +70,8 @@ pub struct Client {
     auth_tenant_id: String,
     auth_token: String,
     runtime_config: ClientRuntimeConfig,
+    /// Optional requests this broker said it implements.
+    server_features: u32,
 }
 
 /// Periodic path stats for client-side connections, mirroring the broker's
@@ -219,11 +221,14 @@ impl Client {
             publish_connections.push(connection);
         }
         let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
+        // Every publish stream negotiates with the same broker, so the last
+        // answer is the broker's answer.
+        let mut server_features = 0u32;
         for connection in &publish_connections {
             for _ in 0..publish_streams_per_conn {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 debug!("client opened publish stream");
-                let server_flags = authenticate_stream(
+                let negotiated = authenticate_stream(
                     &mut send,
                     &mut recv,
                     &auth_tenant_id,
@@ -231,6 +236,8 @@ impl Client {
                     runtime_config.max_frame_bytes,
                 )
                 .await?;
+                let server_flags = negotiated.server_flags;
+                server_features = negotiated.server_features;
                 debug!(server_flags, "client publish stream authenticated");
                 let (tx, rx) = mpsc::channel(publish_queue_depth);
                 // Not colocated with the transport drivers (unlike the
@@ -328,6 +335,7 @@ impl Client {
             event_conn_counts.push(AtomicUsize::new(0));
         }
         Ok(Self {
+            server_features,
             _publish_client: publish_client,
             _cache_client: cache_client,
             _event_client: event_client,
@@ -415,7 +423,8 @@ impl Client {
             &self.auth_token,
             self.runtime_config.max_frame_bytes,
         )
-        .await?;
+        .await?
+        .server_flags;
 
         // A broker that predates resume ignores the unknown `start` field and
         // subscribes at the tail, then answers `Subscribed` -- so the client
@@ -634,13 +643,75 @@ impl Client {
 /// "supports everything" — it resolves to [`ORIGINAL_V1_FLAGS`], the three bits
 /// that existed before negotiation, which is the only assumption that is safe
 /// against a broker we cannot interrogate.
+impl Client {
+    /// True if this broker answers [`Client::topology`].
+    pub fn supports_topology(&self) -> bool {
+        felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_TOPOLOGY)
+    }
+
+    /// Ask the broker which brokers a client may connect to.
+    ///
+    /// Returns an empty list when the cluster has told this broker of no
+    /// client-reachable address -- a single-node deployment, or one whose
+    /// brokers do not advertise where clients reach them. That is not an error:
+    /// it means discovery has nothing to add to what the caller already has.
+    ///
+    /// Fails rather than returning empty when the broker predates the request.
+    /// Sending it anyway would be a protocol error the broker's control loop
+    /// treats as fatal, so the caller has to be told the difference between "no
+    /// brokers to report" and "cannot ask".
+    pub async fn topology(&self) -> Result<Vec<felix_wire::BrokerEndpoint>> {
+        if !self.supports_topology() {
+            anyhow::bail!("broker does not support topology discovery");
+        }
+        // A stream of its own rather than one of the publish pool's: those are
+        // pipelined, and a request/response exchange in the middle of one would
+        // have to be matched against acks it has nothing to do with.
+        let connection = &self.event_connections[0];
+        let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        write_message(&mut send, Message::Topology)
+            .await
+            .context("send topology request")?;
+        let mut scratch = BytesMut::with_capacity(64 * 1024);
+        let answer =
+            read_message_with_limit(&mut recv, &mut scratch, self.runtime_config.max_frame_bytes)
+                .await?;
+        let _ = send.finish();
+        match answer {
+            Some(Message::TopologyView { brokers }) => Ok(brokers),
+            Some(Message::Error { message }) => {
+                Err(anyhow::anyhow!("topology rejected: {message}"))
+            }
+            Some(other) => Err(anyhow::anyhow!("unexpected topology response: {other:?}")),
+            None => Err(anyhow::anyhow!("topology response missing")),
+        }
+    }
+}
+
+/// What one authenticated stream agreed with the broker.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Negotiated {
+    /// Frame-flag bits: how payloads may be laid out.
+    pub(crate) server_flags: u16,
+    /// Feature bits: which optional requests the broker implements.
+    pub(crate) server_features: u32,
+}
+
 async fn authenticate_stream(
     send: &mut SendStream,
     recv: &mut RecvStream,
     tenant_id: &str,
     token: &str,
     max_frame_bytes: usize,
-) -> Result<u16> {
+) -> Result<Negotiated> {
     write_message(
         send,
         Message::Auth {
@@ -653,9 +724,21 @@ async fn authenticate_stream(
     .context("send auth")?;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     match read_message_with_limit(recv, &mut scratch, max_frame_bytes).await? {
-        Some(Message::AuthOk { server_flags }) => Ok(server_flags),
+        Some(Message::AuthOk {
+            server_flags,
+            server_features,
+        }) => Ok(Negotiated {
+            server_flags,
+            // Absent means a broker that predates features. It implements none:
+            // an unrecognised message type is fatal to the broker's control
+            // loop, so a client that guessed would cost itself the connection.
+            server_features: server_features.unwrap_or(0),
+        }),
         // Legacy broker: no advertisement, so assume only the original bits.
-        Some(Message::Ok) => Ok(felix_wire::ORIGINAL_V1_FLAGS),
+        Some(Message::Ok) => Ok(Negotiated {
+            server_flags: felix_wire::ORIGINAL_V1_FLAGS,
+            server_features: 0,
+        }),
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),

@@ -193,8 +193,8 @@ task cluster:failover              # or -- --pace 0.5 to slow it down
 Starts three brokers with a shard replicated three ways, publishes under
 `Quorum`, kills the broker that acknowledged those records, and reads the whole
 stream back from the broker that took over. It also publishes *through* the
-failover with a client that was given every broker's address, to show the client
-reconnecting on its own.
+failover, with a client configured with exactly one broker address — it asks
+that broker who else is there, and reconnects to one of them on its own.
 
 It fails loudly rather than narrating past a problem: a record acknowledged
 before the kill that is not readable afterwards ends the demo with an error.

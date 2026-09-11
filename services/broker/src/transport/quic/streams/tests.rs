@@ -578,6 +578,7 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
     });
     PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),
@@ -3490,6 +3491,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
     drop(rx);
     let publish_ctx = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),
@@ -3668,6 +3670,7 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
         });
         let publish_ctx = PublishContext {
             ingress: None,
+            client_endpoints: None,
             peers: None,
             lease: None,
             workers: Arc::new(vec![tx]),

@@ -318,6 +318,7 @@ mod feed {
         let ingress = Arc::new(IngressRouter::new(Arc::clone(&router)));
         (
             FeedState {
+                client_endpoints: None,
                 ownership: Arc::new(tokio::sync::RwLock::new({
                     let mut ownership = ShardOwnership::default();
                     ownership.reset(assignments.to_vec());
