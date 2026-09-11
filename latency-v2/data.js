@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789133637642,
+  "lastUpdate": 1789141030181,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6138,6 +6138,72 @@ window.BENCHMARK_DATA = {
             "range": "96.52",
             "unit": "us",
             "extra": "trials: 5\nmedian: 340.00\nmean: 382.80\nstdev: 96.52\ncv: 25.21%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "433124bf14125955469571bad9d0da61b31af72a",
+          "message": "fix(replication): make a Quorum acknowledgement survive losing the leader (#266) (#268)\n\n* test(cluster): say why a failover replay produced nothing\n\nThe scenario reported an empty replay and nothing else, so every failure looked\nidentical whether the subscribe was refused, the broker ended the stream, or\nnothing ever arrived. Those need different investigations.\n\nIt now reports the attempt count and the last reason, which is what narrowed\n#266 from \"serves nothing\" to \"accepts the subscribe and never writes to it\".\n\nThe scenario's ignore note is corrected too: the hard failure #267 fixed is\ngone, and what remains is intermittent at roughly one run in four. Ignored\nrather than left failing, because a test that fails a quarter of the time\nteaches people to ignore red.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(replication): narrow the window where failover loses an acked record\n\nFour fixes for #266. **It is not closed** — the scenario still fails roughly one\nrun in ten, down from one in four. Each fix below is independently justified;\nnone of them is the whole answer, and I could not find the rest.\n\n## The report TTL was twenty seconds in a cluster tuned for one\n\nMy bug from #265: the harness's control plane built `ReplicaPositions` from\n`Default::default()` rather than its own liveness settings, so reports lived\nfor expiry(15s) + heartbeat(5s) against a cluster that notices a dead broker in\nabout a second. A follower reported caught up at one tail stayed promotable\nlong after the leader had written past it.\n\n## A report could be released after the publish it justifies\n\nA `Quorum` publish returns when the mark says a majority holds the record; the\nreport is what promotion later reads. Publishing the mark first left a window\nwhere a leader had told a client the record was safe and told the control plane\nnothing about which replica held it. The report now goes first, and is awaited.\n\n## The tail was read before shipping and used after\n\nBoth the report and the mark are relative to `tail`. Reading it before the ship\nloop meant a publish landing in between left `tail` describing a shorter log —\nso a follower level with the *old* tail was reported caught up, and counted\ntoward the quorum, for a record it did not have. Re-read after shipping.\n\n## Promotion picked by score, not by position\n\n\"Caught up\" is only true of the tail it was measured against, so a slightly\nstale report can call two replicas level when one holds more. Promotion now\nprefers the replica with the highest reported offset and uses score only to\nbreak ties, so the replica a quorum-acknowledged record is guaranteed to be on\nis never passed over for one that merely scores better. Reports carry\nper-replica offsets to make that possible.\n\n## What is still wrong\n\nA promoted broker sometimes holds less than the quorum acknowledged. I verified\n`Quorum` is genuinely enforced (`consistency=Quorum offsets=Some((1,1))` on the\npublish path), that promotion picks a replica, and that the records reach\nfollowers in the healthy case. What I could not determine is why the surviving\nfailures still promote a replica missing the record.\n\nThe next attempt needs observability that survives teardown: the broker logs at\nthe moment of promotion are flooded by connection-lost noise from the dying\nleader, which is what stopped this one.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): apply a consistency change to a live stream (#266)\n\nThe last of five fixes for #266, and the one that explains the rest.\n\nRegistering a stream that already exists takes a fast path that refreshes the\nmetadata map and returns. The live `StreamState` carries the consistency the\npublish path actually reads, and the fast path never touched it — so a stream\nthat reached a broker as `Leader` and was later raised to `Quorum` carried on\nacknowledging on the leader alone until that broker restarted.\n\nA `Quorum` that silently behaves as `Leader` is precisely how a failover loses a\nrecord a client was told was safe: the publish returns without waiting for a\nmajority, the record is on the leader only, and the replica promoted after the\nleader dies has never seen it.\n\nConsistency is now an atomic on the stream state, updated on that fast path.\nReverting the update fails both new tests.\n\n## Where this leaves #266\n\nThe milestone scenario passed 20 consecutive runs, and all four failover\nscenarios passed 6 consecutive rounds. It previously failed about one run in\nfour.\n\nFive fixes were needed, and the common thread is worth stating: a `Quorum`\nacknowledgement is a promise about which brokers hold a record, and each of\nthese was a way for the cluster's own account of that to drift from the truth.\n\n- the commit order was not rebased when records arrived by replication, so the\n  first write a promoted broker accepted never completed (#267)\n- a stream raised to `Quorum` kept acknowledging on the leader alone (this)\n- the leader's tail was read before shipping and used after, so a follower level\n  with the old tail was reported caught up for a record it did not have\n- the acknowledgement was released before the control plane was told who held\n  the record\n- promotion chose by placement score rather than by how much a replica held\n\nDocs updated: failover and quorum acknowledgement no longer say \"not usable\",\nand say what the claim is now proven against — process kill, not partitions or\nclock skew, which the harness still cannot inject.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T08:34:52-07:00",
+          "tree_id": "10ff24e41328a7fc04d6fd3551920624f6e36121",
+          "url": "https://github.com/gabloe/felix/commit/433124bf14125955469571bad9d0da61b31af72a"
+        },
+        "date": 1789141029227,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 157,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 157.00\nmean: 157.20\nstdev: 1.30\ncv: 0.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 198,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 197.20\nstdev: 1.30\ncv: 0.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 224,
+            "range": "8.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 224.00\nmean: 227.00\nstdev: 8.25\ncv: 3.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 194,
+            "range": "5.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 194.00\nmean: 196.40\nstdev: 5.98\ncv: 3.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 394,
+            "range": "84.93",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 394.00\nmean: 429.60\nstdev: 84.93\ncv: 19.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 855,
+            "range": "502.43",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 855.00\nmean: 1017.60\nstdev: 502.43\ncv: 49.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
