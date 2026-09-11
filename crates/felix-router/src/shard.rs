@@ -168,6 +168,14 @@ impl RoutingTable {
         self.routes.get(key)
     }
 
+    /// Every route in the table.
+    ///
+    /// For a caller that has to visit shards rather than look one up -- the
+    /// replication driver walks the table to find the shards this node leads.
+    pub fn iter(&self) -> impl Iterator<Item = (&ShardKey, &Route)> {
+        self.routes.iter()
+    }
+
     pub fn len(&self) -> usize {
         self.routes.len()
     }

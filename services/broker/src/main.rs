@@ -36,6 +36,7 @@ mod test_support;
 use anyhow::{Context, Result};
 use broker::membership;
 use broker::peer;
+use broker::replication;
 use broker::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
 use broker::{shard_lifecycle, shard_routing, shard_watch};
 use felix_broker::{Broker, DurableStorage};
@@ -457,6 +458,18 @@ where
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
             );
+            // Shipping to followers, for the shards this broker leads. Only
+            // when there is a peer transport to ship over: without one the
+            // replica set is a plan nobody can act on.
+            if let Some(pool) = &peers {
+                replication::driver::spawn(
+                    Arc::clone(pool),
+                    Arc::clone(&broker),
+                    Arc::clone(router),
+                    Duration::from_millis(config.controlplane_sync_interval_ms),
+                    sync_shutdown.clone(),
+                );
+            }
             Some((watch, feed))
         }
         _ => None,

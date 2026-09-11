@@ -81,7 +81,7 @@ pub trait PeerRequester {
         node_id: &str,
         addr: SocketAddr,
         message: InternalMessage,
-    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>>;
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send;
 }
 
 impl<T: PeerRequester> PeerRequester for std::sync::Arc<T> {
@@ -90,7 +90,8 @@ impl<T: PeerRequester> PeerRequester for std::sync::Arc<T> {
         node_id: &str,
         addr: SocketAddr,
         message: InternalMessage,
-    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> {
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send
+    {
         T::request(self, node_id, addr, message)
     }
 }

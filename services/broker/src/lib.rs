@@ -17,6 +17,7 @@ pub mod membership_metrics;
 pub mod node_catalog;
 pub mod peer;
 pub mod quic;
+pub mod replication;
 pub mod shard_lifecycle;
 pub mod shard_lifecycle_metrics;
 pub mod shard_routing;

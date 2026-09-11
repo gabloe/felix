@@ -243,10 +243,23 @@ until records are actually replicated (#112) nothing reports being caught up, so
 promotion does not fire and placement behaves exactly as it did. The gate starts
 permitting failover at the moment replication starts working, and not before.
 
-The follower's half of this is implemented (#112): the exchange, the append
-rule, and the fence at the storing end. What ships records — the leader's side —
-is not, so nothing replicates yet and the promotion gate above still does not
-fire. The rule and its refusals are in `docs/internal-protocol.md`.
+Both halves of this are implemented (#112). The follower's side is the exchange,
+the append rule, and the fence at the storing end. The leader's side keeps one
+cursor per follower, ships bounded batches from its own log, and moves the
+cursor only on the follower's answer — so a follower that has fallen behind or
+been rebuilt is caught up by its own `LogGap`, with no separate negotiation and
+nothing kept on disk.
+
+Replication to a follower stops on `LogConflict` or `FencedEpoch`. Neither
+converges by retrying: the first means the two logs disagree about bytes both
+sides hold, the second that this broker is no longer the leader.
+
+The `Leader` loss window is exported as `felix_broker_replication_lag_records`:
+how far the slowest follower is behind, across every shard this broker leads. A
+halted follower is excluded from it — it has stopped rather than fallen behind,
+and `felix_broker_replication_halted` is where that shows.
+
+The rule and its refusals are in `docs/internal-protocol.md`.
 
 ## What this does to the other M5 issues
 
@@ -255,7 +268,10 @@ fire. The rule and its refusals are in `docs/internal-protocol.md`.
   routing and durable-append boundaries. **#239 is subsumed**: a stale ex-owner is
   a broker without a valid lease, and the same check refuses it.
 - **#112 (replicate records)** — append-only shipping, not a consensus log. The
-  catch-up path is `read_range` plus sealed-segment checksums.
+  catch-up path is `read_range` plus sealed-segment checksums. **Done**, both
+  halves. Catch-up currently re-reads from the offset the follower names rather
+  than verifying whole sealed segments by checksum; that is an optimisation for
+  #114, not a change to the rule.
 - **#113 (Leader and Quorum)** — the majority is over the replica set *of the
   current generation*, and an acknowledgement from a replica at an older
   generation does not count toward it.
