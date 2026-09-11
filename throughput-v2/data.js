@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789166392535,
+  "lastUpdate": 1789166685033,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5096,6 +5096,58 @@ window.BENCHMARK_DATA = {
             "range": "14988.76",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 750707.64\nmean: 754398.82\nstdev: 14988.76\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e13cc1584a33726a54a45646e4748a5bbd28cf9c",
+          "message": "fix(cluster): make pause_node return only once the broker has actually stopped (#274)\n\n* fix(cluster): make pause_node return only once the broker has actually stopped\n\n`kill` returns when the signal is queued, not when the process has stopped.\nEvery fault test probes the broker immediately afterwards, so they were all\nracing the kernel -- and on a loaded CI runner losing, which reads as \"a\npaused broker was still answering\" and fails the assertion. That is the\nharness's fault, not the broker's, and it is what failed\n`a_resumed_broker_answers_again` on CI.\n\n`pause_node` now polls until the kernel reports the process stopped, so the\nfault is in effect by the time it returns. Measured locally, the first poll\nnever found it already stopped, so the window was never zero -- it is simply\nsmall enough on an idle machine to lose the race rarely.\n\nRead through `ps` rather than `/proc`, which does not exist on macOS and the\nharness runs on developer machines too. Polled rather than waited on:\n`waitpid` with `WUNTRACED` would reap the stop notification `Child` relies\non, leaving the process handle unusable for the resume.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix: make two more tests depend on what they cause rather than on incidental traffic\n\n**`an_unreplicated_shard_does_not_fail_over_to_an_empty_broker` published\nnothing.** It waited for the shipped counter to rise, but never gave the\nleader anything to ship, so the wait could only be satisfied by traffic the\ntest did not cause -- whatever other shards this broker happened to be\nreplicating. That is enough locally and was not on CI, where it timed out\nafter 30s. Its own comment already described the record it was supposed to\nhave (\"the publish is leader-acknowledged, so the record need not have\nreached the follower\"); now it publishes one.\n\n**`seed_for_restart` and `assign_for_restart` were dead without\n`pg-tests`.** Their only caller is `postgres_tests`, which is\n`#![cfg(feature = \"pg-tests\")]`, so a build without that feature warned. It\ndid not show up in `task lint`, which runs `--all-features` and so compiles\nthe caller. They now carry the same gate as the thing that uses them.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T15:42:19-07:00",
+          "tree_id": "af09695ebc1a483d8093be26f42f5efc4aab756f",
+          "url": "https://github.com/gabloe/felix/commit/e13cc1584a33726a54a45646e4748a5bbd28cf9c"
+        },
+        "date": 1789166684081,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 223887.88,
+            "range": "7050.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 223887.88\nmean: 227482.51\nstdev: 7050.48\ncv: 3.10%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 223887.88,
+            "range": "7050.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 223887.88\nmean: 227482.51\nstdev: 7050.48\ncv: 3.10%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55576.05,
+            "range": "1253.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55576.05\nmean: 55769.06\nstdev: 1253.05\ncv: 2.25%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 555760.5,
+            "range": "12530.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 555760.50\nmean: 557690.60\nstdev: 12530.49\ncv: 2.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
