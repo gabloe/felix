@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789166685033,
+  "lastUpdate": 1789169989813,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5148,6 +5148,58 @@ window.BENCHMARK_DATA = {
             "range": "12530.49",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 555760.50\nmean: 557690.60\nstdev: 12530.49\ncv: 2.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9220fe18632c1a2883f55d3de0786c06d4e77007",
+          "message": "feat(client): redirect a subscribe to the broker that owns the shard (#118) (#275)\n\nA subscribe for a shard this broker does not own was accepted and then\ndelivered nothing. That is the worst of the available answers: it is\nindistinguishable from a stream with no traffic, so an application waits\nindefinitely with no error to act on and no way to tell the difference.\nConfirmed before changing anything -- a subscribe on a non-owner was accepted\nand no record published to the owner ever arrived.\n\n`docs/subscribe-routing.md` decided this in M4.4: redirect to the owner,\nnever proxy for it. The broker now answers `NotLeader` with the owner's node\nid, its *client-facing* address, and the generation.\n\n**Features are now negotiated in both directions.** `AuthOk.server_features`\ntold a client what the broker implements; `Auth.client_features` is its\nmirror, and is needed for the same reason. `NotLeader` travels broker to\nclient, and a client that cannot decode it would lose the connection to a\nmessage meant to help it -- so the broker sends it only to a client that\noffered `FEATURE_REDIRECT`, and answers everyone else with an ordinary error.\nEither way the subscribe no longer succeeds silently.\n\nThe address is the client-facing listener added in #117, looked up by node\nid. When the cluster has not been told one, the redirect names the owner and\nomits the address: \"not here, and here is who has it\" is more use than \"not\nhere\", and a client that knows that broker from discovery can act on the name\nalone. Dialling the broker-internal listener would be refused, so no address\nbeats the wrong one.\n\n`ClusterClient::subscribe` follows the redirect, capped at three hops and\nrefusing to revisit a broker within one attempt -- a cluster mid-rebalance\ncan name an owner that names another, and two brokers that disagree would\notherwise bounce a client between them until its deadline. It deliberately\ndoes not replace the client it holds: a redirect is about one shard, not\nabout which broker is generally worth talking to.\n\n`unauthorized_publish_is_refused` did its credential liveness check by\nsubscribing through the ingress broker, which is a non-owner in half its\ncases and is now redirected. It checks against the owner instead: that step\nis a question about the credential, and routing is what the publish it guards\nalready exercises.\n\nAlso documents a trap that invalidated a revert-and-watch-it-fail check here:\nthe cluster harness runs a prebuilt `target/<profile>/felix-broker`, which\n`cargo test -p felix-cluster` does not rebuild, so a broker-side change is\nabsent from the binary those tests spawn until the binary is rebuilt.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T16:37:29-07:00",
+          "tree_id": "96fa777a5ee3a4b771085bb774cdab30fa9d934f",
+          "url": "https://github.com/gabloe/felix/commit/9220fe18632c1a2883f55d3de0786c06d4e77007"
+        },
+        "date": 1789169989284,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 238636.53,
+            "range": "2763.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238636.53\nmean: 238043.73\nstdev: 2763.90\ncv: 1.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 238636.53,
+            "range": "2763.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 238636.53\nmean: 238043.73\nstdev: 2763.90\ncv: 1.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56856.7,
+            "range": "933.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56856.70\nmean: 56791.39\nstdev: 933.93\ncv: 1.64%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 568567.01,
+            "range": "9339.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 568567.01\nmean: 567913.90\nstdev: 9339.31\ncv: 1.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
