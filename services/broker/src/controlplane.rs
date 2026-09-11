@@ -23,8 +23,8 @@
 //!
 //! NOTE: This file is a *client* of the control-plane. Persisting control-plane data
 //! (e.g., in Postgres) is implemented on the **control-plane service**, not here.
-use anyhow::{Context, Result};
-use felix_broker::{Broker, BrokerError, CacheMetadata, StreamMetadata};
+use anyhow::{Context, Result, anyhow};
+use felix_broker::{Broker, BrokerError, CacheMetadata, ConsistencyLevel, StreamMetadata};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -298,6 +298,27 @@ struct Stream {
     stream: String,
     shards: u32,
     durable: bool,
+    /// Absent from a control plane that predates replication, which reads as
+    /// `Leader` -- the behaviour every stream had before this existed.
+    #[serde(default)]
+    consistency: Option<String>,
+}
+
+/// Read a consistency level the control plane sent.
+///
+/// **An unrecognised level is refused, never defaulted.** Falling back to
+/// `Leader` would take a stream the operator asked to be quorum-replicated and
+/// serve it at the weaker guarantee, silently: the acknowledgement would keep
+/// its meaning on paper and lose it in fact. A broker that does not understand
+/// what it was asked for has to say so.
+fn read_consistency(value: Option<&str>) -> Result<ConsistencyLevel> {
+    match value {
+        None | Some("Leader") => Ok(ConsistencyLevel::Leader),
+        Some("Quorum") => Ok(ConsistencyLevel::Quorum),
+        Some(other) => Err(anyhow!(
+            "unknown consistency level {other:?}; this broker understands Leader and Quorum"
+        )),
+    }
 }
 
 /// Represents a cache as registered in the broker registry.
@@ -473,6 +494,7 @@ async fn sync_once(
                         StreamMetadata {
                             durable: stream.durable,
                             shards: stream.shards,
+                            consistency: read_consistency(stream.consistency.as_deref())?,
                         },
                     )
                     .await?;
@@ -615,6 +637,7 @@ async fn sync_once(
                                 StreamMetadata {
                                     durable: stream.durable,
                                     shards: stream.shards,
+                                    consistency: read_consistency(stream.consistency.as_deref())?,
                                 },
                             )
                             .await?;
@@ -1335,6 +1358,7 @@ mod tests {
                                     stream: "orders".to_string(),
                                     shards: 2,
                                     durable: true,
+                                    consistency: None,
                                 }),
                             }],
                             next_seq: 2,
@@ -1435,6 +1459,7 @@ mod tests {
             StreamMetadata {
                 durable: false,
                 shards: 2,
+                ..Default::default()
             },
         )
         .await?;
@@ -1450,6 +1475,7 @@ mod tests {
             StreamMetadata {
                 durable: false,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -1472,6 +1498,7 @@ mod tests {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -1486,6 +1513,7 @@ mod tests {
             StreamMetadata {
                 durable: false,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -1516,6 +1544,7 @@ mod tests {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -1684,6 +1713,7 @@ mod tests {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await
@@ -1720,6 +1750,7 @@ mod tests {
             StreamMetadata {
                 durable: false,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -1731,6 +1762,7 @@ mod tests {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await
@@ -1905,5 +1937,55 @@ mod tests {
         })
         .await
         .expect("test timeout")
+    }
+
+    /// What the control plane sends for `consistency`, and what this broker
+    /// makes of it.
+    mod consistency {
+        use super::*;
+
+        /// A control plane that predates replication sends no level at all, and
+        /// every stream written before this existed behaves as it did.
+        #[test]
+        fn an_absent_level_is_leader() {
+            assert_eq!(
+                read_consistency(None).expect("read"),
+                ConsistencyLevel::Leader
+            );
+        }
+
+        /// The exact strings the control plane serializes. Pinned on this side
+        /// too, because the two enums are compiled separately and nothing else
+        /// would catch them drifting apart.
+        #[test]
+        fn the_levels_are_read_by_their_wire_names() {
+            assert_eq!(
+                read_consistency(Some("Leader")).expect("read"),
+                ConsistencyLevel::Leader,
+            );
+            assert_eq!(
+                read_consistency(Some("Quorum")).expect("read"),
+                ConsistencyLevel::Quorum,
+            );
+        }
+
+        /// **An unrecognised level is refused, never defaulted.** Falling back
+        /// to `Leader` would serve a stream the operator asked to be
+        /// quorum-replicated at the weaker guarantee, and the acknowledgement
+        /// would keep its meaning on paper while losing it in fact.
+        #[test]
+        fn an_unknown_level_is_refused_rather_than_downgraded() {
+            let err = read_consistency(Some("Everywhere")).expect_err("should refuse");
+            assert!(err.to_string().contains("Everywhere"), "{err}");
+        }
+
+        /// Case matters: the wire form is what the control plane serializes, and
+        /// guessing at near-misses is how a downgrade slips through.
+        #[test]
+        fn a_near_miss_is_not_guessed_at() {
+            assert!(read_consistency(Some("quorum")).is_err());
+            assert!(read_consistency(Some("QUORUM")).is_err());
+            assert!(read_consistency(Some("")).is_err());
+        }
     }
 }

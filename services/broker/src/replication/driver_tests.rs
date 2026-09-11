@@ -145,9 +145,10 @@ async fn a_led_shard_is_shipped_to_each_follower() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b", "broker-c"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     let mut shipped_to: Vec<String> = follower
         .batches()
@@ -165,9 +166,10 @@ async fn a_shard_led_elsewhere_is_not_shipped() {
     let (broker, _dir) = leader_with(3).await;
     let router = router("broker-b", &[LOCAL], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     assert!(
         follower.batches().is_empty(),
@@ -182,9 +184,10 @@ async fn a_shard_with_no_replicas_ships_nothing() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &[], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     assert!(follower.batches().is_empty());
 }
@@ -196,9 +199,10 @@ async fn one_pass_ships_until_the_follower_is_level() {
     let (broker, _dir) = leader_with(5).await;
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     let delivered: usize = follower.batches().iter().map(|(_, _, len)| len).sum();
     assert_eq!(delivered, 5, "the follower was left behind after a pass");
@@ -210,11 +214,12 @@ async fn a_second_pass_with_nothing_new_ships_nothing() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
     let after_first = follower.batches().len();
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     assert_eq!(
         follower.batches().len(),
@@ -231,13 +236,14 @@ async fn a_new_generation_starts_the_cursors_again() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
     let after_first = follower.batches().len();
 
     publish(&router, LOCAL, &["broker-b"], 5);
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     assert!(
         follower.batches().len() > after_first,
@@ -258,11 +264,12 @@ async fn a_replica_added_later_starts_from_the_beginning() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
     publish(&router, LOCAL, &["broker-b", "broker-c"], 4);
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     let from_c: Vec<(String, u64, usize)> = follower
         .batches()
@@ -282,9 +289,10 @@ async fn a_replica_removed_from_the_set_is_dropped() {
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b", "broker-c"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
     publish(&router, LOCAL, &["broker-b"], 4);
     // Something new to ship, so a still-registered follower would show up.
     let storage = broker.durable_storage().expect("storage");
@@ -296,7 +304,7 @@ async fn a_replica_removed_from_the_set_is_dropped() {
         .expect("append");
 
     let before = follower.batches().len();
-    replicate_once(&follower, &broker, &router, &mut cursors).await;
+    replicate_once(&follower, &broker, &router, &marks, &mut cursors).await;
 
     let after: Vec<String> = follower
         .batches()
@@ -317,10 +325,11 @@ async fn a_broker_without_durable_storage_ships_nothing() {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
     assert_eq!(
-        replicate_once(&follower, &broker, &router, &mut cursors).await,
+        replicate_once(&follower, &broker, &router, &marks, &mut cursors).await,
         None,
     );
     assert!(follower.batches().is_empty());
@@ -332,11 +341,12 @@ async fn the_reported_lag_is_the_distance_from_the_tail() {
     let (broker, _dir) = leader_with(4).await;
     let router = router(LOCAL, &["broker-b"], 4);
     let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
     // Caught up after a full pass.
     assert_eq!(
-        replicate_once(&follower, &broker, &router, &mut cursors).await,
+        replicate_once(&follower, &broker, &router, &marks, &mut cursors).await,
         Some(0),
     );
 }

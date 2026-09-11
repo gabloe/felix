@@ -14,7 +14,8 @@ use felix_router::{Route, ShardKey, ShardRouter};
 use felix_wire::internal::ShardRef;
 use tokio_util::sync::CancellationToken;
 
-use super::{FollowerCursor, Progress, lag_records, metrics, ship_once};
+use super::quorum::QuorumMarks;
+use super::{FollowerCursor, Progress, lag_records, metrics, quorum_offset, ship_once};
 use crate::peer::PeerRequester;
 
 /// Cursors for one shard, valid only at `generation`.
@@ -36,6 +37,7 @@ pub async fn replicate_once<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
     router: &ShardRouter,
+    marks: &QuorumMarks,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Option<u64> {
     let Some(storage) = broker.durable_storage() else {
@@ -101,6 +103,19 @@ pub async fn replicate_once<R: PeerRequester>(
             {}
         }
 
+        // Published after shipping, so a publish waiting on this shard sees the
+        // majority move as soon as this pass establishes it.
+        marks.publish(
+            &crate::shard_watch::ShardKey {
+                tenant_id: key.tenant_id.clone(),
+                namespace: key.namespace.clone(),
+                stream: key.stream.clone(),
+                shard: key.shard,
+            },
+            route.generation,
+            quorum_offset(tail, &entry.followers),
+        );
+
         halted += entry
             .followers
             .iter()
@@ -114,6 +129,20 @@ pub async fn replicate_once<R: PeerRequester>(
     // A shard this broker no longer leads keeps no cursors: they would be a
     // belief about a follower under a leadership that has ended.
     cursors.retain(|key, _| live_shards.contains(key));
+    // A shard this broker no longer leads stops promising a quorum. Dropping
+    // the mark ends any publish still waiting on it, rather than leaving it to
+    // run out its timeout for an answer that can no longer come.
+    marks.retain(
+        &live_shards
+            .iter()
+            .map(|key| crate::shard_watch::ShardKey {
+                tenant_id: key.tenant_id.clone(),
+                namespace: key.namespace.clone(),
+                stream: key.stream.clone(),
+                shard: key.shard,
+            })
+            .collect::<Vec<_>>(),
+    );
 
     metrics::record_halted(halted);
     if let Some(lag) = worst_lag {
@@ -152,6 +181,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
     broker: Arc<Broker>,
     router: Arc<ShardRouter>,
+    marks: Arc<QuorumMarks>,
     interval: Duration,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -164,7 +194,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
             }
-            replicate_once(requester.as_ref(), &broker, &router, &mut cursors).await;
+            replicate_once(requester.as_ref(), &broker, &router, &marks, &mut cursors).await;
         }
     })
 }

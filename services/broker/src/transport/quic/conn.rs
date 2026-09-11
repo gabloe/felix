@@ -158,6 +158,73 @@ pub struct ClusterContext {
     pub peers: Option<Arc<crate::peer::PeerPool>>,
     /// This broker's authority to serve the shards it leads.
     pub lease: Option<Arc<crate::lease::LeaseState>>,
+    /// How far a majority of each shard's replica set has got. Read by a
+    /// publish to a `Quorum` stream, which cannot acknowledge until the
+    /// majority holds its records.
+    pub marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+}
+
+/// Hold a `Quorum` publish until a majority of the shard's replica set has it.
+///
+/// A `Leader` stream returns at once: local durability is the guarantee it
+/// offers, and it has already been reached by the time this is called.
+///
+/// The wait is bounded. A timeout is **not** "the write failed" — the records
+/// are on this broker's disk and may yet reach a majority — it is "this broker
+/// cannot say that it succeeded", which is the honest answer and the one a
+/// client can act on. Reporting success instead would make an acknowledgement
+/// mean less than the stream promises.
+async fn await_quorum(
+    handle: &felix_broker::StreamHandle,
+    shard: Option<&crate::shard_watch::ShardKey>,
+    outcome: &felix_broker::PublishOutcome,
+    marks: Option<&crate::replication::quorum::QuorumMarks>,
+    ingress: Option<&IngressRouter>,
+    timeout: std::time::Duration,
+) -> Result<(), anyhow::Error> {
+    use crate::replication::quorum::QuorumWait;
+
+    if handle.consistency() != felix_broker::ConsistencyLevel::Quorum {
+        return Ok(());
+    }
+    let (Some(shard), Some(marks), Some(ingress)) = (shard, marks, ingress) else {
+        // A single-node broker has no replica set. `Quorum` on a stream nobody
+        // replicates is satisfied by the leader alone, which has already
+        // written the record.
+        return Ok(());
+    };
+    // An ephemeral stream has no offsets, so there is nothing to replicate and
+    // nothing to wait for.
+    let Some((_, last_offset)) = outcome.offsets else {
+        return Ok(());
+    };
+    let Some(generation) = ingress.generation(shard) else {
+        anyhow::bail!("shard ownership changed before the batch could reach a quorum");
+    };
+
+    // `last_offset` is inclusive, and the mark is one past what is held.
+    match marks
+        .wait_for(shard, generation, last_offset + 1, timeout)
+        .await
+    {
+        QuorumWait::Reached => Ok(()),
+        QuorumWait::TimedOut => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_TIMED_OUT,
+            );
+            Err(anyhow::anyhow!(
+                "the batch is durable here but did not reach a majority within {timeout:?}"
+            ))
+        }
+        QuorumWait::NotLeading => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_NOT_LEADING,
+            );
+            Err(anyhow::anyhow!(
+                "shard leadership moved before the batch could reach a quorum"
+            ))
+        }
+    }
 }
 
 fn build_publish_context(
@@ -169,7 +236,9 @@ fn build_publish_context(
         ingress,
         peers,
         lease,
+        marks,
     } = cluster;
+    let quorum_timeout = std::time::Duration::from_millis(config.publish_quorum_timeout_ms.max(1));
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
@@ -195,6 +264,8 @@ fn build_publish_context(
         let broker_for_worker = Arc::clone(&broker);
         let peers_for_worker = peers.clone();
         let lease_for_worker = lease.clone();
+        let marks_for_worker = marks.clone();
+        let ingress_for_worker = ingress.clone();
         let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
@@ -211,7 +282,7 @@ fn build_publish_context(
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
                 let result: Result<(), anyhow::Error> = match &job.target {
-                    PublishTarget::Resolved(handle) => {
+                    PublishTarget::Resolved { handle, shard } => {
                         // The commit fence, and the authoritative one. Everything
                         // between admission and here can take arbitrarily long --
                         // a full queue, a slow fsync, a suspended process -- so a
@@ -227,11 +298,25 @@ fn build_publish_context(
                                     "lease lapsed before the record could be committed"
                                 ))
                             }
-                            _ => broker_for_worker
-                                .publish_batch_to_handle(handle, &job.payloads)
-                                .await
-                                .map(|_| ())
-                                .map_err(Into::into),
+                            _ => {
+                                match broker_for_worker
+                                    .publish_batch_with_outcome(handle, &job.payloads)
+                                    .await
+                                {
+                                    Ok(outcome) => {
+                                        await_quorum(
+                                            handle,
+                                            shard.as_ref(),
+                                            &outcome,
+                                            marks_for_worker.as_deref(),
+                                            ingress_for_worker.as_deref(),
+                                            quorum_timeout,
+                                        )
+                                        .await
+                                    }
+                                    Err(err) => Err(err.into()),
+                                }
+                            }
                         }
                     }
                     #[cfg(test)]

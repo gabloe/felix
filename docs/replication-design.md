@@ -254,6 +254,28 @@ Replication to a follower stops on `LogConflict` or `FencedEpoch`. Neither
 converges by retrying: the first means the two logs disagree about bytes both
 sides hold, the second that this broker is no longer the leader.
 
+`Stream.consistency` is now wired into the acknowledgement path (#113). A
+`Leader` publish is acknowledged once the leader's own durability policy is
+satisfied, exactly as before. A `Quorum` publish is held until a majority of the
+replica set *of the generation it was written at* holds its records durably.
+
+The majority always counts the leader, so `replication_factor: 1` — the default
+— makes `Quorum` behave exactly like `Leader` rather than never acknowledging.
+A halted follower counts for nothing: it has stopped rather than fallen behind,
+and letting its last position count would make an acknowledgement mean less than
+it says.
+
+A wait that runs out is reported as a failure, and the distinction matters: the
+records *are* durable on the leader and may yet reach a majority. The broker is
+not saying the write failed, it is saying it cannot vouch for it at the level the
+stream asked for. `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` sets the budget. Leadership
+moving mid-wait ends it the same way, immediately, rather than running the clock
+out on an answer that can no longer come.
+
+A control plane that sends a consistency level this broker does not recognise is
+refused rather than defaulted. Falling back to `Leader` would serve a stream the
+operator asked to be quorum-replicated at the weaker guarantee, silently.
+
 The `Leader` loss window is exported as `felix_broker_replication_lag_records`:
 how far the slowest follower is behind, across every shard this broker leads. A
 halted follower is excluded from it — it has stopped rather than fallen behind,

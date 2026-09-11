@@ -455,6 +455,7 @@ async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;
@@ -590,6 +591,7 @@ async fn quic_subscribe_rejects_a_cursor_past_the_tail() -> Result<()> {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await?;

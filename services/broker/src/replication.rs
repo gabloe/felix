@@ -41,6 +41,7 @@ use crate::peer::{PeerError, PeerRequester};
 
 pub mod driver;
 pub mod metrics;
+pub mod quorum;
 
 /// How far a follower has got, as this leader understands it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +235,45 @@ pub fn lag_records(tail: u64, followers: &[FollowerCursor]) -> Option<u64> {
         .filter(|follower| follower.halted.is_none())
         .map(|follower| tail.saturating_sub(follower.next_offset))
         .max()
+}
+
+/// How many copies must hold a record for a majority, the leader included.
+///
+/// `replicas` is the follower count, so the replica set is one larger. A set of
+/// three needs two, a set of five needs three — and a set of one needs one,
+/// which is the leader alone and is why `replication_factor: 1` costs nothing.
+pub fn majority_of(replicas: usize) -> usize {
+    replicas.div_ceil(2) + 1
+}
+
+/// The highest offset a majority of the replica set holds durably.
+///
+/// The leader is counted as holding everything up to `leader_tail`: it wrote the
+/// records, and a record it has not written is not a candidate for a quorum in
+/// the first place.
+///
+/// **A halted follower counts for nothing.** It is not slow, it has stopped —
+/// its log has diverged, or this broker has been superseded — and letting a
+/// stale position count toward a majority is how an acknowledgement comes to
+/// mean less than it says.
+///
+/// Cursors belong to one generation. The caller passes the set for the
+/// generation it is publishing at, which is what stops an older generation's
+/// acknowledgements satisfying a newer generation's quorum.
+pub fn quorum_offset(leader_tail: u64, followers: &[FollowerCursor]) -> u64 {
+    let needed = majority_of(followers.len());
+    // The leader is one of them, and it holds the most.
+    let mut held: Vec<u64> = std::iter::once(leader_tail)
+        .chain(
+            followers
+                .iter()
+                .filter(|follower| follower.halted.is_none())
+                .map(|follower| follower.next_offset.min(leader_tail)),
+        )
+        .collect();
+    // Descending, so the `needed`-th is the highest offset that many hold.
+    held.sort_unstable_by(|a, b| b.cmp(a));
+    held.get(needed - 1).copied().unwrap_or(0)
 }
 
 #[cfg(test)]

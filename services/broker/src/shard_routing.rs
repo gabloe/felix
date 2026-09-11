@@ -157,6 +157,21 @@ impl IngressRouter {
     /// it. Trusting only the router would serve writes during recovery;
     /// trusting only local state would keep serving a shard that has been
     /// reassigned.
+    /// The generation this broker currently leads `key` at, if it does.
+    ///
+    /// A publish waiting for a quorum needs it: the majority is over the
+    /// replica set of *that* generation, and an acknowledgement from an older
+    /// one does not count toward a newer one's quorum.
+    pub fn generation(&self, key: &ShardKey) -> Option<u64> {
+        match self.dispatch(key) {
+            Dispatch::Local => match self.router.resolve(&to_router_key(key)) {
+                Resolution::Local { generation } => Some(generation),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
         match self.router.resolve(&to_router_key(key)) {
             Resolution::Local { generation } => {

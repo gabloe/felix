@@ -47,7 +47,11 @@ async fn register(broker: &Broker, stream: &str, durable: bool) {
             "t1",
             "default",
             stream,
-            StreamMetadata { durable, shards: 1 },
+            StreamMetadata {
+                durable,
+                shards: 1,
+                ..Default::default()
+            },
         )
         .await
         .expect("register");
@@ -269,6 +273,7 @@ async fn upgrading_a_live_stream_to_durable_requires_recreation() {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await
@@ -314,6 +319,7 @@ async fn downgrading_a_live_durable_stream_requires_recreation() {
             StreamMetadata {
                 durable: false,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await
@@ -361,6 +367,7 @@ async fn registering_a_durable_stream_without_storage_is_rejected() {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await
@@ -772,6 +779,7 @@ async fn a_failed_hydration_leaves_no_registered_stream() {
             StreamMetadata {
                 durable: true,
                 shards: 1,
+                ..Default::default()
             },
         )
         .await

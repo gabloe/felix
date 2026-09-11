@@ -47,3 +47,20 @@ pub fn record_lag(records: u64) {
 pub fn record_halted(count: usize) {
     metrics::gauge!(HALTED).set(count as f64);
 }
+
+/// Publishes to a `Quorum` stream that did not reach a majority, by `reason`.
+///
+/// The `ok` case is not counted here: an acknowledged publish is already
+/// counted on the publish path, and a second counter for the same event only
+/// invites the two to disagree.
+pub const QUORUM_FAILED_TOTAL: &str = "felix_broker_publish_quorum_failed_total";
+
+/// No majority within the budget. The records are durable on this broker and
+/// may yet reach one; this broker simply cannot say that they have.
+pub const QUORUM_TIMED_OUT: &str = "timed_out";
+/// Leadership moved before the batch reached a majority.
+pub const QUORUM_NOT_LEADING: &str = "not_leading";
+
+pub fn record_quorum(reason: &'static str) {
+    metrics::counter!(QUORUM_FAILED_TOTAL, "reason" => reason).increment(1);
+}
