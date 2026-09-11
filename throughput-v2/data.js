@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789095273582,
+  "lastUpdate": 1789095416472,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4680,6 +4680,58 @@ window.BENCHMARK_DATA = {
             "range": "37261.33",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 549277.53\nmean: 538314.58\nstdev: 37261.33\ncv: 6.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a49b579e54e96becf75c749b72c4deb3404af2ab",
+          "message": "test(cluster): give the harness the faults M5.6 needs (#263)\n\n#115 asks for failures injected at controlled points in the write and\nreplication pipeline. The harness could kill a broker and nothing else, so the\nfaults that matter most to a lease-fenced design were unreachable.\n\n`pause_node` and `resume_node` suspend and resume a broker with `SIGSTOP` and\n`SIGCONT`. This is the fault a kill cannot produce: the process stays alive,\nkeeps every lease and connection it holds, and answers nothing. It is what the\ncommit-boundary lease check exists for — a broker suspended past its lease\nexpiry has to refuse the write it was in the middle of when it wakes, rather\nthan committing to a shard someone else now leads. A kill cannot test that,\nbecause a dead broker never wakes.\n\n`kill_node` kills without waiting for the control plane to react. `stop_node`\nwaits until the node is no longer placeable, which is right for a test that\nneeds the cluster settled and wrong for one timing failover: the clock has to\nstart at the kill, not after the cluster has already responded.\n\nEach fault is tested as a fault. A \"paused\" broker that was really just slow,\nor a \"killed\" one still answering, would make every scenario built on it pass\nfor the wrong reason — so a paused broker is asserted to stop answering *and*\nstay alive, a resumed one to come back, and a kill to return immediately.\nTeardown is pinned too: a test panicking mid-fault has to fail on its own\nrather than wedging the suite.\n\nOne comment written here was wrong and is not in the diff: teardown does\nreclaim a suspended broker, because `SIGKILL` terminates a stopped process.\nChecked rather than assumed, and now a test.\n\nClock skew is still not injectable, and `docs/cluster-harness.md` says so:\nlease expiry reads the system clock, so testing it needs either an injectable\nclock in the broker or `libfaketime` around the process.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T19:52:29-07:00",
+          "tree_id": "b76aae91d2293e3ca286e1f6374bddecb2c97a28",
+          "url": "https://github.com/gabloe/felix/commit/a49b579e54e96becf75c749b72c4deb3404af2ab"
+        },
+        "date": 1789095416107,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232339.14,
+            "range": "3510.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232339.14\nmean: 232667.38\nstdev: 3510.50\ncv: 1.51%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232339.14,
+            "range": "3510.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232339.14\nmean: 232667.38\nstdev: 3510.50\ncv: 1.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55594.52,
+            "range": "1268.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55594.52\nmean: 55424.22\nstdev: 1268.85\ncv: 2.29%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 555945.18,
+            "range": "12688.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 555945.18\nmean: 554242.18\nstdev: 12688.45\ncv: 2.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
