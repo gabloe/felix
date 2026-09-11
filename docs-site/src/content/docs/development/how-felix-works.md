@@ -103,8 +103,8 @@ The important architectural boundary is:
 | `services/broker` | Runnable broker, network handlers, auth, metrics, control-plane sync | `services/broker/src/main.rs` |
 | `services/controlplane` | Metadata APIs, token exchange, JWKS, and RBAC | `services/controlplane/src/main.rs` |
 
-Supporting crates such as `felix-consensus`, `felix-router`, and
-`felix-metadata` represent the direction of the multi-node architecture. Do not
+Supporting crates such as `felix-router` and `felix-metadata` represent the
+direction of the multi-node architecture. Do not
 start with them when learning the current message path.
 
 ## 3. Networking foundations: UDP, TLS, and QUIC

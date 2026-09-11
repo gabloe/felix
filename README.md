@@ -211,7 +211,6 @@ crates/
   felix-crypto      # encryption and key handling
   felix-authz       # authentication and authorization
   felix-client      # Rust client SDK
-  felix-consensus   # consensus/coordination placeholders
   felix-conformance # shared wire protocol conformance runner
 
 services/

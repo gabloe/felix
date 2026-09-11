@@ -7,7 +7,6 @@ members = [
   "crates/felix-storage",
   "crates/felix-broker",
   "crates/felix-metadata",
-  "crates/felix-consensus",
   "crates/felix-router",
   "crates/felix-crypto",
   "crates/felix-authz",

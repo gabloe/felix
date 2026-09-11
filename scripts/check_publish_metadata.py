@@ -41,7 +41,6 @@ ELASTIC = {
     "felix-metadata",
     "felix-authz",
     "felix-crypto",
-    "felix-consensus",
     "felix-router",
     "felix-cluster",
     "broker",
