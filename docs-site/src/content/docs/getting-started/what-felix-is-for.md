@@ -144,6 +144,9 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; bounded by retention when it is configured, unbounded otherwise |
 | Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
 | Sharding | 🚧 Partial | Streams carry a shard count, the control plane assigns each shard an owner, and a publish resolves against that ownership before anything else happens. A publish for a shard this broker does not own is forwarded to the owner and acknowledged only once the owner has written it. The wire protocol still carries no routing key, so every record of a stream lands on shard 0, which is what keeps this partial |
+| Multi-node clustering and replication | 🚧 Partial | Brokers register, their liveness is tracked, shards are assigned to owners, and a publish that reaches the wrong broker is forwarded to the right one. Shard leaders now replicate committed records to followers, and a follower whose history is gone is given a log starting where the leader's surviving log does. Subscribe is still served only by the broker holding the shard |
+| Leader failover | 🚧 Partial | A lost leader is replaced by a replica that holds the log — never by a broker that does not, and the shard is left unavailable rather than served empty if no replica qualifies. **But a promoted broker does not yet serve the shard it was promoted to ([#266](https://github.com/gabloe/felix/issues/266)), so failover is not usable yet** |
+| Quorum acknowledgement | 🚧 Partial | `Stream.consistency` is honoured: a `Quorum` publish waits for a majority of the replica set, counting the leader, to hold the record durably. Bounded by a timeout, and a timeout is reported as "this broker cannot vouch for the write" rather than as failure. Depends on failover above to be worth choosing |
 
 ### Measured performance
 
@@ -208,10 +211,8 @@ ship rather than being marked off here.
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
-| Multi-node clustering and replication | 🎯 Target | Brokers register, their liveness is tracked, shards are assigned to owners, and a publish that reaches the wrong broker is forwarded to the right one over a broker-internal QUIC transport. Subscribe is not: it is still served only by the broker holding the shard, and there is no replication and no failover |
 | Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
-| At-least-once / quorum acks | 🎯 Target | Not started |
 | Non-Rust client SDKs | 🎯 Target | Rust client only |
 
 **Target scale**, stated as ambition and nothing more: a single update fanning out
@@ -241,9 +242,9 @@ whether you could build it on the current release.
 | Internal service event bus | Moderate | Mostly | Works, but NATS and RabbitMQ serve this well already — weak differentiation |
 | Distributed live-state synchronization | Strong | **No** | Needs gap-free snapshot + change stream; drops corrupt local state |
 | Infrastructure / control-plane state distribution | Strong | **No** | Same gap, plus needs multi-node |
-| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node, without retention or replication |
-| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist; replication does not, and neither does retention |
-| Durable event log, replay, event sourcing | Weak | Partly | A single-node durable log with offset replay exists. No retention, no tiering, no replication — use Kafka for anything that needs history to outlive one machine |
+| AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node. Records replicate to followers, but a lost leader cannot yet serve its shard (#266), so this is still one node in practice |
+| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist. Replication does, and retention does not; failover does not yet complete (#266) |
+| Durable event log, replay, event sourcing | Weak | Partly | A durable log with offset replay exists, and records now replicate to followers. No retention and no tiering, and a lost leader cannot yet serve its shard (#266) — use Kafka for anything that needs history to outlive one machine today |
 | Primary datastore | Weak | No | Use a database |
 | General-purpose key-value store | Weak | No | Use Redis or Valkey |
 | Complex broker routing, workflow messaging | Weak | No | Use RabbitMQ |

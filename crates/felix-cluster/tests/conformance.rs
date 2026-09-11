@@ -11,7 +11,7 @@
 //! failure this suite exists to catch.
 use anyhow::Result;
 use felix_cluster::scenarios::{self, Ingress, Outcome};
-use felix_cluster::{Cluster, ClusterConfig};
+use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 
 /// A scenario's future, boxed so `on_both` can name it for any borrow of the
@@ -27,7 +27,7 @@ const OTHER: &str = "events";
 fn config(nodes: usize) -> ClusterConfig {
     ClusterConfig {
         nodes,
-        streams: vec![(STREAM.to_string(), 1), (OTHER.to_string(), 1)],
+        streams: vec![StreamSpec::new(STREAM, 1), StreamSpec::new(OTHER, 1)],
         ..Default::default()
     }
 }

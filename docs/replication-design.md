@@ -288,10 +288,18 @@ multi-instance work and not before.
 
 The gate matters more than the promotion. A replica that holds no log can be
 promoted perfectly well and will then serve an empty shard — the failover *is*
-the data loss. So promotion requires a follower within the catch-up bound, and
-until records are actually replicated (#112) nothing reports being caught up, so
-promotion does not fire and placement behaves exactly as it did. The gate starts
-permitting failover at the moment replication starts working, and not before.
+the data loss. So promotion requires a follower within the catch-up bound.
+
+Leaders now report which followers hold everything they do, so the gate has real
+input and promotion fires: a lost leader is replaced by a replica that holds the
+log, in around a second on a local three-node cluster.
+
+**Failover is not usable yet.** A promoted broker does not currently serve the
+shard it was promoted to (#266). Promotion itself is correct — the replacement
+is always a replica that holds the log, and a shard with no such replica is left
+unavailable rather than served empty — but a subscriber on the promoted broker
+receives nothing. Treat a replicated stream as single-node for availability
+until that is fixed.
 
 Both halves of this are implemented (#112). The follower's side is the exchange,
 the append rule, and the fence at the storing end. The leader's side keeps one

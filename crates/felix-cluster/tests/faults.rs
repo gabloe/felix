@@ -8,7 +8,7 @@
 //! Run with `cargo test -p felix-cluster` (or `task cluster:test`).
 use std::time::Duration;
 
-use felix_cluster::{Cluster, ClusterConfig};
+use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 
 const STREAM: &str = "orders";
@@ -16,20 +16,23 @@ const STREAM: &str = "orders";
 fn config() -> ClusterConfig {
     ClusterConfig {
         nodes: 3,
-        streams: vec![(STREAM.to_string(), 1)],
+        streams: vec![StreamSpec::new(STREAM, 1)],
         ..Default::default()
     }
 }
 
-/// Whether a broker answers its metrics endpoint within `budget`.
+/// Whether a broker *successfully answers* its metrics endpoint within `budget`.
 ///
-/// The cheapest liveness question that does not depend on cluster state: a
-/// suspended process accepts nothing and answers nothing, so the request times
-/// out rather than failing fast.
+/// Success, not merely completion. A suspended process may leave its listening
+/// socket to hang the request or to refuse it outright depending on the
+/// platform, and both mean "not answering" — an earlier version of this asked
+/// only whether the call returned, so a fast refusal on Linux read as a healthy
+/// broker and the fault went untested.
 async fn answers_within(cluster: &Cluster, node_id: &str, budget: Duration) -> bool {
-    tokio::time::timeout(budget, cluster.metric(node_id, "felix_broker_up"))
-        .await
-        .is_ok()
+    matches!(
+        tokio::time::timeout(budget, cluster.metric(node_id, "felix_broker_up")).await,
+        Ok(Ok(_))
+    )
 }
 
 /// **A paused broker stops answering and stays alive.** Both halves matter: if

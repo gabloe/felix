@@ -157,6 +157,32 @@ impl StreamState {
         self.commit_sequencer.reset(next_seq);
     }
 
+    /// Move the stream's idea of its tail up to `next_seq`.
+    ///
+    /// For records that reached the log without passing through this state —
+    /// replication writes the shard's log directly, so a follower's `next_seq`
+    /// and commit order stay at zero while its disk fills.
+    ///
+    /// **The commit order has to move with it.** It is keyed on disk offsets, so
+    /// a publish after those writes reserves a turn past them and then waits for
+    /// turns that were never taken: the first write a promoted broker accepts
+    /// would hang forever. Same reasoning as recovery after a restart, which is
+    /// why `hydrate` does this too.
+    ///
+    /// The ring is deliberately left alone. Refilling it from disk on every
+    /// replicated batch would read the whole window each time, and a reader is
+    /// served from the log when the ring has nothing — see
+    /// `Broker::subscribe_from`.
+    pub(crate) fn advance_to(&self, next_seq: u64) {
+        let mut state = self.log_state.lock();
+        if next_seq <= state.next_seq {
+            return;
+        }
+        state.next_seq = next_seq;
+        drop(state);
+        self.commit_sequencer.reset(next_seq);
+    }
+
     pub(crate) fn deactivate(&self) {
         self.active.store(false, Ordering::Release);
     }
