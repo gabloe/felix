@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789086477037,
+  "lastUpdate": 1789086606409,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4368,6 +4368,58 @@ window.BENCHMARK_DATA = {
             "range": "27168.78",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 752350.54\nmean: 750671.50\nstdev: 27168.78\ncv: 3.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92bd0fc092df36a7badca4ce7214823df5707b46",
+          "message": "fix(broker): stop a skipped batch ending a subscription (#253) (#257)\n\n`Subscription::recv` read one envelope, filtered it, and returned whatever\nthat envelope produced:\n\n    let envelope = self.receiver.recv().await?;\n    self.extend_pending(&envelope);\n    self.pending.pop_front()\n\n`extend_pending` drops payloads below `skip_below`, and a batch landing\nentirely below it produces nothing. `pop_front` then returned `None` -- which\nis the value that means the channel closed. Every caller reads it that way:\nthe subscribe handler, the client, and the latency demo all stop.\n\nA batch below the resume point is ordinary rather than exceptional, and the\nfield's own documentation says why: a publish claims its disk offsets before\nthe record reaches the replay ring, so a cursor taken from the durable tail\ncan name an offset the ring has not seen, and the records in between arrive\nlive and below the cursor. Dropping them is right -- the caller already has\nthem. Ending the subscription is not.\n\nThis matches #253 exactly: an empty `seen`, an exit through `Ok(None)`, and\nthe test's own timeout assertion not firing. It is timing-dependent because\nit needs an in-flight publish to land below the cursor, which is why a loaded\nCI runner shows it and a fast machine does not.\n\nBoth `recv` and `try_recv` now consume envelopes until they have a record or\nthe channel really ends. Each turn consumes one envelope from a finite\nchannel, so neither loops forever.\n\nThe regression tests fail without the fix: a batch wholly below the resume\npoint, several such batches in a row, and the same trap in `try_recv`. A\nclosed channel still reports the end, and an empty queue still reports empty.\n\nNot a witnessed reproduction of #253 itself: 60 runs of that test on two\npinned CPUs under Linux passed both with and without the fix, as the issue's\nown attempts also found. The defect and its signature are proven; the tie to\nthat specific occurrence is inference.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T17:26:30-07:00",
+          "tree_id": "8d45b3f20cced5b96d326c06a6f6aadcbba413c8",
+          "url": "https://github.com/gabloe/felix/commit/92bd0fc092df36a7badca4ce7214823df5707b46"
+        },
+        "date": 1789086605656,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 317432.89,
+            "range": "2596.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 317432.89\nmean: 318237.48\nstdev: 2596.24\ncv: 0.82%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 317432.89,
+            "range": "2596.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 317432.89\nmean: 318237.48\nstdev: 2596.24\ncv: 0.82%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75869.73,
+            "range": "1505.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75869.73\nmean: 75902.73\nstdev: 1505.20\ncv: 1.98%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 758697.29,
+            "range": "15051.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 758697.29\nmean: 759027.30\nstdev: 15051.95\ncv: 1.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
