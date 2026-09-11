@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789089740308,
+  "lastUpdate": 1789090165780,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4524,6 +4524,58 @@ window.BENCHMARK_DATA = {
             "range": "7035.21",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 729673.51\nmean: 728868.90\nstdev: 7035.21\ncv: 0.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afdb5584f563769bc6e21e16b9e8e1c3f5ab0b63",
+          "message": "feat(storage): let a shard's log begin at a non-zero offset (M5.5) (#261)\n\nThe blocker under #114. A replica being given a shard whose early history is\nalready gone everywhere needs its log to *begin* at the oldest surviving\noffset. Until now a log could only start at zero, so there was nowhere to put\ntransferred history: the storage layer had no way to express \"this log is\ncomplete and starts at 5000\".\n\n`DiskLog::open_at` places a shard's first segment at a given base offset when\nthe directory is empty. An existing log is opened as it stands and the base is\nignored -- a restart must not reinterpret a shard that is already here, and the\nbase it was created at is recorded in its own first segment.\n\nThat last point is what makes this safe rather than a second source of truth.\nThe offset travels in the segment header, which recovery already reads, so\nnothing has to remember it out of band and a base that survived one restart\nsurvives every later one. The first segment is flushed before anything can\nappend to it: a base that did not survive a crash would leave the log reading\nback as one starting at zero, which is a hole rather than a shorter log.\n\nA file name is a segment id, not an offset. The two coincide for the common log\nand are independent in general; `docs/storage-format.md` now says so, because\nthe assumption that they are the same is exactly what this breaks.\n\nTested: the placed base is where the first record lands, it survives a restart,\nan existing log keeps its own base when a different one is passed, a read below\nthe base is `Trimmed` just as on a leader whose retention removed the same\nrecords, rollover keeps the offsets contiguous from a non-zero base, and a base\nof zero is an ordinary log.\n\nNot the whole of #114: nothing transfers history yet. That needs a leader to\nserve its surviving range to a bootstrapping follower, and a way for the\nfollower to know the range it is being given starts where the leader's own log\nstarts -- which the current `ReplicateRecords` body cannot say, and the internal\nprotocol freezes existing body layouts.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T18:26:56-07:00",
+          "tree_id": "d859ff31799c7b2e78d5b889c4189b742a9a08c8",
+          "url": "https://github.com/gabloe/felix/commit/afdb5584f563769bc6e21e16b9e8e1c3f5ab0b63"
+        },
+        "date": 1789090164459,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 287277.12,
+            "range": "8115.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 287277.12\nmean: 290303.19\nstdev: 8115.01\ncv: 2.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 287277.12,
+            "range": "8115.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 287277.12\nmean: 290303.19\nstdev: 8115.01\ncv: 2.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 65487.91,
+            "range": "775.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 65487.91\nmean: 65820.72\nstdev: 775.69\ncv: 1.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 654879.14,
+            "range": "7756.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 654879.14\nmean: 658207.24\nstdev: 7756.92\ncv: 1.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
