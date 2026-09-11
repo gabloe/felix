@@ -39,7 +39,6 @@ crates/
 ├── felix-router/        # Region-aware routing
 ├── felix-crypto/        # Encryption and key handling
 ├── felix-authz/         # Authentication and authorization
-├── felix-consensus/     # Consensus coordination (Raft)
 └── felix-conformance/   # Wire protocol conformance tests
 ```
 
@@ -236,18 +235,6 @@ publisher
 - RBAC policies and permission matching
 - Tenant isolation enforcement
 - mTLS authentication (planned)
-
-#### felix-consensus
-
-**Purpose**: Consensus and coordination for clustering.
-
-**Responsibilities**:
-- Raft implementation (planned)
-- Leader election
-- Log replication
-- Membership management
-
-**Status**: Placeholder for future clustering.
 
 #### felix-conformance
 

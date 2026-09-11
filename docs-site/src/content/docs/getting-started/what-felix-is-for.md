@@ -212,7 +212,7 @@ ship rather than being marked off here.
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
 | Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Explicitly post-MVP; not started |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
-| Raft consensus for cluster metadata | 🎯 Target | `felix-consensus` is a configuration struct with no protocol implementation |
+| Raft consensus for cluster metadata | 🎯 Target | Not started. Raft is the intended mechanism for making control-plane *metadata* highly available, and deliberately not for replicating stream records: shard replication is leader leases plus log shipping, decided in [`docs/replication-design.md`](https://github.com/gabloe/felix/blob/main/docs/replication-design.md) |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
 | Non-Rust client SDKs | 🎯 Target | Rust client only |
 
