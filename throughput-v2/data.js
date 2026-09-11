@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789084620095,
+  "lastUpdate": 1789086477037,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4316,6 +4316,58 @@ window.BENCHMARK_DATA = {
             "range": "10123.02",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 747473.26\nmean: 753482.68\nstdev: 10123.02\ncv: 1.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6403b077ffa2b46f46f30cdf5ee47a1781114dab",
+          "message": "feat(replication): ship committed records to followers (M5.3) (#258)\n\nThe leader's half of #112, completing it. The follower's half landed in #255.\n\n## One cursor per follower\n\nA follower is a position in the shard's log and nothing more. The leader keeps\nthe next offset it believes each follower wants, reads that range from its own\nlog, and ships it. **The follower's answer moves the cursor, never the send** --\na batch that was sent is not a batch that was stored, and the follower is the\nside that did the writing.\n\nThat is also why the cursor can go backwards. A follower that lost records, or\nwas rebuilt, answers `LogGap` naming the offset it actually wants, and the\nleader resumes there. Resume needs no separate negotiation and nothing kept on\ndisk: the follower is the authority on its own position and says so in every\nrefusal.\n\n## What stops and what retries\n\n`LogConflict` and `FencedEpoch` halt that follower. Neither converges by trying\nagain -- the first means the two logs disagree about bytes both hold, the\nsecond that this broker is no longer the leader. Everything else, including an\nanswer this broker does not recognise, is retried: stopping replication over a\nprotocol confusion is the worse mistake.\n\n## What bounds it\n\nOne batch in flight per follower, each bounded by a byte budget read from the\nlog. A follower far behind costs the leader one batch rather than the distance\nit is behind, and one that stops answering stops consuming anything, because\nthe next read does not start until the last answer arrives.\n\n## Cursor lifetime\n\nCursors last as long as the assignment. A generation change discards them: a\ncursor is a belief about where a follower stood under a particular leadership,\nand a new one invalidates the belief rather than the follower. A replica added\nmid-generation starts at zero rather than at the tail -- the leader does not\nknow what it holds, and starting at the tail would declare it caught up while\nit held nothing.\n\n## The loss window is observable\n\n`felix_broker_replication_lag_records` is how far the slowest follower is\nbehind, across every shard this broker leads. The design note requires it: an\noperator choosing `Leader` is choosing this window, and a bound nobody can see\nis not a bound. A halted follower is excluded -- it has stopped rather than\nfallen behind, and those need different responses; `felix_broker_replication_\nhalted` is where that shows.\n\nMetrics are unlabelled by shard on purpose. A label per shard is a label per\nstream per tenant, which is unbounded by design here.\n\nEach rule was confirmed against a reverted check: trusting the leader's own\ncount instead of the follower's, ignoring a gap's requested offset, shipping to\na halted follower, and folding a halted follower into the lag each fail exactly\nthe tests that name them.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T17:25:53-07:00",
+          "tree_id": "c3c31a784499c4533c5f4fb7cdacd1a7a1c3b26a",
+          "url": "https://github.com/gabloe/felix/commit/6403b077ffa2b46f46f30cdf5ee47a1781114dab"
+        },
+        "date": 1789086475728,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 325845.59,
+            "range": "5457.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 325845.59\nmean: 325652.61\nstdev: 5457.64\ncv: 1.68%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 325845.59,
+            "range": "5457.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 325845.59\nmean: 325652.61\nstdev: 5457.64\ncv: 1.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75235.05,
+            "range": "2716.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75235.05\nmean: 75067.15\nstdev: 2716.88\ncv: 3.62%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 752350.54,
+            "range": "27168.78",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 752350.54\nmean: 750671.50\nstdev: 27168.78\ncv: 3.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
