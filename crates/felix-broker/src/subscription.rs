@@ -52,24 +52,38 @@ pub struct Subscription {
 }
 
 impl Subscription {
+    /// The next record, or `None` once the subscription has ended.
+    ///
+    /// **`None` means the channel closed, and nothing else.** Every caller
+    /// treats it as the end of the stream, so a batch that happens to yield no
+    /// records must not produce one: a batch landing entirely below
+    /// [`Self::skip_below`] is ordinary during a resume, and reporting it as an
+    /// end of stream loses every record after the cursor.
     pub async fn recv(&mut self) -> Option<Bytes> {
-        if let Some(payload) = self.pending.pop_front() {
-            return Some(payload);
+        loop {
+            if let Some(payload) = self.pending.pop_front() {
+                return Some(payload);
+            }
+            // Terminates: each turn consumes one envelope from a finite
+            // channel, and a closed one ends the loop through `?`.
+            let envelope = self.receiver.recv().await?;
+            self.extend_pending(&envelope);
         }
-        let envelope = self.receiver.recv().await?;
-        self.extend_pending(&envelope);
-        self.pending.pop_front()
     }
 
+    /// The next record if one is already queued.
+    ///
+    /// `Empty` means nothing is waiting, so — as in [`Self::recv`] — a batch
+    /// that yielded no records is skipped rather than reported: the queue may
+    /// still hold the record the caller is after.
     pub fn try_recv(&mut self) -> std::result::Result<Bytes, mpsc::error::TryRecvError> {
-        if let Some(payload) = self.pending.pop_front() {
-            return Ok(payload);
+        loop {
+            if let Some(payload) = self.pending.pop_front() {
+                return Ok(payload);
+            }
+            let envelope = self.receiver.try_recv()?;
+            self.extend_pending(&envelope);
         }
-        let envelope = self.receiver.try_recv()?;
-        self.extend_pending(&envelope);
-        self.pending
-            .pop_front()
-            .ok_or(mpsc::error::TryRecvError::Empty)
     }
 
     /// Queue an envelope's payloads, dropping any below the resume point.
@@ -141,3 +155,7 @@ impl Drop for SubscriptionReceiver {
         self.receiver.close();
     }
 }
+
+#[cfg(test)]
+#[path = "subscription_tests.rs"]
+mod tests;
