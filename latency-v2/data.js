@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789089737192,
+  "lastUpdate": 1789090161967,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -5742,6 +5742,72 @@ window.BENCHMARK_DATA = {
             "range": "325.22",
             "unit": "us",
             "extra": "trials: 5\nmedian: 360.00\nmean: 546.80\nstdev: 325.22\ncv: 59.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afdb5584f563769bc6e21e16b9e8e1c3f5ab0b63",
+          "message": "feat(storage): let a shard's log begin at a non-zero offset (M5.5) (#261)\n\nThe blocker under #114. A replica being given a shard whose early history is\nalready gone everywhere needs its log to *begin* at the oldest surviving\noffset. Until now a log could only start at zero, so there was nowhere to put\ntransferred history: the storage layer had no way to express \"this log is\ncomplete and starts at 5000\".\n\n`DiskLog::open_at` places a shard's first segment at a given base offset when\nthe directory is empty. An existing log is opened as it stands and the base is\nignored -- a restart must not reinterpret a shard that is already here, and the\nbase it was created at is recorded in its own first segment.\n\nThat last point is what makes this safe rather than a second source of truth.\nThe offset travels in the segment header, which recovery already reads, so\nnothing has to remember it out of band and a base that survived one restart\nsurvives every later one. The first segment is flushed before anything can\nappend to it: a base that did not survive a crash would leave the log reading\nback as one starting at zero, which is a hole rather than a shorter log.\n\nA file name is a segment id, not an offset. The two coincide for the common log\nand are independent in general; `docs/storage-format.md` now says so, because\nthe assumption that they are the same is exactly what this breaks.\n\nTested: the placed base is where the first record lands, it survives a restart,\nan existing log keeps its own base when a different one is passed, a read below\nthe base is `Trimmed` just as on a leader whose retention removed the same\nrecords, rollover keeps the offsets contiguous from a non-zero base, and a base\nof zero is an ordinary log.\n\nNot the whole of #114: nothing transfers history yet. That needs a leader to\nserve its surviving range to a bootstrapping follower, and a way for the\nfollower to know the range it is being given starts where the leader's own log\nstarts -- which the current `ReplicateRecords` body cannot say, and the internal\nprotocol freezes existing body layouts.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-10T18:26:56-07:00",
+          "tree_id": "d859ff31799c7b2e78d5b889c4189b742a9a08c8",
+          "url": "https://github.com/gabloe/felix/commit/afdb5584f563769bc6e21e16b9e8e1c3f5ab0b63"
+        },
+        "date": 1789090159079,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 89,
+            "range": "3.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 89.00\nmean: 91.00\nstdev: 3.67\ncv: 4.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 131,
+            "range": "7.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 131.00\nmean: 130.20\nstdev: 7.19\ncv: 5.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 150,
+            "range": "9.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 150.00\nmean: 151.40\nstdev: 9.76\ncv: 6.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 119,
+            "range": "4.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 119.00\nmean: 121.60\nstdev: 4.77\ncv: 3.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 268,
+            "range": "125.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 268.00\nmean: 317.20\nstdev: 125.94\ncv: 39.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 863,
+            "range": "994.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 863.00\nmean: 1142.60\nstdev: 994.68\ncv: 87.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
