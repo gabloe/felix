@@ -184,6 +184,27 @@ Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
 nothing so far has required it.
 
+## The failover demo
+
+```bash
+task cluster:failover              # or -- --pace 0.5 to slow it down
+```
+
+Starts three brokers with a shard replicated three ways, publishes under
+`Quorum`, kills the broker that acknowledged those records, and reads the whole
+stream back from the broker that took over. It also publishes *through* the
+failover with a client that was given every broker's address, to show the client
+reconnecting on its own.
+
+It fails loudly rather than narrating past a problem: a record acknowledged
+before the kill that is not readable afterwards ends the demo with an error.
+
+Two things in its output look like defects and are not, and it says so:
+several `harness-probe` records (one per broker, published at startup to prove
+the cluster can serve) and, sometimes, one duplicated record — that is
+`publish_at_least_once`, which resends after a failure it cannot prove was not
+applied.
+
 ## Watching it
 
 A recording of the three-pane demo is on the docs site:

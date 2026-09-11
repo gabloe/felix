@@ -62,6 +62,29 @@ impl PeerRequester for AcceptingFollower {
     }
 }
 
+/// A follower that never answers, the way an unreachable one does not.
+///
+/// Not a refusal: a QUIC handshake to a dead port neither succeeds nor fails
+/// promptly, it runs out a timeout far longer than a publish will wait.
+struct SilentFollower {
+    silent: String,
+    reachable: AcceptingFollower,
+}
+
+impl PeerRequester for SilentFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        if node_id == self.silent {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+        self.reachable.request(node_id, addr, message).await
+    }
+}
+
 fn node(node_id: &str, port: u16) -> NodeRef {
     NodeRef {
         node_id: node_id.to_string(),
@@ -73,6 +96,16 @@ fn node(node_id: &str, port: u16) -> NodeRef {
 
 fn key() -> ShardKey {
     ShardKey {
+        tenant_id: TENANT.to_string(),
+        namespace: NAMESPACE.to_string(),
+        stream: STREAM.to_string(),
+        shard: 0,
+    }
+}
+
+/// The same shard, as the quorum marks name it.
+fn watch_key() -> crate::shard_watch::ShardKey {
+    crate::shard_watch::ShardKey {
         tenant_id: TENANT.to_string(),
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
@@ -137,6 +170,44 @@ async fn leader_with(count: usize) -> (Arc<Broker>, TempDir) {
     }
     let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage);
     (Arc::new(broker), dir)
+}
+
+/// **One unreachable follower does not hold up the quorum mark for a shard
+/// whose majority is alive.** Losing a minority of the replica set is the case
+/// `Quorum` exists to tolerate, so it must not be the case that stops it
+/// acknowledging.
+///
+/// The clock is the assertion: with the followers visited one after another,
+/// the mark waits out the unreachable one before the live one's progress counts
+/// for anything.
+#[tokio::test(start_paused = true)]
+async fn an_unreachable_follower_does_not_hold_up_the_quorum_mark() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let requester = SilentFollower {
+        silent: "broker-c".to_string(),
+        reachable: AcceptingFollower::default(),
+    };
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let started = tokio::time::Instant::now();
+    replicate_once(&requester, &broker, &router, &marks, None, &mut cursors).await;
+    let took = started.elapsed();
+
+    assert!(
+        matches!(
+            marks
+                .wait_for(&watch_key(), 4, 3, std::time::Duration::ZERO)
+                .await,
+            crate::replication::quorum::QuorumWait::Reached
+        ),
+        "the leader and the reachable follower are a majority of three",
+    );
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "the pass waited on the unreachable follower: {took:?}",
+    );
 }
 
 /// The shard this broker leads is shipped to every follower in its set.

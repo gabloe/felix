@@ -4,8 +4,8 @@ use crate::config::NodeLivenessConfig;
 
 const HEARTBEAT_MS: u64 = 500;
 const EXPIRY_MS: u64 = 1_500;
-/// Reports are believed for expiry plus one heartbeat.
-const TTL_MS: u64 = EXPIRY_MS + HEARTBEAT_MS;
+/// Reports are believed for twice the expiry plus one heartbeat.
+const TTL_MS: u64 = EXPIRY_MS * 2 + HEARTBEAT_MS;
 
 fn positions() -> ReplicaPositions {
     ReplicaPositions::new(&NodeLivenessConfig {
@@ -247,4 +247,33 @@ fn a_forgotten_shard_reports_nothing() {
     positions.forget(&key("orders"));
 
     assert!(!at(&positions, 1_000).is_caught_up(&key("orders"), "broker-b"));
+}
+
+/// **A report has to outlive the detection of the leader that made it.**
+///
+/// A leader is declared down an expiry timeout after its last *heartbeat*, and
+/// its last *report* is older still. If the report expires first the shard
+/// becomes unpromotable forever — nothing else will ever report on it, because
+/// the only broker that could is the one that died.
+#[test]
+fn a_report_outlives_the_detection_of_the_leader_that_made_it() {
+    let positions = positions();
+    // The worst realistic case: the leader reports, then survives a further
+    // heartbeat interval before dying, and is declared down an expiry timeout
+    // after that.
+    let reported_at = 1_000;
+    positions.record(
+        key("orders"),
+        4,
+        caught_up(&["broker-b"]),
+        offsets_for(&caught_up(&["broker-b"])),
+        reported_at,
+    );
+    let declared_down_at = reported_at + HEARTBEAT_MS + EXPIRY_MS;
+
+    assert!(
+        at(&positions, declared_down_at).is_caught_up(&key("orders"), "broker-b"),
+        "the report expired before the leader was even known to be gone, which \
+         leaves the shard unpromotable for good",
+    );
 }

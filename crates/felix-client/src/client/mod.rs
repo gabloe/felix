@@ -2,6 +2,7 @@
 #![allow(clippy::module_inception)]
 pub mod cache;
 pub mod client;
+pub mod cluster;
 pub mod event_router;
 #[cfg(feature = "in-process")]
 pub mod inprocess;

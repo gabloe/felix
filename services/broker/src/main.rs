@@ -410,6 +410,8 @@ where
                         Arc::clone(ingress),
                         Arc::clone(router),
                         membership_config.advertise_addr.clone(),
+                        Some(Arc::clone(&quorum_marks)),
+                        Duration::from_millis(config.publish_quorum_timeout_ms.max(1)),
                     ),
                     peer::ReplicaHandler::new(Arc::clone(&broker), Arc::clone(router)),
                 )),

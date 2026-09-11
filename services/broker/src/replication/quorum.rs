@@ -150,6 +150,67 @@ pub enum QuorumWait {
     NotLeading,
 }
 
+/// Hold a `Quorum` publish until a majority of the shard's replica set has it.
+///
+/// A `Leader` stream returns at once: local durability is the guarantee it
+/// offers, and it has already been reached by the time this is called.
+///
+/// The wait is bounded. A timeout is **not** "the write failed" — the records
+/// are on this broker's disk and may yet reach a majority — it is "this broker
+/// cannot say that it succeeded", which is the honest answer and the one a
+/// client can act on. Reporting success instead would make an acknowledgement
+/// mean less than the stream promises.
+pub async fn await_quorum(
+    handle: &felix_broker::StreamHandle,
+    shard: Option<&crate::shard_watch::ShardKey>,
+    outcome: &felix_broker::PublishOutcome,
+    marks: Option<&crate::replication::quorum::QuorumMarks>,
+    ingress: Option<&crate::shard_routing::IngressRouter>,
+    timeout: std::time::Duration,
+) -> Result<(), anyhow::Error> {
+    if handle.consistency() != felix_broker::ConsistencyLevel::Quorum {
+        return Ok(());
+    }
+    let (Some(shard), Some(marks), Some(ingress)) = (shard, marks, ingress) else {
+        // A single-node broker has no replica set. `Quorum` on a stream nobody
+        // replicates is satisfied by the leader alone, which has already
+        // written the record.
+        return Ok(());
+    };
+    // An ephemeral stream has no offsets, so there is nothing to replicate and
+    // nothing to wait for.
+    let Some((_, last_offset)) = outcome.offsets else {
+        return Ok(());
+    };
+    let Some(generation) = ingress.generation(shard) else {
+        anyhow::bail!("shard ownership changed before the batch could reach a quorum");
+    };
+
+    // `last_offset` is inclusive, and the mark is one past what is held.
+    match marks
+        .wait_for(shard, generation, last_offset + 1, timeout)
+        .await
+    {
+        crate::replication::quorum::QuorumWait::Reached => Ok(()),
+        crate::replication::quorum::QuorumWait::TimedOut => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_TIMED_OUT,
+            );
+            Err(anyhow::anyhow!(
+                "the batch is durable here but did not reach a majority within {timeout:?}"
+            ))
+        }
+        crate::replication::quorum::QuorumWait::NotLeading => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_NOT_LEADING,
+            );
+            Err(anyhow::anyhow!(
+                "shard leadership moved before the batch could reach a quorum"
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "quorum_tests.rs"]
 mod tests;

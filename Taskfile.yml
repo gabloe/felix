@@ -235,6 +235,11 @@ tasks:
     cmds:
       - cargo build -p broker --bin felix-broker
       - cargo run -q -p felix-cluster -- demo {{.CLI_ARGS}}
+  cluster:failover:
+    desc: "Replication, quorum acks and failover: kill the leader, keep publishing."
+    cmds:
+      - cargo run -q -p felix-cluster --bin felix-cluster -- failover {{.CLI_ARGS}}
+
   cluster:demo:tmux:
     desc: The same demo across THREE tmux panes - cluster, subscriber, publisher.
     cmds:
