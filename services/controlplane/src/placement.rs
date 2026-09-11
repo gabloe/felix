@@ -28,6 +28,16 @@ pub enum Unplaceable {
     NoEligibleNode,
     /// Every live node is at its `max_shards` cap.
     AllNodesAtCapacity,
+    /// The shard was replicated, its leader is gone, and no replica that holds
+    /// the log can take over.
+    ///
+    /// Deliberately unavailable rather than placed elsewhere. A node that has
+    /// never seen the shard would serve an empty log at a new generation while
+    /// the records sat on replicas that were not chosen — the failover would
+    /// *be* the data loss, and nothing downstream would report it as one. This
+    /// is visible, and it resolves on its own when a replica catches up or the
+    /// old leader returns.
+    NoCaughtUpReplica,
 }
 
 impl std::fmt::Display for Unplaceable {
@@ -37,6 +47,10 @@ impl std::fmt::Display for Unplaceable {
             Self::AllNodesAtCapacity => {
                 write!(f, "every live node is at its max_shards capacity")
             }
+            Self::NoCaughtUpReplica => write!(
+                f,
+                "the leader is gone and no replica holding this shard's log can take over"
+            ),
         }
     }
 }
@@ -211,6 +225,24 @@ pub fn plan(
             shards.push(ShardPlan {
                 key,
                 decision: Decision::Place(promoted.to_string(), replicas),
+            });
+            continue;
+        }
+
+        // The shard was replicated and nothing that holds it can lead. Placing
+        // it on a node that has never seen it is not a failover, it is a
+        // silently empty shard: the records stay on the replicas, unreachable,
+        // while a new leader serves nothing at a newer generation.
+        //
+        // A stream that never asked for replication is untouched by this — it
+        // has no replicas, so there was never a copy to prefer, and a fresh
+        // placement remains the only thing available.
+        if let Some(previous) = current.get(&key)
+            && !previous.replicas.is_empty()
+        {
+            shards.push(ShardPlan {
+                key,
+                decision: Decision::Unplaceable(Unplaceable::NoCaughtUpReplica),
             });
             continue;
         }
@@ -417,8 +449,11 @@ pub async fn reconcile_once(store: &dyn crate::store::ControlPlaneStore) -> Reco
         }
     };
 
-    // Nothing is caught up until records are replicated (#112), so promotion
-    // does not yet fire and placement behaves as it did.
+    // Nothing reports being caught up yet: replication ships records (#112) but
+    // no replica's position reaches the control plane, so promotion cannot
+    // fire. A replicated shard whose leader is lost therefore stays unplaced
+    // until the leader returns -- unavailable, and recoverable, rather than
+    // handed to a broker holding none of it.
     let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
