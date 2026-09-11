@@ -123,7 +123,7 @@ flowchart LR
     subgraph B["Broker (services/broker + felix-broker)"]
         Ingress["QUIC accept + stream registry<br/>felix-wire framing + stream-type routing"]
         PS["Pub/Sub core<br/>enqueue + batching + fanout"]
-        Cache["Cache core<br/>lookup/insert + TTL"]
+        Cache["Cache core<br/>log-backed, key index + TTL"]
         Sync["Control-plane sync<br/>tenants/namespaces/streams/caches"]
 
         Ingress --> PS
@@ -186,7 +186,7 @@ The initial MVP targets:
 
 - Single-node broker
 - In-process pub/sub with fanout
-- Ephemeral cache with TTL
+- Log-backed cache with TTL, durable when the broker has a storage directory
 - Stable wire envelope (v1)
 - Basic observability (structured logs)
 - Tests validating core invariants

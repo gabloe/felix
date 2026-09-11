@@ -8,11 +8,13 @@ use std::time::{Duration, Instant};
 pub mod disk_log;
 pub mod ephemeral_cache;
 pub mod log;
+pub mod log_cache;
 pub mod metrics_names;
 pub mod segment;
 pub mod tiered;
 pub use disk_log::{DiskLog, DiskLogProvider};
 pub use ephemeral_cache::EphemeralCache;
+pub use log_cache::LogCache;
 pub use segment::{Corruption, CorruptionKind, CorruptionSite};
 
 #[async_trait()]

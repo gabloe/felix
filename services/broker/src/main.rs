@@ -174,17 +174,11 @@ where
     // Configuration is resolved from environment variables (and optionally a YAML file).
     // Keep this early so the remainder of startup is entirely driven by `config`.
 
-    // Start an in-process broker. The cache backend is in-memory; stream
-    // durability is separate and opt-in via `FELIX_DURABLE_STORAGE_DIR`.
-    let broker = Broker::new(EphemeralCache::new().into())
-        .with_topic_capacity(config.subscriber_queue_capacity.max(1))
-        .context("configure subscriber queue depth")?
-        .with_subscriber_queue_policy(config.subscriber_queue_policy);
-
     // Durable storage is opened before the listener binds: recovering segments
     // can take time and can fail, and both are better surfaced as a startup
     // error than as a failed publish once traffic is arriving.
-    let durable_storage = match DurableStorageConfig::from_env()? {
+    let durable_config = DurableStorageConfig::from_env()?;
+    let durable_storage = match &durable_config {
         Some(durable) => {
             tracing::info!(config = %durable.summary(), "opening durable stream storage");
             let storage = DurableStorage::open(&durable.root, durable.log.clone())
@@ -198,6 +192,35 @@ where
             None
         }
     };
+
+    // The cache is a log when there is a disk to put one on.
+    //
+    // Under `caches/`, not the stream root: a shard directory is named from a
+    // hash of its tenant, namespace and stream, so a cache and a stream sharing
+    // a name would otherwise interleave their records. See
+    // `docs/cache-on-log.md`.
+    //
+    // Without durable storage the cache stays in memory, which is the only
+    // thing it can be: there is nowhere to write a log.
+    let cache: Box<dyn felix_storage::StorageApi + Send> = match &durable_config {
+        Some(durable) => {
+            let root = durable.root.join("caches");
+            tracing::info!(root = %root.display(), "opening the cache on durable storage");
+            Box::new(
+                felix_storage::LogCache::open(&root, durable.log.clone())
+                    .with_context(|| format!("open the cache log at {}", root.display()))?,
+            )
+        }
+        None => {
+            tracing::info!("cache is in memory and is lost on restart");
+            Box::new(EphemeralCache::new())
+        }
+    };
+
+    let broker = Broker::new(cache)
+        .with_topic_capacity(config.subscriber_queue_capacity.max(1))
+        .context("configure subscriber queue depth")?
+        .with_subscriber_queue_policy(config.subscriber_queue_policy);
     let broker = match durable_storage.clone() {
         Some(storage) => broker.with_durable_storage(storage),
         None => broker,

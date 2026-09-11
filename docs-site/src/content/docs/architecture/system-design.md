@@ -12,7 +12,7 @@ Internally, Felix is built around a single append-only log abstraction. Differen
 
 - **Streams (Pub/Sub):** Fanout cursors per subscription
 - **Queues:** Shared consumer-group cursors with acknowledgements
-- **Cache:** Key → latest value with TTL, backed by the same log for invalidation and replay
+- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache operations are not yet routed across brokers — see `docs/cache-on-log.md`
 
 This drastically reduces operational complexity and consistency bugs compared to running Kafka, Redis, and a queueing system side-by-side.
 
