@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789164550014,
+  "lastUpdate": 1789166390117,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6402,6 +6402,72 @@ window.BENCHMARK_DATA = {
             "range": "948.23",
             "unit": "us",
             "extra": "trials: 5\nmedian: 736.00\nmean: 1187.80\nstdev: 948.23\ncv: 79.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c55f72ced2bdac47c8fe027acdac125e07a45ec",
+          "message": "refactor: remove the felix-consensus stub, which describes an architecture Felix rejected (#273)\n\n* refactor: remove the felix-consensus stub, which describes an architecture Felix rejected\n\n`felix-consensus` was 48 lines: a `RaftConfig` struct with defaults and two\ntests asserting those defaults. Nothing depended on it, and no protocol was\never behind it.\n\nIt is worse than dead code because it is wrong about the design. #110 (M5.1)\ndecided against per-shard Raft for payload replication, and\n`docs/replication-design.md` records why: Raft requires a leader to overwrite\na follower's divergent uncommitted suffix, and this log never rewrites\nrecords -- the property torn-tail repair, index rebuilding, and preallocation\nall rest on. Shard leadership is a control-plane lease with a generation as\nits epoch, and replication is log shipping. A crate advertising \"Raft\nimplementation (planned), leader election, log replication\" tells a reader\nthe opposite of what the code does.\n\nRaft remains the intended mechanism for control-plane *metadata* HA in M7,\nwhich is a different problem from replicating stream records; the status\ntable row now says that and points at the design note rather than at a\nstruct.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix: drop felix-consensus from the publish-readiness licence table\n\nThe check keeps its own copy of the licence split and asserts it matches the\nworkspace, so removing the crate without removing it here fails the check --\nwhich is the guard working. It is a separate CI step from `task test`, which\nis why a green local suite did not catch it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T15:37:45-07:00",
+          "tree_id": "b32d8f80f05e40d0bb74f5d0f28b9584666ab131",
+          "url": "https://github.com/gabloe/felix/commit/0c55f72ced2bdac47c8fe027acdac125e07a45ec"
+        },
+        "date": 1789166388130,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 96,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 96.00\nmean: 96.00\nstdev: 1.00\ncv: 1.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 130,
+            "range": "4.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 131.00\nstdev: 4.12\ncv: 3.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 163,
+            "range": "13.43",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 165.40\nstdev: 13.43\ncv: 8.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 129,
+            "range": "1.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 129.60\nstdev: 1.34\ncv: 1.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 253,
+            "range": "194.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 253.00\nmean: 343.80\nstdev: 194.86\ncv: 56.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 427,
+            "range": "881.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 427.00\nmean: 998.20\nstdev: 881.14\ncv: 88.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
