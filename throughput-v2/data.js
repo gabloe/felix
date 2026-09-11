@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789150499886,
+  "lastUpdate": 1789163248893,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -4940,6 +4940,58 @@ window.BENCHMARK_DATA = {
             "range": "8323.41",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 600041.14\nmean: 599866.26\nstdev: 8323.41\ncv: 1.39%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d22c86254941b81eaa474dfe40f845b1c218213",
+          "message": "feat(client): a client that survives the broker it connected to, and make Quorum mean it everywhere (#271)\n\n* feat(client): a client that survives the broker it connected to, and make Quorum mean it everywhere\n\nM6's premise is that M5's cluster features have no client-side story: an\napplication given one broker address does not survive that broker failing,\nhowever well the cluster handles it.\n\n`ClusterClient` takes the addresses of several brokers and rebuilds its\nconnection from the rest when the one it is using fails. The two publish\nmethods are deliberately different and both are honest about it: `publish`\nreconnects but does not resend, returning the error with the connection\nalready replaced, so a caller that cannot tolerate a duplicate decides for\nitself; `publish_at_least_once` also resends, and says plainly that it can\nduplicate a record whose failure it could not prove was not applied.\n\nWriting the failover test for it surfaced two real defects, both of which\nmade `Quorum` mean less than it says.\n\n**A forwarded publish never waited for the quorum.** The wait lived only in\nthe direct publish path, so `Quorum` held when a client happened to talk to\nthe shard's leader and silently degraded to leader-only when it talked to\nany other broker — the ordinary case for a client with a seed list, and the\ncase a failover creates. A forwarded publish is still a publish to that\nstream, and the client asked for the stream's guarantee, not for whichever\none its connection happened to provide. The peer handler now makes the same\nwait.\n\n**One unreachable replica stalled the quorum for a shard whose majority was\nalive.** The replication pass visited followers one after another and\npublished the quorum mark only after the last one, so a follower that had\ndied held up the mark until its handshake gave up — far longer than a\npublish waits. Losing a minority of the replica set is the case `Quorum`\nexists to tolerate, so it must not be the case that stops it acknowledging.\nFollowers are now shipped to concurrently, each on its own budget.\n\nBoth have deterministic tests, each verified by reverting the fix and\nwatching it fail; the driver one asserts on the clock, because the\nsequential pass still completes, just far too late to be worth anything.\n\nAlso widens the control plane's replica-report TTL to twice the expiry\ntimeout plus one heartbeat. At the old width a report expired at the moment\nthe leader that made it was declared down, leaving promotion with no replica\nit could prove held the log — the demo hit this as \"no replica can take\nover\" on a cluster where two were caught up.\n\n`task cluster:failover` is the demo: three brokers, a quorum stream, the\nacknowledging leader killed, and the whole stream read back from the broker\nthat took over. It fails loudly if a record acknowledged before the kill is\nnot readable after, and it explains the two things in its output that look\nlike defects and are not.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(broker): stop a quorum publish timing out while the broker is still correctly waiting\n\nThree separate faults, all uncovered by the forwarded-quorum fix in this\nbranch making `Quorum` waits actually happen on the forwarded path.\n\n**The ack waiter gave up before the wait it was waiting on.** A publish to a\n`Quorum` stream is entitled to `publish_quorum_timeout_ms` (5s) to reach a\nmajority, but the ack waiter reported \"publish commit timeout\" after\n`ack_wait_timeout_ms` (2s). Any quorum publish taking between the two was\nreported as failed while the broker was still correctly waiting, and the\nquorum wait's own answer -- which says specifically that this broker cannot\nvouch for the write -- was replaced by one that says nothing about why. The\nack wait is now floored at the quorum wait plus a small margin, so the inner\nwait always answers first. Raising the ceiling delays nothing: it is when a\nstuck publish is given up on, not a cost any successful publish pays.\n\n**The per-follower deadline cancelled healthy shipping.** The previous\ncommit gave each follower one second per pass, which cancels the slow\nfollowers as readily as the dead ones -- and a dial cut short caches no\nconnection, so the next pass dials again and is cut again. On a loaded CI\nrunner that is a livelock, which is what failed `failover.rs` there while\npassing locally. The deadline is gone; followers are still shipped to\nconcurrently, which is the part that actually stops one unreachable replica\ncosting the pass, and what a peer that is gone costs is bounded by the\npool's handshake timeout and then by its reconnect backoff.\n\n**The handshake timeout was as long as a publish's whole budget.** Both were\n5s, so on a platform where the kernel returns no refusal for a dead peer, a\nsingle dial could spend everything a publish had before the majority that\nwas up got to count. Two seconds is still generous for a round trip on a\nlocal network.\n\nThe driver test now asserts what concurrency actually buys -- two\nunreachable followers cost one handshake timeout, not two -- rather than the\ndeadline's behaviour. Verified by reverting: sequentially it takes 4s.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix: stop two coverage-only failures, both races that instrumentation loses\n\nNeither reproduced outside the coverage job, and both are real.\n\n**A peer connection outlived the request waiting on it.** A broker that is\nkilled leaves its peers holding connections that still look open -- nothing\nis left to tear them down. Peer connections took `max_idle_timeout` from\n`Default` (30s) against a 5s request timeout, so until QUIC gave up, every\nrequest over one waited the request timeout out in full. Those requests are\nnot bookkeeping: they are a forwarded publish, and a replication pass whose\ncompletion is what releases a `Quorum` publish. A dead follower therefore\nheld the quorum mark past the forward's own timeout, which is how\n`a_dead_broker_in_the_list_is_skipped` failed with \"peer broker-2 did not\nrespond within 5s\" while broker-2 was alive and merely waiting.\n\nThe idle window is now derived from `request_timeout` rather than chosen, so\nthe two cannot be tuned apart: three quarters of it, leaving a quarter of the\nrequest's patience to spare. Three quarters and not half because the window\nalso has to be long enough that a broker merely *starved* -- a loaded runner\nunder instrumentation can leave a healthy process unscheduled for seconds --\nis not mistaken for one that is gone.\n\n**A test sampled its baseline after the action it was measuring.**\n`replication_settled` read the shipped counter, then waited for it to rise.\nBut the counter only moves on a real exchange, and the read happened after\nthe publish. Locally the publish returns before the pass records the ship, so\nthe baseline misses it and the wait succeeds. Under coverage the publish is\nslow enough that the ship lands first, the baseline already contains the ship\nit is waiting to see, and nothing will ever move the counter again on a quiet\nstream -- a guaranteed 30s timeout, which is what failed `failover.rs` on CI.\n\nThe baseline is now taken before the publish, which is the only ordering that\ndoes not depend on winning that race. Verified by forcing the CI ordering\nwith a sleep: the old arrangement reproduces the exact failure.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T14:45:07-07:00",
+          "tree_id": "c66cc9c55549d2bba068acb346f226d10830765f",
+          "url": "https://github.com/gabloe/felix/commit/8d22c86254941b81eaa474dfe40f845b1c218213"
+        },
+        "date": 1789163248009,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 229087.94,
+            "range": "2592.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229087.94\nmean: 229290.86\nstdev: 2592.17\ncv: 1.13%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 229087.94,
+            "range": "2592.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229087.94\nmean: 229290.86\nstdev: 2592.17\ncv: 1.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54557.03,
+            "range": "1386.37",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54557.03\nmean: 54256.23\nstdev: 1386.37\ncv: 2.56%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 545570.32,
+            "range": "13863.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 545570.32\nmean: 542562.33\nstdev: 13863.71\ncv: 2.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
