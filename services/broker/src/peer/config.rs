@@ -182,13 +182,40 @@ impl PeerTransportConfig {
 
     /// Transport settings for both internal endpoints.
     ///
+    /// How long a peer connection may hear nothing before it is declared dead.
+    ///
+    /// **Shorter than `request_timeout`, and that ordering is the point.** A
+    /// broker that is killed leaves its peers holding connections that look
+    /// open: nothing is torn down, because nothing is left to tear them down.
+    /// Until QUIC gives up on one, every request sent over it waits out
+    /// `request_timeout` in full -- and those requests are not idle bookkeeping.
+    /// They are a forwarded publish, and a replication pass whose completion is
+    /// what releases a `Quorum` publish. With the idle window longer than the
+    /// request timeout, a dead peer costs the whole request timeout every time;
+    /// with it shorter, the connection fails first and the pool's backoff takes
+    /// over.
+    ///
+    /// Derived from `request_timeout` rather than chosen, so the two cannot be
+    /// tuned apart.
+    ///
+    /// Three quarters, not half: the window has to be long enough that a broker
+    /// merely *starved* is not mistaken for one that is gone. A loaded CI runner
+    /// under coverage instrumentation can leave a healthy process unscheduled
+    /// for seconds, and closing its peer connections on that basis would make
+    /// replication churn exactly when the machine can least afford it. Three
+    /// quarters still leaves a quarter of the request's patience to spare.
+    pub fn peer_idle_timeout(&self) -> Duration {
+        self.request_timeout / 4 * 3
+    }
+
     /// Peer connections are long-lived and can be quiet for long stretches
-    /// between rebalances. Without a keep-alive a dead path is only found by a
-    /// request timing out, which turns one broker's failure into a multi-second
-    /// stall on the next forward.
+    /// between rebalances, so they need a keep-alive to survive the idle window
+    /// above at all. A fifth of it leaves four chances to be heard from before a
+    /// healthy but quiet connection would be closed.
     pub fn quic_transport(&self) -> felix_transport::TransportConfig {
         felix_transport::TransportConfig {
-            keep_alive_interval: Some(self.idle_timeout / 4),
+            max_idle_timeout: Some(self.peer_idle_timeout()),
+            keep_alive_interval: Some(self.peer_idle_timeout() / 5),
             ..Default::default()
         }
     }

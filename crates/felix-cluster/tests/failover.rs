@@ -29,28 +29,35 @@ fn quorum_config() -> ClusterConfig {
 /// than failover. The scenario is a *healthy* replicated shard losing its
 /// leader, and this is what makes it one: zero lag means every follower holds
 /// what the leader does, and the leader has said so.
-async fn replication_settled(cluster: &Cluster, leader: &str) {
-    // The lag gauge is written once per replication pass, so reading zero can
-    // mean "every follower is level" or "every follower was level one pass ago,
-    // before the record this test just published". Waiting for a *rising* number
-    // of shipped batches first is what makes the zero afterwards be about this
-    // record rather than the state before it.
-    let shipped_before = cluster
+async fn shipped_so_far(cluster: &Cluster, leader: &str) -> f64 {
+    cluster
         .metric(leader, "felix_broker_replication_shipped_total")
         .await
         .ok()
         .flatten()
-        .unwrap_or(0.0);
+        .unwrap_or(0.0)
+}
+
+/// Wait until the record published since `shipped_before` is on every follower.
+///
+/// The lag gauge is written once per replication pass, so reading zero can mean
+/// "every follower is level" or "every follower was level one pass ago, before
+/// the record this test just published". Requiring the shipped counter to have
+/// risen past a baseline is what makes the zero be about this record.
+///
+/// **`shipped_before` has to be sampled before the publish, not after.** The
+/// counter only moves on a real exchange -- an idle pass returns up-to-date
+/// without touching it -- and a publish to a `Quorum` stream does not return
+/// until a majority holds the record, so the ship has already been counted by
+/// the time the publish does. A baseline taken afterwards already includes the
+/// ship it is waiting to see, and on a quiet stream nothing will ever move the
+/// counter again.
+async fn replication_settled(cluster: &Cluster, leader: &str, shipped_before: f64) {
     felix_cluster::wait::until(
         Duration::from_secs(30),
         "the published record to be shipped and acknowledged",
         || async {
-            let shipped = cluster
-                .metric(leader, "felix_broker_replication_shipped_total")
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(0.0);
+            let shipped = shipped_so_far(cluster, leader).await;
             let lag = cluster
                 .metric(leader, "felix_broker_replication_lag_records")
                 .await
@@ -149,6 +156,7 @@ async fn a_quorum_acknowledged_record_survives_its_leader() {
         .await
         .expect("start cluster");
     let leader = cluster.owner(STREAM).await.expect("owner");
+    let shipped_before = shipped_so_far(&cluster, &leader).await;
 
     // Acknowledged by a majority before this returns.
     cluster
@@ -156,7 +164,7 @@ async fn a_quorum_acknowledged_record_survives_its_leader() {
         .await
         .expect("publish under quorum");
 
-    replication_settled(&cluster, &leader).await;
+    replication_settled(&cluster, &leader, shipped_before).await;
     cluster.kill_node(&leader).expect("kill the leader");
 
     let elapsed = failover_from(&cluster, &leader, Duration::from_secs(30))
@@ -193,6 +201,7 @@ async fn the_promoted_leader_is_one_of_the_replicas() {
         .await
         .expect("start cluster");
     let leader = cluster.owner(STREAM).await.expect("owner");
+    let shipped_before = shipped_so_far(&cluster, &leader).await;
     let replicas: Vec<String> = cluster
         .nodes
         .iter()
@@ -204,7 +213,7 @@ async fn the_promoted_leader_is_one_of_the_replicas() {
         .publish_via(&leader, STREAM, b"held".to_vec())
         .await
         .expect("publish");
-    replication_settled(&cluster, &leader).await;
+    replication_settled(&cluster, &leader, shipped_before).await;
     cluster.kill_node(&leader).expect("kill the leader");
     failover_from(&cluster, &leader, Duration::from_secs(30))
         .await
@@ -228,12 +237,13 @@ async fn failover_completes_within_the_configured_bound() {
         .await
         .expect("start cluster");
     let leader = cluster.owner(STREAM).await.expect("owner");
+    let shipped_before = shipped_so_far(&cluster, &leader).await;
     cluster
         .publish_via(&leader, STREAM, b"timed".to_vec())
         .await
         .expect("publish");
 
-    replication_settled(&cluster, &leader).await;
+    replication_settled(&cluster, &leader, shipped_before).await;
     cluster.kill_node(&leader).expect("kill the leader");
     let elapsed = failover_from(&cluster, &leader, Duration::from_secs(30))
         .await
@@ -267,6 +277,7 @@ async fn an_unreplicated_shard_does_not_fail_over_to_an_empty_broker() {
     .await
     .expect("start cluster");
     let leader = cluster.owner(STREAM).await.expect("owner");
+    let shipped_before = shipped_so_far(&cluster, &leader).await;
     let replicas: Vec<String> = cluster
         .nodes
         .iter()
@@ -274,7 +285,7 @@ async fn an_unreplicated_shard_does_not_fail_over_to_an_empty_broker() {
         .filter(|node| node != &leader)
         .collect();
 
-    replication_settled(&cluster, &leader).await;
+    replication_settled(&cluster, &leader, shipped_before).await;
     cluster.kill_node(&leader).expect("kill the leader");
 
     // Whatever happens, the shard must not land on a broker outside the replica
