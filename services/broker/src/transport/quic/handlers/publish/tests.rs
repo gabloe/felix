@@ -30,6 +30,7 @@ fn make_publish_context(
     let (tx, rx) = mpsc::channel(buffer);
     let context = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx.clone()]),
@@ -83,6 +84,7 @@ async fn enqueue_publish_drop_sheds_load_when_byte_budget_exhausted() {
     let (tx, _rx) = mpsc::channel(8);
     let ctx = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),
@@ -110,6 +112,7 @@ async fn enqueue_publish_drop_sheds_load_when_conn_byte_budget_exhausted() {
     let (tx, _rx) = mpsc::channel(8);
     let ctx = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),
@@ -138,6 +141,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     let admission = Arc::new(PublishAdmission::new(8));
     let ctx_a = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx.clone()]),
@@ -152,6 +156,7 @@ async fn enqueue_publish_conn_budget_does_not_starve_other_connections() {
     };
     let ctx_b = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         conn_admission: Arc::new(PublishAdmission::new(4)),
@@ -293,6 +298,7 @@ async fn enqueue_publish_wait_times_out_when_queue_full() {
     tx.try_send(make_job()).unwrap();
     let ctx = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),
@@ -317,6 +323,7 @@ async fn enqueue_publish_returns_error_when_queue_closed() {
     drop(rx);
     let ctx = PublishContext {
         ingress: None,
+        client_endpoints: None,
         peers: None,
         lease: None,
         workers: Arc::new(vec![tx]),

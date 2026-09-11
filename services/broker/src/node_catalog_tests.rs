@@ -25,7 +25,7 @@ fn a_registered_node_becomes_a_routable_entry() {
         "items": [node("broker-a", "10.0.0.4:7000", true)],
     })));
 
-    let entry = catalog.get("broker-a").expect("broker-a");
+    let entry = catalog.nodes.get("broker-a").expect("broker-a");
     assert_eq!(entry.node_id, "broker-a");
     assert_eq!(entry.advertise_addr.to_string(), "10.0.0.4:7000");
     assert_eq!(entry.region, "us-west-2");
@@ -40,7 +40,7 @@ fn placement_eligibility_decides_liveness() {
     let catalog = into_catalog(response(serde_json::json!({
         "items": [node("broker-a", "10.0.0.4:7000", false)],
     })));
-    assert!(!catalog.get("broker-a").expect("broker-a").live);
+    assert!(!catalog.nodes.get("broker-a").expect("broker-a").live);
 }
 
 /// One unparseable address costs that node and nothing else.
@@ -54,14 +54,14 @@ fn a_node_with_an_unusable_address_is_skipped_and_the_rest_survive() {
         ],
     })));
 
-    assert!(catalog.contains_key("broker-a"));
-    assert!(catalog.contains_key("broker-c"));
+    assert!(catalog.nodes.contains_key("broker-a"));
+    assert!(catalog.nodes.contains_key("broker-c"));
     assert!(
-        !catalog.contains_key("broker-b"),
+        !catalog.nodes.contains_key("broker-b"),
         "an address that does not parse cannot be forwarded to",
     );
     assert_eq!(
-        catalog.len(),
+        catalog.nodes.len(),
         2,
         "the malformed entry must not take others with it"
     );
@@ -74,13 +74,13 @@ fn a_hostname_is_not_accepted_as_an_address() {
     let catalog = into_catalog(response(serde_json::json!({
         "items": [node("broker-a", "broker-a.internal:7000", true)],
     })));
-    assert!(catalog.is_empty());
+    assert!(catalog.nodes.is_empty());
 }
 
 #[test]
 fn an_empty_catalog_decodes_to_an_empty_map() {
     let catalog = into_catalog(response(serde_json::json!({ "items": [] })));
-    assert!(catalog.is_empty());
+    assert!(catalog.nodes.is_empty());
 }
 
 /// Two registrations for one id cannot both be routable; the map holds one.
@@ -92,7 +92,7 @@ fn a_repeated_node_id_yields_one_entry() {
             node("broker-a", "10.0.0.9:7000", true),
         ],
     })));
-    assert_eq!(catalog.len(), 1);
+    assert_eq!(catalog.nodes.len(), 1);
 }
 
 /// IPv6 is a valid advertised address and must not be dropped as malformed.
@@ -101,7 +101,7 @@ fn an_ipv6_address_is_routable() {
     let catalog = into_catalog(response(serde_json::json!({
         "items": [node("broker-a", "[::1]:7000", true)],
     })));
-    assert!(catalog.contains_key("broker-a"));
+    assert!(catalog.nodes.contains_key("broker-a"));
 }
 
 /// The request half, against a real HTTP server.
@@ -149,7 +149,7 @@ mod over_http {
         let catalog = fetch(&client(), &base, Some("a-token"))
             .await
             .expect("fetch");
-        assert!(catalog.contains_key("broker-a"));
+        assert!(catalog.nodes.contains_key("broker-a"));
 
         task.abort();
     }
@@ -224,4 +224,110 @@ mod over_http {
                 .is_err()
         );
     }
+}
+
+/// A node as registered by a broker that also said where clients reach it.
+fn node_with_client_addr(
+    node_id: &str,
+    addr: &str,
+    client_addr: &str,
+    eligible: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "node": {
+            "node_id": node_id,
+            "spec": {
+                "advertise_addr": addr,
+                "client_addr": client_addr,
+                "region": "us-west-2",
+            },
+        },
+        "placement": { "eligible": eligible },
+    })
+}
+
+/// **A client is told the client address, never the internal one.** They are
+/// different listeners, and the internal one would refuse an application.
+#[test]
+fn a_client_endpoint_is_the_client_address() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [node_with_client_addr(
+            "broker-a",
+            "10.0.0.4:7000",
+            "10.0.0.4:5000",
+            true,
+        )],
+    })));
+
+    assert_eq!(catalog.client_endpoints.len(), 1);
+    assert_eq!(catalog.client_endpoints[0].node_id, "broker-a");
+    assert_eq!(catalog.client_endpoints[0].addr, "10.0.0.4:5000");
+}
+
+/// **A broker that advertises no client address is not offered to clients.**
+/// It is still perfectly routable for forwarding: the two are separate answers
+/// from one listing, and only one of them is missing.
+#[test]
+fn a_broker_without_a_client_address_is_still_routable() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [node("broker-a", "10.0.0.4:7000", true)],
+    })));
+
+    assert!(catalog.nodes.contains_key("broker-a"));
+    assert!(
+        catalog.client_endpoints.is_empty(),
+        "a broker that said nothing about clients must not be handed to one",
+    );
+}
+
+/// **A broker the cluster will not place work on is not offered to clients.**
+/// Sending an application to a broker that is down is worse than sending it
+/// nowhere: it has other addresses to try, and this one wastes an attempt.
+#[test]
+fn an_ineligible_broker_is_not_offered_to_clients() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [node_with_client_addr(
+            "broker-a",
+            "10.0.0.4:7000",
+            "10.0.0.4:5000",
+            false,
+        )],
+    })));
+
+    assert!(catalog.client_endpoints.is_empty());
+}
+
+/// An unparseable client address is skipped, on the same reasoning as an
+/// unparseable advertised one: one bad registration must not cost the rest.
+#[test]
+fn an_unparseable_client_address_is_skipped() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [
+            node_with_client_addr("broker-a", "10.0.0.4:7000", "not-an-address", true),
+            node_with_client_addr("broker-b", "10.0.0.5:7000", "10.0.0.5:5000", true),
+        ],
+    })));
+
+    assert_eq!(catalog.client_endpoints.len(), 1);
+    assert_eq!(catalog.client_endpoints[0].node_id, "broker-b");
+}
+
+/// The answer is ordered, so a client that compares two refreshes sees a change
+/// only when something actually changed.
+#[test]
+fn client_endpoints_come_back_in_a_stable_order() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [
+            node_with_client_addr("broker-c", "10.0.0.6:7000", "10.0.0.6:5000", true),
+            node_with_client_addr("broker-a", "10.0.0.4:7000", "10.0.0.4:5000", true),
+            node_with_client_addr("broker-b", "10.0.0.5:7000", "10.0.0.5:5000", true),
+        ],
+    })));
+
+    let ids: Vec<&str> = catalog
+        .client_endpoints
+        .iter()
+        .map(|endpoint| endpoint.node_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["broker-a", "broker-b", "broker-c"]);
 }

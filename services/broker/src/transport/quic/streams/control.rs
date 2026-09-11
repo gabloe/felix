@@ -272,6 +272,15 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         let response = match client_flags {
                             Some(_) => Message::AuthOk {
                                 server_flags: felix_wire::KNOWN_FLAGS,
+                                // Only what this broker can actually answer. A
+                                // broker with no cluster behind it has no
+                                // topology to report, and advertising the
+                                // feature would have clients ask a question it
+                                // would have to refuse.
+                                server_features: Some(match publish_ctx.client_endpoints {
+                                    Some(_) => felix_wire::KNOWN_FEATURES,
+                                    None => 0,
+                                }),
                             },
                             None => Message::Ok,
                         };
@@ -394,6 +403,42 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                     ack,
                     sample,
+                )
+                .await?;
+            }
+            Message::Topology => {
+                // Authenticated like everything else on this stream: the
+                // addresses are not secret, but who may ask a broker anything
+                // at all is still the tenant boundary.
+                if auth_ctx.is_none() {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "not authenticated",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+                let brokers = publish_ctx
+                    .client_endpoints
+                    .as_ref()
+                    .map(|endpoints| endpoints.snapshot().as_ref().clone())
+                    .unwrap_or_default();
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::TopologyView { brokers }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
                 )
                 .await?;
             }
@@ -656,6 +701,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::PublishOk { .. }
             | Message::PublishError { .. }
             | Message::AuthOk { .. }
+            | Message::TopologyView { .. }
             | Message::Ok => {
                 // Protocol hygiene: these message types should never arrive on the control stream
                 // from the client. Treat as a protocol violation and close.

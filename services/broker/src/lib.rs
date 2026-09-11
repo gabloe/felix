@@ -6,6 +6,7 @@
 //! The public surface here is intentionally minimal and organized by feature area.
 pub mod auth;
 pub mod auth_demo;
+pub mod client_endpoints;
 pub mod config;
 pub mod controlplane;
 pub mod core_shards;

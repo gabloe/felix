@@ -144,6 +144,10 @@ where
     // Shared between the replication driver, which advances it, and the publish
     // path, which waits on it for `Quorum` streams.
     let quorum_marks = Arc::new(replication::quorum::QuorumMarks::new());
+    // Empty until the first catalog refresh fills it, which is the honest
+    // answer in the meantime: this broker has not yet been told where any
+    // client may connect.
+    let client_endpoints = Arc::new(broker::client_endpoints::ClientEndpoints::new());
     let peer_shutdown = CancellationToken::new();
     let peers = match (&config.peer_transport, &config.membership) {
         (Some(peer_config), Some(membership_config)) => Some(
@@ -245,6 +249,7 @@ where
         let peers_for_accept = peers.clone();
         let lease_for_accept = lease.clone();
         let marks_for_accept = Arc::clone(&quorum_marks);
+        let endpoints_for_accept = Arc::clone(&client_endpoints);
         tokio::spawn(async move {
             // A durable broker does not accept until its streams exist.
             // Readiness alone only steers orchestrated traffic; a client with
@@ -276,6 +281,7 @@ where
                     peers: peers_for_accept,
                     lease: lease_for_accept,
                     marks: Some(Arc::clone(&marks_for_accept)),
+                    client_endpoints: Some(Arc::clone(&endpoints_for_accept)),
                 },
             )
             .await
@@ -456,6 +462,7 @@ where
                     store,
                     ingress: Arc::clone(ingress),
                     router: Arc::clone(router),
+                    client_endpoints: Some(Arc::clone(&client_endpoints)),
                 },
                 Some(shard_routing::CatalogSource {
                     client: membership_client.clone(),

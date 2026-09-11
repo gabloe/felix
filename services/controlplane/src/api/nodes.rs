@@ -191,6 +191,7 @@ pub(crate) async fn register_node(
         node_id: request.node_id,
         spec: NodeSpec {
             advertise_addr: request.advertise_addr,
+            client_addr: request.client_addr,
             region: request.region,
             labels: request.labels,
             capacity: request.capacity,

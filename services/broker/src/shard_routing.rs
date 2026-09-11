@@ -259,6 +259,10 @@ pub struct FeedState {
     pub store: Arc<dyn crate::shard_lifecycle::ShardStore>,
     pub ingress: Arc<IngressRouter>,
     pub router: Arc<ShardRouter>,
+    /// Refreshed on the same tick as the catalog it is derived from, so what a
+    /// client is told and what this broker forwards to cannot come from
+    /// different fetches.
+    pub client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
 }
 
 /// What the feed needs to read the node catalog.
@@ -292,6 +296,7 @@ pub fn spawn_feed(
         store,
         ingress,
         router,
+        client_endpoints,
     } = state;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
@@ -311,7 +316,12 @@ pub fn spawn_feed(
                 )
                 .await
                 {
-                    Ok(fetched) => catalog = fetched,
+                    Ok(fetched) => {
+                        if let Some(endpoints) = &client_endpoints {
+                            endpoints.publish(fetched.client_endpoints);
+                        }
+                        catalog = fetched.nodes;
+                    }
                     // The previous catalog is kept: a control-plane blip must
                     // not erase every address this broker can forward to and
                     // turn a healthy cluster into one that refuses every remote

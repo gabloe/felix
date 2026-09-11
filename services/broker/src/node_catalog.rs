@@ -12,7 +12,21 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow};
 use felix_router::NodeRef;
+use felix_wire::BrokerEndpoint;
 use serde::Deserialize;
+
+/// One fetch, read two ways.
+///
+/// The same listing answers "where does this broker forward to" and "where may
+/// a client connect", and they are different addresses on different listeners.
+/// Fetching once and splitting here keeps them from drifting apart.
+#[derive(Debug, Default)]
+pub struct NodeCatalog {
+    pub nodes: HashMap<String, NodeRef>,
+    /// Sorted by node id, so the answer a client gets does not reshuffle
+    /// between refreshes that changed nothing.
+    pub client_endpoints: Vec<BrokerEndpoint>,
+}
 
 #[derive(Debug, Deserialize)]
 struct NodeListResponse {
@@ -34,6 +48,10 @@ struct Node {
 #[derive(Debug, Deserialize)]
 struct NodeSpec {
     advertise_addr: String,
+    /// Absent on a broker that predates client discovery, or one whose operator
+    /// has not said where clients reach it.
+    #[serde(default)]
+    client_addr: Option<String>,
     region: String,
 }
 
@@ -51,7 +69,7 @@ pub async fn fetch(
     client: &reqwest::Client,
     base_url: &str,
     bearer: Option<&str>,
-) -> Result<HashMap<String, NodeRef>> {
+) -> Result<NodeCatalog> {
     let mut request = client.get(format!("{base_url}/v1/nodes"));
     if let Some(bearer) = bearer {
         request = request.bearer_auth(bearer);
@@ -70,9 +88,23 @@ pub async fn fetch(
 ///
 /// Separate from the request so the skipping rule above is testable without a
 /// server standing in for the control plane.
-fn into_catalog(response: NodeListResponse) -> HashMap<String, NodeRef> {
+fn into_catalog(response: NodeListResponse) -> NodeCatalog {
     let mut catalog = HashMap::with_capacity(response.items.len());
+    let mut client_endpoints = Vec::new();
     for item in response.items {
+        // Offered to clients only while the cluster considers this broker able
+        // to serve, and only when it said where clients reach it. Sending a
+        // client to a broker that is down, or to the internal listener that
+        // would refuse it, is worse than sending it nowhere.
+        if item.placement.eligible
+            && let Some(client_addr) = &item.node.spec.client_addr
+            && client_addr.parse::<std::net::SocketAddr>().is_ok()
+        {
+            client_endpoints.push(BrokerEndpoint {
+                node_id: item.node.node_id.clone(),
+                addr: client_addr.clone(),
+            });
+        }
         let Ok(advertise_addr) = item.node.spec.advertise_addr.parse() else {
             tracing::warn!(
                 node_id = %item.node.node_id,
@@ -95,7 +127,11 @@ fn into_catalog(response: NodeListResponse) -> HashMap<String, NodeRef> {
             },
         );
     }
-    catalog
+    client_endpoints.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    NodeCatalog {
+        nodes: catalog,
+        client_endpoints,
+    }
 }
 
 #[cfg(test)]

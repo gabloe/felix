@@ -54,6 +54,27 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
 pub const ORIGINAL_V1_FLAGS: u16 =
     FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_EVENT_BATCH | FLAG_BINARY_EVENT_BATCH_SHARED;
 
+/// Optional requests a broker may implement, advertised in `AuthOk`.
+///
+/// A *feature* bit is not a frame flag. Frame flags say how a payload is laid
+/// out and travel on every frame; these say only that a request exists, and
+/// never appear on a frame at all. They are numbered separately for that
+/// reason -- sharing the space would have a client offering to receive a frame
+/// shape it has no encoder for.
+///
+/// A client must not send a featured request to a broker that did not advertise
+/// the bit: an unrecognised message type is a fatal protocol error to the
+/// broker's control loop, so probing costs the connection.
+pub const FEATURE_TOPOLOGY: u32 = 0x0000_0001;
+
+/// Every feature bit this version implements.
+pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY;
+
+/// True if `features` advertises `feature`.
+pub fn supports_feature(features: u32, feature: u32) -> bool {
+    features & feature == feature
+}
+
 /// True if `flags` contains any bit this version does not define.
 pub fn has_unknown_flags(flags: u16) -> bool {
     flags & !KNOWN_FLAGS != 0

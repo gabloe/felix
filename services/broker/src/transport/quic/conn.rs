@@ -162,6 +162,9 @@ pub struct ClusterContext {
     /// publish to a `Quorum` stream, which cannot acknowledge until the
     /// majority holds its records.
     pub marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+    /// Where a client may connect, for answering `Topology`. `None` on a broker
+    /// with no cluster behind it, which then advertises no such feature.
+    pub client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
 }
 
 fn build_publish_context(
@@ -174,6 +177,7 @@ fn build_publish_context(
         peers,
         lease,
         marks,
+        client_endpoints,
     } = cluster;
     let quorum_timeout = std::time::Duration::from_millis(config.publish_quorum_timeout_ms.max(1));
     // NOTE: This is intentionally global for the process (not per-connection).
@@ -322,6 +326,7 @@ fn build_publish_context(
         ingress,
         peers,
         lease,
+        client_endpoints,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,

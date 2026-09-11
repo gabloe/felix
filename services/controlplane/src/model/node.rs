@@ -32,6 +32,10 @@ pub enum NodeValidationError {
     EmptyRegion,
     #[error("advertise_addr {0:?} is not a valid host:port address")]
     InvalidAdvertiseAddr(String),
+    #[error("client_addr {0:?} is not a valid host:port address")]
+    InvalidClientAddr(String),
+    #[error("client_addr must specify a non-zero port")]
+    ZeroClientPort,
     #[error("advertise_addr must specify a non-zero port")]
     ZeroAdvertisePort,
     #[error("label keys must not be empty")]
@@ -119,6 +123,20 @@ pub struct NodeSpec {
     /// Unique across the cluster: two nodes advertising one address cannot both
     /// be reached, and the store rejects the second.
     pub advertise_addr: String,
+    /// `host:port` the node's *client-facing* QUIC listener is reachable on.
+    ///
+    /// Distinct from `advertise_addr`, which is the broker-internal listener no
+    /// application may connect to. Optional, and absent by default: a broker
+    /// that does not advertise one is simply never offered to a client as a
+    /// place to connect, which is what an older broker registering against a
+    /// newer control plane looks like.
+    ///
+    /// Not required to be unique. Two brokers behind one address is a
+    /// deployment this cannot distinguish from a misconfiguration, and refusing
+    /// the second registration would take a broker out of the cluster over a
+    /// field that only affects discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_addr: Option<String>,
     pub region: String,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
@@ -172,6 +190,9 @@ impl NodeSpec {
             return Err(NodeValidationError::EmptyRegion);
         }
         validate_advertise_addr(&self.advertise_addr)?;
+        if let Some(client_addr) = &self.client_addr {
+            validate_client_addr(client_addr)?;
+        }
         validate_labels(&self.labels)?;
         self.capacity.validate()
     }
@@ -269,6 +290,17 @@ fn validate_advertise_addr(addr: &str) -> Result<(), NodeValidationError> {
     // Port 0 means "any port" to a listener, so it can never be dialled.
     if parsed.port() == 0 {
         return Err(NodeValidationError::ZeroAdvertisePort);
+    }
+    Ok(())
+}
+
+/// Same rules as the internal address: a client has to dial it too.
+fn validate_client_addr(addr: &str) -> Result<(), NodeValidationError> {
+    let parsed: SocketAddr = addr
+        .parse()
+        .map_err(|_| NodeValidationError::InvalidClientAddr(addr.to_string()))?;
+    if parsed.port() == 0 {
+        return Err(NodeValidationError::ZeroClientPort);
     }
     Ok(())
 }

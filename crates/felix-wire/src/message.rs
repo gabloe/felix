@@ -46,6 +46,28 @@ pub enum Message {
     // client old enough not to understand this variant can never receive it.
     AuthOk {
         server_flags: u16,
+        /// Optional protocol features this broker implements, as a bitset of
+        /// `FEATURE_*` constants.
+        ///
+        /// Separate from `server_flags`, which is strictly about how a frame's
+        /// *payload* is laid out. A feature bit says a request exists, not that
+        /// a frame is shaped differently, and conflating the two would have a
+        /// client set a frame flag it never intends to send.
+        ///
+        /// Absent means a broker that predates features, and the only safe
+        /// reading of that silence is that it implements none: an unknown
+        /// message type is a fatal protocol error to the broker's control loop,
+        /// so a client must never send one speculatively.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_features: Option<u32>,
+    },
+    /// Ask the broker which brokers a client may connect to.
+    ///
+    /// Only ever sent to a broker that advertised `FEATURE_TOPOLOGY`.
+    Topology,
+    /// The brokers this one knows of that a client may connect to.
+    TopologyView {
+        brokers: Vec<BrokerEndpoint>,
     },
     // Publish a single payload to a stream.
     Publish {
@@ -189,6 +211,19 @@ pub enum Message {
         /// the current tail. Either way: the nearest offset that would work.
         available: u64,
     },
+}
+
+/// Somewhere a client may connect, as one broker understands the cluster.
+///
+/// Carries only what a client needs in order to connect: an identity to
+/// recognise it by and an address to dial. Deliberately not the control plane's
+/// node record -- placement, capacity, and liveness detail are the cluster's
+/// business, and a tenant's client has no standing to read them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerEndpoint {
+    pub node_id: String,
+    /// `host:port`, as the broker was configured to advertise to clients.
+    pub addr: String,
 }
 
 /// Why a subscribe could not start at the requested position.

@@ -277,14 +277,24 @@ async fn failover(args: &[String]) -> Result<()> {
     beat(pace).await;
 
     step("A client that knows the cluster, not one broker");
-    let client = felix_cluster::client::connect_cluster(
-        &cluster.broker_addrs(),
-        &cluster.tenant_id,
-        &cluster.client_token,
-    )
-    .await?;
-    println!("  Connected with every broker's address as a seed.");
-    println!("  Which one it is actually using does not matter, and it will change.");
+    // One address on purpose. Handing it all three would hide the thing worth
+    // showing: an application is configured with one endpoint far more often
+    // than with a correct list of every broker.
+    let seed = cluster.broker_addrs()[0];
+    let client =
+        felix_cluster::client::connect_cluster(&[seed], &cluster.tenant_id, &cluster.client_token)
+            .await?;
+    println!("  Configured with exactly one address: {seed}");
+    let known = client.endpoints().await;
+    println!(
+        "  It asked that broker who else was there, and now knows {}:",
+        plural(known.len(), "broker", "brokers"),
+    );
+    for addr in &known {
+        println!("      {addr}");
+    }
+    println!("  The address it was given stays in that list. A cluster that");
+    println!("  answers wrongly can never leave a client worse off than before.");
     beat(pace).await;
 
     step("Publishing under Quorum");
@@ -404,6 +414,15 @@ async fn failover(args: &[String]) -> Result<()> {
 
     cluster.shutdown().await;
     Ok(())
+}
+
+/// "1 broker" rather than "1 brokers", which reads as a bug in the demo.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    if count == 1 {
+        format!("{count} {one}")
+    } else {
+        format!("{count} {many}")
+    }
 }
 
 fn step(title: &str) {

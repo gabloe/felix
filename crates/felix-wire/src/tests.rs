@@ -834,3 +834,100 @@ fn ack_mode_serialization() {
     };
     assert!(msg3.encode().is_ok());
 }
+
+/// **An `AuthOk` from a broker that predates features decodes.** Absent is not
+/// zero-by-accident: it has to mean "implements none", because a client that
+/// read silence as support would send a message the broker's control loop
+/// treats as a fatal protocol error, costing the connection.
+#[test]
+fn an_auth_ok_without_features_reads_as_supporting_none() {
+    let frame = Frame::new(
+        0,
+        Bytes::from_static(br#"{"type":"auth_ok","server_flags":7}"#),
+    )
+    .expect("frame");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(
+        decoded,
+        Message::AuthOk {
+            server_flags: 7,
+            server_features: None,
+        }
+    );
+}
+
+/// **A broker advertising no features encodes the same bytes it always did.**
+/// An old client parses this, and a new one reads it as supporting nothing.
+#[test]
+fn an_auth_ok_advertising_nothing_omits_the_field() {
+    let encoded = Message::AuthOk {
+        server_flags: 7,
+        server_features: None,
+    }
+    .encode()
+    .expect("encode");
+    let json = std::str::from_utf8(&encoded.payload).expect("utf8");
+    assert!(
+        !json.contains("server_features"),
+        "an absent feature set must not appear on the wire: {json}"
+    );
+}
+
+#[test]
+fn an_auth_ok_carries_the_features_it_advertises() {
+    let message = Message::AuthOk {
+        server_flags: felix_wire_flags(),
+        server_features: Some(crate::FEATURE_TOPOLOGY),
+    };
+    let decoded = Message::decode(message.encode().expect("encode")).expect("decode");
+    assert_eq!(decoded, message);
+}
+
+#[test]
+fn a_topology_exchange_round_trips() {
+    let request = Message::Topology;
+    assert_eq!(
+        Message::decode(request.encode().expect("encode")).expect("decode"),
+        request
+    );
+
+    let view = Message::TopologyView {
+        brokers: vec![
+            crate::BrokerEndpoint {
+                node_id: "broker-a".to_string(),
+                addr: "127.0.0.1:5000".to_string(),
+            },
+            crate::BrokerEndpoint {
+                node_id: "broker-b".to_string(),
+                addr: "127.0.0.1:5010".to_string(),
+            },
+        ],
+    };
+    assert_eq!(
+        Message::decode(view.encode().expect("encode")).expect("decode"),
+        view
+    );
+}
+
+/// A cluster with nothing to report says so, rather than failing.
+#[test]
+fn an_empty_topology_round_trips() {
+    let view = Message::TopologyView { brokers: vec![] };
+    assert_eq!(
+        Message::decode(view.encode().expect("encode")).expect("decode"),
+        view
+    );
+}
+
+#[test]
+fn a_feature_bit_is_only_supported_when_advertised() {
+    assert!(crate::supports_feature(
+        crate::FEATURE_TOPOLOGY,
+        crate::FEATURE_TOPOLOGY
+    ));
+    assert!(!crate::supports_feature(0, crate::FEATURE_TOPOLOGY));
+}
+
+fn felix_wire_flags() -> u16 {
+    crate::KNOWN_FLAGS
+}
