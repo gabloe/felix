@@ -118,8 +118,9 @@ pub(crate) async fn handle_stream(
     // Only meaningful when ack_on_commit is enabled, but safe to always use.
     let (ack_waiter_tx, ack_waiter_rx) = mpsc::channel::<AckWaiterMessage>(ACK_WAITERS_MAX);
 
-    // Configured ack wait timeout duration.
-    let ack_wait_timeout = Duration::from_millis(config.ack_wait_timeout_ms);
+    // Configured ack wait timeout duration, floored so that it outlasts the
+    // quorum wait a publish to a `Quorum` stream may be sitting on.
+    let ack_wait_timeout = config.ack_wait_timeout();
 
     // Clone Arcs and watch channels before spawning tasks to move ownership into
     // the spawned futures and avoid borrow checker issues.

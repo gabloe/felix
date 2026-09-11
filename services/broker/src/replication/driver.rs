@@ -30,15 +30,6 @@ pub struct ShardCursors {
 /// batch, not the distance it is behind.
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
 
-/// How long one pass will spend on a single follower.
-///
-/// An unreachable follower neither answers nor refuses: a QUIC handshake to a
-/// dead port runs out its own timeout, which is far longer than a publish is
-/// willing to wait. Cutting the follower short is safe because a cursor only
-/// advances on an answer, so the next pass re-ships exactly what this one
-/// abandoned.
-const FOLLOWER_PASS_BUDGET: Duration = Duration::from_secs(1);
-
 /// Ship for every shard this broker leads, once.
 ///
 /// Returns the largest lag seen, so a caller can report it without recomputing.
@@ -105,25 +96,27 @@ pub async fn replicate_once<R: PeerRequester>(
             shard: key.shard,
             generation: route.generation,
         };
-        // Followers are shipped to concurrently, each on its own budget.
+        // Followers are shipped to concurrently.
         //
-        // Sequentially, one follower that has died holds up every follower
-        // behind it *and* the mark published below -- so a shard whose majority
-        // is alive and current stops acknowledging `Quorum` publishes until the
-        // dead one's handshake gives up. A minority failure is the case
-        // `Quorum` exists to tolerate, so it must not be the case that stalls
-        // it.
+        // Sequentially, one follower that is gone holds up every follower
+        // behind it *and* the mark published below, so the cost of unreachable
+        // replicas adds up instead of overlapping. A minority failure is the
+        // case `Quorum` exists to tolerate, so it must not be the case that
+        // stalls it.
+        //
+        // Nothing here is given a deadline. A pass that cancelled a follower
+        // mid-exchange would be cancelling the slow ones as readily as the dead
+        // ones, and a dial cut short caches no connection -- so the next pass
+        // dials again and is cut again. What a peer that is gone costs is
+        // bounded by the pool's handshake timeout and then by its reconnect
+        // backoff.
         let shipping = entry.followers.iter_mut().map(|cursor| async {
             // Keep going while there is more to send, so a follower catching up
             // is not limited to one batch per tick. It ends on the first answer
             // that is not progress, which bounds the work per pass.
-            let _ = tokio::time::timeout(FOLLOWER_PASS_BUDGET, async {
-                while let Progress::Stored { .. } =
-                    ship_once(requester, &log, &shard, cursor, MAX_BATCH_BYTES).await
-                {
-                }
-            })
-            .await;
+            while let Progress::Stored { .. } =
+                ship_once(requester, &log, &shard, cursor, MAX_BATCH_BYTES).await
+            {}
         });
         futures::future::join_all(shipping).await;
 

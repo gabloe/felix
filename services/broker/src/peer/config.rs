@@ -55,7 +55,18 @@ const DEFAULT_RECONNECT_BASE_MS: u64 = 50;
 const DEFAULT_RECONNECT_MAX_MS: u64 = 5_000;
 
 /// How long the handshake has to complete before the connection is abandoned.
-const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
+///
+/// Deliberately well under the publish quorum timeout, which is also 5s. A peer
+/// that is gone does not refuse on every platform -- where the kernel returns no
+/// refusal, a dial runs this timeout out instead -- and that dial sits on the
+/// critical path of the replication pass, which is what releases a `Quorum`
+/// publish. A handshake timeout as long as the publish budget lets one dead
+/// replica spend a publish's entire patience before the majority that is up
+/// gets to count.
+///
+/// Still generous for the handshake itself: a broker-internal dial is a round
+/// trip on a local network, not seconds.
+const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 2_000;
 
 /// Broker-internal transport settings.
 #[derive(Debug, Clone, PartialEq, Eq)]

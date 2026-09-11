@@ -62,26 +62,25 @@ impl PeerRequester for AcceptingFollower {
     }
 }
 
-/// A follower that never answers, the way an unreachable one does not.
-///
-/// Not a refusal: a QUIC handshake to a dead port neither succeeds nor fails
-/// promptly, it runs out a timeout far longer than a publish will wait.
-struct SilentFollower {
-    silent: String,
-    reachable: AcceptingFollower,
+/// A follower that is gone: it answers nothing, and the dial gives up on its
+/// own after `handshake` rather than hanging forever, as the pool's handshake
+/// timeout makes it.
+struct UnreachableFollowers {
+    handshake: std::time::Duration,
 }
 
-impl PeerRequester for SilentFollower {
+impl PeerRequester for UnreachableFollowers {
     async fn request(
         &self,
         node_id: &str,
-        addr: SocketAddr,
-        message: InternalMessage,
+        _addr: SocketAddr,
+        _message: InternalMessage,
     ) -> std::result::Result<InternalMessage, PeerError> {
-        if node_id == self.silent {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        }
-        self.reachable.request(node_id, addr, message).await
+        tokio::time::sleep(self.handshake).await;
+        Err(PeerError::Unavailable {
+            node_id: node_id.to_string(),
+            detail: "no answer within the handshake timeout".to_string(),
+        })
     }
 }
 
@@ -96,16 +95,6 @@ fn node(node_id: &str, port: u16) -> NodeRef {
 
 fn key() -> ShardKey {
     ShardKey {
-        tenant_id: TENANT.to_string(),
-        namespace: NAMESPACE.to_string(),
-        stream: STREAM.to_string(),
-        shard: 0,
-    }
-}
-
-/// The same shard, as the quorum marks name it.
-fn watch_key() -> crate::shard_watch::ShardKey {
-    crate::shard_watch::ShardKey {
         tenant_id: TENANT.to_string(),
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
@@ -172,41 +161,30 @@ async fn leader_with(count: usize) -> (Arc<Broker>, TempDir) {
     (Arc::new(broker), dir)
 }
 
-/// **One unreachable follower does not hold up the quorum mark for a shard
-/// whose majority is alive.** Losing a minority of the replica set is the case
-/// `Quorum` exists to tolerate, so it must not be the case that stops it
-/// acknowledging.
+/// **Unreachable followers cost one handshake timeout, not one each.** A pass
+/// that visited them one after another paid for every dead replica in turn,
+/// with the quorum mark -- and so every `Quorum` publish waiting on this shard
+/// -- behind the sum.
 ///
-/// The clock is the assertion: with the followers visited one after another,
-/// the mark waits out the unreachable one before the live one's progress counts
-/// for anything.
+/// The clock is the assertion: visited sequentially, two unreachable followers
+/// take twice as long as one, and the pass still finishes, just far too late to
+/// be worth anything to a publish.
 #[tokio::test(start_paused = true)]
-async fn an_unreachable_follower_does_not_hold_up_the_quorum_mark() {
+async fn unreachable_followers_are_waited_on_at_the_same_time() {
+    let handshake = std::time::Duration::from_secs(2);
     let (broker, _dir) = leader_with(3).await;
     let router = router(LOCAL, &["broker-b", "broker-c"], 4);
-    let requester = SilentFollower {
-        silent: "broker-c".to_string(),
-        reachable: AcceptingFollower::default(),
-    };
+    let requester = UnreachableFollowers { handshake };
     let marks = QuorumMarks::new();
     let mut cursors = HashMap::new();
 
     let started = tokio::time::Instant::now();
     replicate_once(&requester, &broker, &router, &marks, None, &mut cursors).await;
-    let took = started.elapsed();
 
+    let took = started.elapsed();
     assert!(
-        matches!(
-            marks
-                .wait_for(&watch_key(), 4, 3, std::time::Duration::ZERO)
-                .await,
-            crate::replication::quorum::QuorumWait::Reached
-        ),
-        "the leader and the reachable follower are a majority of three",
-    );
-    assert!(
-        took < std::time::Duration::from_secs(5),
-        "the pass waited on the unreachable follower: {took:?}",
+        took < handshake * 2,
+        "the followers were waited on one after another: {took:?}",
     );
 }
 
