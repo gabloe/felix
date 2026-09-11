@@ -156,9 +156,33 @@ such test races the expiry sweep. Liveness windows are tuned short (a 1s expiry
 timeout) because every process is local, so a stopped broker is observable in
 about a second.
 
+`kill_node` kills without waiting for the control plane to react. A test
+measuring how long failover takes has to start its clock at the kill, not after
+the cluster has already responded to it.
+
+`pause_node` and `resume_node` suspend and resume a broker with `SIGSTOP` and
+`SIGCONT`. This is the fault a kill cannot produce: the process stays alive,
+keeps every lease and connection it holds, and answers nothing. It is what the
+commit-boundary lease check exists for — a broker suspended past its lease
+expiry has to refuse the write it was in the middle of when it wakes, rather
+than committing to a shard someone else now leads. Unix only; there is no
+equivalent elsewhere that leaves the process holding its state, and a test that
+quietly did something weaker would be worse than one that does not run.
+
+`crates/felix-cluster/tests/faults.rs` asserts each fault is the fault it
+claims — a paused broker stops answering *and* stays alive, a resumed one comes
+back, a kill returns immediately — because a scenario built on a fault that is
+really something else passes for the wrong reason. It also pins that teardown
+reclaims a suspended broker, so a test panicking mid-fault fails on its own
+rather than wedging the suite.
+
+Skewing a broker's clock is not supported. Lease expiry is read from the system
+clock, so testing expiry against a skewed one needs either an injectable clock
+in the broker or `libfaketime` around the process, and neither is in place.
+
 Blocking a peer link without stopping the process is not supported yet; it needs
 either a proxy in front of the internal listener or platform firewall rules, and
-nothing in M4 required it.
+nothing so far has required it.
 
 ## Watching it
 

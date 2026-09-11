@@ -1005,6 +1005,7 @@ dependencies = [
  "controlplane",
  "felix-client",
  "felix-wire",
+ "libc",
  "quinn",
  "reqwest 0.12.28",
  "rustls",

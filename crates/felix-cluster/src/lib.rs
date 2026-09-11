@@ -767,6 +767,71 @@ impl Cluster {
         response.json().await.context("decode response")
     }
 
+    /// Suspend a broker without stopping it.
+    ///
+    /// The process stays alive and keeps every lease and connection it holds,
+    /// and answers nothing. That is the fault a kill cannot produce, and it is
+    /// the one the commit-boundary lease check exists for: a broker suspended
+    /// past its lease expiry must refuse the write it was in the middle of when
+    /// it wakes, rather than committing to a shard someone else now leads.
+    ///
+    /// Unix only. Elsewhere there is no equivalent that leaves the process
+    /// holding its state, and a test that quietly did something weaker would be
+    /// worse than one that does not run.
+    #[cfg(unix)]
+    pub fn pause_node(&self, node_id: &str) -> Result<()> {
+        self.signal(node_id, libc::SIGSTOP, "pause")
+    }
+
+    /// Let a suspended broker run again.
+    #[cfg(unix)]
+    pub fn resume_node(&self, node_id: &str) -> Result<()> {
+        self.signal(node_id, libc::SIGCONT, "resume")
+    }
+
+    #[cfg(unix)]
+    fn signal(&self, node_id: &str, signal: libc::c_int, what: &str) -> Result<()> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let process = node
+            .process
+            .as_ref()
+            .ok_or_else(|| anyhow!("cannot {what} {node_id}: it is not running"))?;
+        let pid = process.id() as libc::pid_t;
+        // Safety: `pid` came from a child this harness spawned and has not
+        // reaped, so it names that child or nothing. `kill` reports an error
+        // rather than misbehaving if the process is already gone.
+        let sent = unsafe { libc::kill(pid, signal) };
+        if sent != 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("{what} {node_id} (pid {pid})"));
+        }
+        Ok(())
+    }
+
+    /// Kill a broker and return immediately.
+    ///
+    /// Unlike [`Cluster::stop_node`], this does not wait for the control plane
+    /// to notice. A test measuring how long failover takes has to start its
+    /// clock at the kill, not after the cluster has already reacted to it.
+    pub fn kill_node(&mut self, node_id: &str) -> Result<()> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let Some(mut process) = node.process.take() else {
+            return Ok(());
+        };
+        let _ = process.kill();
+        // Reaped so the process does not linger as a zombie for the rest of the
+        // test; the kill itself has already happened, so this does not wait on
+        // anything the caller is timing.
+        let _ = process.wait();
+        Ok(())
+    }
+
     /// Stop everything. Called by `Drop` too, so an aborted test leaves nothing
     /// behind — this exists for the case where a caller wants to wait for it.
     pub async fn shutdown(mut self) {
