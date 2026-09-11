@@ -223,6 +223,26 @@ large it currently is.
 `Quorum` has no such window: a majority including the leader holds every
 acknowledged record, so any failure within the configured majority preserves it.
 
+### What a lost leader costs today
+
+Promotion is gated on a replica that holds the log, and **no replica's position
+reaches the control plane yet**, so promotion cannot fire. A replicated shard
+whose leader is lost is left *unplaced* until that leader returns.
+
+That is deliberate. The alternative is what the code used to do: fall back to
+ordinary scoring and hand the shard to whichever node scores highest, which may
+never have seen it. That broker then serves an empty log at a newer generation
+while the records sit on replicas that were not chosen — a failover that *is*
+the data loss, and one nothing downstream reports as one.
+
+Unavailable is the better answer: it is visible, and it resolves on its own when
+the old leader returns. It resolves properly when replica positions are reported
+and a caught-up follower can be promoted, which is the work that remains.
+
+A stream that never asked for replication is unaffected. It has no replicas, so
+there was never a copy to prefer, and a fresh placement stays the only thing
+available.
+
 ## Failure model
 
 | Situation | Behaviour |

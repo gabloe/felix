@@ -685,14 +685,13 @@ fn a_caught_up_follower_is_promoted() {
 }
 
 /// **The gate.** A follower that holds nothing is not promoted, however
-/// eligible it looks: promoting it would serve an empty shard, which is the data
-/// loss a failover is supposed to prevent.
+/// eligible it looks: promoting it would serve an empty shard, which is the
+/// data loss a failover is supposed to prevent.
 ///
-/// Asserted against a baseline with no replica set recorded, because "did not
-/// promote" and "promoted the node it would have chosen anyway" are otherwise
-/// the same outcome. Both single-node replica sets are tried, so at least one
-/// names a follower that scoring would *not* have picked — without that, the
-/// two paths coincide and the assertion proves nothing.
+/// And nothing else is promoted in its place. A node that has never seen the
+/// shard is just as empty as an uncaught-up replica, so falling back to
+/// ordinary scoring would defeat the gate rather than respect it — the shard
+/// stays unplaced until something that holds the log can take it.
 #[test]
 fn a_follower_that_holds_nothing_is_not_promoted() {
     let streams = vec![replicated_stream("orders", 1, 2)];
@@ -701,27 +700,15 @@ fn a_follower_that_holds_nothing_is_not_promoted() {
         node("broker-c", NodeLifecycle::Live, None),
     ];
 
-    let baseline = plan(
-        &streams,
-        &nodes,
-        &[assigned("orders", "broker-a", &[])],
-        &NothingCaughtUp,
-    );
-    let expected: Vec<_> = baseline
-        .to_place()
-        .map(|(k, l, _)| (k.clone(), l.to_string()))
-        .collect();
-
     for replica in ["broker-b", "broker-c"] {
         let existing = vec![assigned("orders", "broker-a", &[replica])];
-        let chosen: Vec<_> = plan(&streams, &nodes, &existing, &NothingCaughtUp)
-            .to_place()
-            .map(|(k, l, _)| (k.clone(), l.to_string()))
-            .collect();
+
+        let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
+
         assert_eq!(
-            chosen, expected,
-            "a replica ({replica}) holding nothing was promoted; with no caught-up \
-             follower, placement must ignore the replica set entirely",
+            plan.to_place().count(),
+            0,
+            "with {replica} holding nothing, the shard was placed anyway",
         );
     }
 }
@@ -768,4 +755,108 @@ fn promotion_rebuilds_the_replica_set_without_the_new_leader() {
         !replicas.contains(&leader.to_string()),
         "{leader} was promoted and is still listed as a follower of itself",
     );
+}
+
+/// **A replicated shard is never handed to a node that does not hold it.**
+///
+/// The leader is gone and no replica is caught up. Placing the shard on a node
+/// that has never seen it would serve an empty log at a new generation while
+/// the records sat on the replicas — the failover would *be* the data loss, and
+/// nothing downstream would report it as one.
+#[test]
+fn a_replicated_shard_with_no_caught_up_replica_is_left_unplaceable() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    // broker-a led it; b and c hold copies. broker-a is gone, and broker-z has
+    // never seen this shard.
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+        node("broker-z", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+
+    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
+
+    assert_eq!(
+        plan.to_place().count(),
+        0,
+        "a shard was placed on a node that does not hold its log",
+    );
+    assert!(
+        plan.unplaceable()
+            .any(|(_, why)| matches!(why, Unplaceable::NoCaughtUpReplica)),
+        "the shard was dropped without saying why",
+    );
+}
+
+/// And it is placed the moment a replica can take over, so the state above is
+/// a pause rather than a dead end.
+#[test]
+fn the_shard_is_placed_as_soon_as_a_replica_is_caught_up() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+        node("broker-z", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+    let caught_up = CaughtUpNodes(["broker-b".to_string()].into_iter().collect());
+
+    let plan = plan(&streams, &nodes, &existing, &caught_up);
+
+    let (_, leader, _) = plan.to_place().next().expect("placed");
+    assert_eq!(leader, "broker-b");
+}
+
+/// **A stream that never asked for replication is untouched.** It has no
+/// replicas, so there was never a copy to prefer, and a fresh placement stays
+/// the only thing available — refusing there would turn a recoverable single-copy
+/// outage into a permanent one.
+#[test]
+fn an_unreplicated_shard_is_still_placed_after_its_node_is_lost() {
+    let streams = vec![replicated_stream("orders", 1, 1)];
+    let nodes = vec![node("broker-b", NodeLifecycle::Live, None)];
+    let existing = vec![assigned("orders", "broker-a", &[])];
+
+    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
+
+    let (_, leader, _) = plan
+        .to_place()
+        .next()
+        .expect("an unreplicated shard should still be placed");
+    assert_eq!(leader, "broker-b");
+}
+
+/// A shard that has never been assigned is a first placement, not a failover,
+/// so it is placed normally.
+#[test]
+fn a_shard_with_no_previous_assignment_is_placed_normally() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+        node("broker-z", NodeLifecycle::Live, None),
+    ];
+
+    let plan = plan(&streams, &nodes, &[], &NothingCaughtUp);
+
+    assert_eq!(plan.to_place().count(), 1);
+}
+
+/// A leader that is still live keeps the shard, caught-up replicas or not.
+/// Nothing about this changes the ordinary path.
+#[test]
+fn a_live_leader_keeps_its_shard() {
+    let streams = vec![replicated_stream("orders", 1, 3)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Live, None),
+        node("broker-b", NodeLifecycle::Live, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let existing = vec![assigned("orders", "broker-a", &["broker-b", "broker-c"])];
+
+    let plan = plan(&streams, &nodes, &existing, &NothingCaughtUp);
+
+    assert_eq!(plan.kept(), 1);
+    assert_eq!(plan.to_place().count(), 0);
 }
