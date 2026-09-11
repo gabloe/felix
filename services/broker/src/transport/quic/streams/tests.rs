@@ -139,6 +139,7 @@ fn auth_message(fixture: &AuthFixture) -> Message {
         // Legacy handshake: no capabilities offered, so the broker
         // answers with a plain `Ok`.
         client_flags: None,
+        client_features: None,
     }
 }
 
@@ -822,6 +823,7 @@ async fn control_loop_rejects_auth_failed() -> Result<()> {
         // Legacy handshake: no capabilities offered, so the broker
         // answers with a plain `Ok`.
         client_flags: None,
+        client_features: None,
     })))];
     let (result, messages) = run_control_loop_with_frames(
         broker,

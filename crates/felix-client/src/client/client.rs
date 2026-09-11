@@ -484,6 +484,21 @@ impl Client {
                 }
                 .into());
             }
+            Some(Message::NotLeader {
+                node_id,
+                addr,
+                generation,
+            }) => {
+                // Typed, for the same reason as the cursor error above: this is
+                // not a failure but an instruction, and the only thing an
+                // application can do with a formatted string is fail.
+                return Err(NotLeaderError {
+                    node_id,
+                    addr,
+                    generation,
+                }
+                .into());
+            }
             other => return Err(anyhow::anyhow!("subscribe failed: {other:?}")),
         };
         let tenant_id = Arc::<str>::from(tenant_id);
@@ -718,6 +733,7 @@ async fn authenticate_stream(
             tenant_id: tenant_id.to_string(),
             token: token.to_string(),
             client_flags: Some(felix_wire::KNOWN_FLAGS),
+            client_features: Some(felix_wire::KNOWN_FEATURES),
         },
     )
     .await
@@ -742,6 +758,43 @@ async fn authenticate_stream(
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
+    }
+}
+
+/// The broker does not own this shard, and names the one that does.
+///
+/// Typed rather than a formatted string because it is an instruction, not a
+/// failure: the subscription is available, just somewhere else, and a caller
+/// that can reach the named broker can simply go there. [`ClusterClient`] does
+/// exactly that.
+///
+/// [`ClusterClient`]: crate::ClusterClient
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub struct NotLeaderError {
+    /// The broker that owns the shard.
+    pub node_id: String,
+    /// Where clients reach it, when the cluster has been told. Absent means the
+    /// owner is known by name only, and a caller has to resolve it some other
+    /// way -- discovery, or its own configuration.
+    pub addr: Option<String>,
+    /// The assignment epoch this answer describes.
+    pub generation: u64,
+}
+
+impl std::fmt::Display for NotLeaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.addr {
+            Some(addr) => write!(
+                f,
+                "shard is owned by {} at {addr} (generation {})",
+                self.node_id, self.generation
+            ),
+            None => write!(
+                f,
+                "shard is owned by {}, whose client address is not published (generation {})",
+                self.node_id, self.generation
+            ),
+        }
     }
 }
 

@@ -324,8 +324,22 @@ Features are advertised in the same handshake, in an optional field:
 | Bit | Name | Meaning |
 | --- | --- | --- |
 | `0x0001` | `FEATURE_TOPOLOGY` | The broker answers `topology` |
+| `0x0002` | `FEATURE_REDIRECT` | The peer understands `not_leader` |
 
-An absent `server_features` means the broker implements none. This is not a
+Features are advertised in **both** directions. A client offers its own in the
+`auth` it already sends:
+
+```json
+{"type":"auth","tenant_id":"t1","token":"...","client_flags":63,"client_features":3}
+```
+
+The client's set matters for exactly the same reason as the broker's: a broker
+must not send a client a message type it cannot decode. `not_leader` travels
+broker to client, so the broker sends it only to a client that offered
+`FEATURE_REDIRECT`, and answers everyone else with an ordinary `error`.
+
+An absent `server_features` or `client_features` means that peer implements
+none. This is not a
 formality. An unrecognised message `type` is a **fatal** protocol error to the
 broker's control loop — it closes the connection rather than answering — so a
 client MUST NOT send a featured request speculatively to find out whether it is
@@ -333,6 +347,34 @@ supported. Silence means no.
 
 A broker advertises a feature only when it can actually answer it. A broker with
 no cluster behind it has no topology to report, and advertises `0`.
+
+## Not-leader redirects
+
+A subscribe for a shard the broker does not own is answered with `not_leader`,
+naming the broker that does:
+
+```json
+{"type":"not_leader","node_id":"broker-b","addr":"10.0.0.5:5000","generation":7}
+```
+
+`addr` is the owner's **client-facing** listener, and is omitted when the
+cluster has not been told one — a client is then given the owner's name alone,
+which is still usable if it knows that broker from `topology`. Dialling the
+broker-internal listener instead would be refused, so no address is better than
+the wrong one.
+
+`generation` is the assignment epoch the answer describes. A client holding a
+newer one has already moved on and should ignore the redirect.
+
+A client following a redirect MUST bound its hops. A cluster mid-rebalance can
+name an owner that names another, and two brokers that disagree would otherwise
+bounce a client between them indefinitely. The Rust client caps this at three
+hops and refuses to visit the same broker twice within one attempt.
+
+**Publish is not redirected — it is forwarded.** The two paths made opposite
+choices deliberately: `docs/subscribe-routing.md` records the measurements
+behind redirecting subscribes, and `docs/internal-protocol.md` the forwarding
+of publishes. A client should not expect `not_leader` in answer to a publish.
 
 ## Topology
 

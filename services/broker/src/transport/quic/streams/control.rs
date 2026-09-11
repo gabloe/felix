@@ -103,6 +103,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // Frame-flag bits the client understands. Narrowed to the pre-negotiation
     // set until an `Auth` says otherwise.
     let mut peer_flags = felix_wire::ORIGINAL_V1_FLAGS;
+    // Optional messages this client understands. Nothing until an `Auth` says
+    // otherwise.
+    let mut peer_features = 0u32;
     let authz_ctx = AuthzResponseContext {
         out_ack_tx: &out_ack_tx,
         out_ack_depth: &out_ack_depth,
@@ -244,6 +247,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 tenant_id,
                 token,
                 client_flags,
+                client_features,
             } => {
                 if auth_ctx.is_some() {
                     send_control_error(
@@ -265,6 +269,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         // Absent means a pre-negotiation client, and the only
                         // safe reading of that silence is the original bits.
                         peer_flags = client_flags.unwrap_or(felix_wire::ORIGINAL_V1_FLAGS);
+                        // Which optional messages this client can decode.
+                        // Absent means none: a broker that guessed would send a
+                        // frame the client cannot parse, and an undecodable
+                        // frame costs the connection.
+                        peer_features = client_features.unwrap_or(0);
                         // Advertise our flag set only to a client that offered its
                         // own. A client that sent no `client_flags` predates
                         // negotiation and would not understand `AuthOk`, so it must
@@ -460,6 +469,38 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 .await?
                 {
                     return Ok(false);
+                }
+                // Where the shard actually lives.
+                //
+                // Without this a subscription for a shard this broker does not
+                // own is accepted and then delivers nothing, for as long as the
+                // application is willing to wait -- the worst of the available
+                // answers, because it is indistinguishable from a quiet stream.
+                // `docs/subscribe-routing.md` records the decision: redirect to
+                // the owner rather than proxy for it.
+                if let Some(answer) = crate::transport::quic::handlers::subscribe::redirect_for(
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.client_endpoints.as_deref(),
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    peer_features,
+                ) {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::Message(answer),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    continue;
                 }
                 // Subscribe establishes server-side subscription state and typically spawns a
                 // uni-directional event stream back to the client for delivery.
@@ -702,6 +743,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::PublishError { .. }
             | Message::AuthOk { .. }
             | Message::TopologyView { .. }
+            | Message::NotLeader { .. }
             | Message::Ok => {
                 // Protocol hygiene: these message types should never arrive on the control stream
                 // from the client. Treat as a protocol violation and close.

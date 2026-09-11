@@ -352,6 +352,7 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -426,6 +427,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -688,6 +690,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;
@@ -769,6 +772,7 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
             // Legacy handshake: no capabilities offered, so the broker
             // answers with a plain `Ok`.
             client_flags: None,
+            client_features: None,
         },
     )
     .await?;

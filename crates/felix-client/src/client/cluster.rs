@@ -66,6 +66,13 @@ impl Default for ReconnectPolicy {
     }
 }
 
+/// How many times a subscribe will follow a redirect before giving up.
+///
+/// A correct cluster needs one hop. More than that means the answer is moving
+/// while it is being followed, and a bound is what turns "the cluster has not
+/// settled" into an error the caller sees rather than a loop it does not.
+const MAX_REDIRECTS: usize = 3;
+
 /// A client that reconnects to another broker when the one it is using fails.
 pub struct ClusterClient {
     /// What the application configured. Never removed from `endpoints`: the
@@ -172,6 +179,64 @@ impl ClusterClient {
     /// resuming it is the caller's to do with the offsets it has been given.
     pub async fn client(&self) -> Arc<Client> {
         Arc::clone(&*self.client.read().await)
+    }
+
+    /// Subscribe, following the cluster to whichever broker owns the shard.
+    ///
+    /// A broker that does not own it answers `NotLeader` naming the one that
+    /// does; this connects there and asks again. The returned [`Client`] must
+    /// be kept alive for as long as the subscription: dropping it closes the
+    /// connection the events arrive on.
+    ///
+    /// The client this wrapper holds is **not** replaced. A redirect is about
+    /// one shard, not about which broker is generally worth talking to, and
+    /// moving every future publish because one stream lives elsewhere would be
+    /// a much larger claim than the answer supports.
+    pub async fn subscribe(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        let mut client = self.client().await;
+        // Every broker this attempt has already asked. A cluster mid-rebalance
+        // can name an owner that names another, and two brokers that disagree
+        // would otherwise bounce a client between them until its deadline.
+        let mut visited: Vec<String> = Vec::new();
+
+        for _ in 0..=MAX_REDIRECTS {
+            let error = match client.subscribe(tenant_id, namespace, stream).await {
+                Ok(subscription) => return Ok((client, subscription)),
+                Err(err) => err,
+            };
+            let Some(redirect) = error.downcast_ref::<crate::NotLeaderError>().cloned() else {
+                return Err(error);
+            };
+            if visited.iter().any(|seen| seen == &redirect.node_id) {
+                return Err(error.context(format!(
+                    "redirected back to {}, which has already been asked",
+                    redirect.node_id
+                )));
+            }
+            let Some(addr) = redirect.addr.clone() else {
+                return Err(error.context(
+                    "the owner's client address is not published, so there is nowhere to follow to",
+                ));
+            };
+            let addr: SocketAddr = addr
+                .parse()
+                .with_context(|| format!("the owner's address {addr:?} is not usable"))?;
+            visited.push(redirect.node_id.clone());
+            client = Arc::new(
+                Client::connect(addr, &self.server_name, self.config.clone())
+                    .await
+                    .with_context(|| format!("connect to the shard owner at {addr}"))?,
+            );
+        }
+
+        Err(anyhow::anyhow!(
+            "still being redirected after {MAX_REDIRECTS} hops; the cluster has not settled on an owner"
+        ))
     }
 
     /// Publish, reconnecting if the broker in use has gone.

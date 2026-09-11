@@ -931,3 +931,91 @@ fn a_feature_bit_is_only_supported_when_advertised() {
 fn felix_wire_flags() -> u16 {
     crate::KNOWN_FLAGS
 }
+
+/// **An `Auth` from a client that predates features decodes.** The mirror of
+/// the broker-side case: absent has to mean "implements none", or a broker
+/// would send a message the client cannot decode and cost the connection.
+#[test]
+fn an_auth_without_features_reads_as_supporting_none() {
+    let frame = Frame::new(
+        0,
+        Bytes::from_static(br#"{"type":"auth","tenant_id":"t1","token":"x"}"#),
+    )
+    .expect("frame");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(
+        decoded,
+        Message::Auth {
+            tenant_id: "t1".to_string(),
+            token: "x".to_string(),
+            client_flags: None,
+            client_features: None,
+        }
+    );
+}
+
+/// A client advertising nothing sends the bytes it always did, so a broker that
+/// predates features parses it unchanged.
+#[test]
+fn an_auth_advertising_nothing_omits_the_field() {
+    let encoded = Message::Auth {
+        tenant_id: "t1".to_string(),
+        token: "x".to_string(),
+        client_flags: None,
+        client_features: None,
+    }
+    .encode()
+    .expect("encode");
+    let json = std::str::from_utf8(&encoded.payload).expect("utf8");
+    assert!(
+        !json.contains("client_features"),
+        "an absent feature set must not appear on the wire: {json}"
+    );
+}
+
+#[test]
+fn a_not_leader_round_trips() {
+    let message = Message::NotLeader {
+        node_id: "broker-b".to_string(),
+        addr: Some("10.0.0.5:5000".to_string()),
+        generation: 7,
+    };
+    assert_eq!(
+        Message::decode(message.encode().expect("encode")).expect("decode"),
+        message
+    );
+}
+
+/// **A redirect with no address still names the owner.** "Not here, and here is
+/// who has it" is more use than "not here", and a client that knows that broker
+/// from discovery can act on the name alone.
+#[test]
+fn a_not_leader_without_an_address_round_trips() {
+    let message = Message::NotLeader {
+        node_id: "broker-b".to_string(),
+        addr: None,
+        generation: 7,
+    };
+    let decoded = Message::decode(message.encode().expect("encode")).expect("decode");
+    assert_eq!(decoded, message);
+
+    let json = String::from_utf8(message.encode().expect("encode").payload.to_vec()).expect("utf8");
+    assert!(
+        !json.contains("addr"),
+        "an absent address must not appear: {json}"
+    );
+}
+
+/// The two feature bits are distinct, and neither implies the other.
+#[test]
+fn the_feature_bits_do_not_overlap() {
+    assert_ne!(crate::FEATURE_TOPOLOGY, crate::FEATURE_REDIRECT);
+    assert!(!crate::supports_feature(
+        crate::FEATURE_TOPOLOGY,
+        crate::FEATURE_REDIRECT
+    ));
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_REDIRECT
+    ));
+}

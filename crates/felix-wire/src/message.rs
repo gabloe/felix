@@ -39,6 +39,16 @@ pub enum Message {
         /// degrade without a version check.
         #[serde(skip_serializing_if = "Option::is_none")]
         client_flags: Option<u16>,
+        /// Optional protocol features this client understands, as a bitset of
+        /// `FEATURE_*` constants.
+        ///
+        /// The mirror of `AuthOk.server_features`, and needed for the same
+        /// reason in the other direction: a broker must not send a client a
+        /// message type it cannot decode, because an undecodable frame costs
+        /// the connection. Absent means a client that predates features, which
+        /// implements none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_features: Option<u32>,
     },
     // Successful auth, carrying the broker's supported frame-flag bits.
     //
@@ -60,6 +70,22 @@ pub enum Message {
         /// so a client must never send one speculatively.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_features: Option<u32>,
+    },
+    /// This broker does not own the shard; the owner is named here.
+    ///
+    /// Only ever sent to a client that offered `FEATURE_REDIRECT`.
+    NotLeader {
+        /// Who owns it, so a client can recognise a redirect back to a broker
+        /// it has already tried.
+        node_id: String,
+        /// `host:port` the owner serves *clients* on, or absent when the
+        /// cluster has not been told where clients reach it. Absent means the
+        /// client must find another way in rather than dial the wrong listener.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<String>,
+        /// The assignment epoch this answer describes. A client holding a newer
+        /// one has already moved on and should ignore this.
+        generation: u64,
     },
     /// Ask the broker which brokers a client may connect to.
     ///

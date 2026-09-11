@@ -40,6 +40,12 @@ degrades gracefully without `pandas`.
   and `task test` cannot see them, so a workspace-scoped "this is unused, delete it" signal
   is unreliable — deleting a public item that only a demo uses passes lint and breaks the
   build. Run `task demo:check` after changing public APIs.
+- **The cluster harness runs a *prebuilt* `target/<profile>/felix-broker`.** `cargo test -p
+  felix-cluster` does not rebuild it, so a broker-side change is not in the binary those
+  tests spawn until `cargo build -p broker --bin felix-broker` runs. This silently
+  invalidates "revert the fix and watch the test fail": the test keeps passing because it
+  is still running the old broker. `task test` is fine — `cargo test --workspace` builds
+  the binary first.
 - **`task test` deliberately does not use `--all-features` on the whole workspace.**
   `felix-client`'s `in-process` feature is run separately so its tests do not add concurrent
   load to timing-sensitive tests elsewhere.
