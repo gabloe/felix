@@ -120,6 +120,69 @@ impl Client {
             .await
     }
 
+    /// Connect to whichever of `addrs` answers first, in order.
+    ///
+    /// A cluster has more than one broker and any of them will serve a publish —
+    /// one that does not own the shard forwards it. So a client given a single
+    /// address has a single point of failure that the cluster itself does not:
+    /// the broker it was pointed at can be the one that just died, and every
+    /// other broker is sitting there able to serve.
+    ///
+    /// Tried in the order given, so a caller can express preference. The errors
+    /// are collected rather than discarded: "nothing answered" is the only
+    /// outcome worth reporting, but *why* each endpoint refused is what an
+    /// operator needs, and a bare "connection refused" from the last one in the
+    /// list hides the credential error from the first.
+    ///
+    /// This is seed discovery, not topology: the client does not yet learn the
+    /// rest of the cluster from the broker it reaches, and does not move if that
+    /// broker later dies. Both are M6.
+    pub async fn connect_any(
+        addrs: &[SocketAddr],
+        server_name: &str,
+        client_config: ClientConfig,
+    ) -> Result<Self> {
+        Self::connect_any_with_transport(
+            addrs,
+            server_name,
+            client_config,
+            TransportConfig::default(),
+        )
+        .await
+    }
+
+    /// [`Client::connect_any`] with an explicit transport configuration.
+    pub async fn connect_any_with_transport(
+        addrs: &[SocketAddr],
+        server_name: &str,
+        client_config: ClientConfig,
+        transport: TransportConfig,
+    ) -> Result<Self> {
+        if addrs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "no broker addresses were given to connect to"
+            ));
+        }
+        let mut refusals = Vec::with_capacity(addrs.len());
+        for addr in addrs {
+            match Self::connect_with_transport(
+                *addr,
+                server_name,
+                client_config.clone(),
+                transport.clone(),
+            )
+            .await
+            {
+                Ok(client) => return Ok(client),
+                Err(err) => refusals.push(format!("{addr}: {err:#}")),
+            }
+        }
+        Err(anyhow::anyhow!(
+            "no broker answered ({})",
+            refusals.join("; ")
+        ))
+    }
+
     pub async fn connect_with_transport(
         addr: SocketAddr,
         server_name: &str,
