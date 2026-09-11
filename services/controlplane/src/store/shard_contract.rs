@@ -441,11 +441,18 @@ async fn a_snapshot_and_the_changes_after_it_lose_nothing(store: &dyn ControlPla
 
 /// Seeding exposed for the restart test, which needs the catalog in place
 /// across two store handles.
+///
+/// Gated to match its only caller: `postgres_tests` is `pg-tests`-only, so
+/// without that feature this has no users and is dead code.
+#[cfg(feature = "pg-tests")]
 pub(crate) async fn seed_for_restart(store: &dyn ControlPlaneStore) {
     seed(store).await;
 }
 
 /// Write one assignment and hand it back, for the restart test to compare.
+///
+/// `pg-tests`-only for the same reason as [`seed_for_restart`].
+#[cfg(feature = "pg-tests")]
 pub(crate) async fn assign_for_restart(store: &dyn ControlPlaneStore) -> ShardAssignment {
     clear(store).await;
     let first = store
