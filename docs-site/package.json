@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "astro dev",
     "check:mermaid": "node ../scripts/check-mermaid.mjs",
-    "build": "npm run check:mermaid && astro build",
+    "check:diagrams": "node ../scripts/check-diagram-copies.mjs",
+    "build": "npm run check:mermaid && npm run check:diagrams && astro build",
     "preview": "astro preview"
   },
   "dependencies": {

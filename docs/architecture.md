@@ -175,108 +175,76 @@ Felix is opinionated by design.
 
 ---
 
-## Planned Multinode Architecture
+## Cluster Architecture
 
-The current MVP is single-node. The intended multinode design adds explicit control-plane
-coordination, shard placement, and a QUIC data plane that scales horizontally.
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](assets/architecture.svg)
 
-```mermaid
-flowchart TB
-  %% ---------- Clients ----------
-  subgraph Clients["Clients"]
-    C1["Producers<br/>(felix-client)"]
-    C2["Consumers<br/>(felix-client)"]
-    C3["Cache clients<br/>(felix-client)"]
-  end
+Three properties carry most of the design.
 
-  %% ---------- Kubernetes / Edge ----------
-  subgraph K8s["Kubernetes Cluster"]
-    Ingress["Ingress / LB<br/>(L4 for QUIC)"]
-    DNS["Service discovery<br/>(K8s Service / DNS)"]
-  end
+**Any broker accepts any request.** A client connects to whichever broker it can
+reach and asks it for the topology. If that broker does not lead the shard the
+request belongs to, it forwards the request to the one that does and relays the
+answer. The client never has to find the right broker first, and never talks to
+two of them for a single request.
 
-  C1 --> Ingress
-  C2 --> Ingress
-  C3 --> Ingress
+**Ownership comes from the control plane and nowhere else.** Every shard of every
+stream and cache has exactly one leader, chosen by rendezvous hashing over the
+live nodes. Brokers watch the assignment feed — a snapshot, then a change stream
+— and never negotiate ownership among themselves.
 
-  %% ---------- Data Plane ----------
-  subgraph DP["Data Plane (Broker Nodes)"]
-    direction LR
-    B1["Broker Pod A<br/>QUIC data-plane"]
-    B2["Broker Pod B<br/>QUIC data-plane"]
-    B3["Broker Pod C<br/>QUIC data-plane"]
+**No consensus protocol runs between brokers.** Placement is a pure function of a
+metadata snapshot, so two control-plane instances reading the same catalog reach
+the same answer without having to agree on one. Durability across a leader change
+comes from log shipping and leader leases instead; `replication-design.md` argues
+that choice in full, including why per-shard Raft was rejected.
 
-    subgraph Shards["Partitioning / Locality"]
-      R1["Shard/Range 0..n"]
-      R2["Shard/Range n..m"]
-    end
+That rejection is about replicating *records*. Making the control plane's own
+metadata highly available is a separate problem, and Raft is still the intended
+answer there — unimplemented, so control-plane availability currently rests on
+Postgres.
 
-    B1 --- Shards
-    B2 --- Shards
-    B3 --- Shards
-  end
-
-  Ingress --> DP
-  DNS --- DP
-
-  %% ---------- Control Plane ----------
-  subgraph CONTROLPLANE["Control Plane"]
-    direction LR
-    CONTROLPLANE1["controlplane-0"]
-    CONTROLPLANE2["controlplane-1"]
-    CONTROLPLANE3["controlplane-2"]
-
-    subgraph Raft["RAFT quorum"]
-      direction LR
-      CONTROLPLANE1 <--> CONTROLPLANE2
-      CONTROLPLANE2 <--> CONTROLPLANE3
-      CONTROLPLANE1 <--> CONTROLPLANE3
-    end
-
-    Meta["Metadata store<br/>(topics, tenants, ACLs,<br/>shards, placements)"]
-    Raft --> Meta
-  end
-
-  %% ---------- Storage ----------
-  subgraph Storage["Storage (evolves over time)"]
-    direction LR
-    CacheStore["Cache store<br/>(in-memory + TTL)"]
-    LogStore["Durable log<br/>(segments + sparse indexes)"]
-    Snapshots["Retention / tiering (future)"]
-    LogStore --> Snapshots
-  end
-
-  %% ---------- Wiring ----------
-  DP <--> CONTROLPLANE
-  DP --> CacheStore
-  DP --> LogStore
-
-```
+The control plane is not on the data path. Resolving an owner is an atomic load
+of a routing snapshot the broker already holds — no lock and no network call,
+because it is the hottest question a broker is asked. The snapshot is refreshed
+in the background.
 
 ## Cross-Broker Delivery
 
-If publishes can enter any broker and forward to the shard owner, the flow looks like:
+A publish entering a broker that does not lead the shard:
 
 ```mermaid
 sequenceDiagram
   participant Client as Producer
   participant B0 as Broker (ingress)
-  participant CONTROLPLANE as Control Plane (RAFT)
   participant Bp as Broker (owner)
   participant S as Subscribers
 
-  Client->>B0: Publish(topic, batch)
-  B0->>CONTROLPLANE: Lookup placement(topic/shard)
-  CONTROLPLANE-->>B0: owner = Bp
-  B0->>Bp: Forward publish (internal QUIC)
+  Client->>B0: Publish(stream, key, batch)
+  B0->>B0: hash the key, resolve the owner locally
+  B0->>Bp: ForwardPublish(shard, generation, payloads)
+  Bp->>Bp: check ownership at that generation, commit
   Bp->>S: Fanout (batched events on uni streams)
+  Bp-->>B0: ForwardPublishOk(offsets)
+  B0-->>Client: Ack
 ```
+
+The control plane does not appear here, and that is the design. Resolving the
+owner is an atomic load of a snapshot the broker already holds.
+
+The `generation` travels with the request. The owner compares it against its own
+and answers a mismatch explicitly in either direction, so a stale routing view
+produces a typed answer rather than a write to a shard that has been reassigned.
+
+A broker asked for a shard it does not own answers `NotLeader` — it never
+forwards onward on the requester's behalf, because a chain of relays would have
+unbounded latency and a failure mode nobody can reason about.
 
 ## Status
 
-This document reflects the **intended architecture**. Implementation will proceed incrementally,
-starting with a single-node broker and expanding toward clustering, durability, and sovereignty
-features over time.
+Clustering, replication, and cross-broker routing are implemented; see the status
+table in `docs-site/src/content/docs/getting-started/what-felix-is-for.md`, which
+is kept current per capability. Multi-region and the sovereignty features below
+are design intent, not code.
 
 ---
 

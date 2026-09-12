@@ -12,7 +12,7 @@ Internally, Felix is built around a single append-only log abstraction. Differen
 
 - **Streams (Pub/Sub):** Fanout cursors per subscription
 - **Queues:** Shared consumer-group cursors with acknowledgements
-- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache operations are not yet routed across brokers — see `docs/cache-on-log.md`
+- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache keys are sharded and routed to their owner like a stream's are, so a value written through any broker is readable through every other — see `docs/cache-on-log.md`
 
 This drastically reduces operational complexity and consistency bugs compared to running Kafka, Redis, and a queueing system side-by-side.
 
@@ -29,123 +29,30 @@ Felix prioritizes predictable low latency over maximum batch throughput:
 
 Felix assumes Kubernetes for process lifecycle, identity (ServiceAccounts), networking and service discovery, and failure detection. Felix does **not** attempt to reimplement scheduling or node membership logic that Kubernetes already provides.
 
-## System Architecture (Current MVP)
+## System Architecture
 
-The current implementation is a single-node broker for development and testing:
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
-```mermaid
-flowchart TB
-    subgraph Clients["Client Applications"]
-        P1["Publisher 1"]
-        P2["Publisher 2"]
-        S1["Subscriber 1"]
-        S2["Subscriber 2"]
-        C1["Cache Client"]
-    end
+Three things carry most of the design.
 
-    subgraph Broker["Felix Broker (Single Node)"]
-        direction TB
-        Transport["QUIC Transport Layer<br/>felix-transport"]
-        Wire["Wire Protocol Handler<br/>felix-wire framing"]
-        Router["Stream Router<br/>Control vs Event vs Cache"]
-        
-        subgraph DataPlane["Data Plane"]
-            PubSub["Pub/Sub Engine<br/>felix-broker"]
-            Cache["Cache Engine<br/>TTL + eviction"]
-            Storage["Ephemeral Storage<br/>In-memory"]
-        end
-        
-        Metrics["Metrics Server<br/>:8080"]
-        
-        Transport --> Wire
-        Wire --> Router
-        Router --> PubSub
-        Router --> Cache
-        PubSub --> Storage
-        Cache --> Storage
-    end
+**Any broker accepts any request.** A client connects to whichever broker it can reach and asks it for the topology. If that broker does not lead the shard the request belongs to, it forwards the request to the broker that does and relays the answer — the client is never asked to find the right one first, and never talks to more than one broker for a single request.
 
-    P1 & P2 --> Transport
-    Transport --> S1 & S2
-    C1 <--> Transport
-    
-    PubSub -.-> Metrics
-    Cache -.-> Metrics
-```
+**Ownership comes from the control plane, and only from there.** Every shard of every stream and cache has exactly one leader, chosen by rendezvous hashing over the live nodes. Brokers watch the assignment feed — a snapshot, then a change stream — and never negotiate ownership among themselves.
 
-**Key Components:**
+**No consensus protocol runs between brokers.** Placement is a pure function of a metadata snapshot, so two control-plane instances reading the same catalog reach the same answer without having to agree on one. Durability across a leader change comes from log shipping and leader leases: per-shard Raft was considered and rejected, for reasons set out in [`docs/replication-design.md`](https://github.com/gabloe/felix/blob/main/docs/replication-design.md).
 
-- **Transport Layer:** Accepts QUIC connections, manages stream lifecycle
-- **Wire Protocol:** Frames messages, validates envelopes, routes by type
-- **Pub/Sub Engine:** Enqueues publishes, manages subscriptions, fans out events
-- **Cache Engine:** Handles put/get operations with TTL and lazy expiration
-- **Storage:** In-memory ring buffers and hash maps (ephemeral)
-- **Metrics Server:** Prometheus-compatible endpoint for monitoring
+That rejection is specific to *replicating records*. Making the control plane's own metadata highly available is a separate problem, and Raft remains the intended answer there — it is not implemented yet, and until it is, control-plane availability rests on Postgres.
 
-## Planned Multi-Node Architecture
+The control plane is not on the data path. A publish, a subscribe, or a cache operation never calls it; brokers read it in the background and serve from what they already hold.
 
-The intended multi-node design adds explicit control-plane coordination and data-plane scalability:
+### Control plane
 
-```mermaid
-flowchart TB
-    subgraph Clients["Clients"]
-        C1["Producers"]
-        C2["Consumers"]
-        C3["Cache Clients"]
-    end
-    
-    LB["Load Balancer<br/>(L4 for QUIC)"]
-    
-    Clients --> LB
-    
-    subgraph ControlPlane["Control Plane (RAFT)"]
-        direction LR
-        CONTROLPLANE1["controlplane-0"]
-        CONTROLPLANE2["controlplane-1"]
-        CONTROLPLANE3["controlplane-2"]
-        
-        CONTROLPLANE1 <--> CONTROLPLANE2
-        CONTROLPLANE2 <--> CONTROLPLANE3
-        CONTROLPLANE1 <--> CONTROLPLANE3
-        
-        Meta["Metadata Store<br/>• Topics/Streams<br/>• Tenants/Namespaces<br/>• Shard Placement<br/>• ACLs/Quotas"]
-    end
-    
-    subgraph DataPlane["Data Plane (Brokers)"]
-        direction LR
-        B1["Broker A<br/>Shards 0-99"]
-        B2["Broker B<br/>Shards 100-199"]
-        B3["Broker C<br/>Shards 200-299"]
-    end
-    
-    subgraph Storage["Storage Layer"]
-        direction LR
-        Ephemeral["Ephemeral<br/>(in-memory)"]
-        Durable["Durable Log<br/>(persistent volumes)"]
-        Snapshots["Snapshots<br/>(object storage)"]
-    end
-    
-    LB --> DataPlane
-    ControlPlane --> Meta
-    DataPlane <--> ControlPlane
-    DataPlane --> Storage
-```
+Serves metadata over REST, backed by Postgres or an in-memory store. It owns tenants, namespaces, streams, caches, the node catalog, and shard assignments, and it runs placement on a timer. Brokers seed from it at startup and gate readiness on that seeding, so a broker does not accept traffic for streams it does not yet know about.
 
-### Control Plane Responsibilities
+### Data plane
 
-- **Metadata Management:** Topics, tenants, namespaces, ACLs
-- **Shard Placement:** Assign shards to broker nodes
-- **Health Monitoring:** Track broker liveness and readiness
-- **Configuration:** Cluster-wide retention, limits, feature flags
-- **Rebalancing:** Migrate shards on node failures or scaling events
+Brokers serve clients over QUIC and reach each other over a separate QUIC endpoint with its own protocol. Each one leads some shards, replicates the ones it leads to followers, forwards what it does not lead, and refuses what it cannot route — a request served locally by a broker that does not own it is exactly the divergence the ownership check exists to prevent.
 
-### Data Plane Responsibilities
-
-- **Client Connections:** Accept and route QUIC streams
-- **Data Operations:** Publish, subscribe, cache operations
-- **Shard Ownership:** Host assigned shards (leaders and followers)
-- **Replication:** (Future) Replicate log entries to followers
-- **Backpressure:** Enforce flow control and isolation
 
 ## Data Flow Patterns
 
@@ -218,25 +125,33 @@ sequenceDiagram
 - Request IDs for request/response matching
 - Sub-millisecond latency at moderate concurrency
 
-### Cross-Broker Routing (Planned)
+### Cross-Broker Routing
 
-When a client connects to a broker that doesn't own the target shard:
+When a client reaches a broker that does not lead the target shard:
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant B1 as Broker (ingress)
-    participant CONTROLPLANE as Control Plane
     participant B2 as Broker (shard owner)
-    
-    C->>B1: Publish(topic, batch)
-    B1->>CONTROLPLANE: Lookup shard placement(topic)
-    CONTROLPLANE-->>B1: owner = B2
-    B1->>B2: Forward publish (internal QUIC)
-    B2->>B2: Commit to log
-    B2-->>B1: ACK
-    B1-->>C: ACK
+
+    C->>B1: Publish(stream, key, batch)
+    B1->>B1: hash the key, resolve the owner locally
+    B1->>B2: ForwardPublish(shard, generation, payloads)
+    B2->>B2: check ownership at that generation, then commit
+    B2-->>B1: ForwardPublishOk(offsets)
+    B1-->>C: Ack
 ```
+
+**The control plane is not in this picture, and that is the point.** Resolving an
+owner is an atomic load of a routing snapshot the broker already holds — no lock,
+no network call — because this is the hottest question the broker is asked. The
+snapshot is refreshed in the background from the assignment feed.
+
+The `generation` the ingress broker resolved against travels with the request.
+The owner compares it against its own and answers a mismatch explicitly in either
+direction, so a stale view is a typed answer rather than a write to a shard
+somebody has already been given.
 
 ## Storage Architecture
 
@@ -282,7 +197,7 @@ See [Durable Storage](/felix/architecture/durable-storage/).
 
 ## Consistency Model
 
-### Single-Node (MVP)
+### Single node
 
 - **Delivery:** At-most-once (best-effort)
 - **Ordering:** Per-stream ordering preserved per subscriber. For a durable
@@ -291,20 +206,27 @@ See [Durable Storage](/felix/architecture/durable-storage/).
 - **Durability:** Per stream. Ephemeral by default; `durable: true` persists
   every publish before acknowledging it.
 
-### Multi-Node (Planned)
+### Clustered
 
-**Tunable per stream:**
+Consistency is declared per stream:
 
-- **Leader-only acknowledgements:** Lowest latency, leader commits before replicating
-- **Quorum acknowledgements:** Higher durability, waits for majority replica confirmation
-- **Asynchronous replication:** Background replication after ACK
-- **Synchronous replication:** Blocks on replication before ACK
+- **`Leader`:** the leader acknowledges once the record is durable locally. Lowest
+  latency, and the default.
+- **`Quorum`:** the leader waits until a majority of the shard's replicas — itself
+  included — hold the record. A record acknowledged this way survives the loss of
+  its leader.
+
+A leader serves only while it holds a lease on the shards it leads, so a broker
+that has been superseded stops acknowledging rather than discovering the fact
+later. On failover, only a replica that actually holds the log is promoted: a
+shard whose leader is gone and whose replicas are behind is left unavailable
+rather than reopened empty, because a silently empty shard *is* the data loss.
 
 **Delivery guarantees:**
 
-- **At-least-once:** With durable storage and replay on failure
-- **At-most-once:** Best-effort with no retries
-- **Exactly-once:** (Future roadmap) via idempotent producers and transactions
+- **At-least-once:** with durable storage and replay on failure
+- **At-most-once:** best-effort with no retries
+- **Exactly-once:** not implemented
 
 ## Multi-Region Architecture (Planned)
 
@@ -366,11 +288,14 @@ regulatory or compliance purposes until it ships.
 
 - **Sharding:** Partition streams across brokers
 - **Connection pooling:** Reuse connections across shards
-- **Control plane:** RAFT quorum for metadata (3-5 nodes)
-- **Data plane:** Many broker nodes for capacity
+- **Control plane:** stateless REST over Postgres; scale by adding instances,
+  since placement is a pure function of the catalog and needs no agreement
+  between them
+- **Data plane:** many broker nodes for capacity
 
-Multi-node is not implemented, so no cluster-level throughput figure is
-claimed here.
+No cluster-level throughput figure is claimed here: the published benchmarks are
+single-node, and a multi-node number measured on one machine would say more
+about the loopback than about Felix.
 
 ## Next Steps
 
