@@ -8,6 +8,11 @@ see the "QUIC Transport Tuning" section of
 [Environment Variables](../docs-site/src/content/docs/reference/environment-variables.md).
 The performance-critical defaults are already on; no tuning is required.
 
+**Running against a cluster** — seed brokers, discovery, failover, retries and
+redirects — is [Running a client against a cluster](multi-node-client.md). None
+of it is configured here: it is chosen by using `ClusterClient` rather than
+`Client`, and by the `ReconnectPolicy` handed to it.
+
 ## Loading Order
 
 `ClientConfig::from_env_or_yaml(quinn, config_path)` uses:

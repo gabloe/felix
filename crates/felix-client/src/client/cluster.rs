@@ -159,6 +159,49 @@ pub(crate) fn is_terminal(error: &anyhow::Error) -> bool {
 const MAX_REDIRECTS: usize = 3;
 
 /// A client that reconnects to another broker when the one it is using fails.
+///
+/// See `docs/multi-node-client.md` for what to configure and what this does on
+/// its own. The short version:
+///
+/// ```rust,no_run
+/// use std::time::Duration;
+/// use felix_client::{ClientConfig, ClusterClient, ReconnectPolicy};
+/// use felix_wire::AckMode;
+///
+/// # async fn example(quinn: quinn::ClientConfig) -> anyhow::Result<()> {
+/// let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
+/// config.auth_tenant_id = Some("acme".to_string());
+/// config.auth_token = Some(std::env::var("FELIX_TOKEN")?);
+///
+/// // One address is enough; the rest are discovered. Configure more anyway,
+/// // because discovery needs *some* broker to answer first.
+/// let seeds = ["10.0.0.4:5000".parse()?, "10.0.0.5:5000".parse()?];
+///
+/// let client = ClusterClient::connect_with_policy(
+///     &seeds,
+///     "broker.internal",
+///     config,
+///     ReconnectPolicy {
+///         attempts: 5,
+///         backoff: Duration::from_millis(200),
+///         max_backoff: Duration::from_secs(2),
+///         deadline: Some(Duration::from_secs(10)),
+///     },
+/// )
+/// .await?;
+///
+/// client
+///     .publish_at_least_once(
+///         "acme",
+///         "default",
+///         "orders",
+///         b"payload".to_vec(),
+///         AckMode::PerMessage,
+///     )
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct ClusterClient {
     /// What the application configured. Never removed from `endpoints`: the
     /// cluster's account of itself can be wrong, and these are the addresses
