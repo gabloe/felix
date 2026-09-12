@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789171304987,
+  "lastUpdate": 1789176161820,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5252,6 +5252,58 @@ window.BENCHMARK_DATA = {
             "range": "10657.63",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 563068.12\nmean: 563495.75\nstdev: 10657.63\ncv: 1.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3cef7d10f9423a9f3b0330579138029f19542b92",
+          "message": "fix(broker): stop acknowledging a Quorum publish that no majority holds (#282) (#283)\n\n`Quorum` behaved exactly like `Leader` whenever `ack_on_commit` was off,\nwhich is the default. A publish to a `Quorum` stream was acknowledged the\nmoment it was queued.\n\nThe enqueue-ack path is gated on `!ack_on_commit && !forwarding`, and\nforwarding was excluded for a reason already written there: this broker\nenqueued the batch to send it somewhere else, which is not a fact worth\nacknowledging. `Quorum` is the same argument one step further -- \"accepted\ninto the ingress queue\" is not an answer to \"is this on a majority\" -- and it\nwas not excluded. The quorum wait still ran, in a worker holding a response\nchannel nobody had created, and its answer went nowhere.\n\nTwo of the four publishes in the reproducer had their quorum wait return\n`NotLeading` -- an error -- and were acknowledged anyway. A third was still\nblocked on frozen followers when its publish had already returned `Ok`. An\nacknowledgement cannot depend on a wait that has not returned.\n\n`Quorum` now forces the commit-ack path at every point the decision is made:\nthe response channel, the enqueue policy, and the enqueue-ack short circuit,\nin both the JSON and binary batch handlers.\n\n**This is why `a_quorum_acknowledged_record_survives_its_leader` failed one\nrun in four.** A record acknowledged without a majority existed only on the\nleader, so promoting any replica legitimately lost it, and the test failed\nwhenever the promoted broker was one that never received it. Three\nconsecutive runs of the failover suite are now clean. Its doc comment claimed\nthe test was ignored; it was not -- there was no `#[ignore]` -- so it ran and\nfailed intermittently, which is worse than either honest option. The comment\nnow says what actually happened.\n\nThe new `fencing` tests are #115's: a leader paused past its lease and then\nresumed must not acknowledge writes the cluster loses, a frozen follower must\nnot block a majority the rest of the set can reach, records must survive two\nfailovers in a row, and -- the one that found this -- a `Quorum` publish with\nevery follower frozen must be refused. They carry the failure timeline #115\nasks for, because \"a record is missing\" is not actionable on its own.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T18:20:18-07:00",
+          "tree_id": "f031dec22de3b9fe774897c9cd133967f5677d4f",
+          "url": "https://github.com/gabloe/felix/commit/3cef7d10f9423a9f3b0330579138029f19542b92"
+        },
+        "date": 1789176161140,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230918.38,
+            "range": "10548.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230918.38\nmean: 225200.73\nstdev: 10548.32\ncv: 4.68%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230918.38,
+            "range": "10548.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230918.38\nmean: 225200.73\nstdev: 10548.32\ncv: 4.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55086.63,
+            "range": "4114.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55086.63\nmean: 52791.65\nstdev: 4114.50\ncv: 7.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 550866.31,
+            "range": "41144.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 550866.31\nmean: 527916.49\nstdev: 41144.98\ncv: 7.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
