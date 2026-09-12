@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789191074942,
+  "lastUpdate": 1789215646059,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6798,6 +6798,72 @@ window.BENCHMARK_DATA = {
             "range": "295.41",
             "unit": "us",
             "extra": "trials: 5\nmedian: 704.00\nmean: 789.60\nstdev: 295.41\ncv: 37.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c0d4ab7c46e4a0a5cbcbea45b402fe99e81c633e",
+          "message": "chore(deps): bump axum from 0.8.8 to 0.8.9 (#288)\n\nBumps [axum](https://github.com/tokio-rs/axum) from 0.8.8 to 0.8.9.\n- [Release notes](https://github.com/tokio-rs/axum/releases)\n- [Changelog](https://github.com/tokio-rs/axum/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/tokio-rs/axum/compare/axum-v0.8.8...axum-v0.8.9)\n\n---\nupdated-dependencies:\n- dependency-name: axum\n  dependency-version: 0.8.9\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-12T05:18:21-07:00",
+          "tree_id": "06c78c333a60725aab11d379adea75397b54e652",
+          "url": "https://github.com/gabloe/felix/commit/c0d4ab7c46e4a0a5cbcbea45b402fe99e81c633e"
+        },
+        "date": 1789215644653,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "2.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.00\nstdev: 2.12\ncv: 1.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 201,
+            "range": "4.66",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 203.20\nstdev: 4.66\ncv: 2.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 238,
+            "range": "146.90",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 238.00\nmean: 307.60\nstdev: 146.90\ncv: 47.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.20\nstdev: 0.84\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 388,
+            "range": "10.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 388.00\nmean: 391.20\nstdev: 10.47\ncv: 2.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 544,
+            "range": "114.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 544.00\nmean: 585.60\nstdev: 114.26\ncv: 19.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
