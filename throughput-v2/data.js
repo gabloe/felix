@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789218591555,
+  "lastUpdate": 1789223909016,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5512,6 +5512,58 @@ window.BENCHMARK_DATA = {
             "range": "5962.39",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 810278.27\nmean: 811153.57\nstdev: 5962.39\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7e9ed08cb9b0907d4a1fe05944643b149a75dbb",
+          "message": "docs: how to run a client against a cluster (#120) (#293)\n\nNothing told an application developer how to use the cluster-aware client.\n`client-config.md` lists tuning knobs -- pool sizes, windows, queue policies\n-- and none of what actually decides whether an application survives a\nfailover, which is not configured there at all: it is chosen by using\n`ClusterClient` rather than `Client`, and by the policy handed to it.\n\n`docs/multi-node-client.md` covers seeds and discovery, what each publish\nmethod does when a broker dies, redirects, the retry rules, what `Leader` and\n`Quorum` mean from the calling side, and a table of the errors an application\nwill actually see with what to do about each.\n\nThree things it states because they are the ones that bite:\n\n- **Subscriptions do not survive a failover.** A subscription is bound to its\n  connection. Record `Event.offset` and resume from `offset + 1`; that is what\n  offsets are for.\n- **`deadline` is `None` by default and why.** One shorter than a single\n  attempt's timeout prevents any retry at all, so it has to come from the\n  caller's latency budget rather than from a number this library picks.\n- **`DeliveryGuarantee` is declared and not enforced.** Better read than\n  discovered.\n\nThe worked example is a `no_run` doctest on `ClusterClient`, so it is compiled\nagainst the real API on every test run rather than kept accurate by hand.\nVerified it catches drift: renaming one method in it fails the suite with\n`no method named ... found for struct ClusterClient`. #120 asks for examples\ncovered by documentation tests where available, and this is where it was\navailable.\n\nThe default values quoted -- five attempts, 200ms, 2s, three redirect hops --\nwere each read back out of the source rather than remembered.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T07:36:06-07:00",
+          "tree_id": "51fdba4753af49c2e9a831d6dc6e12c4b41eb517",
+          "url": "https://github.com/gabloe/felix/commit/e7e9ed08cb9b0907d4a1fe05944643b149a75dbb"
+        },
+        "date": 1789223908626,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230289.62,
+            "range": "1991.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230289.62\nmean: 230816.25\nstdev: 1991.21\ncv: 0.86%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230289.62,
+            "range": "1991.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230289.62\nmean: 230816.25\nstdev: 1991.21\ncv: 0.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55442.35,
+            "range": "746.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55442.35\nmean: 55734.93\nstdev: 746.32\ncv: 1.34%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 554423.53,
+            "range": "7463.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 554423.53\nmean: 557349.34\nstdev: 7463.18\ncv: 1.34%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
