@@ -719,6 +719,76 @@ impl Cluster {
     }
 
     /// The node that owns `stream`'s shard 0.
+    /// Who owns each shard of `stream`, by shard index.
+    ///
+    /// The point of a multi-shard test: a stream placed across brokers has
+    /// several owners, and which shard a key lands on decides which of them a
+    /// publish reaches.
+    pub async fn shard_owners_for(
+        &self,
+        stream: &str,
+    ) -> Result<std::collections::HashMap<u32, String>> {
+        let owners = self.shard_owners().await?;
+        let prefix = format!("{}/{}/{}/", self.tenant_id, self.namespace, stream);
+        Ok(owners
+            .into_iter()
+            .filter_map(|(key, node)| {
+                let shard = key.strip_prefix(&prefix)?.parse().ok()?;
+                Some((shard, node))
+            })
+            .collect())
+    }
+
+    /// Publish with a routing key, through a named broker.
+    pub async fn publish_keyed_via(
+        &self,
+        node_id: &str,
+        stream: &str,
+        key: &[u8],
+        payload: Vec<u8>,
+    ) -> Result<()> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let publisher = client.publisher().await.context("open publisher")?;
+        publisher
+            .publish_keyed(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                bytes::Bytes::copy_from_slice(key),
+                payload,
+                felix_wire::AckMode::PerMessage,
+            )
+            .await
+            .with_context(|| format!("publish to {stream} key {key:?} via {node_id}"))
+    }
+
+    /// Replay one shard of a stream from the broker that owns it.
+    pub async fn replay_shard(
+        &self,
+        node_id: &str,
+        stream: &str,
+        shard: u32,
+    ) -> Result<(felix_client::Client, felix_client::Subscription)> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let subscription = client
+            .subscribe_shard(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                shard,
+                Some(felix_client::StartPosition::Earliest),
+            )
+            .await
+            .with_context(|| format!("replay {stream} shard {shard} on {node_id}"))?;
+        Ok((client, subscription))
+    }
+
     pub async fn owner(&self, stream: &str) -> Result<String> {
         let owners = self.shard_owners().await?;
         let key = format!("{}/{}/{}/0", self.tenant_id, self.namespace, stream);

@@ -90,7 +90,9 @@ pub(crate) async fn handle_binary_publish_batch_control(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
-            // No routing key on the wire yet (#240).
+            // The binary frames carry no routing key: their layout is fixed and
+            // adding one is a new flag, not an optional field. A caller that
+            // needs a key uses the JSON encoding.
             crate::shard_routing::shard_for(1, None),
         )
         .await,
@@ -274,11 +276,40 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         batch.namespace,
         batch.stream,
         batch.payloads,
+        // The binary frames carry no routing key: their layout is fixed, so
+        // adding one is a new frame flag rather than an optional field. A
+        // caller that needs a key uses the JSON encoding.
+        None,
         Some(request_id),
         Some(ack),
         sample,
     )
     .await
+}
+
+/// Which shard a record with this routing key belongs to.
+///
+/// The stream's width comes from the router's own snapshot rather than the
+/// stream catalog: it is an `ArcSwap` read with no lock, on a path that resolves
+/// a shard for every publish, and the router is already the thing that decides
+/// how the cluster is divided.
+///
+/// A broker with no cluster behind it has one shard, so every key lands on 0 —
+/// which is also what a stream placed with one shard does, and is why adding a
+/// key to a single-shard stream changes nothing.
+fn resolve_shard(
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    key: Option<&[u8]>,
+) -> u32 {
+    let shards = publish_ctx
+        .ingress
+        .as_ref()
+        .map(|ingress| ingress.shards_for(tenant_id, namespace, stream))
+        .unwrap_or(1);
+    crate::shard_routing::shard_for(shards, key)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -301,6 +332,7 @@ pub(crate) async fn handle_publish_message(
     namespace: String,
     stream: String,
     payload: Vec<u8>,
+    key: Option<bytes::Bytes>,
     request_id: Option<u64>,
     ack: Option<felix_wire::AckMode>,
     sample: bool,
@@ -409,9 +441,7 @@ pub(crate) async fn handle_publish_message(
             &tenant_id,
             &namespace,
             &stream,
-            // No routing key on the wire yet, so every record lands on shard 0
-            // (#240). The plumbing below is shard-correct either way.
-            crate::shard_routing::shard_for(1, None),
+            resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref()),
         )
         .await,
         publish_ctx,
@@ -698,6 +728,7 @@ pub(crate) async fn handle_publish_batch_message(
     namespace: String,
     stream: String,
     payloads: Vec<Vec<u8>>,
+    key: Option<bytes::Bytes>,
     request_id: Option<u64>,
     ack: Option<felix_wire::AckMode>,
     sample: bool,
@@ -808,9 +839,7 @@ pub(crate) async fn handle_publish_batch_message(
             &tenant_id,
             &namespace,
             &stream,
-            // No routing key on the wire yet, so every record lands on shard 0
-            // (#240). The plumbing below is shard-correct either way.
-            crate::shard_routing::shard_for(1, None),
+            resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref()),
         )
         .await,
         publish_ctx,

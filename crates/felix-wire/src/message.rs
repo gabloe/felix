@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 ///     namespace: "default".to_string(),
 ///     stream: "updates".to_string(),
 ///     payload: b"hello".to_vec(),
+///     // No routing key: shard 0, exactly as before routing keys existed.
+///     key: None,
 ///     request_id: None,
 ///     ack: None,
 /// };
@@ -102,6 +104,23 @@ pub enum Message {
         stream: String,
         #[serde(with = "crate::base64_serde::base64_bytes")]
         payload: Vec<u8>,
+        /// Which shard this record belongs to, resolved by hashing.
+        ///
+        /// Absent means shard 0, which is what every record did before routing
+        /// keys existed and what a single-shard stream does regardless. Present
+        /// means the broker hashes it against the stream's shard count.
+        ///
+        /// **Ordering is per key, not per stream.** Two records with the same
+        /// key are ordered with respect to each other; two with different keys
+        /// may be applied by different brokers in either order. A stream with
+        /// one shard keeps total order whatever keys are used, which is what
+        /// makes this safe to add.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::base64_serde::base64_option_bytes"
+        )]
+        key: Option<Bytes>,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,6 +133,28 @@ pub enum Message {
         stream: String,
         #[serde(with = "crate::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
+        /// One key for the whole batch.
+        ///
+        /// A batch is routed as a unit, so every record in it shares a shard.
+        /// Splitting a batch across shards would make it several batches with
+        /// several acknowledgements, which is not what the caller asked for.
+        /// Which shard this record belongs to, resolved by hashing.
+        ///
+        /// Absent means shard 0, which is what every record did before routing
+        /// keys existed and what a single-shard stream does regardless. Present
+        /// means the broker hashes it against the stream's shard count.
+        ///
+        /// **Ordering is per key, not per stream.** Two records with the same
+        /// key are ordered with respect to each other; two with different keys
+        /// may be applied by different brokers in either order. A stream with
+        /// one shard keeps total order whatever keys are used, which is what
+        /// makes this safe to add.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::base64_serde::base64_option_bytes"
+        )]
+        key: Option<Bytes>,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +175,17 @@ pub enum Message {
         /// to an old broker has its position ignored rather than misread.
         #[serde(skip_serializing_if = "Option::is_none")]
         start: Option<StartPosition>,
+        /// Which shard of the stream to read.
+        ///
+        /// Absent means shard 0, which is every record of a single-shard stream
+        /// and is what a client that predates sharding expects.
+        ///
+        /// A subscription reads **one** shard. A stream's shards can have
+        /// different owners, and a subscription is bound to one connection to
+        /// one broker, so reading a whole multi-shard stream means one
+        /// subscription per shard — see #297.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shard: Option<u32>,
     },
     // Subscription confirmation with server-assigned ID.
     Subscribed {

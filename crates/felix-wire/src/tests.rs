@@ -353,14 +353,14 @@ fn text_publish_batch_json_round_trips_through_decoder() {
     for (request_id, ack) in cases {
         let mut buf = BytesMut::new();
         crate::text::write_publish_batch_json(
-            &mut buf, "t1", "default", "updates", &payloads, request_id, ack,
+            &mut buf, "t1", "default", "updates", &payloads, None, request_id, ack,
         )
         .expect("write");
 
         // The declared length must match what was actually written, or callers
         // that pre-reserve using it will mis-size the frame.
         let declared = crate::text::publish_batch_json_len(
-            "t1", "default", "updates", &payloads, request_id, ack,
+            "t1", "default", "updates", &payloads, None, request_id, ack,
         )
         .expect("len");
         assert_eq!(
@@ -378,6 +378,7 @@ fn text_publish_batch_json_round_trips_through_decoder() {
                 payloads: decoded,
                 request_id: decoded_id,
                 ack: decoded_ack,
+                key: None,
             } => {
                 assert_eq!(tenant_id, "t1");
                 assert_eq!(namespace, "default");
@@ -400,6 +401,7 @@ fn message_round_trip() {
         payload: b"payload".to_vec(),
         request_id: None,
         ack: None,
+        key: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -525,6 +527,7 @@ fn text_publish_batch_json_with_special_chars() {
         payloads,
         request_id: Some(123),
         ack: Some(AckMode::PerBatch),
+        key: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -540,6 +543,7 @@ fn message_all_variants_encode_decode() {
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
         stream: "stream".to_string(),
+        shard: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -719,6 +723,7 @@ fn message_publish_with_ack_modes() {
         payload: b"data".to_vec(),
         request_id: Some(1),
         ack: Some(AckMode::None),
+        key: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -732,6 +737,7 @@ fn message_publish_with_ack_modes() {
         payload: b"data".to_vec(),
         request_id: Some(2),
         ack: Some(AckMode::PerMessage),
+        key: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -745,6 +751,7 @@ fn message_publish_with_ack_modes() {
         payloads: vec![b"data1".to_vec(), b"data2".to_vec()],
         request_id: Some(3),
         ack: Some(AckMode::PerBatch),
+        key: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -811,6 +818,7 @@ fn ack_mode_serialization() {
         payload: vec![1, 2, 3],
         request_id: Some(1),
         ack: Some(none),
+        key: None,
     };
     assert!(msg.encode().is_ok());
 
@@ -821,6 +829,7 @@ fn ack_mode_serialization() {
         payload: vec![1, 2, 3],
         request_id: Some(2),
         ack: Some(per_msg),
+        key: None,
     };
     assert!(msg2.encode().is_ok());
 
@@ -831,6 +840,7 @@ fn ack_mode_serialization() {
         payloads: vec![vec![1, 2], vec![3, 4]],
         request_id: Some(3),
         ack: Some(per_batch),
+        key: None,
     };
     assert!(msg3.encode().is_ok());
 }
@@ -1018,4 +1028,68 @@ fn the_feature_bits_do_not_overlap() {
         crate::KNOWN_FEATURES,
         crate::FEATURE_REDIRECT
     ));
+}
+
+/// **The hand-written batch encoder carries the routing key.** It, not serde, is
+/// what the client's writer task uses, so a key omitted here is a key that never
+/// reaches the broker — and the record lands on shard 0 with nothing to show for
+/// it. Exactly the kind of silent divergence a fast path invites.
+#[test]
+fn the_fast_batch_encoder_carries_the_routing_key() {
+    let payloads = vec![b"one".to_vec(), b"two".to_vec()];
+    let key = b"customer-42".to_vec();
+
+    let mut buf = BytesMut::new();
+    crate::text::write_publish_batch_json(
+        &mut buf,
+        "t1",
+        "default",
+        "updates",
+        &payloads,
+        Some(&key),
+        Some(7),
+        Some(AckMode::PerMessage),
+    )
+    .expect("write");
+
+    let declared = crate::text::publish_batch_json_len(
+        "t1",
+        "default",
+        "updates",
+        &payloads,
+        Some(&key),
+        Some(7),
+        Some(AckMode::PerMessage),
+    )
+    .expect("len");
+    assert_eq!(
+        declared,
+        buf.len(),
+        "a declared length that ignores the key mis-sizes the frame",
+    );
+
+    let decoded = Message::decode(Frame::new(0, buf.freeze()).expect("frame")).expect("decode");
+    match decoded {
+        Message::PublishBatch { key: decoded, .. } => {
+            assert_eq!(decoded.as_deref(), Some(&key[..]), "the key was dropped");
+        }
+        other => panic!("expected a publish batch, got {other:?}"),
+    }
+}
+
+/// A batch with no key encodes the bytes it always did, so an old broker parses
+/// a new client's unkeyed publish unchanged.
+#[test]
+fn an_unkeyed_batch_omits_the_field() {
+    let payloads = vec![b"one".to_vec()];
+    let mut buf = BytesMut::new();
+    crate::text::write_publish_batch_json(
+        &mut buf, "t1", "default", "updates", &payloads, None, None, None,
+    )
+    .expect("write");
+    let json = std::str::from_utf8(&buf).expect("utf8");
+    assert!(
+        !json.contains("key"),
+        "an absent key must not appear: {json}"
+    );
 }

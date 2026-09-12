@@ -116,6 +116,12 @@ impl Resolution {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RoutingTable {
     routes: HashMap<ShardKey, Route>,
+    /// How many shards each stream was placed with, by `tenant/namespace/stream`.
+    ///
+    /// Derived once when the table is built rather than counted per publish: a
+    /// publish needs it before it can resolve a routing key to a shard, and
+    /// that is the hottest question the router is asked.
+    shards_per_stream: HashMap<String, u32>,
 }
 
 impl RoutingTable {
@@ -134,7 +140,16 @@ impl RoutingTable {
         nodes: &HashMap<String, NodeRef>,
     ) -> Self {
         let mut routes = HashMap::new();
+        let mut shards_per_stream: HashMap<String, u32> = HashMap::new();
         for (key, leader, replicas, generation) in assignments {
+            // The count is the highest shard index placed plus one, not the
+            // number of assignments: placement may not have managed to place
+            // every shard, and a publish must still resolve keys against the
+            // stream's real width or the same key would move as placement
+            // catches up.
+            let stream_id = format!("{}/{}/{}", key.tenant_id, key.namespace, key.stream);
+            let width = shards_per_stream.entry(stream_id).or_insert(0);
+            *width = (*width).max(key.shard + 1);
             let leader_ref = nodes.get(&leader).cloned().unwrap_or(NodeRef {
                 node_id: leader.clone(),
                 // A placeholder that can never be dialled, paired with
@@ -161,7 +176,25 @@ impl RoutingTable {
                 },
             );
         }
-        Self { routes }
+        Self {
+            routes,
+            shards_per_stream,
+        }
+    }
+
+    /// How many shards this stream was placed with.
+    ///
+    /// `1` when the table has never heard of the stream, which is the answer a
+    /// publish needs: an unplaced stream has one shard as far as routing is
+    /// concerned, and `shard_for` sends every key to shard 0.
+    pub fn shards_for(&self, tenant_id: &str, namespace: &str, stream: &str) -> u32 {
+        let mut id = String::with_capacity(tenant_id.len() + namespace.len() + stream.len() + 2);
+        id.push_str(tenant_id);
+        id.push('/');
+        id.push_str(namespace);
+        id.push('/');
+        id.push_str(stream);
+        self.shards_per_stream.get(&id).copied().unwrap_or(1).max(1)
     }
 
     pub fn get(&self, key: &ShardKey) -> Option<&Route> {

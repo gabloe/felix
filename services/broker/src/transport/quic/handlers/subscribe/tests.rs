@@ -359,6 +359,7 @@ async fn handle_subscribe_message_sends_event_stream_binary_batch() -> Result<()
             "orders".to_string(),
             Some(7),
             None,
+            None,
             felix_wire::ORIGINAL_V1_FLAGS,
         )
         .await?;
@@ -461,6 +462,7 @@ async fn handle_subscribe_message_errors_when_stream_missing() -> Result<()> {
             "missing".to_string(),
             Some(11),
             None,
+            None,
             felix_wire::ORIGINAL_V1_FLAGS,
         )
         .await
@@ -536,6 +538,7 @@ async fn handle_subscribe_message_batches_by_bytes() -> Result<()> {
             "default".to_string(),
             "orders".to_string(),
             Some(21),
+            None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
         )
@@ -660,6 +663,7 @@ async fn lane_fanout_preserves_order_for_multiple_subscribers() -> Result<()> {
                 "default".to_string(),
                 "orders".to_string(),
                 Some(sub_id),
+                None,
                 None,
                 felix_wire::ORIGINAL_V1_FLAGS,
             )
@@ -869,6 +873,7 @@ async fn handle_subscribe_message_hashed_pool_with_generated_id() -> Result<()> 
             "orders".to_string(),
             None,
             None,
+            None,
             felix_wire::ORIGINAL_V1_FLAGS,
         )
         .await
@@ -965,6 +970,7 @@ async fn handle_subscribe_message_open_uni_failure_sends_error_ack() -> Result<(
             "default".to_string(),
             "orders".to_string(),
             Some(900),
+            None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
         )

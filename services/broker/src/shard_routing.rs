@@ -172,6 +172,15 @@ impl IngressRouter {
         }
     }
 
+    /// How many shards this stream was placed with.
+    ///
+    /// Read from the routing snapshot, which is an `ArcSwap` load and no lock.
+    pub fn shards_for(&self, tenant_id: &str, namespace: &str, stream: &str) -> u32 {
+        self.router
+            .snapshot()
+            .shards_for(tenant_id, namespace, stream)
+    }
+
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
         match self.router.resolve(&to_router_key(key)) {
             Resolution::Local { generation } => {

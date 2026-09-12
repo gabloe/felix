@@ -111,14 +111,38 @@ A publish and a subscribe make opposite choices, deliberately.
 > `docs/subscribe-routing.md` and `docs/internal-protocol.md` record the two
 > decisions.
 
-**Every record of a stream currently lands on shard 0**, because the wire
-protocol carries no routing key (#240). A stream's shard count is honoured by
-placement and ignored by publishing.
+**A publish may carry a routing key**, and the key decides the shard. A stream
+placed with more than one shard therefore spreads across brokers, which is the
+mechanism by which one stream scales past a single owner.
+
+> `a_sharded_stream_is_placed_across_brokers`,
+> `keys_spread_records_across_shards`,
+> `a_keyed_publish_is_forwarded_to_the_shards_owner`.
+
+A publish with **no** key lands on shard 0, which is what every record did
+before keys existed and what a single-shard stream does regardless.
+
+> `an_unkeyed_publish_still_lands_on_shard_zero`.
+
+Keyed publishes use the JSON encoding. The binary publish frames are fixed
+layouts with no room for a key, so adding one there is a new frame flag rather
+than an optional field, and is not done.
 
 ## Delivery to subscribers
 
-- **Ordering** is preserved per stream, per subscriber. There is no ordering
-  across streams.
+- **Ordering is per key on a sharded stream, and per stream on a single-shard
+  one.** Two records sharing a routing key are ordered with respect to each
+  other, because a key always resolves to the same shard and a shard is one log
+  on one leader. Two records with different keys may be applied by different
+  brokers in either order.
+
+  A stream with one shard keeps total order whatever keys are used, which is
+  what makes routing keys safe to add to an existing stream: the guarantee only
+  weakens when the shard count does the widening.
+
+  There is no ordering across streams.
+
+  > `one_key_always_lands_on_one_shard`.
 - **A slow subscriber is dropped from, not blocked on.** Each subscriber has a
   bounded queue with an explicit overflow policy, `DropNew` by default. A
   publisher never waits for a subscriber.
@@ -128,6 +152,11 @@ placement and ignored by publishing.
   inferred.
 - **A subscription can resume.** `Subscribe` takes `latest`, `earliest`, or an
   offset; stored history joins live delivery with no gap.
+- **A subscription reads one shard.** Shards of a stream can have different
+  owners and a subscription is bound to one connection, so reading a whole
+  multi-shard stream means one subscription per shard. Offsets are per shard,
+  so resuming a multi-shard consumer means carrying one offset per shard.
+  Doing that for the caller is #297.
 
 **`DeliveryGuarantee` is declared on a stream and not enforced.** The control
 plane accepts `AtMostOnce` and `AtLeastOnce`, and no broker code reads either.
