@@ -137,7 +137,8 @@ Do not rely on it.
 ## Clients
 
 A client is told which brokers exist and is redirected to the right one, but the
-retry policy is still the application's.
+retry policy is still the application's. `docs/multi-node-client.md` is the
+how-to; this is the contract.
 
 - `ClusterClient` takes several broker addresses and rebuilds its connection
   from the rest when the one in use fails.
