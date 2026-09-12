@@ -342,7 +342,20 @@ impl CacheShard {
             // holds nothing the current log does not.
             std::fs::remove_dir_all(&staging).map_err(StorageError::Io)?;
         }
-        let fresh = DiskLog::open(staging.clone(), self.label.clone(), self.config.clone())?;
+        // The compacted log continues the offset space rather than restarting
+        // it. An offset has to name the same record for the life of the shard:
+        // replication ships records at their offsets, so a leader that renumbered
+        // on compaction would make its offset 0 a different record from every
+        // follower's, with no way for either to tell. Continuing from the tail
+        // makes compaction an append of the live set, which is the one shape
+        // the rest of the storage layer already assumes.
+        let resume_at = state.log.tail_offset().await?;
+        let fresh = DiskLog::open_at(
+            staging.clone(),
+            self.label.clone(),
+            self.config.clone(),
+            resume_at,
+        )?;
 
         let mut index = Index::default();
         for (key, value, expires_at_millis) in live {
