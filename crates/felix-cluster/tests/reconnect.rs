@@ -212,3 +212,49 @@ async fn records_published_across_a_failover_are_all_readable() {
     }
     cluster.shutdown().await;
 }
+
+/// **A publish that cannot succeed is not retried.** #119 asks for failures to
+/// be classified, and this is why: a credential without `stream.publish` fails
+/// the same way on every broker and after every backoff, so retrying it only
+/// delays the error the application needs to see.
+///
+/// The clock is the assertion. The policy is five attempts with a jittered
+/// backoff that reaches seconds, so a retried failure takes a second or more; a
+/// classified one comes back immediately.
+#[serial]
+#[tokio::test]
+async fn a_forbidden_publish_fails_fast_instead_of_retrying() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+    let client = felix_cluster::client::connect_cluster(
+        &cluster.broker_addrs(),
+        &cluster.tenant_id,
+        // Good enough to connect and subscribe, and not to publish.
+        &cluster.subscribe_only_token,
+    )
+    .await
+    .expect("connect with a subscribe-only credential");
+
+    let started = std::time::Instant::now();
+    let err = client
+        .publish_at_least_once(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            STREAM,
+            b"denied".to_vec(),
+            AckMode::PerMessage,
+        )
+        .await
+        .expect_err("a token without stream.publish must not be accepted");
+    let elapsed = started.elapsed();
+
+    assert!(
+        format!("{err:#}").contains("not retried"),
+        "the failure was not classified as terminal: {err:#}",
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a terminal failure took {elapsed:?}, so it went round the retry loop",
+    );
+
+    cluster.shutdown().await;
+}

@@ -41,15 +41,33 @@ use tokio::sync::RwLock;
 use super::client::Client;
 use crate::config::ClientConfig;
 
-/// How long to wait between reconnection attempts, and how many to make.
+/// How long to wait between reconnection attempts, how many to make, and how
+/// long the whole thing may take.
 #[derive(Debug, Clone)]
 pub struct ReconnectPolicy {
     /// Attempts to reach *some* broker before giving up. Each attempt tries
-    /// every seed.
+    /// every endpoint.
     pub attempts: usize,
-    /// Wait before the first retry. Doubles up to `max_backoff`.
+    /// The first retry waits somewhere in `[0, backoff]`. The ceiling doubles
+    /// each attempt up to `max_backoff`.
     pub backoff: Duration,
     pub max_backoff: Duration,
+    /// A ceiling on the whole operation, across every attempt and every sleep.
+    ///
+    /// Attempt counts alone do not bound time: five attempts against a broker
+    /// that takes its full publish timeout to answer is minutes, which is not a
+    /// number anybody chose.
+    ///
+    /// **`None` by default, and deliberately.** A deadline shorter than one
+    /// attempt's own timeout prevents any retry at all — the first attempt
+    /// spends the whole budget and the loop exits having tried once. The
+    /// client's publish timeout is already tens of seconds, so any useful
+    /// default here would have to be derived from that rather than picked, and
+    /// picking one silently turns a client that recovers from a failover into
+    /// one that does not.
+    ///
+    /// A caller that knows its own latency budget should set it.
+    pub deadline: Option<Duration>,
 }
 
 impl Default for ReconnectPolicy {
@@ -62,8 +80,75 @@ impl Default for ReconnectPolicy {
             attempts: 5,
             backoff: Duration::from_millis(200),
             max_backoff: Duration::from_secs(2),
+            deadline: None,
         }
     }
+}
+
+impl ReconnectPolicy {
+    /// How long to wait before attempt `attempt` (0-based), jittered.
+    ///
+    /// **Full jitter: uniform over `[0, ceiling]`, not the ceiling itself.**
+    /// Every client of a cluster notices a failover at the same moment, and an
+    /// unjittered backoff has all of them retry in step — arriving together at
+    /// whichever broker was just promoted, which is the moment it can least
+    /// afford a thundering herd. The broker's own peer pool jitters its redials
+    /// for exactly this reason.
+    fn delay_before(&self, attempt: usize) -> Duration {
+        let ceiling = self
+            .backoff
+            .saturating_mul(1u32 << attempt.min(16) as u32)
+            .min(self.max_backoff);
+        ceiling.mul_f64(jitter_fraction())
+    }
+}
+
+/// A uniform fraction in `[0, 1)`, without taking an RNG dependency.
+///
+/// The same approach the broker's reconnect backoff uses. Its only job is to
+/// decorrelate clients that all woke up together, so it needs to be unbiased
+/// rather than unpredictable.
+fn jitter_fraction() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.subsec_nanos())
+        .unwrap_or(0);
+    f64::from(nanos % 1_000_000) / 1_000_000.0
+}
+
+/// Whether an error is worth another attempt.
+///
+/// **Unknown errors are retried.** The client protocol carries an error as a
+/// string with no code, so this is matching on prose, and prose changes. A
+/// misclassified retryable error costs one wasted attempt; a misclassified
+/// terminal error costs the operation. Defaulting to "retry" puts the cheaper
+/// mistake on the likely side.
+///
+/// Terminal means *no amount of waiting or reconnecting changes the answer*,
+/// and the bar for that is higher on a cluster than it looks.
+///
+/// **"Not found" is not terminal here.** A broker learns its tenants,
+/// namespaces and streams from the control plane, and opens a shard only once
+/// it has been given it. A broker promoted a moment ago answers "stream not
+/// found" for the stream it is about to serve -- being named leader and being
+/// ready to serve are different moments. Treating that as terminal breaks
+/// exactly the recovery this policy exists to provide, which is not
+/// hypothetical: it did.
+///
+/// What is left is the credential. A permission the token does not carry is a
+/// property of its claims rather than of any broker's state, so it fails the
+/// same way everywhere and for as long as the token lives.
+pub(crate) fn is_terminal(error: &anyhow::Error) -> bool {
+    // Terminal by construction rather than by matching prose: the offset asked
+    // for is not available, and asking again will not make it so.
+    if error
+        .downcast_ref::<crate::SubscribeCursorError>()
+        .is_some()
+    {
+        return true;
+    }
+    format!("{error:#}").to_lowercase().contains("forbidden")
 }
 
 /// How many times a subscribe will follow a redirect before giving up.
@@ -285,13 +370,21 @@ impl ClusterClient {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
-        let mut backoff = self.policy.backoff;
+        let started = std::time::Instant::now();
         let mut last: Option<anyhow::Error> = None;
 
         for attempt in 0..self.policy.attempts.max(1) {
             if attempt > 0 {
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(self.policy.max_backoff);
+                let delay = self.policy.delay_before(attempt - 1);
+                // Checked before sleeping, not after: sleeping past a deadline
+                // and then reporting it wastes exactly the time the deadline
+                // exists to save.
+                if let Some(budget) = self.policy.deadline
+                    && started.elapsed() + delay >= budget
+                {
+                    break;
+                }
+                tokio::time::sleep(delay).await;
                 if let Err(err) = self.reconnect().await {
                     last = Some(err.context("no broker answered"));
                     continue;
@@ -300,14 +393,25 @@ impl ClusterClient {
             let client = self.client().await;
             match publish_once(&client, tenant_id, namespace, stream, payload.clone(), ack).await {
                 Ok(()) => return Ok(()),
-                Err(err) => last = Some(err),
+                Err(err) => {
+                    // No amount of reconnecting changes a forbidden credential
+                    // or a stream that does not exist, and burning the whole
+                    // backoff schedule only delays the answer the caller needs.
+                    if is_terminal(&err) {
+                        return Err(
+                            err.context("not retried: this cannot succeed on another attempt")
+                        );
+                    }
+                    last = Some(err);
+                }
             }
         }
 
         Err(last
             .unwrap_or_else(|| anyhow::anyhow!("publish failed"))
             .context(format!(
-                "gave up after {} attempts across {} endpoints",
+                "gave up after {:?} and at most {} attempts across {} endpoints",
+                started.elapsed(),
                 self.policy.attempts.max(1),
                 self.endpoints.read().await.len()
             )))
@@ -345,4 +449,122 @@ async fn publish_once(
     publisher
         .publish(tenant_id, namespace, stream, payload, ack)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy() -> ReconnectPolicy {
+        ReconnectPolicy {
+            attempts: 5,
+            backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(2),
+            deadline: None,
+        }
+    }
+
+    /// **Every delay is inside its ceiling, and the ceiling doubles.** Full
+    /// jitter means the delay is somewhere in `[0, ceiling]`, so the property
+    /// worth pinning is the bound rather than the value.
+    #[test]
+    fn backoff_stays_inside_a_doubling_ceiling() {
+        let policy = policy();
+        for attempt in 0..6 {
+            let ceiling = policy
+                .backoff
+                .saturating_mul(1u32 << attempt)
+                .min(policy.max_backoff);
+            for _ in 0..50 {
+                let delay = policy.delay_before(attempt);
+                assert!(
+                    delay <= ceiling,
+                    "attempt {attempt}: {delay:?} exceeds its ceiling {ceiling:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backoff_is_capped_by_max_backoff() {
+        let policy = policy();
+        for attempt in 0..20 {
+            assert!(policy.delay_before(attempt) <= policy.max_backoff);
+        }
+    }
+
+    /// **The delay actually varies.** A "jitter" that returned the same number
+    /// every time would satisfy the bound above and still send every client of
+    /// a cluster at a freshly promoted broker in step.
+    #[test]
+    fn backoff_is_jittered_rather_than_fixed() {
+        let policy = ReconnectPolicy {
+            backoff: Duration::from_secs(1),
+            ..policy()
+        };
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            seen.insert(policy.delay_before(0).as_micros());
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        assert!(
+            seen.len() > 5,
+            "the backoff produced {} distinct delays; it is not jittered",
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn a_forbidden_error_is_terminal() {
+        assert!(is_terminal(&anyhow::anyhow!("forbidden")));
+        assert!(is_terminal(
+            &anyhow::anyhow!("publish failed").context("forbidden")
+        ));
+    }
+
+    /// A cursor error is terminal by construction, and typed, so it does not
+    /// depend on matching prose.
+    #[test]
+    fn a_cursor_error_is_terminal() {
+        let err: anyhow::Error = crate::SubscribeCursorError {
+            reason: felix_wire::CursorErrorReason::TooOld,
+            requested: 5,
+            available: 100,
+        }
+        .into();
+        assert!(is_terminal(&err));
+    }
+
+    /// **The failures a failover produces are retried.** These are the whole
+    /// point of the policy, and classifying one of them as terminal would turn
+    /// a recoverable blip into a lost publish.
+    #[test]
+    fn transient_failures_are_retried() {
+        for message in [
+            "connection lost",
+            "publish commit timeout",
+            "the batch is durable here but did not reach a majority within 5s",
+            "shard leadership moved before the batch could reach a quorum",
+            "no peer transport: this broker cannot forward to broker-2",
+            "stream orders cannot be subscribed to right now: owner unavailable",
+            // A broker promoted a moment ago has not opened the shard yet and
+            // says exactly this. Classifying it as terminal broke
+            // `records_published_across_a_failover_are_all_readable`.
+            "stream not found: tenant=t1 namespace=ns stream=orders",
+            "unknown tenant t1",
+            "unknown namespace ns",
+        ] {
+            assert!(
+                !is_terminal(&anyhow::anyhow!(message.to_string())),
+                "{message:?} should be retried",
+            );
+        }
+    }
+
+    /// An error nobody has classified is retried, because a wasted attempt is
+    /// cheaper than a lost operation.
+    #[test]
+    fn an_unrecognised_error_is_retried() {
+        assert!(!is_terminal(&anyhow::anyhow!("something nobody foresaw")));
+    }
 }
