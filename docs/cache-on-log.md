@@ -102,20 +102,47 @@ proportional to the garbage and a cache that is mostly live is never compacted.
 Writes are excluded for the duration; a cache write is already serialised behind
 the index lock, so this adds no new contention, only a longer hold.
 
+## Routing
+
+A cache key hashes to a shard with the same function a routing key uses for a
+publish, and that shard has exactly one owner. A broker that receives an
+operation for a key it does not own forwards it to the owner over the internal
+protocol and relays the answer, the way a publish already does.
+
+This is what makes a cache usable from more than one broker. Before it, every
+broker served its own copy: a `put` on one was invisible to a `get` on another
+and — worse than invisible — two brokers could hold *different* values for one
+key with nothing to reconcile them. A miss is detectable; divergence is not.
+
+Three details are load-bearing:
+
+- **A cache and a stream may share a name**, and when they do they are unrelated.
+  Everything keyed by a shard carries the kind for that reason: the control
+  plane's assignments, the broker's ownership table, the router's routes, and
+  the width each is resolved against. Any one of them dropping it would file a
+  cache's shard under the stream's and answer for it.
+- **An unroutable operation is refused, not served locally.** A local write for
+  a key this broker does not own is the divergence, so it is a refusal even
+  though refusing is the less helpful answer.
+- **A failed read is an error, not a miss.** Reporting a miss would let a client
+  conclude a key does not exist when it does, on the owner.
+
 ## What this does not do yet
 
-The control plane places cache shards, and a cache carries a shard count and a
-replication factor like a stream does. Nothing in the data path acts on that
-yet: brokers drop cache assignments at ingestion rather than route on them.
+**Replication.** A cache's shards are placed with a replication factor, and the
+driver does not yet ship them: it resolves a shard through `open_stream`, and a
+cache's log is under the cache root. Losing the broker that owns a cache shard
+loses that shard's contents until it returns. This is the one remaining gap
+between a cache and a stream.
 
-So cache operations are still unrouted. Every broker serves its own cache, which
-means a `put` on one broker is invisible to a `get` on another — and worse than
-invisible, because two brokers can hold *different* values for one key with
-nothing to reconcile them. A miss is detectable; divergence is not.
+**Delete on the wire.** The storage layer and the internal protocol both carry
+delete; the client protocol does not.
 
-Closing that needs three things, in order: the broker resolving a cache key to a
-shard and forwarding to its owner the way a publish already does, the driver
-opening a cache's log so replication covers it, and a decision on what `Leader`
-and `Quorum` mean for a cache read. The machinery is the machinery publishes and
-subscribes already use — which is the point of putting the cache on the log
-first.
+**Warming on takeover.** A stream's log is opened while the shard is being
+taken, so a torn tail is repaired before the shard is declared servable. A cache
+shard's log is opened lazily on the first request that touches it, so the same
+repair happens later and inline.
+
+**`Leader` and `Quorum` for a cache read.** A stream declares its consistency
+and a cache does not. What either should mean for a read, and what a client
+should expect of read-your-writes after a failover, is undecided.

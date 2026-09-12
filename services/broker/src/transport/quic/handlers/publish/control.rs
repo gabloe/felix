@@ -307,7 +307,14 @@ fn resolve_shard(
     let shards = publish_ctx
         .ingress
         .as_ref()
-        .map(|ingress| ingress.shards_for(tenant_id, namespace, stream))
+        .map(|ingress| {
+            ingress.shards_for(
+                crate::shard_watch::ShardKind::Stream,
+                tenant_id,
+                namespace,
+                stream,
+            )
+        })
         .unwrap_or(1);
     crate::shard_routing::shard_for(shards, key)
 }

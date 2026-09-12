@@ -15,10 +15,10 @@ use tokio::sync::RwLock;
 /// let rt = tokio::runtime::Runtime::new().expect("rt");
 /// rt.block_on(async {
 ///     cache
-///         .put("t1", "default", "primary", "k", Bytes::from_static(b"v"), None)
+///         .put("t1", "default", "primary", 0, "k", Bytes::from_static(b"v"), None)
 ///         .await;
 ///     assert_eq!(
-///         cache.get("t1", "default", "primary", "k").await,
+///         cache.get("t1", "default", "primary", 0, "k").await,
 ///         Some(Bytes::from_static(b"v"))
 ///     );
 /// });
@@ -53,11 +53,16 @@ impl From<EphemeralCache> for Box<dyn StorageApi + Send> {
 
 #[async_trait()]
 impl StorageApi for EphemeralCache {
+    /// The shard is ignored, deliberately. Entries live in one flat map, and a
+    /// key belongs to exactly one shard, so two shards of one cache can never
+    /// name the same entry. Only the log-backed cache needs the shard, because
+    /// its records go to a per-shard directory.
     async fn put(
         &self,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        _shard: u32,
         key: &str,
         value: Bytes,
         ttl: Option<Duration>,
@@ -78,7 +83,14 @@ impl StorageApi for EphemeralCache {
         }
     }
 
-    async fn get(&self, tenant_id: &str, namespace: &str, cache: &str, key: &str) -> Option<Bytes> {
+    async fn get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        _shard: u32,
+        key: &str,
+    ) -> Option<Bytes> {
         // Take a write lock so we can evict expired entries.
         let mut guard: tokio::sync::RwLockWriteGuard<'_, HashMap<CacheKey, CacheEntry>> =
             self.inner.write().await;
@@ -101,6 +113,7 @@ impl StorageApi for EphemeralCache {
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        _shard: u32,
         key: &str,
     ) -> Option<Bytes> {
         // Remove and return the stored value, if any.

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use felix_router::{Resolution, ShardRouter, Unavailable};
 
-use crate::shard_watch::ShardKey;
+use crate::shard_watch::{ShardKey, ShardKind};
 
 /// What ingress should do with a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,13 +172,19 @@ impl IngressRouter {
         }
     }
 
-    /// How many shards this stream was placed with.
+    /// How many shards this stream or cache was placed with.
     ///
     /// Read from the routing snapshot, which is an `ArcSwap` load and no lock.
-    pub fn shards_for(&self, tenant_id: &str, namespace: &str, stream: &str) -> u32 {
+    pub fn shards_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> u32 {
         self.router
             .snapshot()
-            .shards_for(tenant_id, namespace, stream)
+            .shards_for(to_router_kind(kind), tenant_id, namespace, stream)
     }
 
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
@@ -229,12 +235,23 @@ pub fn dispatch(ingress: Option<&IngressRouter>, key: &ShardKey) -> Dispatch {
     }
 }
 
-fn to_router_key(key: &ShardKey) -> felix_router::ShardKey {
+pub(crate) fn to_router_key(key: &ShardKey) -> felix_router::ShardKey {
     felix_router::ShardKey {
         tenant_id: key.tenant_id.clone(),
         namespace: key.namespace.clone(),
         stream: key.stream.clone(),
         shard: key.shard,
+        kind: to_router_kind(key.kind),
+    }
+}
+
+/// The watch's kind and the router's kind are separate types on purpose — the
+/// router is a library that does not know about the control plane's wire
+/// format — so the two are mapped here, in one place.
+pub(crate) fn to_router_kind(kind: ShardKind) -> felix_router::ShardKind {
+    match kind {
+        ShardKind::Stream => felix_router::ShardKind::Stream,
+        ShardKind::Cache => felix_router::ShardKind::Cache,
     }
 }
 

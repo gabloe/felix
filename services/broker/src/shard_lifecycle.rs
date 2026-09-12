@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::shard_lifecycle_metrics as mm;
-use crate::shard_watch::{ShardAssignment, ShardKey};
+use crate::shard_watch::{ShardAssignment, ShardKey, ShardKind};
 
 /// Where this broker is with one shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -333,6 +333,17 @@ impl DurableShardStore {
 #[async_trait::async_trait]
 impl ShardStore for DurableShardStore {
     async fn open(&self, key: &ShardKey) -> anyhow::Result<()> {
+        // A cache's log lives under the cache root, not this one, so opening a
+        // stream log here would create an empty directory nothing ever reads
+        // while leaving the real log untouched. It is opened lazily instead, on
+        // the first request that touches the shard.
+        //
+        // The cost is that a cache log too corrupt to open is found then rather
+        // than now, which is later than a stream's — see the cache-warming item
+        // in the cache-routing work.
+        if key.kind == ShardKind::Cache {
+            return Ok(());
+        }
         // Recovery happens here: validating the tail and rebuilding indexes is
         // exactly the cost the `Opening` phase is holding writes back for.
         self.storage
@@ -342,6 +353,9 @@ impl ShardStore for DurableShardStore {
     }
 
     async fn release(&self, key: &ShardKey) -> anyhow::Result<()> {
+        if key.kind == ShardKind::Cache {
+            return Ok(());
+        }
         let log = self
             .storage
             .open_stream(&key.tenant_id, &key.namespace, &key.stream, key.shard)

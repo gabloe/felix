@@ -94,7 +94,9 @@ impl std::fmt::Debug for CacheShard {
     }
 }
 
-type CacheId = (String, String, String);
+/// Tenant, namespace, cache, and shard. The shard is part of the identity
+/// because each one is a separate log in a separate directory.
+type CacheId = (String, String, String, u32);
 
 impl LogCache {
     /// Open the cache store rooted at `root`.
@@ -126,24 +128,35 @@ impl LogCache {
         Ok(())
     }
 
-    fn shard(&self, tenant: &str, namespace: &str, cache: &str) -> Result<Arc<CacheShard>> {
-        let id = (tenant.to_string(), namespace.to_string(), cache.to_string());
+    fn shard(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Arc<CacheShard>> {
+        let id = (
+            tenant.to_string(),
+            namespace.to_string(),
+            cache.to_string(),
+            shard,
+        );
         // Opening runs under the lock: two callers racing to open the same new
         // cache must not both replay the log and both create segment zero.
         let mut shards = self.shards.lock();
-        if let Some(shard) = shards.get(&id) {
-            return Ok(Arc::clone(shard));
+        if let Some(open) = shards.get(&id) {
+            return Ok(Arc::clone(open));
         }
         let key = ShardKey {
             tenant: tenant.to_string(),
             namespace: namespace.to_string(),
             stream: cache.to_string(),
-            shard: 0,
+            shard,
         };
         let dir = layout::shard_dir(&self.root, &key);
         let label = layout::shard_label(&key);
         let log = DiskLog::open(dir.clone(), label.clone(), self.config.clone())?;
-        let shard = Arc::new(CacheShard {
+        let open = Arc::new(CacheShard {
             dir,
             label,
             config: self.config.clone(),
@@ -152,8 +165,8 @@ impl LogCache {
                 index: Index::default(),
             }),
         });
-        shards.insert(id, Arc::clone(&shard));
-        Ok(shard)
+        shards.insert(id, Arc::clone(&open));
+        Ok(open)
     }
 }
 
@@ -381,12 +394,13 @@ impl StorageApi for LogCache {
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
         value: Bytes,
         ttl: Option<std::time::Duration>,
     ) {
         if let Err(err) = self
-            .put_checked(tenant_id, namespace, cache, key, value, ttl)
+            .put_checked(tenant_id, namespace, cache, shard, key, value, ttl)
             .await
         {
             // The trait returns nothing, so a failed write can only be reported
@@ -399,8 +413,18 @@ impl StorageApi for LogCache {
         }
     }
 
-    async fn get(&self, tenant_id: &str, namespace: &str, cache: &str, key: &str) -> Option<Bytes> {
-        match self.get_checked(tenant_id, namespace, cache, key).await {
+    async fn get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Option<Bytes> {
+        match self
+            .get_checked(tenant_id, namespace, cache, shard, key)
+            .await
+        {
             Ok(value) => value,
             Err(err) => {
                 tracing::error!(
@@ -417,9 +441,13 @@ impl StorageApi for LogCache {
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
     ) -> Option<Bytes> {
-        match self.delete_checked(tenant_id, namespace, cache, key).await {
+        match self
+            .delete_checked(tenant_id, namespace, cache, shard, key)
+            .await
+        {
             Ok(value) => value,
             Err(err) => {
                 tracing::error!(
@@ -459,16 +487,18 @@ impl StorageApi for LogCache {
 
 impl LogCache {
     /// `put`, with the failure the trait cannot express.
+    #[allow(clippy::too_many_arguments)]
     pub async fn put_checked(
         &self,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
         value: Bytes,
         ttl: Option<std::time::Duration>,
     ) -> Result<()> {
-        let shard = self.shard(tenant_id, namespace, cache)?;
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
         let mut state = shard.state.lock().await;
         shard.ensure_index(&mut state).await?;
         let expires_at_millis = ttl.map_or(0, |ttl| now_millis() + ttl.as_millis() as u64);
@@ -494,9 +524,10 @@ impl LogCache {
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
     ) -> Result<Option<Bytes>> {
-        let shard = self.shard(tenant_id, namespace, cache)?;
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
         let mut state = shard.state.lock().await;
         shard.ensure_index(&mut state).await?;
         let Some(entry) = state.index.entries.get(key).copied() else {
@@ -516,9 +547,10 @@ impl LogCache {
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
     ) -> Result<Option<Bytes>> {
-        let shard = self.shard(tenant_id, namespace, cache)?;
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
         let mut state = shard.state.lock().await;
         shard.ensure_index(&mut state).await?;
         let Some(entry) = state.index.entries.get(key).copied() else {

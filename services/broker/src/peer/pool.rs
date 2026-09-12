@@ -784,6 +784,20 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
             correlation_id,
             ..m
         }),
+        InternalMessage::ForwardCacheOp(m) => InternalMessage::ForwardCacheOp(ForwardCacheOp {
+            correlation_id,
+            ..m
+        }),
+        InternalMessage::ForwardCacheOk(m) => InternalMessage::ForwardCacheOk(ForwardCacheOk {
+            correlation_id,
+            ..m
+        }),
+        InternalMessage::ForwardCacheError(m) => {
+            InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                ..m
+            })
+        }
         InternalMessage::Hello(m) => InternalMessage::Hello(Hello {
             correlation_id,
             ..m

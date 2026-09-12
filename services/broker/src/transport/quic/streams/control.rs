@@ -607,20 +607,45 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 let ttl = ttl_ms.map(Duration::from_millis);
                 let lookup_start = t_now_if(sample);
-                broker
-                    .cache()
-                    .put(
-                        tenant_id.as_str(),
-                        namespace.as_str(),
-                        cache.as_str(),
-                        key.as_str(),
-                        value,
-                        ttl,
-                    )
-                    .await;
+                // Routed, not applied locally: exactly one broker owns this
+                // key's shard, and a write served here instead would be the
+                // second copy nothing reconciles.
+                let applied = crate::cache_routing::apply_cache_op(
+                    broker.cache(),
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.peers.as_deref(),
+                    tenant_id.as_str(),
+                    namespace.as_str(),
+                    cache.as_str(),
+                    key.as_str(),
+                    crate::cache_routing::put_request(value, ttl),
+                )
+                .await;
                 if let Some(start) = lookup_start {
                     let lookup_ns = start.elapsed().as_nanos() as u64;
                     timings::record_cache_insert_ns(lookup_ns);
+                }
+                if let Err(reason) = applied {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::CacheMessage(Message::Error {
+                                message: format!("cache put not served: {reason}"),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    if request_id.is_none() {
+                        return Ok(true);
+                    }
+                    continue;
                 }
                 if let Some(request_id) = request_id {
                     handle_ack_enqueue_result(
@@ -708,14 +733,50 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     continue;
                 }
                 let lookup_start = t_now_if(sample);
-                let value = broker
-                    .cache()
-                    .get(&tenant_id, &namespace, &cache, &key)
-                    .await;
+                let read = crate::cache_routing::apply_cache_op(
+                    broker.cache(),
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.peers.as_deref(),
+                    &tenant_id,
+                    &namespace,
+                    &cache,
+                    &key,
+                    crate::peer::CacheRequest::Get,
+                )
+                .await;
                 if let Some(start) = lookup_start {
                     let lookup_ns = start.elapsed().as_nanos() as u64;
                     timings::record_cache_lookup_ns(lookup_ns);
                 }
+                let value = match read {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        // A read this broker cannot route is an error, never an
+                        // empty answer: reporting a miss would let a client
+                        // conclude the key does not exist when it does, on the
+                        // owner.
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::CacheMessage(Message::Error {
+                                    message: format!("cache get not served: {reason}"),
+                                }),
+                            )
+                            .await,
+                            &ack_timeout_state,
+                            &ack_throttle_tx,
+                            &cancel_tx,
+                        )
+                        .await?;
+                        if request_id.is_none() {
+                            return Ok(true);
+                        }
+                        continue;
+                    }
+                };
                 handle_ack_enqueue_result(
                     send_outgoing_critical(
                         &out_ack_tx,

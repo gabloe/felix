@@ -78,9 +78,17 @@ Every request carries a `correlation_id`, unique per connection and chosen by th
 requester. Every response echoes it.
 
 **Every request has exactly one terminal response.** `ForwardPublish` is answered
-by exactly one of `ForwardPublishOk`, `ForwardPublishError`, or `NotLeader`. A
-requester that never receives one, because the connection dropped, treats the
-publish as failed — no forwarded publish is silently abandoned as pending.
+by exactly one of `ForwardPublishOk`, `ForwardPublishError`, or `NotLeader`;
+`ForwardCacheOp` by exactly one of `ForwardCacheOk`, `ForwardCacheError`, or
+`NotLeader`. A requester that never receives one, because the connection
+dropped, treats the request as failed — nothing is silently abandoned as
+pending.
+
+The two paths share `NotLeader`, which carries a routing answer rather than an
+error, and share nothing else. A refusal is answered in the shape of the request
+that caused it: a requester matches on the message kind to decide what happened,
+so a cache operation refused with a publish's error type would read as a
+protocol violation rather than as a refusal.
 
 Correlation ids are per connection, so two connections may reuse a value.
 Responses are matched within the connection they arrive on and nowhere else.
@@ -118,6 +126,46 @@ assignment generation it resolved against; the owner compares it with its own.
 
 That asymmetry is the point. A generation mismatch in either direction is an
 explicit typed answer, and **never a successful ownership claim**.
+
+### Forwarded cache operation
+
+A cache key hashes to a shard, and that shard has one owner. A broker that
+receives an operation for a key it does not own hands it over rather than
+serving it, which is what stops two brokers holding different values for one
+key.
+
+```mermaid
+sequenceDiagram
+    participant A as Broker A (ingress)
+    participant B as Broker B (owner)
+
+    A->>A: hash the key -> shard -> Remote(B, generation)
+    A->>B: ForwardCacheOp(correlation, shard, generation, op, key, value, ttl)
+    B->>B: check own ownership at that generation
+    alt B owns the shard at that generation
+        B->>B: apply to its cache log
+        B-->>A: ForwardCacheOk(correlation, value?)
+    else B has moved on
+        B-->>A: NotLeader(correlation, owner, its generation)
+    else B cannot serve
+        B-->>A: ForwardCacheError(correlation, code)
+    end
+```
+
+The same generation rules as a forwarded publish, and the same reason: a
+mismatch in either direction is a typed answer, never a successful ownership
+claim.
+
+`ForwardCacheOk` carries the value a `Get` found or a `Delete` removed, and
+nothing for a `Put`. The value is length-prefixed **behind a presence byte**, so
+a stored empty value stays distinguishable from a miss — the two mean different
+things, and one encoding for both would make a cached empty value read as
+absent forever.
+
+A `Get` and a `Delete` are safe to re-send after an indeterminate answer,
+because both land on the same state twice. A `Put` is not: re-sending one with a
+TTL restarts its clock. So a lost answer to a write is reported as
+indeterminate rather than retried, and the caller decides.
 
 ### Handshake
 
@@ -296,9 +344,11 @@ send the batch back where it came from.
 ## Chains are refused, not relayed
 
 A broker asked for a shard it does not own answers `NotLeader`. It never forwards
-onward on the requester's behalf. One publish crossing an unbounded chain of
+onward on the requester's behalf. One request crossing an unbounded chain of
 brokers would have unbounded latency and a failure mode nobody can reason about;
-the requester holds the decision instead.
+the requester holds the decision instead. This applies to a forwarded cache
+operation exactly as it does to a forwarded publish — both go through the same
+ownership check for that reason.
 
 ## The transport
 

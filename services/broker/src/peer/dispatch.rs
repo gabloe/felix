@@ -33,6 +33,7 @@ impl PeerRequestHandler for BrokerPeerHandler {
     async fn handle(&self, request: InternalMessage) -> InternalMessage {
         match request {
             InternalMessage::ForwardPublish(publish) => self.forwarding.apply(publish).await,
+            InternalMessage::ForwardCacheOp(op) => self.forwarding.apply_cache_op(op).await,
             InternalMessage::ReplicateRecords(batch) => self.replica.apply(batch).await,
             InternalMessage::ReplicateBootstrap(request) => self.replica.bootstrap(request).await,
             // Responses have no business arriving as requests, and a broker that

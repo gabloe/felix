@@ -112,15 +112,9 @@ impl ShardOwnership {
     }
 
     /// Replace everything with a snapshot.
-    ///
-    /// Cache shards are dropped rather than stored. The control plane places
-    /// them, but no cache request consults this table yet, and holding rows the
-    /// data path never reads would make `len()` — which readiness gates on —
-    /// count shards this broker does not actually serve.
     pub fn reset(&mut self, items: Vec<ShardAssignment>) {
         self.assignments = items
             .into_iter()
-            .filter(|assignment| assignment.key.kind == ShardKind::Stream)
             .map(|assignment| (assignment.key.clone(), assignment))
             .collect();
     }
@@ -291,21 +285,12 @@ async fn poll(
         return Ok(Progress::MustResync(reason));
     }
 
-    // Cache-shard changes advance the cursor but are not applied, for the same
-    // reason `reset` drops them: the control plane places them, and no cache
-    // request routes on them yet. Skipping them here rather than in `apply`
-    // keeps the seq accounting honest -- the change *was* consumed.
-    let applicable: Vec<&ShardAssignmentChange> = response
-        .items
-        .iter()
-        .filter(|change| change.key.kind == ShardKind::Stream)
-        .collect();
-    if !applicable.is_empty() {
+    if !response.items.is_empty() {
         let mut owned = ownership.write().await;
-        for change in &applicable {
+        for change in &response.items {
             owned.apply(&change.key, change.assignment.clone());
         }
-        mm::record_applied(applicable.len());
+        mm::record_applied(response.items.len());
     }
     Ok(Progress::At(response.next_seq))
 }
