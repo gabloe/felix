@@ -547,6 +547,8 @@ async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     store

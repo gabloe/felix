@@ -284,6 +284,8 @@ async fn pg_delete_namespace_emits_cascades() {
             namespace: "ns1".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await
         .expect("cache");
@@ -632,6 +634,8 @@ async fn pg_store_cache_conflict_and_not_found() {
             namespace: "missing".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await
         .expect_err("missing namespace");
@@ -642,6 +646,8 @@ async fn pg_store_cache_conflict_and_not_found() {
         namespace: "default".to_string(),
         cache: "primary".to_string(),
         display_name: "Primary".to_string(),
+        shards: 1,
+        replication_factor: 1,
     };
     store.create_cache(cache.clone()).await.expect("cache");
     let err = store.create_cache(cache).await.expect_err("conflict");
@@ -746,6 +752,8 @@ async fn pg_store_list_get_and_exists_roundtrip() {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await
         .expect("cache");

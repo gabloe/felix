@@ -488,6 +488,7 @@ async fn create_cache(http: &reqwest::Client, cp_base: &str) -> Result<StatusCod
     let body = CacheCreateRequest {
         cache: CACHE.to_string(),
         display_name: "Primary".to_string(),
+        ..Default::default()
     };
     let response = http.post(url).json(&body).send().await?;
     Ok(response.status())

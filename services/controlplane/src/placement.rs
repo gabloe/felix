@@ -19,7 +19,9 @@
 //! be identical everywhere.
 use std::collections::HashMap;
 
-use crate::model::{Node, NodeLifecycle, ShardAssignment, ShardKey, ShardState, Stream};
+use crate::model::{
+    Cache, Node, NodeLifecycle, ShardAssignment, ShardKey, ShardKind, ShardState, Stream,
+};
 
 /// Why a shard could not be placed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,12 +148,69 @@ impl CaughtUp for NothingCaughtUp {
     }
 }
 
+/// One thing with shards to place, viewed the only way placement cares about.
+///
+/// Streams and caches are placed by the same algorithm because they are the
+/// same log underneath. Collapsing them here rather than running two passes is
+/// what makes the `max_shards` cap and the load counting apply across both — two
+/// passes would each believe it had the whole cluster to itself.
+#[derive(Debug, Clone, Copy)]
+struct Placeable<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+    name: &'a str,
+    kind: ShardKind,
+    shards: u32,
+    replication_factor: u32,
+}
+
+impl<'a> Placeable<'a> {
+    fn of_stream(stream: &'a Stream) -> Self {
+        Self {
+            tenant_id: &stream.tenant_id,
+            namespace: &stream.namespace,
+            name: &stream.stream,
+            kind: ShardKind::Stream,
+            shards: stream.shards,
+            replication_factor: stream.replication_factor.max(1),
+        }
+    }
+
+    fn of_cache(cache: &'a Cache) -> Self {
+        Self {
+            tenant_id: &cache.tenant_id,
+            namespace: &cache.namespace,
+            name: &cache.cache,
+            kind: ShardKind::Cache,
+            shards: cache.shards,
+            replication_factor: cache.replication_factor.max(1),
+        }
+    }
+
+    fn key(&self, shard: u32) -> ShardKey {
+        ShardKey {
+            tenant_id: self.tenant_id.to_string(),
+            namespace: self.namespace.to_string(),
+            stream: self.name.to_string(),
+            shard,
+            kind: self.kind,
+        }
+    }
+}
+
 pub fn plan(
     streams: &[Stream],
+    caches: &[Cache],
     nodes: &[Node],
     existing: &[ShardAssignment],
     caught_up: &dyn CaughtUp,
 ) -> Plan {
+    let placeables: Vec<Placeable<'_>> = streams
+        .iter()
+        .map(Placeable::of_stream)
+        .chain(caches.iter().map(Placeable::of_cache))
+        .collect();
+
     let eligible: Vec<&Node> = {
         let mut live: Vec<&Node> = nodes
             .iter()
@@ -177,31 +236,24 @@ pub fn plan(
         }
     }
 
-    // Keyed by the same string `stream_of` builds, so the lookup below cannot
+    // Keyed by the same string `owner_of` builds, so the lookup below cannot
     // disagree with the key it is derived from.
-    let factors: HashMap<String, u32> = streams
+    let factors: HashMap<String, u32> = placeables
         .iter()
-        .map(|stream| {
+        .map(|placeable| {
             (
                 format!(
-                    "{}/{}/{}",
-                    stream.tenant_id, stream.namespace, stream.stream
+                    "{}/{}/{}/{}",
+                    placeable.kind, placeable.tenant_id, placeable.namespace, placeable.name
                 ),
-                stream.replication_factor.max(1),
+                placeable.replication_factor,
             )
         })
         .collect();
 
-    let mut keys: Vec<ShardKey> = streams
+    let mut keys: Vec<ShardKey> = placeables
         .iter()
-        .flat_map(|stream| {
-            (0..stream.shards).map(move |shard| ShardKey {
-                tenant_id: stream.tenant_id.clone(),
-                namespace: stream.namespace.clone(),
-                stream: stream.stream.clone(),
-                shard,
-            })
-        })
+        .flat_map(|placeable| (0..placeable.shards).map(move |shard| placeable.key(shard)))
         .collect();
     keys.sort_by(|a, b| order(a).cmp(&order(b)));
 
@@ -220,7 +272,7 @@ pub fn plan(
             continue;
         }
 
-        let replication_factor = factors.get(stream_of(&key).as_str()).copied().unwrap_or(1);
+        let replication_factor = factors.get(owner_of(&key).as_str()).copied().unwrap_or(1);
 
         // The leader is gone. Prefer one of its followers -- but only one that
         // actually holds the log, or the failover is the data loss.
@@ -313,9 +365,14 @@ fn promote<'a>(
         .map(|node| node.node_id.as_str())
 }
 
-/// The stream a shard belongs to, as `tenant/namespace/stream`.
-fn stream_of(key: &ShardKey) -> String {
-    format!("{}/{}/{}", key.tenant_id, key.namespace, key.stream)
+/// The stream or cache a shard belongs to, as `kind/tenant/namespace/name`.
+///
+/// The kind leads because a cache and a stream may share every other field.
+fn owner_of(key: &ShardKey) -> String {
+    format!(
+        "{}/{}/{}/{}",
+        key.kind, key.tenant_id, key.namespace, key.stream
+    )
 }
 
 /// The next best-scoring nodes for a shard, after the leader.
@@ -393,12 +450,27 @@ fn score(key: &ShardKey, node_id: &str) -> u64 {
     /// multiplicative mix across the whole word.
     const GOLDEN: u64 = 0x9e37_79b9_7f4a_7c15;
 
-    let shard = finalize(fnv1a(&[
-        key.tenant_id.as_bytes(),
-        key.namespace.as_bytes(),
-        key.stream.as_bytes(),
-        &key.shard.to_be_bytes(),
-    ]));
+    // A stream contributes no kind field, so every score computed before caches
+    // were placed is unchanged bit-for-bit: adding the field unconditionally
+    // would reshuffle the placement of every stream in every fresh cluster for
+    // no gain. A cache does contribute one, which is what stops a cache and a
+    // stream of the same name from scoring identically and tracking each other
+    // onto the same node forever.
+    let shard = finalize(match key.kind {
+        ShardKind::Stream => fnv1a(&[
+            key.tenant_id.as_bytes(),
+            key.namespace.as_bytes(),
+            key.stream.as_bytes(),
+            &key.shard.to_be_bytes(),
+        ]),
+        ShardKind::Cache => fnv1a(&[
+            key.tenant_id.as_bytes(),
+            key.namespace.as_bytes(),
+            key.stream.as_bytes(),
+            &key.shard.to_be_bytes(),
+            key.kind.as_str().as_bytes(),
+        ]),
+    });
     let node = finalize(fnv1a(&[node_id.as_bytes()]));
     finalize(shard.wrapping_mul(GOLDEN) ^ node.rotate_left(32))
 }
@@ -431,8 +503,16 @@ fn finalize(mut hash: u64) -> u64 {
     hash ^ (hash >> 31)
 }
 
-fn order(key: &ShardKey) -> (&str, &str, &str, u32) {
-    (&key.tenant_id, &key.namespace, &key.stream, key.shard)
+/// Kind sorts last so the relative order of stream shards is what it always
+/// was, and a cache sharing a stream's name is never an unstable tie.
+fn order(key: &ShardKey) -> (&str, &str, &str, u32, ShardKind) {
+    (
+        &key.tenant_id,
+        &key.namespace,
+        &key.stream,
+        key.shard,
+        key.kind,
+    )
 }
 
 /// Build the assignment a `Place` decision calls for.
@@ -461,7 +541,7 @@ pub async fn reconcile_once(
     store: &dyn crate::store::ControlPlaneStore,
     positions: &crate::replica_positions::ReplicaPositions,
 ) -> ReconcileOutcome {
-    let (streams, nodes, existing) = match load(store).await {
+    let (streams, caches, nodes, existing) = match load(store).await {
         Ok(loaded) => loaded,
         Err(err) => {
             tracing::error!(error = %err, "could not read the catalog to place shards");
@@ -476,7 +556,7 @@ pub async fn reconcile_once(
         positions,
         now_millis: crate::api::nodes::now_millis(),
     };
-    let plan = plan(&streams, &nodes, &existing, &caught_up);
+    let plan = plan(&streams, &caches, &nodes, &existing, &caught_up);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
         ..ReconcileOutcome::default()
@@ -490,7 +570,8 @@ pub async fn reconcile_once(
             Ok(assignment) => {
                 outcome.placed += 1;
                 tracing::info!(
-                    stream = %key.stream,
+                    kind = %key.kind,
+                    name = %key.stream,
                     shard = key.shard,
                     leader = %leader,
                     replicas = replicas.len(),
@@ -503,7 +584,8 @@ pub async fn reconcile_once(
                 // retries it, and the others are placed now rather than later.
                 outcome.failed += 1;
                 tracing::warn!(
-                    stream = %key.stream,
+                    kind = %key.kind,
+                    name = %key.stream,
                     shard = key.shard,
                     leader = %leader,
                     error = %err,
@@ -518,7 +600,8 @@ pub async fn reconcile_once(
         // Warn rather than error: an empty or full cluster is an operational
         // state to fix, not a control-plane fault.
         tracing::warn!(
-            stream = %key.stream,
+            kind = %key.kind,
+            name = %key.stream,
             shard = key.shard,
             reason = %reason,
             "shard has no eligible leader",
@@ -532,11 +615,12 @@ pub async fn reconcile_once(
 
 async fn load(
     store: &dyn crate::store::ControlPlaneStore,
-) -> crate::store::StoreResult<(Vec<Stream>, Vec<Node>, Vec<ShardAssignment>)> {
+) -> crate::store::StoreResult<(Vec<Stream>, Vec<Cache>, Vec<Node>, Vec<ShardAssignment>)> {
     let streams = store.stream_snapshot().await?.items;
+    let caches = store.cache_snapshot().await?.items;
     let nodes = store.list_nodes().await?;
     let existing = store.list_shard_assignments().await?;
-    Ok((streams, nodes, existing))
+    Ok((streams, caches, nodes, existing))
 }
 
 /// What one reconciliation pass did.

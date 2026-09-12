@@ -392,6 +392,7 @@ async fn seed_shards(store: &InMemoryStore) {
                     namespace: "ns".to_string(),
                     stream: "orders".to_string(),
                     shard,
+                    kind: controlplane::model::ShardKind::Stream,
                 },
                 leader: leader.to_string(),
                 replicas: Vec::new(),

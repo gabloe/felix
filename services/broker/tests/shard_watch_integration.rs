@@ -11,7 +11,8 @@ use controlplane::auth::keys::generate_signing_keys;
 use controlplane::config::NodeLivenessConfig;
 use controlplane::model::{
     ConsistencyLevel, DeliveryGuarantee, Namespace, Node, NodeCapacity, NodeLifecycle, NodeSpec,
-    NodeStatus, RetentionPolicy, ShardAssignment, ShardKey, ShardState, Stream, StreamKind, Tenant,
+    NodeStatus, RetentionPolicy, ShardAssignment, ShardKey, ShardKind, ShardState, Stream,
+    StreamKind, Tenant,
 };
 use controlplane::store::memory::InMemoryStore;
 use controlplane::store::{AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig};
@@ -176,6 +177,7 @@ impl Cluster {
                     namespace: "ns".to_string(),
                     stream: "orders".to_string(),
                     shard,
+                    kind: ShardKind::Stream,
                 },
                 leader: leader.to_string(),
                 replicas: Vec::new(),
@@ -281,6 +283,7 @@ async fn a_leader_change_reaches_the_broker() {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard: 0,
+        kind: shard_watch::ShardKind::Stream,
     };
     assert!(until(async || ownership.read().await.is_leader(&shard, "broker-a")).await);
 
@@ -314,6 +317,7 @@ async fn an_unassignment_reaches_the_broker() {
             namespace: "ns".to_string(),
             stream: "orders".to_string(),
             shard: 0,
+            kind: ShardKind::Stream,
         })
         .await
         .expect("delete");

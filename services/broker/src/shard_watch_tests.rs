@@ -8,6 +8,7 @@ fn key(shard: u32) -> ShardKey {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard,
+        kind: crate::shard_watch::ShardKind::Stream,
     }
 }
 
@@ -137,4 +138,88 @@ fn backoff_grows_and_then_stops_growing() {
     assert_eq!(backoff(interval, 2), interval * 2);
     assert_eq!(backoff(interval, 3), interval * 4);
     assert_eq!(backoff(interval, 40), MAX_BACKOFF);
+}
+
+// --- Cache shards are placed but not yet routed ------------------------------
+
+fn cache_assignment(shard: u32, leader: &str, generation: u64) -> ShardAssignment {
+    ShardAssignment {
+        key: ShardKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            // Deliberately the stream's name: the two are told apart by kind
+            // alone, and a broker that ignored it would file one under the
+            // other and serve requests against the wrong log.
+            stream: "orders".to_string(),
+            shard,
+            kind: ShardKind::Cache,
+        },
+        leader: leader.to_string(),
+        replicas: Vec::new(),
+        generation,
+        state: "active".to_string(),
+    }
+}
+
+/// A snapshot carrying cache shards must leave the routing table holding only
+/// the stream shards. Nothing in the data path routes a cache request yet, and
+/// a cache row filed under the same name as a stream would answer for it.
+#[test]
+fn a_snapshot_drops_cache_shards() {
+    let mut owned = ShardOwnership::default();
+    owned.reset(vec![
+        assignment(0, "broker-a", 1),
+        cache_assignment(0, "broker-b", 1),
+        assignment(1, "broker-a", 1),
+    ]);
+
+    assert_eq!(owned.len(), 2);
+    assert_eq!(
+        owned.get(&key(0)).map(|a| a.leader.as_str()),
+        Some("broker-a"),
+        "the cache shard must not have taken the stream shard's row",
+    );
+    assert!(
+        owned
+            .assignments()
+            .keys()
+            .all(|k| k.kind == ShardKind::Stream),
+    );
+}
+
+/// The key includes the kind, so the two are distinct entries rather than one
+/// overwriting the other. This is what makes dropping caches at ingestion a
+/// filter rather than a data loss: the stream's row is untouched either way.
+#[test]
+fn a_cache_key_is_not_the_stream_key_of_the_same_name() {
+    let mut owned = ShardOwnership::default();
+    assert!(owned.apply(&key(0), Some(assignment(0, "broker-a", 1))));
+
+    let cache = cache_assignment(0, "broker-b", 1);
+    assert!(owned.apply(&cache.key.clone(), Some(cache)));
+
+    assert_eq!(owned.len(), 2);
+    assert_eq!(
+        owned.get(&key(0)).map(|a| a.leader.as_str()),
+        Some("broker-a")
+    );
+}
+
+/// A control plane that predates cache placement sends no kind at all, and the
+/// only safe reading of that silence is the kind everything used to be.
+#[test]
+fn an_assignment_without_a_kind_is_a_stream() {
+    let json = r#"{
+        "tenant_id": "t1",
+        "namespace": "ns",
+        "stream": "orders",
+        "shard": 3,
+        "leader": "broker-a",
+        "generation": 7,
+        "state": "active"
+    }"#;
+    let assignment: ShardAssignment = serde_json::from_str(json).expect("legacy assignment");
+
+    assert_eq!(assignment.key.kind, ShardKind::Stream);
+    assert_eq!(assignment.key.shard, 3);
 }

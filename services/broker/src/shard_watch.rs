@@ -24,12 +24,30 @@ use crate::shard_watch_metrics as mm;
 /// Ceiling on poll backoff after a failure.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// What an assignment is an assignment *of*.
+///
+/// The control plane places cache shards alongside stream shards, and the two
+/// share every other field of the key. A broker that ignored this would file a
+/// cache's shard under the stream of the same name and let one overwrite the
+/// other's ownership.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub enum ShardKind {
+    /// Absent on the wire means this, which is what a control plane that
+    /// predates cache placement sends.
+    #[default]
+    Stream,
+    Cache,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShardKey {
     pub tenant_id: String,
     pub namespace: String,
     pub stream: String,
     pub shard: u32,
+    #[serde(default)]
+    pub kind: ShardKind,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -94,9 +112,15 @@ impl ShardOwnership {
     }
 
     /// Replace everything with a snapshot.
+    ///
+    /// Cache shards are dropped rather than stored. The control plane places
+    /// them, but no cache request consults this table yet, and holding rows the
+    /// data path never reads would make `len()` — which readiness gates on —
+    /// count shards this broker does not actually serve.
     pub fn reset(&mut self, items: Vec<ShardAssignment>) {
         self.assignments = items
             .into_iter()
+            .filter(|assignment| assignment.key.kind == ShardKind::Stream)
             .map(|assignment| (assignment.key.clone(), assignment))
             .collect();
     }
@@ -267,12 +291,21 @@ async fn poll(
         return Ok(Progress::MustResync(reason));
     }
 
-    if !response.items.is_empty() {
+    // Cache-shard changes advance the cursor but are not applied, for the same
+    // reason `reset` drops them: the control plane places them, and no cache
+    // request routes on them yet. Skipping them here rather than in `apply`
+    // keeps the seq accounting honest -- the change *was* consumed.
+    let applicable: Vec<&ShardAssignmentChange> = response
+        .items
+        .iter()
+        .filter(|change| change.key.kind == ShardKind::Stream)
+        .collect();
+    if !applicable.is_empty() {
         let mut owned = ownership.write().await;
-        for change in &response.items {
+        for change in &applicable {
             owned.apply(&change.key, change.assignment.clone());
         }
-        mm::record_applied(response.items.len());
+        mm::record_applied(applicable.len());
     }
     Ok(Progress::At(response.next_seq))
 }

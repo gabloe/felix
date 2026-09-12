@@ -34,9 +34,9 @@ use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle,
     NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, RetentionPolicy, ShardAssignment,
-    ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardState, ShardValidationError,
-    Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest, Tenant,
-    TenantChange, TenantChangeOp,
+    ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind, ShardState,
+    ShardValidationError, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind,
+    StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -124,6 +124,8 @@ struct DbCache {
     namespace: String,
     cache: String,
     display_name: String,
+    shards: i32,
+    replication_factor: i32,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -444,7 +446,7 @@ impl ControlPlaneStore for PostgresStore {
         ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1"#,
         )
         .bind(tenant_id)
         .fetch_all(&mut *tx)
@@ -469,6 +471,8 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: cache.namespace,
                 cache: cache.cache,
                 display_name: cache.display_name,
+                shards: cache.shards as u32,
+                replication_factor: cache.replication_factor as u32,
             };
             sqlx::query(
                 r#"INSERT INTO cache_changes (op, tenant_id, namespace, cache, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -688,7 +692,7 @@ impl ControlPlaneStore for PostgresStore {
         ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -713,6 +717,8 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: cache.namespace,
                 cache: cache.cache,
                 display_name: cache.display_name,
+                shards: cache.shards as u32,
+                replication_factor: cache.replication_factor as u32,
             };
             sqlx::query(
                 r#"INSERT INTO cache_changes (op, tenant_id, namespace, cache, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -1081,7 +1087,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn list_caches(&self, tenant_id: &str, namespace: &str) -> StoreResult<Vec<Cache>> {
         let rows = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2 ORDER BY cache"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 ORDER BY cache"#,
         )
         .bind(tenant_id)
         .bind(namespace)
@@ -1095,13 +1101,15 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: row.namespace,
                 cache: row.cache,
                 display_name: row.display_name,
+                shards: row.shards as u32,
+                replication_factor: row.replication_factor as u32,
             })
             .collect())
     }
 
     async fn get_cache(&self, key: &CacheKey) -> StoreResult<Cache> {
         let row = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -1115,6 +1123,8 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: row.namespace,
                 cache: row.cache,
                 display_name: row.display_name,
+                shards: row.shards as u32,
+                replication_factor: row.replication_factor as u32,
             }),
             None => Err(StoreError::NotFound("cache".into())),
         }
@@ -1134,12 +1144,15 @@ impl ControlPlaneStore for PostgresStore {
         }
 
         let insert = sqlx::query(
-            r#"INSERT INTO caches (tenant_id, namespace, cache, display_name) VALUES ($1, $2, $3, $4)"#,
+            r#"INSERT INTO caches (tenant_id, namespace, cache, display_name, shards, replication_factor)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
         )
         .bind(&cache.tenant_id)
         .bind(&cache.namespace)
         .bind(&cache.cache)
         .bind(&cache.display_name)
+        .bind(cache.shards as i32)
+        .bind(cache.replication_factor as i32)
         .execute(&mut *tx)
         .await;
         if let Err(err) = insert {
@@ -1170,7 +1183,7 @@ impl ControlPlaneStore for PostgresStore {
     async fn patch_cache(&self, key: &CacheKey, patch: CachePatchRequest) -> StoreResult<Cache> {
         let mut tx = self.pool.begin().await?;
         let current = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3 FOR UPDATE"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3 FOR UPDATE"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -1184,6 +1197,8 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: row.namespace,
                 cache: row.cache,
                 display_name: row.display_name,
+                shards: row.shards as u32,
+                replication_factor: row.replication_factor as u32,
             },
             None => return Err(StoreError::NotFound("cache".into())),
         };
@@ -1254,7 +1269,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn cache_snapshot(&self) -> StoreResult<Snapshot<Cache>> {
         let rows = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name FROM caches ORDER BY tenant_id, namespace, cache"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches ORDER BY tenant_id, namespace, cache"#,
         )
         .fetch_all(&self.pool)
         .await
@@ -1266,6 +1281,8 @@ impl ControlPlaneStore for PostgresStore {
                 namespace: row.namespace,
                 cache: row.cache,
                 display_name: row.display_name,
+                shards: row.shards as u32,
+                replication_factor: row.replication_factor as u32,
             })
             .collect();
         let next_seq =
@@ -1657,15 +1674,27 @@ impl ControlPlaneStore for PostgresStore {
         assignment.validate().map_err(invalid_shard)?;
         let mut tx = self.pool.begin().await?;
 
-        let shards: Option<i32> = sqlx::query_scalar(
-            "SELECT shards FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3",
-        )
-        .bind(&assignment.key.tenant_id)
-        .bind(&assignment.key.namespace)
-        .bind(&assignment.key.stream)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let shards = shards.ok_or_else(|| StoreError::NotFound("stream".into()))? as u32;
+        // The shard bound comes from whichever of the two the key names, chosen
+        // by the kind rather than by trying one and falling back to the other:
+        // a cache and a stream may share a name, and a fallback would let a
+        // shard of the wrong one validate against the other's count.
+        let (table, missing) = match assignment.key.kind {
+            ShardKind::Stream => (
+                "SELECT shards FROM streams WHERE tenant_id = $1 AND namespace = $2 AND stream = $3",
+                "stream",
+            ),
+            ShardKind::Cache => (
+                "SELECT shards FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3",
+                "cache",
+            ),
+        };
+        let shards: Option<i32> = sqlx::query_scalar(table)
+            .bind(&assignment.key.tenant_id)
+            .bind(&assignment.key.namespace)
+            .bind(&assignment.key.stream)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let shards = shards.ok_or_else(|| StoreError::NotFound(missing.into()))? as u32;
         assignment.validate_within(shards).map_err(invalid_shard)?;
 
         // Checked here rather than by a foreign key: the node reference has none
@@ -1684,15 +1713,16 @@ impl ControlPlaneStore for PostgresStore {
         // `FOR UPDATE` so a concurrent write to the same shard waits rather than
         // reading the row this transaction is about to replace.
         let existing = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
                FROM shard_assignments
-               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5
                FOR UPDATE"#,
         )
         .bind(&assignment.key.tenant_id)
         .bind(&assignment.key.namespace)
         .bind(&assignment.key.stream)
         .bind(assignment.key.shard as i32)
+        .bind(assignment.key.kind.as_str())
         .fetch_optional(&mut *tx)
         .await?
         .map(shard_from_db)
@@ -1722,9 +1752,9 @@ impl ControlPlaneStore for PostgresStore {
         };
 
         sqlx::query(
-            r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, leader, replicas, generation, state)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (tenant_id, namespace, stream, shard) DO UPDATE SET
+            r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE SET
                  leader = EXCLUDED.leader,
                  replicas = EXCLUDED.replicas,
                  generation = EXCLUDED.generation,
@@ -1735,6 +1765,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&stored.key.namespace)
         .bind(&stored.key.stream)
         .bind(stored.key.shard as i32)
+        .bind(stored.key.kind.as_str())
         .bind(&stored.leader)
         .bind(serde_json::to_value(&stored.replicas)?)
         .bind(stored.generation as i64)
@@ -1751,14 +1782,15 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
         sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
                FROM shard_assignments
-               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4"#,
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
         .bind(&key.stream)
         .bind(key.shard as i32)
+        .bind(key.kind.as_str())
         .fetch_optional(&self.pool)
         .await?
         .map(shard_from_db)
@@ -1768,8 +1800,8 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
-               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard"#,
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1781,9 +1813,9 @@ impl ControlPlaneStore for PostgresStore {
         node_id: &str,
     ) -> StoreResult<Vec<ShardAssignment>> {
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
                FROM shard_assignments WHERE leader = $1
-               ORDER BY tenant_id, namespace, stream, shard"#,
+               ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
         .bind(node_id)
         .fetch_all(&self.pool)
@@ -1795,12 +1827,13 @@ impl ControlPlaneStore for PostgresStore {
         let mut tx = self.pool.begin().await?;
         let deleted = sqlx::query(
             r#"DELETE FROM shard_assignments
-               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4"#,
+               WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
         .bind(&key.stream)
         .bind(key.shard as i32)
+        .bind(key.kind.as_str())
         .execute(&mut *tx)
         .await?;
         if deleted.rows_affected() == 0 {
@@ -1821,8 +1854,8 @@ impl ControlPlaneStore for PostgresStore {
         let mut tx = self.pool.begin().await?;
         begin_consistent_read(&mut tx).await?;
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, leader, replicas, generation, state
-               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard"#,
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+               FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -1845,7 +1878,7 @@ impl ControlPlaneStore for PostgresStore {
         let mut tx = self.pool.begin().await?;
         begin_consistent_read(&mut tx).await?;
         let rows = sqlx::query_as::<_, ShardAssignmentChangeRow>(
-            r#"SELECT seq, op, tenant_id, namespace, stream, shard, payload
+            r#"SELECT seq, op, tenant_id, namespace, stream, shard, kind, payload
                FROM shard_assignment_changes WHERE seq >= $1 ORDER BY seq ASC LIMIT $2"#,
         )
         .bind(since as i64)
@@ -1868,6 +1901,7 @@ impl ControlPlaneStore for PostgresStore {
                     namespace: row.namespace,
                     stream: row.stream,
                     shard: row.shard as u32,
+                    kind: parse_shard_kind(&row.kind)?,
                 },
                 assignment: row.payload.map(serde_json::from_value).transpose()?,
             });
@@ -1978,6 +2012,7 @@ struct DbShardAssignment {
     namespace: String,
     stream: String,
     shard: i32,
+    kind: String,
     leader: String,
     replicas: serde_json::Value,
     generation: i64,
@@ -1992,6 +2027,7 @@ struct ShardAssignmentChangeRow {
     namespace: String,
     stream: String,
     shard: i32,
+    kind: String,
     payload: Option<serde_json::Value>,
 }
 
@@ -2002,6 +2038,7 @@ fn shard_from_db(row: DbShardAssignment) -> StoreResult<ShardAssignment> {
             namespace: row.namespace,
             stream: row.stream,
             shard: row.shard as u32,
+            kind: parse_shard_kind(&row.kind)?,
         },
         leader: row.leader,
         replicas: serde_json::from_value(row.replicas)?,
@@ -2015,6 +2052,16 @@ fn shard_state_to_str(state: ShardState) -> &'static str {
         ShardState::Assigning => "assigning",
         ShardState::Active => "active",
         ShardState::Draining => "draining",
+    }
+}
+
+fn parse_shard_kind(value: &str) -> StoreResult<ShardKind> {
+    match value {
+        "stream" => Ok(ShardKind::Stream),
+        "cache" => Ok(ShardKind::Cache),
+        other => Err(StoreError::Unexpected(anyhow!(
+            "unknown shard kind: {other}"
+        ))),
     }
 }
 
@@ -2070,8 +2117,8 @@ async fn record_shard_change(
     .await?;
 
     sqlx::query(
-        r#"INSERT INTO shard_assignment_changes (seq, op, tenant_id, namespace, stream, shard, payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+        r#"INSERT INTO shard_assignment_changes (seq, op, tenant_id, namespace, stream, shard, kind, payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
     )
     .bind(seq)
     .bind(shard_op_to_str(op))
@@ -2079,6 +2126,7 @@ async fn record_shard_change(
     .bind(&key.namespace)
     .bind(&key.stream)
     .bind(key.shard as i32)
+    .bind(key.kind.as_str())
     .bind(assignment.map(serde_json::to_value).transpose()?)
     .execute(&mut **tx)
     .await?;

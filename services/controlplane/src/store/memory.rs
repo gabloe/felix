@@ -40,8 +40,8 @@ use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
     NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
-    Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant, TenantChange,
-    TenantChangeOp,
+    ShardKind, Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant,
+    TenantChange, TenantChangeOp,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -999,17 +999,35 @@ impl ControlPlaneStore for InMemoryStore {
     ) -> StoreResult<ShardAssignment> {
         assignment.validate().map_err(invalid_shard)?;
 
-        // The stream bounds the shard number, and it has to exist at all.
-        let stream = self
-            .streams
-            .read()
-            .await
-            .get(&assignment.key.stream_key())
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("stream".into()))?;
-        assignment
-            .validate_within(stream.shards)
-            .map_err(invalid_shard)?;
+        // The stream or cache bounds the shard number, and it has to exist at
+        // all. Which of the two is decided by the key's kind, not by looking in
+        // both: a cache and a stream may share a name, and falling back from one
+        // to the other would let a shard of the wrong thing validate.
+        let shards = match assignment.key.kind {
+            ShardKind::Stream => self
+                .streams
+                .read()
+                .await
+                .get(&StreamKey {
+                    tenant_id: assignment.key.tenant_id.clone(),
+                    namespace: assignment.key.namespace.clone(),
+                    stream: assignment.key.stream.clone(),
+                })
+                .map(|stream| stream.shards)
+                .ok_or_else(|| StoreError::NotFound("stream".into()))?,
+            ShardKind::Cache => self
+                .caches
+                .read()
+                .await
+                .get(&CacheKey {
+                    tenant_id: assignment.key.tenant_id.clone(),
+                    namespace: assignment.key.namespace.clone(),
+                    cache: assignment.key.stream.clone(),
+                })
+                .map(|cache| cache.shards)
+                .ok_or_else(|| StoreError::NotFound("cache".into()))?,
+        };
+        assignment.validate_within(shards).map_err(invalid_shard)?;
 
         // Checked here rather than by a foreign key: the node reference has none
         // deliberately, so that deleting a node cannot cascade an assignment away.
@@ -1459,6 +1477,8 @@ mod tests {
                 namespace: "default".to_string(),
                 cache: "primary".to_string(),
                 display_name: "Primary".to_string(),
+                shards: 1,
+                replication_factor: 1,
             })
             .await
             .expect("cache");

@@ -58,22 +58,75 @@ impl ShardState {
     }
 }
 
-/// Identifies one shard of one stream.
+/// Whether a shard belongs to a stream or to a cache.
+///
+/// Both are placed by the same algorithm over the same kind of log — that is
+/// the point of "one core log, many semantics". They are *not* the same
+/// namespace: a cache and a stream may share a name within one namespace, and
+/// when they do their shards are unrelated. Anything keyed by `ShardKey` must
+/// therefore carry the kind, or the two silently collide on ownership.
+#[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    PartialOrd,
+    Ord,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ShardKind {
+    /// A stream's shard. The default, so an assignment persisted before caches
+    /// were placed reads back as exactly what it was.
+    #[default]
+    Stream,
+    /// A cache's shard.
+    Cache,
+}
+
+impl ShardKind {
+    /// The name this kind is stored and logged under.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stream => "stream",
+            Self::Cache => "cache",
+        }
+    }
+}
+
+impl std::fmt::Display for ShardKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Identifies one shard of one stream or cache.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq, Hash)]
 pub struct ShardKey {
     pub tenant_id: String,
     pub namespace: String,
+    /// The stream or cache name, disambiguated by `kind`.
     pub stream: String,
     pub shard: u32,
+    /// Absent on the wire means `Stream`, which is what every assignment
+    /// written before caches were placed is.
+    #[serde(default)]
+    pub kind: ShardKind,
 }
 
 impl ShardKey {
-    pub fn stream_key(&self) -> StreamKey {
-        StreamKey {
+    /// The stream this shard belongs to, or `None` if it belongs to a cache.
+    pub fn stream_key(&self) -> Option<StreamKey> {
+        (self.kind == ShardKind::Stream).then(|| StreamKey {
             tenant_id: self.tenant_id.clone(),
             namespace: self.namespace.clone(),
             stream: self.stream.clone(),
-        }
+        })
     }
 }
 
@@ -86,8 +139,7 @@ pub struct ShardAssignment {
     pub leader: String,
     /// Nodes holding a copy. Never contains the leader, never repeats.
     ///
-    /// Empty until M5 — replication does not exist yet, and an assignment that
-    /// claimed replicas nothing maintains would be a lie placement acts on.
+    /// Empty when the replication factor is 1, which is the default.
     #[serde(default)]
     pub replicas: Vec<String>,
     /// Increments on every change to this assignment.

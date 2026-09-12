@@ -123,6 +123,7 @@ fn handler(
                 namespace: NAMESPACE.to_string(),
                 stream: STREAM.to_string(),
                 shard: 0,
+                kind: crate::shard_watch::ShardKind::Stream,
             },
             GENERATION,
         )]
@@ -168,6 +169,7 @@ async fn a_forwarded_quorum_publish_waits_for_the_majority() {
             namespace: NAMESPACE.to_string(),
             stream: STREAM.to_string(),
             shard: 0,
+            kind: crate::shard_watch::ShardKind::Stream,
         },
         GENERATION,
         0,
@@ -198,6 +200,7 @@ async fn a_forwarded_quorum_publish_is_acknowledged_once_the_majority_holds_it()
             namespace: NAMESPACE.to_string(),
             stream: STREAM.to_string(),
             shard: 0,
+            kind: crate::shard_watch::ShardKind::Stream,
         },
         GENERATION,
         // Past the record this publish writes.

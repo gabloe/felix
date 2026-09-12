@@ -134,6 +134,7 @@ pub(crate) async fn report_replica_status(
                 namespace: shard.namespace,
                 stream: shard.stream,
                 shard: shard.shard,
+                kind: shard.kind,
             },
             shard.generation,
             shard.caught_up.into_iter().collect(),

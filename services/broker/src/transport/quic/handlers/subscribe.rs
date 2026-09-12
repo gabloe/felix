@@ -808,6 +808,7 @@ pub fn redirect_for(
         namespace: namespace.to_string(),
         stream: stream.to_string(),
         shard,
+        kind: crate::shard_watch::ShardKind::Stream,
     };
 
     match dispatch(ingress, &key) {

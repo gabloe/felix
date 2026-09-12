@@ -171,6 +171,7 @@ pub async fn replicate_once<R: PeerRequester>(
                 namespace: key.namespace.clone(),
                 stream: key.stream.clone(),
                 shard: key.shard,
+                kind: crate::shard_watch::ShardKind::Stream,
             },
             route.generation,
             quorum_offset(tail, &entry.followers),
@@ -200,6 +201,7 @@ pub async fn replicate_once<R: PeerRequester>(
                 namespace: key.namespace.clone(),
                 stream: key.stream.clone(),
                 shard: key.shard,
+                kind: crate::shard_watch::ShardKind::Stream,
             })
             .collect::<Vec<_>>(),
     );
