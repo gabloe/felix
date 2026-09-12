@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789169989813,
+  "lastUpdate": 1789171304987,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5200,6 +5200,58 @@ window.BENCHMARK_DATA = {
             "range": "9339.31",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 568567.01\nmean: 567913.90\nstdev: 9339.31\ncv: 1.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "10b738a1e2cf98d7363b490edc2279ee8e383464",
+          "message": "feat(storage): make the cache a projection over the log (#276)\n\n`docs/architecture.md` has claimed \"one core log, many semantics\" from the\nstart, with the cache as \"key → latest value with TTL, backed by the same\nlog\". That was aspiration written in the present tense. The cache was a\n`RwLock<HashMap>` beside the stream registry, sharing no code, no durability\nand no replication with it, and it lost everything on restart.\n\nIt is now a log. `put` and `delete` append a record; an index maps each key\nto the offset of the record that defines it; `get` reads the log there. The\nindex is derived and rebuilt by replaying the log when a cache is opened --\nthe same rule the segment indexes follow, because anything recomputable from\nthe log must be, or it can be stale in a way that matters.\n\n**The index holds offsets, not values.** The log is the store; memory holds\nonly where to look. That costs a read per `get` a hash map would not pay, and\nit is what makes the durability real rather than a write-behind of an\nin-memory map that is still the actual source of truth. Caching hot values in\nfront of the index is a later optimisation and deliberately not part of\nmaking the claim true.\n\n**Compaction**, because without it the log grows forever and \"the cache is a\nlog\" is a slow leak rather than a design. It rewrites the live set -- newest\nsurviving record per key, expired entries dropped -- into a fresh directory\nand swaps, so **records are never rewritten**, which is the invariant the\nwhole storage layer rests on. It triggers on a multiple of live bytes, so the\ncost is proportional to the garbage.\n\nThe record format is explicit and versioned rather than whatever a serialiser\nemits: these bytes outlive the process that wrote them. The expiry is stored\nas an absolute time, so a restart does not give every entry a fresh life.\n\nCaches live under `<root>/caches/`, not the stream root: a shard directory is\nnamed from a hash of tenant, namespace and stream, so a cache and a stream\nsharing a name would otherwise interleave records in one directory. No stream\npath changes, so there is nothing to migrate.\n\nWithout `FELIX_DURABLE_STORAGE_DIR` the cache stays in memory, which is the\nonly thing it can be when there is nowhere to write a log.\n\nDocs swept rather than appended to: `architecture.md` and the docs-site copy\nstated the premise as fact and now say what is and is not true;\n`semantics.md` described the in-memory cache's TTL and eviction and now\ndescribes the log's; the non-goal \"durability beyond in-memory storage\" was\nfalse for durable streams already; the README's MVP list said \"ephemeral\ncache\"; and the status table row moves from Target to Partial, partial\nbecause cache operations are still not routed across brokers and the wire\nprotocol has no cache delete.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T16:59:25-07:00",
+          "tree_id": "db96ce2532a980dfb99f9c73655e676498289b59",
+          "url": "https://github.com/gabloe/felix/commit/10b738a1e2cf98d7363b490edc2279ee8e383464"
+        },
+        "date": 1789171304621,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 239355.89,
+            "range": "4517.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239355.89\nmean: 237885.22\nstdev: 4517.47\ncv: 1.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 239355.89,
+            "range": "4517.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239355.89\nmean: 237885.22\nstdev: 4517.47\ncv: 1.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56306.81,
+            "range": "1065.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56306.81\nmean: 56349.57\nstdev: 1065.76\ncv: 1.89%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 563068.12,
+            "range": "10657.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 563068.12\nmean: 563495.75\nstdev: 10657.63\ncv: 1.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
