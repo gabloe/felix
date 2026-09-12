@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789176161820,
+  "lastUpdate": 1789191076814,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5304,6 +5304,58 @@ window.BENCHMARK_DATA = {
             "range": "41144.98",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 550866.31\nmean: 527916.49\nstdev: 41144.98\ncv: 7.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "668d49128f75a9789a45112e712a067e87585eda",
+          "message": "test(cluster): inject partitions, and close the last of #115 (#285)\n\nA partition was the one fault the harness could not produce. Killing,\nstopping and freezing a broker are each a signal away, and the cluster\nnotices all three the same way: the heartbeat stops. Severing two brokers\nwhile both keep running -- and keep heartbeating, so the control plane goes\non believing everything is healthy -- needs cooperation from the thing being\ntested.\n\nThat combination is worth reaching. A leader that looks healthy to the\ncontrol plane and cannot reach a single follower is where a replication\ndesign is most likely to be wrong, because it is the one fault where the\ncluster's account of itself and the truth disagree with nothing looking\nbroken.\n\n`FELIX_PEER_PARTITION_FILE` names a file of node ids the peer pool must\nrefuse. Absent -- every deployment that does not ask for it -- the check is\none `Option` test. The pool refuses rather than drops, because what is under\ntest is how the broker behaves when a peer is unreachable, not how long the\ntransport takes to notice.\n\n`Cluster::partition_node` writes the file on both sides, since a partition is\nsymmetric and a broker still reachable inbound is not isolated, and waits for\nevery broker to re-read before returning. That wait is the same lesson\n`pause_node` learned in #274: a fault-injection call that returns before the\nfault is in effect hands the test a race, and the test then proves nothing.\nGetting this wrong is exactly what happened here first -- the publish went\nthrough because the injector's cached reading had not expired.\n\n**Clock skew is closed by argument rather than by injection, and the argument\nis in the semantics doc.** No lease reads a wall clock: each broker measures\nelapsed time on its own monotonic clock and gives up a quarter of the lease as\nmargin, so two brokers disagreeing about the time have nothing to act on. The\nassumption that does matter is bounded process *suspension*, which is\ninjectable and is already tested by freezing a leader past its lease. The\nresidual window -- a broker suspended between the commit-time lease check and\nits write reaching disk -- is bounded by the margin, and the doc says the\nmargin is a choice rather than a proof.\n\nDocs corrected: both the semantics page and the status table said partitions\nwere not injectable, which stopped being true here.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T22:28:59-07:00",
+          "tree_id": "bc130a79a5e41b7232e770c4f87460d14925f8b0",
+          "url": "https://github.com/gabloe/felix/commit/668d49128f75a9789a45112e712a067e87585eda"
+        },
+        "date": 1789191076433,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230742.85,
+            "range": "4329.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230742.85\nmean: 231600.58\nstdev: 4329.91\ncv: 1.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230742.85,
+            "range": "4329.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230742.85\nmean: 231600.58\nstdev: 4329.91\ncv: 1.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55501.22,
+            "range": "1041.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55501.22\nmean: 55584.26\nstdev: 1041.67\ncv: 1.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 555012.25,
+            "range": "10416.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 555012.25\nmean: 555842.56\nstdev: 10416.69\ncv: 1.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
