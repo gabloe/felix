@@ -2952,3 +2952,43 @@ mod ownership_gate {
         assert!(matches!(route, PublishRoute::Local(_)));
     }
 }
+
+/// The hot-path decimal encoder, which exists to keep `core::fmt` off the
+/// publish path. It has to agree with formatting for every value a shard can
+/// take, or two shards could share a cache entry.
+#[test]
+fn push_decimal_matches_formatting() {
+    for value in [0u32, 1, 7, 9, 10, 99, 100, 4095, 65_535, u32::MAX] {
+        let mut buf = String::new();
+        super::push_decimal(&mut buf, value);
+        assert_eq!(buf, value.to_string(), "encoding {value}");
+    }
+}
+
+/// **Shard 0 builds the key it always did.** Every stream has a shard 0 and
+/// most have only that one, so the common publish must pay nothing for shards
+/// existing — and a non-zero shard must still get a distinct key.
+#[test]
+fn shard_zero_adds_nothing_to_the_cache_key_and_others_stay_distinct() {
+    fn key(tenant: &str, namespace: &str, stream: &str, shard: u32) -> String {
+        let mut buf = String::new();
+        buf.push_str(tenant);
+        buf.push('\0');
+        buf.push_str(namespace);
+        buf.push('\0');
+        buf.push_str(stream);
+        if shard != 0 {
+            buf.push('\0');
+            super::push_decimal(&mut buf, shard);
+        }
+        buf
+    }
+
+    assert_eq!(key("t1", "ns", "orders", 0), "t1\0ns\0orders");
+    assert_ne!(key("t1", "ns", "orders", 0), key("t1", "ns", "orders", 1));
+    assert_ne!(key("t1", "ns", "orders", 1), key("t1", "ns", "orders", 2));
+    // Names containing a NUL can still collide -- `orders` shard 1 against a
+    // stream literally named "orders\0 1" on shard 0. That ambiguity predates
+    // shards (tenant "a\0b" against tenant "a" namespace "b") and is #295, not
+    // something this key shape introduced.
+}

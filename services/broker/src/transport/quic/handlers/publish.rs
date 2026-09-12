@@ -97,6 +97,25 @@ use crate::transport::quic::STREAM_CACHE_TTL;
 
 pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Instant)>;
 
+/// Append `value` as ASCII decimal, without `core::fmt`.
+///
+/// On the publish path, where the difference between this and `write!` is the
+/// whole formatting machinery for a number that is almost always one digit.
+fn push_decimal(buf: &mut String, mut value: u32) {
+    let mut digits = [0u8; 10];
+    let mut at = digits.len();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    // Only ASCII digits were written, so the slice is valid UTF-8.
+    buf.push_str(std::str::from_utf8(&digits[at..]).expect("ascii digits"));
+}
+
 /// Work item consumed by publish workers.
 ///
 /// A publish job is the unit the broker’s ingress pipeline processes:
@@ -406,7 +425,7 @@ pub(crate) async fn resolve_route(
     // stream, they are separate logs, and a cache that ignored the shard would
     // hand a publish for one of them the handle of another.
     key_scratch.clear();
-    let needed = tenant_id.len() + namespace.len() + stream.len() + 14;
+    let needed = tenant_id.len() + namespace.len() + stream.len() + 13;
     if key_scratch.capacity() < needed {
         key_scratch.reserve(needed - key_scratch.capacity());
     }
@@ -415,10 +434,19 @@ pub(crate) async fn resolve_route(
     key_scratch.push_str(namespace);
     key_scratch.push('\0');
     key_scratch.push_str(stream);
-    key_scratch.push('\0');
-    {
-        use std::fmt::Write;
-        let _ = write!(key_scratch, "{shard}");
+    // Shard 0 adds nothing to the key.
+    //
+    // Every stream has a shard 0 and most have only that one, so the common
+    // publish builds exactly the bytes it did before shards existed. Keys stay
+    // distinct because a suffix is only ever present for a non-zero shard, and
+    // `\0` cannot appear in the parts above it.
+    //
+    // Written by hand rather than through `write!`: this key is rebuilt on
+    // every publish, and `core::fmt` is heavy next to the `push_str` calls the
+    // rest of it is deliberately made of.
+    if shard != 0 {
+        key_scratch.push('\0');
+        push_decimal(key_scratch, shard);
     }
     if let Some((handle, expires)) = cache.get(key_scratch.as_str())
         && *expires > Instant::now()
