@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789218589068,
+  "lastUpdate": 1789223906384,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6996,6 +6996,72 @@ window.BENCHMARK_DATA = {
             "range": "2845.96",
             "unit": "us",
             "extra": "trials: 5\nmedian: 391.00\nmean: 1690.80\nstdev: 2845.96\ncv: 168.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7e9ed08cb9b0907d4a1fe05944643b149a75dbb",
+          "message": "docs: how to run a client against a cluster (#120) (#293)\n\nNothing told an application developer how to use the cluster-aware client.\n`client-config.md` lists tuning knobs -- pool sizes, windows, queue policies\n-- and none of what actually decides whether an application survives a\nfailover, which is not configured there at all: it is chosen by using\n`ClusterClient` rather than `Client`, and by the policy handed to it.\n\n`docs/multi-node-client.md` covers seeds and discovery, what each publish\nmethod does when a broker dies, redirects, the retry rules, what `Leader` and\n`Quorum` mean from the calling side, and a table of the errors an application\nwill actually see with what to do about each.\n\nThree things it states because they are the ones that bite:\n\n- **Subscriptions do not survive a failover.** A subscription is bound to its\n  connection. Record `Event.offset` and resume from `offset + 1`; that is what\n  offsets are for.\n- **`deadline` is `None` by default and why.** One shorter than a single\n  attempt's timeout prevents any retry at all, so it has to come from the\n  caller's latency budget rather than from a number this library picks.\n- **`DeliveryGuarantee` is declared and not enforced.** Better read than\n  discovered.\n\nThe worked example is a `no_run` doctest on `ClusterClient`, so it is compiled\nagainst the real API on every test run rather than kept accurate by hand.\nVerified it catches drift: renaming one method in it fails the suite with\n`no method named ... found for struct ClusterClient`. #120 asks for examples\ncovered by documentation tests where available, and this is where it was\navailable.\n\nThe default values quoted -- five attempts, 200ms, 2s, three redirect hops --\nwere each read back out of the source rather than remembered.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T07:36:06-07:00",
+          "tree_id": "51fdba4753af49c2e9a831d6dc6e12c4b41eb517",
+          "url": "https://github.com/gabloe/felix/commit/e7e9ed08cb9b0907d4a1fe05944643b149a75dbb"
+        },
+        "date": 1789223905457,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.00\nstdev: 0.71\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 206,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 205.60\nstdev: 1.67\ncv: 0.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 243,
+            "range": "48.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 243.00\nmean: 268.60\nstdev: 48.99\ncv: 18.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "3.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 199.20\nstdev: 3.77\ncv: 1.89%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 395,
+            "range": "112.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 395.00\nmean: 443.40\nstdev: 112.16\ncv: 25.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 527,
+            "range": "955.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 527.00\nmean: 1154.40\nstdev: 955.80\ncv: 82.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
