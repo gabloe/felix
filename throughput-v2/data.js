@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789236512447,
+  "lastUpdate": 1789237018801,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5720,6 +5720,58 @@ window.BENCHMARK_DATA = {
             "range": "54914.65",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 582838.80\nmean: 545864.79\nstdev: 54914.65\ncv: 10.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4c87a09e41e9850690a5ff44c6ffe1d19506b0d",
+          "message": "Relicense the server components from Elastic-2.0 to AGPL-3.0 (#299)\n\nThe goal was never commercial. It was to stop someone taking this work,\nclosing it, and selling it. Elastic-2.0 achieves that, and buys something\nnobody wanted along with it: an exclusive right to offer Felix as a managed\nservice, reserved to the copyright holder. That reservation is the only reason\nto prefer ELv2 over copyleft, and it does not describe the intent here.\n\nAGPL-3.0 gets the actual requirement and gives up only the part that was never\nwanted. Anyone may run Felix commercially, including as a hosted service, on\none condition: if they modify it and let users reach it over a network, those\nusers get the source. Reciprocity rather than exclusivity.\n\nTwo consequences of the swap, stated rather than discovered:\n\n- **AGPL permits what ELv2 forbade.** A competitor could offer Felix as a\n  service if they publish their changes. In practice hyperscalers will not\n  touch AGPL and many enterprises ban it outright, so the deterrent is close to\n  total - but it is a deterrent, not a prohibition, and that is the trade.\n\n- **Felix is now open source rather than source-available.** Both halves are\n  OSI-approved. That matters more than the extra prohibition for a project\n  whose point is the craft.\n\nThe permissive half is untouched and is what makes copyleft affordable here:\nfelix-wire, felix-client, felix-transport, felix-common and felix-conformance\nstay Apache-2.0, so everything needed to *talk to* Felix carries no obligation\nat all. Build proprietary applications on top freely. Only the server, the\nthing someone would host, is copyleft.\n\nMechanically: the eleven ELv2 LICENSE files now carry the canonical AGPL-3.0\ntext from gnu.org, and the workspace default moves to AGPL-3.0-only, keeping\nthe fail-closed property that a new crate inherits copyleft unless it\ndeliberately opts into Apache-2.0. deny.toml, the CLA, CONTRIBUTING, the README\nbadge and prose, the conformance and client crate comments, and the\npublish-readiness licence table all follow; its ELASTIC set is now COPYLEFT.\n\nLICENSING.md is rewritten rather than search-and-replaced, because its argument\nchanged: the section explaining what ELv2 restricts is now one explaining what\nAGPL requires, including the two things a reader most needs to know - that\nlinking a proprietary app against the AGPL crates is a problem and the\nApache-2.0 half exists precisely for that, and that many organisations ban AGPL\ndependencies, which is a real cost accepted knowingly.\n\n`task publish:check` passes across all 15 workspace members; cargo metadata\nresolves ten AGPL-3.0-only and five Apache-2.0 as intended.",
+          "timestamp": "2026-09-12T11:14:38-07:00",
+          "tree_id": "db75509f88bd05c138a4cb98b3541aa9d918e33e",
+          "url": "https://github.com/gabloe/felix/commit/d4c87a09e41e9850690a5ff44c6ffe1d19506b0d"
+        },
+        "date": 1789237018413,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 236886.85,
+            "range": "4835.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236886.85\nmean: 235627.11\nstdev: 4835.87\ncv: 2.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 236886.85,
+            "range": "4835.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236886.85\nmean: 235627.11\nstdev: 4835.87\ncv: 2.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56665.52,
+            "range": "3814.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56665.52\nmean: 54760.75\nstdev: 3814.86\ncv: 6.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 566655.22,
+            "range": "38148.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 566655.22\nmean: 547607.47\nstdev: 38148.60\ncv: 6.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
