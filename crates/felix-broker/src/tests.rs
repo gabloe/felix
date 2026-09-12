@@ -25,7 +25,7 @@ async fn publish_delivers_to_subscriber() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     broker
@@ -68,7 +68,7 @@ async fn stream_delivers_in_order_to_single_subscriber() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "ordered")
+        .subscribe("t1", "default", "ordered", 0)
         .await
         .expect("subscribe");
     broker
@@ -132,7 +132,7 @@ async fn slow_subscriber_drops_messages_without_blocking_publish() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "laggy")
+        .subscribe("t1", "default", "laggy", 0)
         .await
         .expect("subscribe");
     broker
@@ -164,7 +164,7 @@ async fn block_policy_backpressures_publish_when_queue_is_full() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "blocky")
+        .subscribe("t1", "default", "blocky", 0)
         .await
         .expect("subscribe");
 
@@ -204,7 +204,7 @@ async fn drop_old_policy_is_emulated_as_drop_new() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "drop_old")
+        .subscribe("t1", "default", "drop_old", 0)
         .await
         .expect("subscribe");
 
@@ -237,7 +237,7 @@ async fn small_queue_does_not_grow_unbounded_under_burst() {
         .await
         .expect("register");
     let mut sub = broker
-        .subscribe("t1", "default", "bounded")
+        .subscribe("t1", "default", "bounded", 0)
         .await
         .expect("subscribe");
 
@@ -268,11 +268,11 @@ async fn multiple_subscribers_receive_payload() {
         .await
         .expect("register");
     let mut sub_a = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     let mut sub_b = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     broker
@@ -302,18 +302,18 @@ async fn publish_batch_shares_one_encoded_frame_across_subscribers() {
         .await
         .expect("register");
     let (mut rx_a, _guard_a) = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe a")
         .into_parts();
     let (mut rx_b, _guard_b) = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe b")
         .into_parts();
     let payloads = [Bytes::from_static(b"one"), Bytes::from_static(b"two")];
     broker
-        .publish_batch("t1", "default", "orders", &payloads)
+        .publish_batch("t1", "default", "orders", 0, &payloads)
         .await
         .expect("publish");
 
@@ -339,18 +339,18 @@ async fn queue_depth_returns_to_zero_after_receive_and_receiver_drop() {
         .await
         .expect("register");
     let stream_state = broker
-        .get_stream_state("t1", "default", "orders")
+        .get_stream_state("t1", "default", "orders", 0)
         .await
         .expect("stream state");
     let (mut receiver, _guard) = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe")
         .into_parts();
     let payloads = [Bytes::from_static(b"one"), Bytes::from_static(b"two")];
 
     broker
-        .publish_batch("t1", "default", "orders", &payloads)
+        .publish_batch("t1", "default", "orders", 0, &payloads)
         .await
         .expect("publish");
     assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 2);
@@ -358,7 +358,7 @@ async fn queue_depth_returns_to_zero_after_receive_and_receiver_drop() {
     assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 0);
 
     broker
-        .publish_batch("t1", "default", "orders", &payloads)
+        .publish_batch("t1", "default", "orders", 0, &payloads)
         .await
         .expect("publish");
     assert_eq!(stream_state.queued_items.load(Ordering::Relaxed), 2);
@@ -380,13 +380,13 @@ async fn subscribe_drop_unregisters_subscriber() {
         .expect("register");
 
     let stream_state = broker
-        .get_stream_state("t1", "default", "orders")
+        .get_stream_state("t1", "default", "orders", 0)
         .await
         .expect("stream state");
     assert_eq!(stream_state.subscriber_count(), 0);
 
     let sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     assert_eq!(stream_state.subscriber_count(), 1);
@@ -411,7 +411,7 @@ async fn perf_hot_path_payload_4096_fanout_1_batch_64_binary() {
         .expect("stream");
 
     let mut sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     let iterations = 200usize;
@@ -425,7 +425,7 @@ async fn perf_hot_path_payload_4096_fanout_1_batch_64_binary() {
     });
 
     let stream_state = broker
-        .get_stream_state("t1", "default", "orders")
+        .get_stream_state("t1", "default", "orders", 0)
         .await
         .expect("stream_state");
 
@@ -441,7 +441,7 @@ async fn perf_hot_path_payload_4096_fanout_1_batch_64_binary() {
 
         let start = Instant::now();
         broker
-            .publish_batch("t1", "default", "orders", &payloads)
+            .publish_batch("t1", "default", "orders", 0, &payloads)
             .await
             .expect("publish");
         publish_ns += start.elapsed().as_nanos();
@@ -484,7 +484,7 @@ async fn cursor_replays_log_then_streams_new_events() {
         .await
         .expect("register");
     let cursor = broker
-        .cursor_tail("t1", "default", "orders")
+        .cursor_tail("t1", "default", "orders", 0)
         .await
         .expect("cursor");
     broker
@@ -496,7 +496,7 @@ async fn cursor_replays_log_then_streams_new_events() {
         .await
         .expect("publish");
     let (backlog, mut sub) = broker
-        .subscribe_with_cursor("t1", "default", "orders", cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, cursor)
         .await
         .expect("subscribe");
     assert_eq!(
@@ -595,11 +595,11 @@ async fn resolved_stream_handle_publishes_without_name_lookup() {
         .await
         .expect("stream");
     let mut sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     let handle = broker
-        .resolve_stream_handle("t1", "default", "orders")
+        .resolve_stream_handle("t1", "default", "orders", 0)
         .await
         .expect("handle");
 
@@ -626,7 +626,7 @@ async fn removed_stream_invalidates_resolved_handle() {
         .await
         .expect("stream");
     let handle = broker
-        .resolve_stream_handle("t1", "default", "orders")
+        .resolve_stream_handle("t1", "default", "orders", 0)
         .await
         .expect("handle");
     broker
@@ -650,7 +650,7 @@ async fn subscribe_to_nonexistent_stream_errors() {
         .await
         .expect("namespace");
     let err = broker
-        .subscribe("t1", "default", "missing")
+        .subscribe("t1", "default", "missing", 0)
         .await
         .expect_err("stream");
     assert!(matches!(err, BrokerError::StreamNotFound { .. }));

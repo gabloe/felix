@@ -72,7 +72,7 @@ impl InProcessClient {
         stream: &str,
     ) -> Result<Subscription> {
         self.broker
-            .subscribe(tenant_id, namespace, stream)
+            .subscribe(tenant_id, namespace, stream, 0)
             .await
             .map_err(Into::into)
     }

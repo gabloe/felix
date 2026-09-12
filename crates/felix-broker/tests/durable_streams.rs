@@ -145,7 +145,7 @@ async fn a_cursor_taken_after_restart_reflects_the_recovered_tail() {
     // at zero, so a cursor a client saved before the restart still means the
     // same position.
     let cursor = broker
-        .cursor_tail("t1", "default", "orders")
+        .cursor_tail("t1", "default", "orders", 0)
         .await
         .expect("cursor");
     assert_eq!(cursor.next_seq(), 5);
@@ -158,7 +158,7 @@ async fn durable_publishes_are_delivered_to_subscribers_too() {
     register(&broker, "orders", true).await;
 
     let mut sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
     broker
@@ -180,7 +180,7 @@ async fn a_non_durable_stream_writes_nothing_to_disk() {
     register(&broker, "ephemeral", false).await;
 
     let mut sub = broker
-        .subscribe("t1", "default", "ephemeral")
+        .subscribe("t1", "default", "ephemeral", 0)
         .await
         .expect("subscribe");
     for i in 0..10 {
@@ -217,11 +217,11 @@ async fn durable_and_non_durable_streams_coexist() {
     // Cursors taken before publishing, so the backlog replay below has
     // something to return for each stream.
     let durable_cursor = broker
-        .cursor_tail("t1", "default", "orders")
+        .cursor_tail("t1", "default", "orders", 0)
         .await
         .expect("cursor");
     let ephemeral_cursor = broker
-        .cursor_tail("t1", "default", "ephemeral")
+        .cursor_tail("t1", "default", "ephemeral", 0)
         .await
         .expect("cursor");
 
@@ -243,13 +243,13 @@ async fn durable_and_non_durable_streams_coexist() {
     // ...but in-memory replay behaves identically for both, which is what keeps
     // the non-durable path unchanged.
     let (durable_backlog, _) = broker
-        .subscribe_with_cursor("t1", "default", "orders", durable_cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, durable_cursor)
         .await
         .expect("subscribe");
     assert_eq!(durable_backlog, vec![payload("kept")]);
 
     let (ephemeral_backlog, _) = broker
-        .subscribe_with_cursor("t1", "default", "ephemeral", ephemeral_cursor)
+        .subscribe_with_cursor("t1", "default", "ephemeral", 0, ephemeral_cursor)
         .await
         .expect("subscribe");
     assert_eq!(ephemeral_backlog, vec![payload("lost")]);
@@ -475,7 +475,7 @@ async fn a_batch_publish_lands_as_one_contiguous_run() {
 
     let batch: Vec<Bytes> = (0..8).map(|i| payload(&format!("b{i}"))).collect();
     broker
-        .publish_batch("t1", "default", "orders", &batch)
+        .publish_batch("t1", "default", "orders", 0, &batch)
         .await
         .expect("publish");
 
@@ -507,11 +507,11 @@ async fn disk_order_cursor_order_and_delivery_order_agree_under_concurrency() {
     register(&broker, "orders", true).await;
 
     let cursor = broker
-        .cursor_tail("t1", "default", "orders")
+        .cursor_tail("t1", "default", "orders", 0)
         .await
         .expect("cursor");
     let mut sub = broker
-        .subscribe("t1", "default", "orders")
+        .subscribe("t1", "default", "orders", 0)
         .await
         .expect("subscribe");
 
@@ -555,7 +555,7 @@ async fn disk_order_cursor_order_and_delivery_order_agree_under_concurrency() {
 
     // 3. The order cursor replay returns them in.
     let (replayed, _) = broker
-        .subscribe_with_cursor("t1", "default", "orders", cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, cursor)
         .await
         .expect("replay");
     let replayed: Vec<String> = replayed
@@ -584,7 +584,7 @@ async fn a_pre_restart_cursor_still_replays_after_a_restart() {
         // A client subscribes, reads a few records, and remembers where it got
         // to — the ordinary resume pattern.
         saved_cursor = broker
-            .cursor_tail("t1", "default", "orders")
+            .cursor_tail("t1", "default", "orders", 0)
             .await
             .expect("cursor");
         for i in 0..20 {
@@ -603,7 +603,7 @@ async fn a_pre_restart_cursor_still_replays_after_a_restart() {
     register(&broker, "orders", true).await;
 
     let (backlog, mut sub) = broker
-        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, saved_cursor)
         .await
         .expect("replay after restart");
     let replayed: Vec<String> = backlog
@@ -660,9 +660,9 @@ async fn hydration_is_bounded_by_the_replay_ring_capacity() {
 
     // Cursors inside the ring window resolve from memory...
     let (backlog, _sub) = broker
-        .subscribe_with_cursor("t1", "default", "orders", {
+        .subscribe_with_cursor("t1", "default", "orders", 0, {
             let tail = broker
-                .cursor_tail("t1", "default", "orders")
+                .cursor_tail("t1", "default", "orders", 0)
                 .await
                 .expect("cursor");
             assert_eq!(tail.next_seq(), 300, "cursor did not resume at the tail");
@@ -678,7 +678,7 @@ async fn hydration_is_bounded_by_the_replay_ring_capacity() {
     let mut offset = 0u64;
     loop {
         let page = broker
-            .read_durable("t1", "default", "orders", offset, 4096)
+            .read_durable("t1", "default", "orders", 0, offset, 4096)
             .await
             .expect("read_durable");
         if page.is_empty() {
@@ -702,7 +702,7 @@ async fn historical_replay_is_rejected_for_a_non_durable_stream() {
     register(&broker, "ephemeral", false).await;
 
     let err = broker
-        .read_durable("t1", "default", "ephemeral", 0, 4096)
+        .read_durable("t1", "default", "ephemeral", 0, 0, 4096)
         .await
         .expect_err("no persisted history");
     assert!(matches!(err, BrokerError::StreamNotDurable { .. }), "{err}");
@@ -836,7 +836,7 @@ async fn hydration_never_leaves_a_gap_between_the_ring_and_the_tail() {
                 .expect("publish");
         }
         saved_cursor = broker
-            .cursor_tail("t1", "default", "orders")
+            .cursor_tail("t1", "default", "orders", 0)
             .await
             .expect("cursor");
         assert_eq!(saved_cursor.next_seq(), 550);
@@ -855,7 +855,7 @@ async fn hydration_never_leaves_a_gap_between_the_ring_and_the_tail() {
     // 550 is accepted (550 >= 100) and answered with silence.
     let (broker, _storage) = boot(&dir, config).await;
     let (backlog, _sub) = broker
-        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, saved_cursor)
         .await
         .expect("replay from a saved cursor");
 
@@ -891,7 +891,7 @@ async fn a_cancelled_publish_does_not_shift_cursor_identity() {
 
         // A client takes its cursor after that, then reads five records.
         saved_cursor = broker
-            .cursor_tail("t1", "default", "orders")
+            .cursor_tail("t1", "default", "orders", 0)
             .await
             .expect("cursor");
         for i in 0..5 {
@@ -902,7 +902,7 @@ async fn a_cancelled_publish_does_not_shift_cursor_identity() {
         }
 
         let (backlog, _) = broker
-            .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+            .subscribe_with_cursor("t1", "default", "orders", 0, saved_cursor)
             .await
             .expect("replay");
         before_restart = backlog
@@ -921,7 +921,7 @@ async fn a_cancelled_publish_does_not_shift_cursor_identity() {
     let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
     register(&broker, "orders", true).await;
     let (backlog, _) = broker
-        .subscribe_with_cursor("t1", "default", "orders", saved_cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, saved_cursor)
         .await
         .expect("replay after restart");
     let after_restart: Vec<String> = backlog
@@ -960,11 +960,11 @@ async fn the_backlog_to_live_handoff_loses_nothing_under_concurrent_publishes() 
     // Join mid-flight.
     tokio::time::sleep(Duration::from_millis(5)).await;
     let cursor = broker
-        .cursor_tail("t1", "default", "orders")
+        .cursor_tail("t1", "default", "orders", 0)
         .await
         .expect("cursor");
     let (backlog, mut sub) = broker
-        .subscribe_with_cursor("t1", "default", "orders", cursor)
+        .subscribe_with_cursor("t1", "default", "orders", 0, cursor)
         .await
         .expect("subscribe");
     publisher.await.expect("join");
@@ -1039,7 +1039,7 @@ async fn drain_resume(
         let mut at = range.from_offset;
         while at < range.until_offset {
             let records = broker
-                .read_durable("t1", "default", stream, at, 64 * 1024)
+                .read_durable("t1", "default", stream, 0, at, 64 * 1024)
                 .await
                 .expect("history");
             if records.is_empty() {
@@ -1074,7 +1074,7 @@ async fn resuming_at_an_offset_older_than_the_ring_replays_from_disk() {
     }
 
     let mut resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(3))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(3))
         .await
         .expect("resume");
 
@@ -1102,7 +1102,7 @@ async fn a_publish_during_the_resume_arrives_live_exactly_once() {
     }
 
     let mut resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(3))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(3))
         .await
         .expect("resume");
 
@@ -1139,7 +1139,7 @@ async fn resuming_within_the_ring_needs_no_disk_history() {
     }
 
     let mut resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(5))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(5))
         .await
         .expect("resume");
     assert!(resumed.history.is_none(), "the ring covered the request");
@@ -1163,7 +1163,7 @@ async fn latest_delivers_nothing_already_published() {
     }
 
     let mut resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Latest)
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Latest)
         .await
         .expect("resume");
     assert!(resumed.history.is_none());
@@ -1187,7 +1187,7 @@ async fn earliest_replays_the_whole_retained_stream() {
     }
 
     let mut resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Earliest)
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Earliest)
         .await
         .expect("resume");
     let seen = drain_resume(&broker, "orders", &mut resumed).await;
@@ -1210,7 +1210,7 @@ async fn an_in_memory_stream_reports_a_cursor_older_than_its_ring() {
     }
 
     let err = broker
-        .subscribe_from("t1", "default", "ephemeral", StartPosition::Offset(2))
+        .subscribe_from("t1", "default", "ephemeral", 0, StartPosition::Offset(2))
         .await
         .expect_err("cursor is below the ring and there is no disk");
     assert!(
@@ -1235,7 +1235,7 @@ async fn a_resume_past_the_tail_is_rejected_not_reinterpreted() {
     // handed over records at offsets 5, 6, 7... -- below the requested position,
     // which is the opposite of what was asked for.
     let err = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(99))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(99))
         .await
         .expect_err("99 is past the tail");
     assert!(
@@ -1268,7 +1268,7 @@ async fn a_rejected_resume_leaves_no_subscriber_behind() {
     // the slab without ever touching the per-connection subscription cap.
     for _ in 0..50 {
         let err = broker
-            .subscribe_from("t1", "default", "ephemeral", StartPosition::Offset(1))
+            .subscribe_from("t1", "default", "ephemeral", 0, StartPosition::Offset(1))
             .await
             .expect_err("below the ring, and no disk to fall back to");
         assert!(matches!(err, BrokerError::CursorTooOld { .. }));
@@ -1276,7 +1276,7 @@ async fn a_rejected_resume_leaves_no_subscriber_behind() {
 
     assert_eq!(
         broker
-            .registered_subscribers("t1", "default", "ephemeral")
+            .registered_subscribers("t1", "default", "ephemeral", 0)
             .await
             .expect("count"),
         0,
@@ -1297,7 +1297,7 @@ async fn backlog_entries_carry_their_own_offsets() {
     }
 
     let resumed = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(2))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(2))
         .await
         .expect("resume");
 
@@ -1369,7 +1369,7 @@ async fn resuming_below_the_retained_range_reports_cursor_too_old() {
     // Offset 0 existed and is gone. That is a different answer from "nothing
     // there yet", and it is the one a resuming client needs.
     let err = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Offset(0))
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Offset(0))
         .await
         .expect_err("offset 0 has been trimmed");
     match err {
@@ -1399,7 +1399,7 @@ async fn earliest_resumes_from_the_oldest_retained_record() {
     // `earliest` must mean "oldest still retained", not "offset 0" -- otherwise
     // it is an error for every trimmed stream.
     let resumed: ResumedSubscription = broker
-        .subscribe_from("t1", "default", "orders", StartPosition::Earliest)
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Earliest)
         .await
         .expect("earliest still resumes after a trim");
     if let Some(history) = &resumed.history {
@@ -1429,7 +1429,7 @@ async fn a_trimmed_read_reports_cursor_too_old_rather_than_a_storage_error() {
     // This is the mid-replay case: a paging replay whose next read lands below
     // a base offset that moved underneath it. Reported, not silently short.
     let err = broker
-        .read_durable("t1", "default", "orders", 0, 64 * 1024)
+        .read_durable("t1", "default", "orders", 0, 0, 64 * 1024)
         .await
         .expect_err("reading trimmed offsets must fail");
     match err {
@@ -1477,12 +1477,12 @@ async fn a_cursor_never_points_past_the_live_edge() {
     // is the cursor's own position, never something older.
     for _ in 0..250 {
         let cursor = broker
-            .cursor_tail("t1", "default", "orders")
+            .cursor_tail("t1", "default", "orders", 0)
             .await
             .expect("cursor");
         let from = cursor.next_seq();
         let (backlog, mut sub) = broker
-            .subscribe_with_cursor("t1", "default", "orders", cursor)
+            .subscribe_with_cursor("t1", "default", "orders", 0, cursor)
             .await
             .expect("subscribe");
 

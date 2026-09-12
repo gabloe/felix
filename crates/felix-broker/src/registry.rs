@@ -9,7 +9,10 @@ use std::sync::atomic::Ordering;
 
 use crate::broker::{Broker, CacheMetadata, StreamHandle, StreamMetadata};
 use crate::error::{BrokerError, Result};
-use crate::keys::{CacheKey, CacheKeyRef, NamespaceKey, NamespaceKeyRef, StreamKey, StreamKeyRef};
+use crate::keys::{
+    CacheKey, CacheKeyRef, NamespaceKey, NamespaceKeyRef, StreamKey, StreamKeyRef, TopicKey,
+    TopicKeyRef,
+};
 use crate::stream_state::StreamState;
 
 /// Byte ceiling on the replay ring refill at startup.
@@ -70,7 +73,13 @@ impl Broker {
         // the race in between. The retry then takes the fast path.
         loop {
             // Already live: nothing to build, just refresh the metadata.
-            if let Some(state) = self.topics.read().await.get(&key).cloned() {
+            //
+            // Registration opens shard 0 only. A broker opens the other shards
+            // of a stream when it is asked to serve one, because it may own any
+            // subset of them and opening all of them would create a log per
+            // shard on every broker in the cluster.
+            let topic = TopicKey::new(&key.tenant_id, &key.namespace, &key.stream, 0);
+            if let Some(state) = self.topics.read().await.get(&topic).cloned() {
                 let mut streams = self.streams.write().await;
                 if let Some(existing) = streams.get(&key)
                     && existing.durable != metadata.durable
@@ -87,7 +96,7 @@ impl Broker {
             }
 
             let durable = self
-                .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, &metadata)
+                .open_durable_log(&key.tenant_id, &key.namespace, &key.stream, 0, &metadata)
                 .await?;
             let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
             let state = Arc::new(StreamState::new(
@@ -107,14 +116,14 @@ impl Broker {
                 return Err(Self::durability_change_error(&key, existing, &metadata));
             }
             let mut topics = self.topics.write().await;
-            if topics.contains_key(&key) {
+            if topics.contains_key(&topic) {
                 // Lost the race while hydrating; the winner's state is the live
                 // one, so discard this one and take the fast path.
                 drop(topics);
                 drop(streams);
                 continue;
             }
-            topics.insert(key.clone(), state);
+            topics.insert(topic, state);
             streams.insert(key.clone(), metadata);
             return Ok(());
         }
@@ -189,6 +198,7 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         metadata: &StreamMetadata,
     ) -> Result<Option<crate::durable::StreamLog>> {
         if !metadata.durable {
@@ -201,10 +211,12 @@ impl Broker {
                 stream: stream.to_string(),
             });
         };
-        // The broker keeps one log per stream today. `metadata.shards` is
-        // carried through to the shard key so that when the data path is
-        // sharded, existing single-shard directories keep their identity.
-        Ok(Some(storage.open_stream(tenant_id, namespace, stream, 0)?))
+        // One log per shard. Shard 0 keeps the directory a single-shard stream
+        // has always had, so nothing needs migrating; every other shard gets its
+        // own, which is what the replication driver has always opened.
+        Ok(Some(
+            storage.open_stream(tenant_id, namespace, stream, shard)?,
+        ))
     }
 
     pub async fn register_cache(
@@ -278,10 +290,17 @@ impl Broker {
         let removed = self.streams.write().await.remove(&key).is_some();
         if removed {
             let mut topics = self.topics.write().await;
-            if let Some(state) = topics.get(&key) {
-                state.deactivate();
-            }
-            topics.remove(&key);
+            // Every shard of the stream, not just the one registration opened:
+            // a broker may have been asked to serve several.
+            topics.retain(|topic, state| {
+                let same_stream = topic.tenant_id == key.tenant_id
+                    && topic.namespace == key.namespace
+                    && topic.stream == key.stream;
+                if same_stream {
+                    state.deactivate();
+                }
+                !same_stream
+            });
         }
         Ok(removed)
     }
@@ -389,23 +408,86 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
     ) -> std::result::Result<Arc<StreamState>, BrokerError> {
         #[cfg(feature = "perf_debug")]
         let lock_wait_start = std::time::Instant::now();
-        let guard = self.topics.read().await;
-        #[cfg(feature = "perf_debug")]
-        {
-            let wait_ns = lock_wait_start.elapsed().as_nanos() as u64;
-            metrics::histogram!("felix_perf_topics_read_lock_wait_ns").record(wait_ns as f64);
+        let found = {
+            let guard = self.topics.read().await;
+            #[cfg(feature = "perf_debug")]
+            {
+                let wait_ns = lock_wait_start.elapsed().as_nanos() as u64;
+                metrics::histogram!("felix_perf_topics_read_lock_wait_ns").record(wait_ns as f64);
+            }
+            guard
+                .get(&TopicKeyRef::new(tenant_id, namespace, stream, shard))
+                .cloned()
+        };
+        if let Some(state) = found {
+            return Ok(state);
         }
-        guard
-            .get(&StreamKeyRef::new(tenant_id, namespace, stream))
-            .cloned()
-            .ok_or_else(|| BrokerError::StreamNotFound {
+        // A shard this broker has not opened yet. Registration opens shard 0;
+        // any other arrives here the first time the broker is asked to serve
+        // it, because ownership is decided by the control plane long after the
+        // stream was registered and a broker may hold any subset.
+        self.open_stream_shard(tenant_id, namespace, stream, shard)
+            .await
+    }
+
+    /// Build, hydrate and install the state for one shard.
+    ///
+    /// Hydration happens **before** the state is visible, for the same reason
+    /// registration does it in that order: a durable shard that is publishable
+    /// with an empty replay ring answers `CursorTooOld` for every pre-existing
+    /// cursor, and nothing upstream would know it was never initialised.
+    async fn open_stream_shard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+    ) -> std::result::Result<Arc<StreamState>, BrokerError> {
+        let stream_key = StreamKeyRef::new(tenant_id, namespace, stream);
+        let metadata = self.streams.read().await.get(&stream_key).cloned().ok_or(
+            BrokerError::StreamNotFound {
                 tenant_id: tenant_id.to_string(),
                 namespace: namespace.to_string(),
                 stream: stream.to_string(),
-            })
+            },
+        )?;
+        if shard >= metadata.shards.max(1) {
+            // Asking for a shard the stream does not have is a routing bug, and
+            // opening a log for it would create a directory nothing will ever
+            // read.
+            return Err(BrokerError::StreamNotFound {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: format!("{stream} (shard {shard} of {})", metadata.shards),
+            });
+        }
+
+        let topic = TopicKey::new(tenant_id, namespace, stream, shard);
+        let durable = self
+            .open_durable_log(tenant_id, namespace, stream, shard, &metadata)
+            .await?;
+        let handle_id = self.next_stream_handle.fetch_add(1, Ordering::Relaxed);
+        let state = Arc::new(StreamState::new(
+            handle_id,
+            self.topic_capacity,
+            self.subscriber_queue_policy,
+            durable,
+            metadata.consistency,
+        ));
+        self.hydrate_durable_stream(&state).await?;
+
+        let mut topics = self.topics.write().await;
+        // No retry loop: a caller that lost the race takes the winner's state
+        // rather than building another, so there is nothing to go round for.
+        if let Some(existing) = topics.get(&topic) {
+            return Ok(Arc::clone(existing));
+        }
+        topics.insert(topic, Arc::clone(&state));
+        Ok(state)
     }
 
     pub async fn resolve_stream_handle(
@@ -413,8 +495,11 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
     ) -> Result<StreamHandle> {
-        let state = self.get_stream_state(tenant_id, namespace, stream).await?;
+        let state = self
+            .get_stream_state(tenant_id, namespace, stream, shard)
+            .await?;
         if !state.active.load(Ordering::Acquire) {
             return Err(BrokerError::StreamHandleInactive(state.handle_id));
         }

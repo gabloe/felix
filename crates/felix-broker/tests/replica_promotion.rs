@@ -67,7 +67,7 @@ async fn promoted_broker(records: &[&str]) -> (Arc<Broker>, TempDir) {
     }
     let tail = log.tail_offset().await.expect("tail");
     broker
-        .adopt_replicated(TENANT, NAMESPACE, STREAM, tail)
+        .adopt_replicated(TENANT, NAMESPACE, STREAM, 0, tail)
         .await
         .expect("adopt the replicated records");
 
@@ -96,14 +96,14 @@ async fn a_replicated_stream_replays_from_the_start() {
     let (broker, _dir) = promoted_broker(&["a", "b", "c"]).await;
 
     let resumed = broker
-        .subscribe_from(TENANT, NAMESPACE, STREAM, StartPosition::Earliest)
+        .subscribe_from(TENANT, NAMESPACE, STREAM, 0, StartPosition::Earliest)
         .await
         .expect("subscribe from the start");
 
     let mut from_disk = Vec::new();
     if let Some(range) = resumed.history {
         let records = broker
-            .read_durable(TENANT, NAMESPACE, STREAM, range.from_offset, 1024 * 1024)
+            .read_durable(TENANT, NAMESPACE, STREAM, 0, range.from_offset, 1024 * 1024)
             .await
             .expect("read history");
         for record in records {
@@ -135,7 +135,7 @@ async fn a_publish_after_promotion_follows_the_replicated_history() {
     let (broker, _dir) = promoted_broker(&["a", "b"]).await;
 
     let resumed = broker
-        .subscribe_from(TENANT, NAMESPACE, STREAM, StartPosition::Earliest)
+        .subscribe_from(TENANT, NAMESPACE, STREAM, 0, StartPosition::Earliest)
         .await
         .expect("subscribe from the start");
     let mut subscription = resumed.subscription;
@@ -155,7 +155,7 @@ async fn latest_starts_at_the_replicated_tail() {
     let (broker, _dir) = promoted_broker(&["a", "b"]).await;
 
     let resumed = broker
-        .subscribe_from(TENANT, NAMESPACE, STREAM, StartPosition::Latest)
+        .subscribe_from(TENANT, NAMESPACE, STREAM, 0, StartPosition::Latest)
         .await
         .expect("subscribe at the tail");
 
@@ -175,7 +175,7 @@ async fn latest_starts_at_the_replicated_tail() {
 async fn a_consistency_change_reaches_a_live_stream() {
     let (broker, _dir) = promoted_broker(&[]).await;
     let handle = broker
-        .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+        .resolve_stream_handle(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("resolve");
     assert_eq!(handle.consistency(), felix_broker::ConsistencyLevel::Leader);
@@ -195,7 +195,7 @@ async fn a_consistency_change_reaches_a_live_stream() {
         .expect("raise to quorum");
 
     let handle = broker
-        .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+        .resolve_stream_handle(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("resolve");
     assert_eq!(
@@ -227,7 +227,7 @@ async fn lowering_the_consistency_also_reaches_a_live_stream() {
             .await
             .expect("register");
         let handle = broker
-            .resolve_stream_handle(TENANT, NAMESPACE, STREAM)
+            .resolve_stream_handle(TENANT, NAMESPACE, STREAM, 0)
             .await
             .expect("resolve");
         assert_eq!(handle.consistency(), level);

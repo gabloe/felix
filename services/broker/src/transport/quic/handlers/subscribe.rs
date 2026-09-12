@@ -165,6 +165,7 @@ async fn write_replay<S: EventSink>(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
+    shard: u32,
     subscription_id: u64,
     history: Option<felix_broker::HistoryRange>,
     backlog: Vec<(u64, bytes::Bytes)>,
@@ -182,7 +183,7 @@ async fn write_replay<S: EventSink>(
         let mut at = range.from_offset;
         while at < range.until_offset {
             let records = broker
-                .read_durable(tenant_id, namespace, stream, at, HISTORY_PAGE_BYTES)
+                .read_durable(tenant_id, namespace, stream, shard, at, HISTORY_PAGE_BYTES)
                 .await?;
             if records.is_empty() {
                 break;
@@ -242,6 +243,7 @@ async fn write_replay<S: EventSink>(
                         tenant_id,
                         namespace,
                         stream,
+                        shard,
                         subscription_id,
                         delivered_upto,
                         base,
@@ -293,6 +295,7 @@ async fn write_history_range<S: EventSink>(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
+    shard: u32,
     subscription_id: u64,
     from: u64,
     until: u64,
@@ -304,7 +307,7 @@ async fn write_history_range<S: EventSink>(
     let mut at = from;
     while at < until {
         let records = broker
-            .read_durable(tenant_id, namespace, stream, at, HISTORY_PAGE_BYTES)
+            .read_durable(tenant_id, namespace, stream, shard, at, HISTORY_PAGE_BYTES)
             .await?;
         if records.is_empty() {
             break;
@@ -464,6 +467,11 @@ pub(crate) async fn handle_subscribe_message(
     start: Option<StartPosition>,
     peer_flags: u16,
 ) -> Result<bool> {
+    // Which shard of the stream this subscription reads. No routing key on the
+    // wire yet, so a stream has one reachable shard (#240); the plumbing is
+    // shard-correct either way, and the redirect above already resolved
+    // ownership against the same number.
+    let shard = crate::shard_routing::shard_for(1, None);
     // Offsets ride the event batch only for a client that negotiated the bit.
     // One that did not gets exactly the frames it got before this existed.
     let offsets_enabled = felix_wire::supports(peer_flags, felix_wire::FLAG_EVENT_BATCH_OFFSETS);
@@ -515,7 +523,10 @@ pub(crate) async fn handle_subscribe_message(
     // On failure, respond on the control stream (through the ack queue) and keep the stream alive.
     let mut replay = None;
     let mut subscription = match start {
-        None => match broker.subscribe(&tenant_id, &namespace, &stream).await {
+        None => match broker
+            .subscribe(&tenant_id, &namespace, &stream, shard)
+            .await
+        {
             Ok(subscription) => subscription,
             Err(err) => {
                 return subscribe_failed(
@@ -531,7 +542,7 @@ pub(crate) async fn handle_subscribe_message(
             }
         },
         Some(start) => match broker
-            .subscribe_from(&tenant_id, &namespace, &stream, start)
+            .subscribe_from(&tenant_id, &namespace, &stream, shard, start)
             .await
         {
             Ok(resumed) => {
@@ -642,6 +653,7 @@ pub(crate) async fn handle_subscribe_message(
             &tenant_id,
             &namespace,
             &stream,
+            shard,
             subscription_id,
             history,
             backlog,
@@ -744,7 +756,7 @@ pub(crate) async fn handle_subscribe_message(
     // `publish_worker_index` (handle id % shard count).
     let shard_runtime = match crate::core_shards::global_shards(&config) {
         Some(shards) => match broker
-            .resolve_stream_handle(&tenant_id, &namespace, &stream)
+            .resolve_stream_handle(&tenant_id, &namespace, &stream, shard)
             .await
         {
             Ok(handle) => Some(shards.handle_for(handle.id()).clone()),

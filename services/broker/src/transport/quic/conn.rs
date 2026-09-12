@@ -266,7 +266,7 @@ fn build_publish_context(
                         namespace,
                         stream,
                     } => broker_for_worker
-                        .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                        .publish_batch(tenant_id, namespace, stream, 0, &job.payloads)
                         .await
                         .map(|_| ())
                         .map_err(Into::into),

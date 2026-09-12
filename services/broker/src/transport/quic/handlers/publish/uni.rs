@@ -72,6 +72,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,
@@ -144,6 +145,7 @@ pub(crate) async fn handle_publish_message_uni(
             &tenant_id,
             &namespace,
             &stream,
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,
@@ -215,6 +217,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
             &tenant_id,
             &namespace,
             &stream,
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,
