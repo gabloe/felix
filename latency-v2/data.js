@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789229808167,
+  "lastUpdate": 1789235024489,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7128,6 +7128,72 @@ window.BENCHMARK_DATA = {
             "range": "864.99",
             "unit": "us",
             "extra": "trials: 5\nmedian: 611.00\nmean: 1002.80\nstdev: 864.99\ncv: 86.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2ae9356f5491cb4e6b2b43708536b099fab202bd",
+          "message": "perf(broker): keep core::fmt off the publish path, and make shard 0 free (#296)\n\n#294's perf check flagged four regressions, all on the `batch=1` configs\nwhere per-publish overhead dominates and none on `batch=64` -- the shape of a\nfixed cost added per publish rather than per byte.\n\n#294 appended the shard to the stream-handle cache key with\n`write!(key_scratch, \"{shard}\")`. That drags the whole of `core::fmt` onto a\npath built out of hand-rolled `push_str` calls precisely to avoid it.\n\nTwo changes:\n\n**Shard 0 adds nothing to the key.** Every stream has a shard 0 and most have\nonly that one, so the common publish now builds exactly the bytes it built\nbefore shards existed, and pays nothing for the shard dimension. Keys stay\ndistinct because a suffix is only ever present for a non-zero shard.\n\n**A non-zero shard is encoded by hand**, ten bytes of ASCII without touching\n`core::fmt`, with a test that it agrees with `to_string` across the range.\n\nWhether this recovers the flagged numbers is for the perf check to say. Two\nof the four flags were the same figure reported twice (throughput and\ndelivered_throughput differ only by the fanout factor) and the p999 was a\n934% swing at p=0.032 on a shared runner, which is the metric least worth\ntrusting from a handful of samples. The `write!` was worth removing on its\nown terms either way.\n\nAlso files #295: the cache key joins its parts with `\\0` and nothing forbids a\n`\\0` inside a tenant, namespace or stream name, so two distinct streams can\nshare a cache entry and a publish can be handed the wrong handle. That\npredates shards -- tenant \"a\\0b\" against tenant \"a\" namespace \"b\" -- and the\nstorage layer already length-prefixes its key material for exactly this\nreason. Found by a test here that asserted the stronger property; the\nassertion was narrowed to what this key shape actually promises and points at\nthe issue rather than being deleted.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T10:41:20-07:00",
+          "tree_id": "57fb85d6e8f45339847d2bb6b663082086c24c03",
+          "url": "https://github.com/gabloe/felix/commit/2ae9356f5491cb4e6b2b43708536b099fab202bd"
+        },
+        "date": 1789235022416,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 84,
+            "range": "2.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 84.00\nmean: 85.00\nstdev: 2.24\ncv: 2.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 117,
+            "range": "5.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 117.00\nmean: 118.60\nstdev: 5.22\ncv: 4.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 142,
+            "range": "6.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 142.00\nmean: 143.20\nstdev: 6.38\ncv: 4.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 116,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 116.00\nmean: 115.40\nstdev: 0.89\ncv: 0.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 260,
+            "range": "499.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 260.00\nmean: 482.20\nstdev: 499.69\ncv: 103.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1201,
+            "range": "3133.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1201.00\nmean: 2397.00\nstdev: 3133.41\ncv: 130.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
