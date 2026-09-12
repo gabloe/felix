@@ -140,15 +140,18 @@ async fn failover_from(cluster: &Cluster, gone: &str, budget: Duration) -> Optio
 /// The acknowledgement is the whole claim: it means a majority held the record
 /// durably, so losing any one of them — including the leader — cannot take it.
 ///
-/// Ignored: **intermittent**, roughly one run in four (#266). Usually the
-/// promoted broker replays everything; occasionally it accepts the subscribe
-/// and delivers nothing, and retrying with fresh subscriptions for 30s does not
-/// recover it.
+/// Was intermittent, roughly one run in four, and the cause is now known: the
+/// acknowledgement did not require a majority at all. `Quorum` degraded to the
+/// `Leader` behaviour whenever `ack_on_commit` was off — the default — because
+/// the enqueue-ack path answered "accepted into the ingress queue" to a
+/// question about majorities, and the quorum wait ran in a worker nobody was
+/// listening to. A record acknowledged that way existed only on the leader, so
+/// promoting any replica legitimately lost it, and the test failed whenever the
+/// promoted broker was one that had not received it (#282).
 ///
-/// Kept rather than deleted — it is the milestone's acceptance criterion and
-/// the thing to re-run against any fix — and kept ignored rather than left
-/// failing, because a test that fails one run in four teaches people to ignore
-/// red.
+/// The comment that used to sit here said this test was ignored. It was not —
+/// there was no `#[ignore]`, so it ran and failed one run in four, which is
+/// worse than either honest option.
 #[serial]
 #[tokio::test]
 async fn a_quorum_acknowledged_record_survives_its_leader() {

@@ -217,6 +217,18 @@ impl PublishContext {
 /// resolve, or the shard belongs to a peer this broker has no transport to.
 /// Callers answer that the same way they always answered an unresolvable
 /// stream.
+/// True when this publish must not be acknowledged until a majority holds it.
+///
+/// `Quorum` is the stream that said "accepted by this broker is not good
+/// enough", so the local ack-on-commit policy cannot answer for it.
+pub(crate) fn needs_quorum(target: &Option<PublishTarget>) -> bool {
+    matches!(
+        target,
+        Some(PublishTarget::Resolved { handle, .. })
+            if handle.consistency() == felix_broker::ConsistencyLevel::Quorum
+    )
+}
+
 pub(crate) fn publish_target(
     route: PublishRoute,
     publish_ctx: &PublishContext,

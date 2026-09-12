@@ -422,8 +422,20 @@ pub(crate) async fn handle_publish_message(
     // accepted nothing: the data is not on its disk, and the owner may still
     // refuse it.
     let forwarding = matches!(target, Some(PublishTarget::Forward { .. }));
+    // A `Quorum` publish is acknowledged only once a majority holds it,
+    // whatever `ack_on_commit` says -- the same reasoning as forwarding, one
+    // step further. `ack_on_commit` is a local policy meaning "accepted by this
+    // broker is good enough", and `Quorum` is precisely the stream that said it
+    // is not.
+    //
+    // Without this the quorum wait still runs, in a worker holding a response
+    // channel nobody created, and its answer -- including its refusals -- goes
+    // nowhere. The client is told the record is on a majority the moment it is
+    // queued. `ack_on_commit` is off by default, so that was every direct
+    // `Quorum` publish.
+    let quorum = super::needs_quorum(&target);
     let (response_tx, response_rx) =
-        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding) {
+        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding || quorum) {
             let (response_tx, response_rx) = oneshot::channel();
             (Some(response_tx), Some(response_rx))
         } else {
@@ -465,7 +477,7 @@ pub(crate) async fn handle_publish_message(
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit || forwarding {
+        } else if ack_on_commit || forwarding || quorum {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -546,7 +558,12 @@ pub(crate) async fn handle_publish_message(
     // A forward has no enqueue-ack mode: this broker enqueued the batch to send
     // it somewhere else, which is not a fact worth acknowledging. The commit-ack
     // path below waits for the owner's answer instead.
-    if !ack_on_commit && !forwarding {
+    //
+    // Nor does a `Quorum` publish. "Accepted into the ingress queue" is not an
+    // answer to "is this on a majority", and answering it anyway is how a
+    // `Quorum` stream came to behave exactly like a `Leader` one whenever
+    // `ack_on_commit` was off -- which is the default.
+    if !ack_on_commit && !forwarding && !quorum {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.
@@ -795,8 +812,10 @@ pub(crate) async fn handle_publish_batch_message(
         internal_ack(ack),
     );
     // See the single-publish path: a forward is acknowledged only once the owner
-    // has answered, whatever `ack_on_commit` says.
+    // has answered, whatever `ack_on_commit` says, and a `Quorum` publish only
+    // once a majority holds it.
     let forwarding = matches!(target, Some(PublishTarget::Forward { .. }));
+    let quorum = super::needs_quorum(&target);
     let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
@@ -825,8 +844,11 @@ pub(crate) async fn handle_publish_batch_message(
         .map(|payload| payload.len())
         .collect::<Vec<_>>();
     let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
+    // Same reasoning as the JSON path above: `Quorum` outranks the local
+    // ack-on-commit policy, because it is the stream saying this broker alone
+    // cannot answer for the record.
     let (response_tx, response_rx) =
-        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding) {
+        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding || quorum) {
             let (response_tx, response_rx) = oneshot::channel();
             (Some(response_tx), Some(response_rx))
         } else {
@@ -843,7 +865,7 @@ pub(crate) async fn handle_publish_batch_message(
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit || forwarding {
+        } else if ack_on_commit || forwarding || quorum {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -911,7 +933,12 @@ pub(crate) async fn handle_publish_batch_message(
     // A forward has no enqueue-ack mode: this broker enqueued the batch to send
     // it somewhere else, which is not a fact worth acknowledging. The commit-ack
     // path below waits for the owner's answer instead.
-    if !ack_on_commit && !forwarding {
+    //
+    // Nor does a `Quorum` publish. "Accepted into the ingress queue" is not an
+    // answer to "is this on a majority", and answering it anyway is how a
+    // `Quorum` stream came to behave exactly like a `Leader` one whenever
+    // `ack_on_commit` was off -- which is the default.
+    if !ack_on_commit && !forwarding && !quorum {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.
