@@ -147,7 +147,22 @@ retry policy is still the application's.
 - `publish` reconnects but does **not** resend. `publish_at_least_once`
   resends, and can therefore duplicate a record whose failure it could not prove
   was not applied. The names are the contract.
+- **Retries are bounded by an attempt count and a jittered exponential
+  backoff**, and optionally by a deadline across every attempt and sleep. The
+  deadline is off by default: one shorter than a single attempt's own timeout
+  prevents any retry at all, so a useful value depends on the caller's latency
+  budget rather than on a number this library can pick.
+- **The backoff is full jitter** — uniform over `[0, ceiling]`, not the ceiling.
+  Every client notices a failover at the same moment, and an unjittered backoff
+  sends all of them at the freshly promoted broker in step.
+- **A failure that cannot succeed on another attempt is not retried.** A
+  forbidden credential, an unknown stream, or an offset that retention has
+  passed fails immediately rather than after the full schedule. Everything else
+  is retried, *including errors nobody has classified*: the client protocol
+  carries an error as prose with no code, so this is string matching, and a
+  wasted attempt is a cheaper mistake than a lost operation.
 
+> `a_forbidden_publish_fails_fast_instead_of_retrying`,
 > `a_client_given_one_seed_learns_the_other_brokers`,
 > `the_configured_seed_is_never_dropped`,
 > `a_client_given_one_seed_survives_losing_it`,
