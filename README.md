@@ -9,7 +9,7 @@
     <img src="https://raw.githubusercontent.com/gabloe/felix/badges/coverage.svg" alt="Coverage" />
   </a>
   <a href="https://github.com/gabloe/felix/blob/main/LICENSING.md">
-    <img src="https://img.shields.io/badge/license-ELv2%20%2B%20Apache--2.0-blue.svg" alt="License: Elastic License 2.0 + Apache-2.0 (split, see LICENSING.md)" />
+    <img src="https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Apache--2.0-blue.svg" alt="License: AGPL-3.0 + Apache-2.0 (split, see LICENSING.md)" />
   </a>
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/rust-1.97.1-blue" alt="Rust 1.97.1" />
@@ -305,8 +305,9 @@ Detailed plans live in `docs/`.
 Felix uses a split license: the wire protocol (`felix-wire`), client SDK
 (`felix-client`), transport layer (`felix-transport`), shared types
 (`felix-common`), and conformance suite (`felix-conformance`) are
-Apache-2.0. The broker and control-plane server components are Elastic
-License 2.0 (source-available). See [LICENSING.md](LICENSING.md) for the
-full breakdown and rationale.
+Apache-2.0. The broker and control-plane server components are AGPL-3.0:
+open source, but running a modified Felix as a network service means
+publishing your changes. See [LICENSING.md](LICENSING.md) for the full
+breakdown and rationale.
 
 Copyright (c) 2026 Felix Authors

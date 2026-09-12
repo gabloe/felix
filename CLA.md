@@ -12,7 +12,7 @@ to the `gabloe/felix` repository:
    OSI-approved open source licenses — in addition to (not in place of)
    their availability under the project's license(s) at the time of
    contribution (see [LICENSING.md](LICENSING.md) for the current split
-   between Apache-2.0 and Elastic License 2.0 across the repository).
+   between Apache-2.0 and AGPL-3.0 across the repository).
 3. This does not transfer copyright — you keep it. It means the project
    doesn't need your separate sign-off every time its own licensing terms
    evolve.

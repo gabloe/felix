@@ -11,7 +11,7 @@ readme.workspace = true
 keywords = ["felix", "conformance", "protocol"]
 categories = ["network-programming", "development-tools"]
 # Not a library anyone consumes from a registry: service binaries and a
-# dev/CI tool with hard Elastic-2.0 dependencies.
+# dev/CI tool with hard AGPL-3.0 dependencies.
 publish = false
 
 [dependencies]

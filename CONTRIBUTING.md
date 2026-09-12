@@ -7,7 +7,7 @@ merged, please read this — it's short.
 
 Felix uses a split license: the wire protocol, client SDK, transport layer,
 shared types, and conformance suite are Apache-2.0; the broker and
-control-plane server components are Elastic License 2.0. See
+control-plane server components are the GNU Affero General Public License v3.0. See
 [LICENSING.md](LICENSING.md) for the full breakdown of which path is under
 which license. Know which part of the tree your PR touches before you start.
 
