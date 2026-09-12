@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789176158834,
+  "lastUpdate": 1789191074942,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -6732,6 +6732,72 @@ window.BENCHMARK_DATA = {
             "range": "189.15",
             "unit": "us",
             "extra": "trials: 5\nmedian: 832.00\nmean: 789.40\nstdev: 189.15\ncv: 23.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "668d49128f75a9789a45112e712a067e87585eda",
+          "message": "test(cluster): inject partitions, and close the last of #115 (#285)\n\nA partition was the one fault the harness could not produce. Killing,\nstopping and freezing a broker are each a signal away, and the cluster\nnotices all three the same way: the heartbeat stops. Severing two brokers\nwhile both keep running -- and keep heartbeating, so the control plane goes\non believing everything is healthy -- needs cooperation from the thing being\ntested.\n\nThat combination is worth reaching. A leader that looks healthy to the\ncontrol plane and cannot reach a single follower is where a replication\ndesign is most likely to be wrong, because it is the one fault where the\ncluster's account of itself and the truth disagree with nothing looking\nbroken.\n\n`FELIX_PEER_PARTITION_FILE` names a file of node ids the peer pool must\nrefuse. Absent -- every deployment that does not ask for it -- the check is\none `Option` test. The pool refuses rather than drops, because what is under\ntest is how the broker behaves when a peer is unreachable, not how long the\ntransport takes to notice.\n\n`Cluster::partition_node` writes the file on both sides, since a partition is\nsymmetric and a broker still reachable inbound is not isolated, and waits for\nevery broker to re-read before returning. That wait is the same lesson\n`pause_node` learned in #274: a fault-injection call that returns before the\nfault is in effect hands the test a race, and the test then proves nothing.\nGetting this wrong is exactly what happened here first -- the publish went\nthrough because the injector's cached reading had not expired.\n\n**Clock skew is closed by argument rather than by injection, and the argument\nis in the semantics doc.** No lease reads a wall clock: each broker measures\nelapsed time on its own monotonic clock and gives up a quarter of the lease as\nmargin, so two brokers disagreeing about the time have nothing to act on. The\nassumption that does matter is bounded process *suspension*, which is\ninjectable and is already tested by freezing a leader past its lease. The\nresidual window -- a broker suspended between the commit-time lease check and\nits write reaching disk -- is bounded by the margin, and the doc says the\nmargin is a choice rather than a proof.\n\nDocs corrected: both the semantics page and the status table said partitions\nwere not injectable, which stopped being true here.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-11T22:28:59-07:00",
+          "tree_id": "bc130a79a5e41b7232e770c4f87460d14925f8b0",
+          "url": "https://github.com/gabloe/felix/commit/668d49128f75a9789a45112e712a067e87585eda"
+        },
+        "date": 1789191073975,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 159.60\nstdev: 0.89\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "3.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 205.20\nstdev: 3.63\ncv: 1.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 240,
+            "range": "39.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 240.00\nmean: 252.60\nstdev: 39.75\ncv: 15.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.00\nstdev: 0.71\ncv: 0.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 404,
+            "range": "10.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 404.00\nmean: 401.20\nstdev: 10.71\ncv: 2.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 704,
+            "range": "295.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 704.00\nmean: 789.60\nstdev: 295.41\ncv: 37.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
