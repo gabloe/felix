@@ -142,7 +142,7 @@ async fn run_demo() -> Result<()> {
     // The non-durable stream has no disk state at all; a fresh broker starts it
     // empty, which is what "in-memory" means when the process goes away.
     let ephemeral_cursor = broker
-        .cursor_tail(TENANT, NAMESPACE, EPHEMERAL_STREAM)
+        .cursor_tail(TENANT, NAMESPACE, EPHEMERAL_STREAM, 0)
         .await?;
     println!(
         "  ephemeral `{EPHEMERAL_STREAM}`: 0 of {RECORDS} records recovered (cursor restarts at {})",

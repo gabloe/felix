@@ -331,6 +331,10 @@ pub(crate) enum PublishRoute {
 /// changes the instant the control plane says so, and caching it would keep a
 /// broker serving a reassigned shard for up to a TTL. The check is two atomic
 /// loads, so paying it per publish costs less than reasoning about staleness.
+// Six of these are the shard's identity plus the two things needed to resolve
+// it. Bundling them into a struct would move the argument list rather than
+// shorten it, and the same allow is already on the publish handlers.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_route(
     broker: &Broker,
     authority: Authority<'_>,
@@ -339,6 +343,7 @@ pub(crate) async fn resolve_route(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
+    shard: u32,
 ) -> PublishRoute {
     // Single-node brokers short-circuit on a null check; a cluster member pays
     // two loads. Either way there is no lock and no await.
@@ -365,9 +370,10 @@ pub(crate) async fn resolve_route(
             tenant_id: tenant_id.to_string(),
             namespace: namespace.to_string(),
             stream: stream.to_string(),
-            // No routing key on the wire yet, so every record of a stream lands
-            // on shard 0. See `shard_routing::shard_for`.
-            shard: shard_for(1, None),
+            // The shard the caller resolved. Dispatch and the log this publish
+            // lands in must agree on it, or a record is written to one shard's
+            // log and replicated from another's.
+            shard,
         };
         match dispatch(ingress, &key) {
             Dispatch::Local => {}
@@ -395,8 +401,12 @@ pub(crate) async fn resolve_route(
     }
 
     // Short-lived cache to avoid repeated stream lookups on hot paths.
+    //
+    // Keyed by shard as well as stream: a broker can own several shards of one
+    // stream, they are separate logs, and a cache that ignored the shard would
+    // hand a publish for one of them the handle of another.
     key_scratch.clear();
-    let needed = tenant_id.len() + namespace.len() + stream.len() + 2;
+    let needed = tenant_id.len() + namespace.len() + stream.len() + 14;
     if key_scratch.capacity() < needed {
         key_scratch.reserve(needed - key_scratch.capacity());
     }
@@ -405,6 +415,11 @@ pub(crate) async fn resolve_route(
     key_scratch.push_str(namespace);
     key_scratch.push('\0');
     key_scratch.push_str(stream);
+    key_scratch.push('\0');
+    {
+        use std::fmt::Write;
+        let _ = write!(key_scratch, "{shard}");
+    }
     if let Some((handle, expires)) = cache.get(key_scratch.as_str())
         && *expires > Instant::now()
         && handle.as_ref().is_none_or(StreamHandle::is_active)
@@ -412,7 +427,7 @@ pub(crate) async fn resolve_route(
         return PublishRoute::from(handle.clone());
     }
     let handle = broker
-        .resolve_stream_handle(tenant_id, namespace, stream)
+        .resolve_stream_handle(tenant_id, namespace, stream, shard)
         .await
         .ok();
     cache.insert(

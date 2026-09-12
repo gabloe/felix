@@ -1778,6 +1778,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         "t1",
         "ns",
         "stream",
+        0,
     )
     .await;
     assert!(
@@ -1811,6 +1812,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         "t1",
         "ns",
         "stream",
+        0,
     )
     .await;
     assert!(
@@ -1830,6 +1832,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
         "t1",
         "ns",
         "stream",
+        0,
     )
     .await;
     assert!(
@@ -2802,6 +2805,7 @@ mod ownership_gate {
             "t1",
             "ns",
             "stream",
+            0,
         )
         .await;
         assert!(
@@ -2831,6 +2835,7 @@ mod ownership_gate {
             "t1",
             "ns",
             "stream",
+            0,
         )
         .await;
         match route {
@@ -2859,6 +2864,7 @@ mod ownership_gate {
             "t1",
             "ns",
             "stream",
+            0,
         )
         .await;
         assert!(
@@ -2888,7 +2894,8 @@ mod ownership_gate {
                     &mut key,
                     "t1",
                     "ns",
-                    "stream"
+                    "stream",
+                    0
                 )
                 .await,
                 PublishRoute::Local(_)
@@ -2911,7 +2918,8 @@ mod ownership_gate {
                     &mut key,
                     "t1",
                     "ns",
-                    "stream"
+                    "stream",
+                    0
                 )
                 .await,
                 PublishRoute::Forward(_)
@@ -2938,6 +2946,7 @@ mod ownership_gate {
             "t1",
             "ns",
             "stream",
+            0,
         )
         .await;
         assert!(matches!(route, PublishRoute::Local(_)));

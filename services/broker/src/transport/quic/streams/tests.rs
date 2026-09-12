@@ -566,7 +566,7 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
                     stream,
                 } => {
                     broker
-                        .publish_batch(tenant_id, namespace, stream, &job.payloads)
+                        .publish_batch(tenant_id, namespace, stream, 0, &job.payloads)
                         .await
                 }
             }

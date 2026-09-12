@@ -127,6 +127,7 @@ async fn replay(
         TENANT,
         NAMESPACE,
         STREAM,
+        0,
         SUBSCRIPTION,
         history,
         backlog,
@@ -146,7 +147,7 @@ async fn history_is_replayed_from_disk_in_order() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b", "c", "d"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -180,7 +181,7 @@ async fn the_history_range_stops_before_its_end() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b", "c", "d"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -209,7 +210,7 @@ async fn history_is_followed_by_the_backlog() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -241,7 +242,7 @@ async fn a_publish_that_arrives_during_replay_is_carried_across() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
 
@@ -280,7 +281,7 @@ async fn a_gap_left_by_the_queue_is_filled_from_disk() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b", "c", "d", "e"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
 
@@ -318,7 +319,7 @@ async fn a_gap_left_by_the_queue_is_filled_from_disk() {
 async fn a_queued_record_already_covered_by_history_is_not_repeated() {
     let (broker, _dir) = durable_broker().await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     publish(&broker, &["a", "b", "c"]).await;
@@ -349,7 +350,7 @@ async fn a_queued_record_already_covered_by_history_is_not_repeated() {
 async fn an_empty_replay_writes_nothing() {
     let (broker, _dir) = durable_broker().await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -376,7 +377,7 @@ async fn replay_is_split_into_batches_without_losing_the_run() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a", "b", "c", "d", "e", "f"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -405,7 +406,7 @@ async fn replay_is_split_into_batches_without_losing_the_run() {
 async fn a_backlog_without_history_is_delivered() {
     let (broker, _dir) = durable_broker().await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();
@@ -432,7 +433,7 @@ async fn a_history_range_past_the_end_of_the_log_stops() {
     let (broker, _dir) = durable_broker().await;
     publish(&broker, &["a"]).await;
     let mut subscription = broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let mut sink = Recorder::default();

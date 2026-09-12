@@ -90,6 +90,8 @@ pub(crate) async fn handle_binary_publish_batch_control(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
+            // No routing key on the wire yet (#240).
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,
@@ -407,6 +409,9 @@ pub(crate) async fn handle_publish_message(
             &tenant_id,
             &namespace,
             &stream,
+            // No routing key on the wire yet, so every record lands on shard 0
+            // (#240). The plumbing below is shard-correct either way.
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,
@@ -803,6 +808,9 @@ pub(crate) async fn handle_publish_batch_message(
             &tenant_id,
             &namespace,
             &stream,
+            // No routing key on the wire yet, so every record lands on shard 0
+            // (#240). The plumbing below is shard-correct either way.
+            crate::shard_routing::shard_for(1, None),
         )
         .await,
         publish_ctx,

@@ -226,6 +226,7 @@ impl ReplicaHandler {
                         &key.tenant_id,
                         &key.namespace,
                         &key.stream,
+                        key.shard,
                         applied.durable_offset,
                     )
                     .await

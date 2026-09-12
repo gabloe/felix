@@ -1371,7 +1371,7 @@ async fn run_connection_writer_coalesces_multiple_deliveries() -> Result<()> {
             felix_broker::StreamMetadata::default(),
         )
         .await?;
-    let subscription = broker.subscribe("t1", "default", "orders").await?;
+    let subscription = broker.subscribe("t1", "default", "orders", 0).await?;
     let (_rx, guard) = subscription.into_parts();
 
     let (server_config, cert) = make_server_config()?;
@@ -1466,7 +1466,7 @@ async fn run_connection_writer_handles_write_error() -> Result<()> {
             felix_broker::StreamMetadata::default(),
         )
         .await?;
-    let subscription = broker.subscribe("t1", "default", "orders").await?;
+    let subscription = broker.subscribe("t1", "default", "orders", 0).await?;
     let (_rx, guard) = subscription.into_parts();
 
     let (server_config, cert) = make_server_config()?;
@@ -1528,7 +1528,7 @@ async fn run_connection_writer_unregister_drops_late_deliveries() -> Result<()> 
             felix_broker::StreamMetadata::default(),
         )
         .await?;
-    let subscription = broker.subscribe("t1", "default", "orders").await?;
+    let subscription = broker.subscribe("t1", "default", "orders", 0).await?;
     let (_rx, guard) = subscription.into_parts();
 
     let (server_config, cert) = make_server_config()?;

@@ -147,7 +147,7 @@ impl ForwardingHandler {
 
         let handle = match self
             .broker
-            .resolve_stream_handle(&key.tenant_id, &key.namespace, &key.stream)
+            .resolve_stream_handle(&key.tenant_id, &key.namespace, &key.stream, key.shard)
             .await
         {
             Ok(handle) => handle,

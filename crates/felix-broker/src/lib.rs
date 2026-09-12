@@ -42,7 +42,7 @@ pub use config::SubQueuePolicy;
 pub use delivery::DeliveryEnvelope;
 pub use durable::{DurableStorage, StreamLog};
 pub use error::{BrokerError, Result};
-pub use keys::{CacheKey, NamespaceKey, StreamKey};
+pub use keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
 pub use stream_state::Cursor;
 pub use subscription::{Subscription, SubscriptionGuard, SubscriptionReceiver};
 

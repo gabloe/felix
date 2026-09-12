@@ -83,6 +83,68 @@ impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
     }
 }
 
+/// One shard of one stream: what a broker actually holds.
+///
+/// Distinct from [`StreamKey`], which identifies the stream a *catalog* entry
+/// describes. Metadata is per stream — its shard count, its consistency — while
+/// a log, a replay ring and a subscriber set are per shard, because a broker can
+/// own several shards of one stream and each is a separate log.
+///
+/// Conflating the two is what made every shard share shard 0's log while
+/// replication shipped the real one.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct TopicKey {
+    pub(crate) tenant_id: String,
+    pub(crate) namespace: String,
+    pub(crate) stream: String,
+    pub(crate) shard: u32,
+}
+
+impl TopicKey {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+        stream: impl Into<String>,
+        shard: u32,
+    ) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            namespace: namespace.into(),
+            stream: stream.into(),
+            shard,
+        }
+    }
+}
+
+/// Borrowed lookup key, so the publish path does not allocate to find a shard.
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub(crate) struct TopicKeyRef<'a> {
+    pub(crate) tenant_id: &'a str,
+    pub(crate) namespace: &'a str,
+    pub(crate) stream: &'a str,
+    pub(crate) shard: u32,
+}
+
+impl<'a> TopicKeyRef<'a> {
+    pub(crate) fn new(tenant_id: &'a str, namespace: &'a str, stream: &'a str, shard: u32) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<TopicKey> for TopicKeyRef<'a> {
+    fn equivalent(&self, key: &TopicKey) -> bool {
+        self.shard == key.shard
+            && self.tenant_id == key.tenant_id
+            && self.namespace == key.namespace
+            && self.stream == key.stream
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CacheKey {
     pub(crate) tenant_id: String,

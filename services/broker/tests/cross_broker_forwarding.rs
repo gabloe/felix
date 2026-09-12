@@ -201,7 +201,7 @@ async fn a_forwarded_publish_is_written_by_the_owner() {
     // rather than merely answering.
     let mut subscription = owner
         .broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let listener = Listener::start(OWNER, owner.handler("10.0.0.5:7000"));
@@ -237,7 +237,7 @@ async fn an_owner_behind_the_requester_refuses_rather_than_writing() {
     let owner = Owner::new(OWNER, 1, true).await;
     let mut subscription = owner
         .broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let listener = Listener::start(OWNER, owner.handler("10.0.0.5:7000"));
@@ -480,7 +480,7 @@ async fn a_lost_answer_is_reported_as_indeterminate_and_never_retried() {
         async fn handle(&self, request: InternalMessage) -> InternalMessage {
             if let InternalMessage::ForwardPublish(publish) = &request {
                 self.broker
-                    .publish_batch(TENANT, NAMESPACE, STREAM, &publish.payloads)
+                    .publish_batch(TENANT, NAMESPACE, STREAM, 0, &publish.payloads)
                     .await
                     .expect("publish");
                 self.applied.fetch_add(1, Ordering::SeqCst);
@@ -495,7 +495,7 @@ async fn a_lost_answer_is_reported_as_indeterminate_and_never_retried() {
     let owner = Owner::new(OWNER, 1, true).await;
     let mut subscription = owner
         .broker
-        .subscribe(TENANT, NAMESPACE, STREAM)
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
         .await
         .expect("subscribe");
     let applied = Arc::new(AtomicUsize::new(0));

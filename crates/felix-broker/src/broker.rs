@@ -16,7 +16,7 @@ use crate::config::{
 use crate::delivery::{DeliveryEnvelope, QueuedDelivery};
 use crate::durable::DurableStorage;
 use crate::error::{BrokerError, Result};
-use crate::keys::{CacheKey, NamespaceKey, StreamKey};
+use crate::keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
 use crate::stream_state::{Cursor, StreamState};
 use crate::subscription::{Subscription, SubscriptionGuard};
 use crate::telemetry::{t_now_if, t_should_sample};
@@ -45,8 +45,10 @@ pub use felix_wire::StartPosition;
 ///         .register_stream("t1", "default", "topic", Default::default())
 ///         .await
 ///         .expect("register");
+///     // Shard 0: a stream with one shard has only that one, and `publish`
+///     // below resolves to the same.
 ///     let mut sub = broker
-///         .subscribe("t1", "default", "topic")
+///         .subscribe("t1", "default", "topic", 0)
 ///         .await
 ///         .expect("subscribe");
 ///     broker
@@ -60,7 +62,7 @@ pub use felix_wire::StartPosition;
 #[derive(Debug)]
 pub struct Broker {
     // Map of stream key -> stream state (subscriber registry + log).
-    pub(crate) topics: RwLock<HashMap<StreamKey, Arc<StreamState>, RandomState>>,
+    pub(crate) topics: RwLock<HashMap<TopicKey, Arc<StreamState>, RandomState>>,
     // Map of stream key -> metadata for existence checks.
     pub(crate) streams: RwLock<HashMap<StreamKey, StreamMetadata, RandomState>>,
     // Map of cache key -> metadata for existence checks.
@@ -277,6 +279,10 @@ impl Broker {
         self
     }
 
+    /// Publish one payload to a single-shard stream.
+    ///
+    /// Shard 0 by construction: a caller with a routing key resolves the shard
+    /// first and uses [`Broker::publish_batch`].
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -285,7 +291,7 @@ impl Broker {
         payload: Bytes,
     ) -> Result<usize> {
         let payloads = [payload];
-        self.publish_batch(tenant_id, namespace, stream, &payloads)
+        self.publish_batch(tenant_id, namespace, stream, 0, &payloads)
             .await
     }
 
@@ -294,12 +300,13 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         payloads: &[Bytes],
     ) -> Result<usize> {
         let sample = t_should_sample();
         let lookup_start = t_now_if(sample);
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         if let Some(start) = lookup_start {
             let lookup_ns = start.elapsed().as_nanos() as u64;
@@ -533,9 +540,10 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
     ) -> Result<Subscription> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         let stream_state = handle.state;
         let (subscriber_id, receiver) = stream_state.register_subscriber();
@@ -563,9 +571,10 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
     ) -> Result<Cursor> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
 
         let next_seq = match &handle.state.durable {
@@ -582,10 +591,11 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         cursor: Cursor,
     ) -> Result<(Vec<Bytes>, Subscription)> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         let stream_state = handle.state;
 
@@ -626,10 +636,11 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         durable_offset: u64,
     ) -> Result<()> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         handle.state.advance_to(durable_offset);
         Ok(())
@@ -659,11 +670,12 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         from_offset: u64,
         max_bytes: usize,
     ) -> Result<Vec<felix_storage::log::LogRecord>> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         let Some(log) = &handle.state.durable else {
             return Err(BrokerError::StreamNotDurable {
@@ -698,10 +710,11 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
         start: StartPosition,
     ) -> Result<ResumedSubscription> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         let stream_state = handle.state;
         let durable = stream_state.durable.clone();
@@ -798,9 +811,10 @@ impl Broker {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
+        shard: u32,
     ) -> Result<usize> {
         let handle = self
-            .resolve_stream_handle(tenant_id, namespace, stream)
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
             .await?;
         Ok(handle.state.subscriber_count())
     }
