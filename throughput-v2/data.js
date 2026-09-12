@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789191076814,
+  "lastUpdate": 1789215648864,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5356,6 +5356,58 @@ window.BENCHMARK_DATA = {
             "range": "10416.69",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 555012.25\nmean: 555842.56\nstdev: 10416.69\ncv: 1.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c0d4ab7c46e4a0a5cbcbea45b402fe99e81c633e",
+          "message": "chore(deps): bump axum from 0.8.8 to 0.8.9 (#288)\n\nBumps [axum](https://github.com/tokio-rs/axum) from 0.8.8 to 0.8.9.\n- [Release notes](https://github.com/tokio-rs/axum/releases)\n- [Changelog](https://github.com/tokio-rs/axum/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/tokio-rs/axum/compare/axum-v0.8.8...axum-v0.8.9)\n\n---\nupdated-dependencies:\n- dependency-name: axum\n  dependency-version: 0.8.9\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-12T05:18:21-07:00",
+          "tree_id": "06c78c333a60725aab11d379adea75397b54e652",
+          "url": "https://github.com/gabloe/felix/commit/c0d4ab7c46e4a0a5cbcbea45b402fe99e81c633e"
+        },
+        "date": 1789215648154,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235715.49,
+            "range": "3773.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235715.49\nmean: 234710.84\nstdev: 3773.81\ncv: 1.61%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235715.49,
+            "range": "3773.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235715.49\nmean: 234710.84\nstdev: 3773.81\ncv: 1.61%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56442.48,
+            "range": "716.43",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56442.48\nmean: 56442.88\nstdev: 716.43\ncv: 1.27%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 564424.76,
+            "range": "7164.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 564424.76\nmean: 564428.85\nstdev: 7164.28\ncv: 1.27%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
