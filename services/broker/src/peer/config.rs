@@ -82,6 +82,20 @@ pub struct PeerTransportConfig {
     pub reconnect_base: Duration,
     pub reconnect_max: Duration,
     pub handshake_timeout: Duration,
+    /// Test-only: a file naming peers this broker must not exchange with.
+    ///
+    /// `None` in every deployment that does not set `FELIX_PEER_PARTITION_FILE`,
+    /// which is the only way to turn it on, and the check costs one `Option`
+    /// test when it is off.
+    ///
+    /// A partition is the one failure this harness cannot produce from the
+    /// outside: killing, stopping and freezing a broker are all a signal away,
+    /// but severing two brokers while both stay alive and both keep heartbeating
+    /// to the control plane needs cooperation from the thing being tested. That
+    /// combination -- a leader that looks healthy to the control plane and
+    /// cannot reach its followers -- is exactly where a replication design is
+    /// most likely to be wrong, so it is worth a hook.
+    pub partition_file: Option<std::path::PathBuf>,
 }
 
 impl Default for PeerTransportConfig {
@@ -96,6 +110,7 @@ impl Default for PeerTransportConfig {
             reconnect_base: Duration::from_millis(DEFAULT_RECONNECT_BASE_MS),
             reconnect_max: Duration::from_millis(DEFAULT_RECONNECT_MAX_MS),
             handshake_timeout: Duration::from_millis(DEFAULT_HANDSHAKE_TIMEOUT_MS),
+            partition_file: None,
         }
     }
 }
@@ -126,6 +141,10 @@ impl PeerTransportConfig {
                 )
             })?;
         }
+        config.partition_file = std::env::var("FELIX_PEER_PARTITION_FILE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(std::path::PathBuf::from);
         if let Some(value) = env_usize("FELIX_INTERNAL_CONNS_PER_PEER").filter(|v| *v > 0) {
             config.conns_per_peer = value;
         }

@@ -879,6 +879,48 @@ impl Cluster {
         response.json().await.context("decode response")
     }
 
+    /// Cut `node_id` off from every other broker, both ways.
+    ///
+    /// Distinct from pausing: the broker keeps running and keeps heartbeating,
+    /// so the control plane still believes it is healthy. That is the state no
+    /// other fault produces, and the one a replication design is most likely to
+    /// get wrong.
+    ///
+    /// Written on both sides, because a partition is symmetric and a broker
+    /// still reachable inbound would not be isolated.
+    pub fn partition_node(&self, node_id: &str) -> Result<()> {
+        let others: Vec<String> = self
+            .nodes
+            .iter()
+            .map(|node| node.node_id.clone())
+            .filter(|id| id != node_id)
+            .collect();
+        for node in &self.nodes {
+            let listed = if node.node_id == node_id {
+                others.clone()
+            } else {
+                vec![node_id.to_string()]
+            };
+            std::fs::write(partition_file(&node.data_dir), listed.join("\n"))
+                .with_context(|| format!("write the partition file for {}", node.node_id))?;
+        }
+        await_partition_reread();
+        Ok(())
+    }
+
+    /// Reconnect everything.
+    pub fn heal_partitions(&self) -> Result<()> {
+        for node in &self.nodes {
+            let path = partition_file(&node.data_dir);
+            if path.exists() {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("heal the partition for {}", node.node_id))?;
+            }
+        }
+        await_partition_reread();
+        Ok(())
+    }
+
     /// Suspend a broker without stopping it.
     ///
     /// The process stays alive and keeps every lease and connection it holds,
@@ -1158,6 +1200,8 @@ fn spawn_broker(
         // harness binds a concrete loopback port rather than 0.0.0.0, so the
         // bind address is also the reachable one.
         .env("FELIX_CLIENT_ADVERTISE_ADDR", client_addr.to_string())
+        // Test-only peer severing, off until a test writes the file.
+        .env("FELIX_PEER_PARTITION_FILE", partition_file(&data_dir))
         .env("FELIX_INTERNAL_BIND", internal_addr.to_string())
         .env("FELIX_BROKER_METRICS_BIND", metrics_addr.to_string())
         .env("FELIX_DURABLE_STORAGE_DIR", &data_dir)
@@ -1215,4 +1259,27 @@ fn broker_binary() -> Result<PathBuf> {
         "felix-broker not found at {}; build it first with `cargo build -p broker --bin felix-broker`",
         candidate.display()
     ))
+}
+
+/// Where a broker's test-only partition list lives.
+///
+/// Under the data directory, so it is cleaned up with the cluster and a broker
+/// the harness restarts keeps the same one.
+fn partition_file(data_dir: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+    data_dir.as_ref().join("peer-partition")
+}
+
+/// Wait until every broker has re-read its partition file.
+///
+/// A broker caches its reading briefly rather than stat-ing a file on every
+/// forwarded publish, so writing the file does not sever anything until that
+/// cache expires. Returning before then would hand a caller a fault that is not
+/// yet in effect, and the test would go on to prove nothing -- which is exactly
+/// the mistake `pause_node` made before it learned to wait for the stop.
+///
+/// Generous against the broker's window rather than equal to it: this runs once
+/// per fault, and a test that races the injector fails for a reason that has
+/// nothing to do with what it is testing.
+fn await_partition_reread() {
+    std::thread::sleep(std::time::Duration::from_millis(400));
 }

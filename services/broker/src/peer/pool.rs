@@ -100,6 +100,9 @@ impl PeerError {
 /// Connections to peer brokers.
 pub struct PeerPool {
     config: PeerTransportConfig,
+    /// Test-only peer severing. `None` in any deployment that did not ask for
+    /// it by setting `FELIX_PEER_PARTITION_FILE`.
+    partition: Option<super::PartitionInjector>,
     local_node_id: String,
     client: QuicClient,
     peers: Mutex<HashMap<String, Arc<Peer>>>,
@@ -121,6 +124,10 @@ impl PeerPool {
         .context("bind peer QUIC endpoint")?;
 
         let pool = Arc::new(Self {
+            partition: config
+                .partition_file
+                .clone()
+                .map(super::PartitionInjector::new),
             config,
             local_node_id,
             client,
@@ -160,6 +167,20 @@ impl PeerPool {
     ) -> std::result::Result<InternalMessage, PeerError> {
         if self.shutdown.is_cancelled() {
             return Err(PeerError::ShuttingDown);
+        }
+        // Test-only, and `None` unless `FELIX_PEER_PARTITION_FILE` is set.
+        //
+        // Refused rather than dropped: a silently discarded packet would make
+        // every partition test wait out a timeout, and what is under test is how
+        // the broker behaves when a peer is unreachable, not how long the
+        // transport takes to notice.
+        if let Some(partition) = &self.partition
+            && partition.blocks(node_id)
+        {
+            return Err(PeerError::Unavailable {
+                node_id: node_id.to_string(),
+                detail: "partitioned from this broker (fault injection)".to_string(),
+            });
         }
         let peer = self.peer(node_id);
 
