@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789223906384,
+  "lastUpdate": 1789229808167,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7062,6 +7062,72 @@ window.BENCHMARK_DATA = {
             "range": "955.80",
             "unit": "us",
             "extra": "trials: 5\nmedian: 527.00\nmean: 1154.40\nstdev: 955.80\ncv: 82.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "05a117cf88607694c689a9d13f0512d75a76edd9",
+          "message": "fix(broker): give every shard its own log (#286) (#294)\n\nThe stream registry opened shard `0`'s log whatever shard it was asked for,\nwhile the replication driver and shard lifecycle opened the real index. They\nagreed only for shard 0 -- which is the only shard anything could reach,\nbecause `shard_for` is always called with no routing key.\n\nThat agreement is what #240 would have broken. The moment a routing key sends\na publish to shard 3, it lands in shard 0's log while replication ships the\nempty shard-3 log: acknowledged, never replicated, lost on failover, and\nunder `Quorum` never reaching a majority at all.\n\n**`topics` is now keyed by `(tenant, namespace, stream, shard)`.** Metadata\nstays per stream -- its shard count and consistency describe the stream --\nwhile a log, a replay ring and a subscriber set are per shard, because a\nbroker can own several shards of one stream and each is a separate log.\nConflating the two is what produced the bug.\n\nRegistration opens shard 0 alone. Any other shard is opened the first time\nthe broker is asked to serve it, because ownership is decided by the control\nplane long after registration and a broker holds an arbitrary subset --\nopening all of them eagerly would create a log per shard on every broker in\nthe cluster. The lazy open hydrates before the state is visible, for the\nreason registration already did: a durable shard that is publishable with an\nempty replay ring answers `CursorTooOld` for every pre-existing cursor with\nnothing upstream aware it was never initialised.\n\nShard 0 keeps the directory a single-shard stream has always had, so there is\nnothing to migrate.\n\nTwo things this touched that are easy to miss:\n\n- **The publish path's stream-handle cache** was keyed by stream alone. Left\n  that way it would hand a publish for one shard the handle of another, which\n  is the same bug through a different door.\n- **Deregistering a stream** now drops every shard of it, not just the one\n  registration opened.\n\nEvery stream operation on `Broker` names the shard it acts on. `publish`\nkeeps its single-shard shape and documents that it is shard 0 by\nconstruction.\n\nThe four new tests fail without the fix -- three of them outright -- and the\none that matters most opens the log the way `replication::driver` does and\nchecks the record is actually in it.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T09:14:28-07:00",
+          "tree_id": "b7c7e93621cc73ee753340d247eb94523da21d58",
+          "url": "https://github.com/gabloe/felix/commit/05a117cf88607694c689a9d13f0512d75a76edd9"
+        },
+        "date": 1789229806354,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 156,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 156.00\nmean: 155.80\nstdev: 1.10\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 194,
+            "range": "3.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 194.00\nmean: 195.80\nstdev: 3.63\ncv: 1.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 224,
+            "range": "29.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 224.00\nmean: 236.80\nstdev: 29.22\ncv: 12.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 192,
+            "range": "5.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 192.00\nmean: 194.60\nstdev: 5.37\ncv: 2.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 401,
+            "range": "508.73",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 401.00\nmean: 627.00\nstdev: 508.73\ncv: 81.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 611,
+            "range": "864.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 611.00\nmean: 1002.80\nstdev: 864.99\ncv: 86.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
