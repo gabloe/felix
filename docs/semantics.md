@@ -155,12 +155,16 @@ retry policy is still the application's.
 - **The backoff is full jitter** — uniform over `[0, ceiling]`, not the ceiling.
   Every client notices a failover at the same moment, and an unjittered backoff
   sends all of them at the freshly promoted broker in step.
-- **A failure that cannot succeed on another attempt is not retried.** A
-  forbidden credential, an unknown stream, or an offset that retention has
-  passed fails immediately rather than after the full schedule. Everything else
-  is retried, *including errors nobody has classified*: the client protocol
-  carries an error as prose with no code, so this is string matching, and a
-  wasted attempt is a cheaper mistake than a lost operation.
+- **A failure that cannot succeed on another attempt is not retried.** That is
+  a short list: a credential without the permission, and an offset retention has
+  passed. Everything else is retried, *including errors nobody has classified* —
+  the client protocol carries an error as prose with no code, so this is string
+  matching, and a wasted attempt is a cheaper mistake than a lost operation.
+
+  **"Not found" is retried**, and deliberately. A broker learns its streams from
+  the control plane and opens a shard only once it is given one, so a broker
+  promoted a moment ago reports the stream it is about to serve as missing.
+  Being named leader and being ready to serve are different moments.
 
 > `a_forbidden_publish_fails_fast_instead_of_retrying`,
 > `a_client_given_one_seed_learns_the_other_brokers`,

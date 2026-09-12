@@ -125,29 +125,30 @@ fn jitter_fraction() -> f64 {
 /// terminal error costs the operation. Defaulting to "retry" puts the cheaper
 /// mistake on the likely side.
 ///
-/// Terminal means *no amount of waiting or reconnecting changes the answer*:
-/// the credential does not permit this, the stream does not exist, the offset
-/// is gone. Retrying those is not merely wasteful, it delays the error the
-/// caller needs to see behind the full backoff schedule.
+/// Terminal means *no amount of waiting or reconnecting changes the answer*,
+/// and the bar for that is higher on a cluster than it looks.
+///
+/// **"Not found" is not terminal here.** A broker learns its tenants,
+/// namespaces and streams from the control plane, and opens a shard only once
+/// it has been given it. A broker promoted a moment ago answers "stream not
+/// found" for the stream it is about to serve -- being named leader and being
+/// ready to serve are different moments. Treating that as terminal breaks
+/// exactly the recovery this policy exists to provide, which is not
+/// hypothetical: it did.
+///
+/// What is left is the credential. A permission the token does not carry is a
+/// property of its claims rather than of any broker's state, so it fails the
+/// same way everywhere and for as long as the token lives.
 pub(crate) fn is_terminal(error: &anyhow::Error) -> bool {
-    // A cursor error is terminal by construction: the offset asked for is not
-    // available, and it will not become available by asking again.
+    // Terminal by construction rather than by matching prose: the offset asked
+    // for is not available, and asking again will not make it so.
     if error
         .downcast_ref::<crate::SubscribeCursorError>()
         .is_some()
     {
         return true;
     }
-    let text = format!("{error:#}").to_lowercase();
-    const TERMINAL: [&str; 6] = [
-        "forbidden",
-        "auth rejected",
-        "not authenticated",
-        "unknown tenant",
-        "unknown namespace",
-        "stream not found",
-    ];
-    TERMINAL.iter().any(|marker| text.contains(marker))
+    format!("{error:#}").to_lowercase().contains("forbidden")
 }
 
 /// How many times a subscribe will follow a redirect before giving up.
@@ -521,13 +522,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_missing_stream_is_terminal() {
-        assert!(is_terminal(&anyhow::anyhow!(
-            "stream not found: tenant=t1 namespace=ns stream=orders"
-        )));
-    }
-
     /// A cursor error is terminal by construction, and typed, so it does not
     /// depend on matching prose.
     #[test]
@@ -553,6 +547,12 @@ mod tests {
             "shard leadership moved before the batch could reach a quorum",
             "no peer transport: this broker cannot forward to broker-2",
             "stream orders cannot be subscribed to right now: owner unavailable",
+            // A broker promoted a moment ago has not opened the shard yet and
+            // says exactly this. Classifying it as terminal broke
+            // `records_published_across_a_failover_are_all_readable`.
+            "stream not found: tenant=t1 namespace=ns stream=orders",
+            "unknown tenant t1",
+            "unknown namespace ns",
         ] {
             assert!(
                 !is_terminal(&anyhow::anyhow!(message.to_string())),
