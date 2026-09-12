@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789215648864,
+  "lastUpdate": 1789215826045,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5408,6 +5408,58 @@ window.BENCHMARK_DATA = {
             "range": "7164.28",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 564424.76\nmean: 564428.85\nstdev: 7164.28\ncv: 1.27%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a5d4d0a0ec7130caf2a91ae0ff1c5e358f9cd9f2",
+          "message": "chore(deps): bump sha2 from 0.10.9 to 0.11.0 (#292)\n\nBumps [sha2](https://github.com/RustCrypto/hashes) from 0.10.9 to 0.11.0.\n- [Commits](https://github.com/RustCrypto/hashes/compare/sha2-v0.10.9...sha2-v0.11.0)\n\n---\nupdated-dependencies:\n- dependency-name: sha2\n  dependency-version: 0.11.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-12T05:19:29-07:00",
+          "tree_id": "2bb81a1c4273fb33f6c193dbd978740bd3d654e1",
+          "url": "https://github.com/gabloe/felix/commit/a5d4d0a0ec7130caf2a91ae0ff1c5e358f9cd9f2"
+        },
+        "date": 1789215825653,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233348.36,
+            "range": "2858.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233348.36\nmean: 232150.35\nstdev: 2858.71\ncv: 1.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233348.36,
+            "range": "2858.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233348.36\nmean: 232150.35\nstdev: 2858.71\ncv: 1.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55338.48,
+            "range": "751.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55338.48\nmean: 55218.31\nstdev: 751.86\ncv: 1.36%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553384.85,
+            "range": "7518.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553384.85\nmean: 552183.11\nstdev: 7518.57\ncv: 1.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
