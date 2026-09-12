@@ -193,13 +193,26 @@ Per-tenant quotas are **not** enforced.
 
 Stated because a guarantee without its failure model is a slogan.
 
-- **The failure model is process loss.** Kill, graceful stop, and freeze are
-  injectable and tested. **Partitions and clock skew are not yet injectable**,
-  so nothing here has been proven against them (#115).
-- **The lease assumes bounded process suspension.** A broker frozen past its
-  lease is safe because it re-checks before committing; a broker frozen *between*
-  that check and its write reaching disk is a window bounded by the margin, and
-  the margin is a choice rather than a proof.
+- **The failure model is process loss and partition.** Kill, graceful stop,
+  freeze, and severing a broker from its peers while it keeps running are all
+  injectable and tested. A partitioned leader keeps heartbeating, so the control
+  plane goes on believing it is healthy while it can reach nobody — and it
+  cannot acknowledge a `Quorum` publish, because it is not a majority on its own.
+
+  > `a_partitioned_leader_cannot_reach_a_quorum`,
+  > `a_healed_partition_restores_the_quorum`,
+  > `a_partitioned_leader_still_serves_a_leader_stream`.
+
+- **Clock skew between brokers cannot affect lease safety**, because no lease
+  reads a wall clock. Each broker measures its own elapsed time on a monotonic
+  clock and gives up a quarter of the lease as margin, so two brokers'
+  disagreement about what time it is has nothing to act on. The assumption that
+  *does* matter is bounded **process suspension**, and that is injectable — a
+  broker frozen past its lease and resumed is the test above.
+
+  A broker suspended *between* the commit-time lease check and its write
+  reaching disk is a residual window bounded by the margin. The margin is a
+  choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
 - **No queue semantics** — consumer groups, acknowledgements and redelivery are
