@@ -328,6 +328,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 namespace,
                 stream,
                 payload,
+                key,
                 request_id,
                 ack,
             } => {
@@ -363,6 +364,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     namespace,
                     stream,
                     payload,
+                    key,
                     request_id,
                     ack,
                     sample,
@@ -374,6 +376,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 namespace,
                 stream,
                 payloads,
+                key,
                 request_id,
                 ack,
             } => {
@@ -409,6 +412,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     namespace,
                     stream,
                     payloads,
+                    key,
                     request_id,
                     ack,
                     sample,
@@ -457,6 +461,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 stream,
                 subscription_id,
                 start,
+                shard,
             } => {
                 if !authorize_stream_simple(
                     auth_ctx.as_ref(),
@@ -484,6 +489,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &tenant_id,
                     &namespace,
                     &stream,
+                    // Ownership is per shard, so the redirect answers for the
+                    // shard being subscribed to: different shards of one stream
+                    // can have different owners.
+                    shard.unwrap_or(0),
                     peer_features,
                 ) {
                     handle_ack_enqueue_result(
@@ -520,6 +529,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     stream,
                     subscription_id,
                     start,
+                    shard,
                     peer_flags,
                 )
                 .await?;

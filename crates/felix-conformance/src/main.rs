@@ -173,6 +173,7 @@ async fn run_pubsub(
             namespace: "default".to_string(),
             stream: "conformance".to_string(),
             subscription_id: None,
+            shard: None,
         },
     )
     .await?;
@@ -243,6 +244,7 @@ async fn publish(
             payload: payload.to_vec(),
             request_id: Some(request_id),
             ack: Some(AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;

@@ -396,6 +396,27 @@ impl Client {
         stream: &str,
         start: Option<StartPosition>,
     ) -> Result<Subscription> {
+        self.subscribe_shard(tenant_id, namespace, stream, 0, start)
+            .await
+    }
+
+    /// Subscribe to one shard of a stream.
+    ///
+    /// A subscription reads a single shard. A stream's shards can have
+    /// different owners and a subscription is bound to one connection, so
+    /// reading a whole multi-shard stream means one of these per shard — see
+    /// #297, which is about doing that for the caller.
+    ///
+    /// Shard 0 is every record of a single-shard stream, which is what
+    /// [`Client::subscribe`] asks for.
+    pub async fn subscribe_shard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        start: Option<StartPosition>,
+    ) -> Result<Subscription> {
         if tenant_id != self.auth_tenant_id {
             return Err(anyhow::anyhow!(
                 "tenant mismatch: client auth is scoped to {}",
@@ -452,6 +473,9 @@ impl Client {
                 stream: stream.to_string(),
                 subscription_id: None,
                 start,
+                // Absent for shard 0, so a subscribe to a single-shard stream
+                // is byte-identical to what a client sent before sharding.
+                shard: (shard != 0).then_some(shard),
             },
         )
         .await?;

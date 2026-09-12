@@ -335,6 +335,42 @@ impl Publisher {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
+        self.publish_json_keyed(tenant_id, namespace, stream, payload, None, ack)
+            .await
+    }
+
+    /// Publish one payload with a routing key.
+    ///
+    /// **Keyed publishes use the JSON encoding.** The binary publish frames are
+    /// fixed layouts with no room for a key, and adding one means a new frame
+    /// flag and a new layout rather than an optional field. Until that exists, a
+    /// caller that needs a key trades the binary fast path for it.
+    ///
+    /// The key decides the shard, and therefore the broker. Records sharing a
+    /// key are ordered with respect to each other; records with different keys
+    /// are not, once a stream has more than one shard.
+    pub async fn publish_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_json_keyed(tenant_id, namespace, stream, payload, Some(key), ack)
+            .await
+    }
+
+    async fn publish_json_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        key: Option<bytes::Bytes>,
+        ack: AckMode,
+    ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payload = maybe_append_publish_ts(payload, self.inner.bench_embed_ts);
         // Enqueue publish on the single-writer publisher task.
@@ -349,6 +385,7 @@ impl Publisher {
             namespace: namespace.to_string(),
             stream: stream.to_string(),
             payload,
+            key,
             request_id,
             ack: Some(ack),
         };
@@ -492,6 +529,35 @@ impl Publisher {
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
     ) -> Result<()> {
+        self.publish_batch_json_keyed(tenant_id, namespace, stream, payloads, None, ack)
+            .await
+    }
+
+    /// A batch routed by one key. Every record in it lands on the same shard,
+    /// because a batch is acknowledged as a unit and splitting it across shards
+    /// would make it several batches.
+    pub async fn publish_batch_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
+            .await
+    }
+
+    async fn publish_batch_json_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        key: Option<bytes::Bytes>,
+        ack: AckMode,
+    ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
         // Batch publish uses the same queue/writer as single messages.
@@ -506,6 +572,7 @@ impl Publisher {
             namespace: namespace.to_string(),
             stream: stream.to_string(),
             payloads,
+            key,
             request_id,
             ack: Some(ack),
         };
@@ -870,6 +937,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                     namespace,
                     stream,
                     payloads,
+                    key,
                     request_id: msg_request_id,
                     ack: msg_ack,
                 } => {
@@ -884,6 +952,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                         &namespace,
                         &stream,
                         &payloads,
+                        key.as_deref(),
                         msg_request_id,
                         msg_ack,
                     )?;
@@ -898,6 +967,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                         &namespace,
                         &stream,
                         &payloads,
+                        key.as_deref(),
                         msg_request_id,
                         msg_ack,
                     )?;
@@ -1604,6 +1674,7 @@ mod tests {
                     namespace: "ns".into(),
                     stream: "s".into(),
                     payloads: vec![b"x".to_vec()],
+                    key: None,
                     request_id: Some(request_id),
                     ack: Some(AckMode::PerBatch),
                 },
@@ -1715,6 +1786,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payloads: vec![b"a".to_vec(), b"b".to_vec()],
+                key: None,
                 request_id: None,
                 ack: Some(AckMode::None),
             },
@@ -1854,6 +1926,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"bad".to_vec(),
+                key: None,
                 request_id: Some(1),
                 ack: Some(AckMode::PerMessage),
             },
@@ -1870,6 +1943,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"queued".to_vec(),
+                key: None,
                 request_id: Some(2),
                 ack: Some(AckMode::PerMessage),
             },
@@ -1944,6 +2018,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"bad".to_vec(),
+                key: None,
                 request_id: Some(9),
                 ack: Some(AckMode::PerMessage),
             },
@@ -1960,6 +2035,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"queued".to_vec(),
+                key: None,
                 request_id: Some(10),
                 ack: Some(AckMode::PerMessage),
             },
@@ -2075,6 +2151,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"bad".to_vec(),
+                key: None,
                 request_id: Some(7),
                 ack: Some(AckMode::PerMessage),
             },
@@ -2141,6 +2218,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payloads: vec![b"a".to_vec(), b"b".to_vec()],
+                key: None,
                 request_id: Some(99),
                 ack: Some(AckMode::PerMessage),
             },
@@ -2157,6 +2235,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: b"queued".to_vec(),
+                key: None,
                 request_id: Some(100),
                 ack: Some(AckMode::PerMessage),
             },
@@ -2238,6 +2317,7 @@ mod tests {
                 namespace: "ns".to_string(),
                 stream: "s".to_string(),
                 payload: vec![],
+                key: None,
                 request_id: None,
                 ack: Some(AckMode::None),
             },

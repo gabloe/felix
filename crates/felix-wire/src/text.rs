@@ -21,13 +21,16 @@ const PUBLISH_BATCH_PAYLOADS: &str = "\",\"payloads\":[";
 // and made the whole frame undeserializable. Both constants are used only by the
 // publish-batch writer below, where the preceding token is always `]` or a number.
 const REQUEST_ID_PREFIX: &str = ",\"request_id\":";
+const KEY_PREFIX: &str = ",\"key\":\"";
 const ACK_PREFIX: &str = ",\"ack\":\"";
 
+#[allow(clippy::too_many_arguments)]
 pub fn publish_batch_json_len(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
     payloads: &[Vec<u8>],
+    key: Option<&[u8]>,
     request_id: Option<u64>,
     ack: Option<AckMode>,
 ) -> Result<usize> {
@@ -62,6 +65,14 @@ pub fn publish_batch_json_len(
         len = len.checked_add(item_len).ok_or(Error::FrameTooLarge)?;
     }
     len = len.checked_add(1).ok_or(Error::FrameTooLarge)?; // closing ]
+    if let Some(key) = key {
+        len = len
+            .checked_add(KEY_PREFIX.len() + 1)
+            .ok_or(Error::FrameTooLarge)?;
+        len = len
+            .checked_add(base64_len(key.len())?)
+            .ok_or(Error::FrameTooLarge)?;
+    }
     if let Some(request_id) = request_id {
         len = len
             .checked_add(REQUEST_ID_PREFIX.len())
@@ -86,12 +97,20 @@ pub fn publish_batch_json_len(
     Ok(len)
 }
 
+/// Encode a `PublishBatch` by hand, skipping serde on the publish path.
+///
+/// `key` is the batch's routing key, base64 like any other byte field. It has
+/// to be written here as well as by serde: this encoder is what the client's
+/// writer task actually uses, so a key omitted here is a key that never reaches
+/// the broker and a record that silently lands on shard 0.
+#[allow(clippy::too_many_arguments)]
 pub fn write_publish_batch_json(
     buf: &mut BytesMut,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
     payloads: &[Vec<u8>],
+    key: Option<&[u8]>,
     request_id: Option<u64>,
     ack: Option<AckMode>,
 ) -> Result<EncodeStats> {
@@ -130,6 +149,18 @@ pub fn write_publish_batch_json(
         check_realloc(buf, &mut stats, &mut cap);
     }
     buf.put_u8(b']');
+    if let Some(key) = key {
+        buf.extend_from_slice(KEY_PREFIX.as_bytes());
+        let encoded_len = base64_len(key.len())?;
+        let at = buf.len();
+        buf.resize(at + encoded_len, 0);
+        let written = base64::engine::general_purpose::STANDARD
+            .encode_slice(key, &mut buf[at..])
+            .expect("base64 encode slice");
+        debug_assert_eq!(written, encoded_len);
+        buf.put_u8(b'"');
+        check_realloc(buf, &mut stats, &mut cap);
+    }
     if let Some(request_id) = request_id {
         buf.extend_from_slice(REQUEST_ID_PREFIX.as_bytes());
         write_decimal(buf, request_id);

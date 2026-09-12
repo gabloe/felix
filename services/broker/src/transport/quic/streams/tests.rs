@@ -320,6 +320,7 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;
@@ -355,6 +356,7 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(2),
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;
@@ -421,6 +423,7 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;
@@ -724,6 +727,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
         Ok(Some(frame_from_message(Message::PublishBatch {
             tenant_id: "t1".to_string(),
@@ -732,6 +736,7 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
             payloads: vec![b"a".to_vec(), b"b".to_vec()],
             request_id: Some(2),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
         Ok(Some(frame_from_message(Message::CachePut {
             tenant_id: "t1".to_string(),
@@ -885,6 +890,7 @@ async fn control_loop_rejects_publish_batch_forbidden() -> Result<()> {
             payloads: vec![b"a".to_vec()],
             request_id: Some(9),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
     ];
     let (result, messages) = run_control_loop_with_frames(
@@ -913,6 +919,7 @@ async fn control_loop_publish_without_auth_sends_error() -> Result<()> {
         payload: b"payload".to_vec(),
         request_id: Some(10),
         ack: Some(felix_wire::AckMode::PerMessage),
+        key: None,
     })))];
     let (result, messages) = run_control_loop_with_frames(
         broker,
@@ -942,6 +949,7 @@ async fn control_loop_publish_forbidden_without_request_id_sends_error() -> Resu
             payload: b"payload".to_vec(),
             request_id: None,
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         }))),
     ];
     let (result, messages) = run_control_loop_with_frames(
@@ -972,6 +980,7 @@ async fn control_loop_publish_tenant_mismatch_sends_error() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(12),
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         }))),
     ];
     let (result, messages) = run_control_loop_with_frames(
@@ -1001,6 +1010,7 @@ async fn control_loop_subscribe_forbidden_sends_error() -> Result<()> {
             namespace: "default".to_string(),
             stream: "updates".to_string(),
             subscription_id: None,
+            shard: None,
         }))),
     ];
     let (result, messages) = run_control_loop_with_frames(
@@ -1030,6 +1040,7 @@ async fn control_loop_subscribe_returns_true() -> Result<()> {
             namespace: "default".to_string(),
             stream: "missing".to_string(),
             subscription_id: None,
+            shard: None,
         }))),
     ];
     let (result, _messages) = run_control_loop_with_frames(
@@ -1055,6 +1066,7 @@ async fn control_loop_subscribe_tenant_mismatch_sends_error() -> Result<()> {
             namespace: "default".to_string(),
             stream: "updates".to_string(),
             subscription_id: None,
+            shard: None,
         }))),
     ];
     let (result, messages) = run_control_loop_with_frames(
@@ -1221,6 +1233,7 @@ async fn control_loop_rejects_subscribe_without_auth() -> Result<()> {
         namespace: "default".to_string(),
         stream: "updates".to_string(),
         subscription_id: Some(1),
+        shard: None,
     })))];
     let (result, messages) = run_control_loop_with_frames(
         broker,
@@ -1711,6 +1724,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
         Ok(Some(frame_from_message(Message::PublishBatch {
             tenant_id: "t1".to_string(),
@@ -1719,6 +1733,7 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
             payloads: vec![b"a".to_vec(), b"b".to_vec()],
             request_id: Some(2),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
         Ok(None),
     ];
@@ -3066,6 +3081,7 @@ async fn control_loop_subscribe_done_true() -> Result<()> {
             namespace: "default".to_string(),
             stream: "missing".to_string(),
             subscription_id: None,
+            shard: None,
         }))),
     ];
     let mut source = TestFrameSource::new(frames);
@@ -3536,6 +3552,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
     ]);
     run_uni_loop(
@@ -3561,6 +3578,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
             payloads: vec![b"a".to_vec()],
             request_id: Some(2),
             ack: Some(felix_wire::AckMode::None),
+            key: None,
         }))),
     ]);
     run_uni_loop(
@@ -3627,6 +3645,7 @@ async fn handle_uni_stream_smoke() -> Result<()> {
         payload: b"payload".to_vec(),
         request_id: None,
         ack: Some(felix_wire::AckMode::None),
+        key: None,
     }
     .encode()?;
     send.write_all(&frame.encode()).await?;
@@ -3721,6 +3740,7 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: Some(1),
             ack: Some(felix_wire::AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;

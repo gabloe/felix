@@ -447,6 +447,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
             payload: b"payload".to_vec(),
             request_id: None,
             ack: Some(AckMode::PerMessage),
+            key: None,
         },
     )
     .await?;

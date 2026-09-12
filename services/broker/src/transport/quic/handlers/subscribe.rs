@@ -465,13 +465,16 @@ pub(crate) async fn handle_subscribe_message(
     stream: String,
     subscription_id: Option<u64>,
     start: Option<StartPosition>,
+    shard: Option<u32>,
     peer_flags: u16,
 ) -> Result<bool> {
-    // Which shard of the stream this subscription reads. No routing key on the
-    // wire yet, so a stream has one reachable shard (#240); the plumbing is
-    // shard-correct either way, and the redirect above already resolved
-    // ownership against the same number.
-    let shard = crate::shard_routing::shard_for(1, None);
+    // Which shard of the stream this subscription reads.
+    //
+    // A subscription reads one shard. A stream's shards can have different
+    // owners and a subscription is bound to one connection, so a whole
+    // multi-shard stream is one subscription per shard (#297). Absent means 0,
+    // which is every record of a single-shard stream.
+    let shard = shard.unwrap_or(0);
     // Offsets ride the event batch only for a client that negotiated the bit.
     // One that did not gets exactly the frames it got before this existed.
     let offsets_enabled = felix_wire::supports(peer_flags, felix_wire::FLAG_EVENT_BATCH_OFFSETS);
@@ -795,17 +798,16 @@ pub fn redirect_for(
     tenant_id: &str,
     namespace: &str,
     stream: &str,
+    shard: u32,
     peer_features: u32,
 ) -> Option<Message> {
-    use crate::shard_routing::{Dispatch, dispatch, shard_for};
+    use crate::shard_routing::{Dispatch, dispatch};
 
     let key = crate::shard_watch::ShardKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
         stream: stream.to_string(),
-        // No routing key on the wire yet, so every record of a stream lands on
-        // shard 0, exactly as the publish path resolves it.
-        shard: shard_for(1, None),
+        shard,
     };
 
     match dispatch(ingress, &key) {
