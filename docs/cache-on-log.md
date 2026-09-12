@@ -102,6 +102,18 @@ proportional to the garbage and a cache that is mostly live is never compacted.
 Writes are excluded for the duration; a cache write is already serialised behind
 the index lock, so this adds no new contention, only a longer hold.
 
+**Compaction continues the offset space rather than restarting it.** The live set
+is appended at the current tail, so an offset names the same record for the life
+of the shard even across many compactions and restarts. Two things depend on
+this. A reader tracking offsets never sees them go backwards. And replication
+ships records *at* their offsets, so a leader that renumbered on compaction would
+make its offset 0 a different record from every follower's — two logs that have
+silently diverged, with nothing in either able to detect it.
+
+The cost is that offsets are sparse after a compaction: the numbers the reclaimed
+records held are never reused. That is the same shape a stream's log takes after
+retention trims its head, and nothing reads a cache by offset anyway.
+
 ## Routing
 
 A cache key hashes to a shard with the same function a routing key uses for a

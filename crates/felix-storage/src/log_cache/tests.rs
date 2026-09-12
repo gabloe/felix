@@ -353,3 +353,97 @@ async fn a_compacted_cache_survives_a_restart() {
         Some(&b"kept"[..])
     );
 }
+
+/// Compaction must not renumber the log.
+///
+/// A cache shard is replicated by shipping its records at their offsets, so an
+/// offset has to mean the same record on the leader and on every follower, for
+/// the life of the shard. A compaction that restarts numbering makes the
+/// leader's offset 0 a different record from the follower's, and the two logs
+/// have silently diverged with no way to tell.
+#[tokio::test]
+async fn compaction_does_not_rewind_the_offset_space() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    // Enough overwriting of one key to put the log well past the compaction
+    // threshold while the live set stays tiny.
+    let value = Bytes::from(vec![b'x'; 4096]);
+    for _ in 0..64 {
+        cache
+            .put_checked(T, NS, C, 0, "k", value.clone(), None)
+            .await
+            .expect("put");
+    }
+
+    let shard = cache.shard(T, NS, C, 0).expect("shard");
+    let before = {
+        let state = shard.state.lock().await;
+        state.log.tail_offset().await.expect("tail")
+    };
+
+    {
+        let mut state = shard.state.lock().await;
+        shard.compact(&mut state).await.expect("compact");
+    }
+
+    let after = {
+        let state = shard.state.lock().await;
+        state.log.tail_offset().await.expect("tail")
+    };
+
+    assert!(
+        after >= before,
+        "compaction rewound the log from {before} to {after}; \
+         every offset a follower already holds now names a different record",
+    );
+    assert_eq!(
+        cache.get_checked(T, NS, C, 0, "k").await.expect("get"),
+        Some(value),
+        "compaction must keep the live set readable",
+    );
+}
+
+/// The offset space keeps growing across repeated compactions and a restart.
+///
+/// One compaction preserving the tail is not enough: the base offset has to
+/// survive being written to disk and read back, or the shard rewinds the next
+/// time the process starts and a follower's history stops matching.
+#[tokio::test]
+async fn the_offset_space_survives_compaction_and_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value = Bytes::from(vec![b'x'; 4096]);
+    let mut high_water = 0;
+
+    for round in 0..3 {
+        let cache = cache(dir.path()).await;
+        for _ in 0..48 {
+            cache
+                .put_checked(T, NS, C, 0, "k", value.clone(), None)
+                .await
+                .expect("put");
+        }
+
+        let shard = cache.shard(T, NS, C, 0).expect("shard");
+        {
+            let mut state = shard.state.lock().await;
+            shard.compact(&mut state).await.expect("compact");
+        }
+        let tail = {
+            let state = shard.state.lock().await;
+            state.log.tail_offset().await.expect("tail")
+        };
+
+        assert!(
+            tail > high_water,
+            "round {round}: tail went from {high_water} to {tail}",
+        );
+        high_water = tail;
+
+        assert_eq!(
+            cache.get_checked(T, NS, C, 0, "k").await.expect("get"),
+            Some(value.clone()),
+        );
+        cache.shutdown().await.expect("shutdown");
+    }
+}
