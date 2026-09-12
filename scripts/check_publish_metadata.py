@@ -35,7 +35,7 @@ APACHE = {
     "felix-common",
     "felix-conformance",
 }
-ELASTIC = {
+COPYLEFT = {
     "felix-broker",
     "felix-storage",
     "felix-metadata",
@@ -48,7 +48,7 @@ ELASTIC = {
     "agent",
 }
 
-# Service binaries and dev/CI tools with hard Elastic-2.0 dependencies. Nobody
+# Service binaries and dev/CI tools with hard AGPL-3.0 dependencies. Nobody
 # consumes these from a registry, and `broker`/`controlplane`/`agent` are generic
 # names that would collide besides.
 NOT_PUBLISHABLE = {
@@ -82,15 +82,15 @@ def check() -> list[str]:
     packages = workspace_members()
     seen = {p["name"] for p in packages}
 
-    unclassified = seen - APACHE - ELASTIC
+    unclassified = seen - APACHE - COPYLEFT
     for name in sorted(unclassified):
         failures.append(
             f"{name}: not listed in this script's licence table. Add it to APACHE or "
-            f"ELASTIC and to the table in LICENSING.md — a new crate must be "
+            f"COPYLEFT and to the table in LICENSING.md — a new crate must be "
             f"classified deliberately."
         )
 
-    stale = (APACHE | ELASTIC) - seen
+    stale = (APACHE | COPYLEFT) - seen
     for name in sorted(stale):
         failures.append(
             f"{name}: listed in this script's licence table but is no longer a "
@@ -100,7 +100,7 @@ def check() -> list[str]:
     for pkg in sorted(packages, key=lambda p: p["name"]):
         name = pkg["name"]
         expected = (
-            "Apache-2.0" if name in APACHE else "Elastic-2.0" if name in ELASTIC else None
+            "Apache-2.0" if name in APACHE else "AGPL-3.0-only" if name in COPYLEFT else None
         )
         actual = pkg.get("license")
         if expected and actual != expected:

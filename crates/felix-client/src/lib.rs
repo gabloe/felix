@@ -27,7 +27,7 @@ This crate provides two client flavors:
 1) InProcessClient (requires the `in-process` Cargo feature, off by default)
    - Thin wrapper around an in-memory `felix_broker::Broker`.
    - Useful for tests, benchmarks, and embedding Felix into a single process.
-   - `felix-broker` is Elastic-2.0 (unlike the rest of this crate); gated behind
+   - `felix-broker` is AGPL-3.0 (unlike the rest of this crate); gated behind
      an opt-in feature so the default build stays Apache-2.0. See LICENSING.md.
    - No transport concerns (no framing, flow control, backpressure across the network).
 

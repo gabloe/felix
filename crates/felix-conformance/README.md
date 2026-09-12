@@ -15,7 +15,7 @@ cargo run -p felix-conformance
 ## Licensing
 
 This crate is Apache-2.0, matching `felix-wire`, so that protocol conformance is
-not gated behind a restrictive licence. It links against Elastic-2.0 crates
+not gated behind a copyleft licence. It links against AGPL-3.0 crates
 (`felix-broker`, `felix-storage`, `felix-authz`) to run its checks against the
 reference broker — normal for a dev/CI tool, and it does not change this crate's
 own licence. See [`LICENSING.md`](../../LICENSING.md).
