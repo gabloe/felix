@@ -18,7 +18,8 @@ use async_trait::async_trait;
 use felix_broker::Broker;
 use felix_router::{Resolution, ShardRouter};
 use felix_wire::internal::{
-    ErrorCode, ForwardPublish, ForwardPublishError, ForwardPublishOk, InternalMessage, NotLeader,
+    CacheOpKind, ErrorCode, ForwardCacheError, ForwardCacheOk, ForwardCacheOp, ForwardPublish,
+    ForwardPublishError, ForwardPublishOk, InternalMessage, NotLeader,
 };
 
 use super::metrics;
@@ -65,6 +66,93 @@ impl ForwardingHandler {
         }
     }
 
+    /// Every check a forwarded request must pass before it touches storage.
+    ///
+    /// Shared by the publish and cache paths deliberately. These gates are the
+    /// whole reason forwarding is safe — ownership, readiness, and an exact
+    /// generation match — and two copies of them would eventually disagree
+    /// about which writes a broker may accept.
+    ///
+    /// `None` means this broker owns `key` at exactly `claimed_generation`.
+    /// `Some` is why it does not, for the caller to answer in its own shape.
+    fn check_ownership(
+        &self,
+        correlation_id: u64,
+        key: &ShardKey,
+        claimed_generation: u64,
+    ) -> Option<Denial> {
+        match self.ingress.dispatch(key) {
+            Dispatch::Local => {}
+            Dispatch::Forward {
+                node_id,
+                advertise_addr,
+                generation,
+            } => {
+                // The shard moved on. Answering `NotLeader` rather than
+                // forwarding again is deliberate: a chain of brokers each
+                // relaying to the next would make one request's latency and
+                // failure modes unbounded. The requester decides.
+                metrics::record_served(metrics::OUTCOME_NOT_LEADER);
+                return Some(Denial::Answer(InternalMessage::NotLeader(NotLeader {
+                    correlation_id,
+                    node_id,
+                    advertise_addr: advertise_addr.to_string(),
+                    generation,
+                })));
+            }
+            Dispatch::Unavailable(reason) => {
+                metrics::record_served(metrics::OUTCOME_REFUSED);
+                return Some(Denial::Refused {
+                    code: ErrorCode::Unavailable,
+                    detail: reason.to_string(),
+                });
+            }
+        }
+
+        // Local, but at which generation? `dispatch` already required local
+        // readiness to match the router, so this reads the same number it
+        // agreed on.
+        let ours = match self
+            .router
+            .resolve(&crate::shard_routing::to_router_key(key))
+        {
+            Resolution::Local { generation } => generation,
+            // Between the dispatch above and here the view changed. Refusing is
+            // the only safe answer; the requester retries and gets a definite
+            // one.
+            _ => {
+                metrics::record_served(metrics::OUTCOME_REFUSED);
+                return Some(Denial::Refused {
+                    code: ErrorCode::Unavailable,
+                    detail: "ownership changed while the request was being served".to_string(),
+                });
+            }
+        };
+
+        if claimed_generation != ours {
+            metrics::record_served(metrics::OUTCOME_REFUSED);
+            return Some(if claimed_generation > ours {
+                // The requester has seen a newer assignment than this broker.
+                // Accepting would be writing a shard we may already have lost.
+                Denial::Refused {
+                    code: ErrorCode::StaleRoute,
+                    detail: format!(
+                        "this broker is at generation {ours}, the requester at {claimed_generation}"
+                    ),
+                }
+            } else {
+                Denial::Answer(InternalMessage::NotLeader(NotLeader {
+                    correlation_id,
+                    node_id: self.router.local_node_id().to_string(),
+                    advertise_addr: self.advertise_addr.clone(),
+                    generation: ours,
+                }))
+            });
+        }
+
+        None
+    }
+
     pub(super) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
         let correlation_id = publish.correlation_id;
         let key = ShardKey {
@@ -75,75 +163,8 @@ impl ForwardingHandler {
             kind: ShardKind::Stream,
         };
 
-        match self.ingress.dispatch(&key) {
-            Dispatch::Local => {}
-            Dispatch::Forward {
-                node_id,
-                advertise_addr,
-                generation,
-            } => {
-                // The shard moved on. Answering `NotLeader` rather than
-                // forwarding again is deliberate: a chain of brokers each
-                // relaying to the next would make one publish's latency and
-                // failure modes unbounded. The requester decides.
-                metrics::record_served(metrics::OUTCOME_NOT_LEADER);
-                return InternalMessage::NotLeader(NotLeader {
-                    correlation_id,
-                    node_id,
-                    advertise_addr: advertise_addr.to_string(),
-                    generation,
-                });
-            }
-            Dispatch::Unavailable(reason) => {
-                metrics::record_served(metrics::OUTCOME_REFUSED);
-                return error(correlation_id, ErrorCode::Unavailable, reason.to_string());
-            }
-        }
-
-        // Local, but at which generation? `dispatch` already required local
-        // readiness to match the router, so this reads the same number it
-        // agreed on.
-        let ours = match self.router.resolve(&felix_router::ShardKey {
-            tenant_id: key.tenant_id.clone(),
-            namespace: key.namespace.clone(),
-            stream: key.stream.clone(),
-            shard: key.shard,
-        }) {
-            Resolution::Local { generation } => generation,
-            // Between the dispatch above and here the view changed. Refusing is
-            // the only safe answer; the requester retries and gets a definite
-            // one.
-            _ => {
-                metrics::record_served(metrics::OUTCOME_REFUSED);
-                return error(
-                    correlation_id,
-                    ErrorCode::Unavailable,
-                    "ownership changed while the request was being served".to_string(),
-                );
-            }
-        };
-
-        if publish.shard.generation != ours {
-            metrics::record_served(metrics::OUTCOME_REFUSED);
-            return if publish.shard.generation > ours {
-                // The requester has seen a newer assignment than this broker.
-                // Accepting would be writing a shard we may already have lost.
-                error(
-                    correlation_id,
-                    ErrorCode::StaleRoute,
-                    format!(
-                        "this broker is at generation {ours}, the requester at {}",
-                        publish.shard.generation
-                    ),
-                )
-            } else {
-                InternalMessage::NotLeader(NotLeader {
-                    correlation_id,
-                    node_id: self.router.local_node_id().to_string(),
-                    advertise_addr: self.advertise_addr.clone(),
-                    generation: ours,
-                })
-            };
+        if let Some(denial) = self.check_ownership(correlation_id, &key, publish.shard.generation) {
+            return denial.into_publish_answer(correlation_id);
         }
 
         let handle = match self
@@ -204,11 +225,118 @@ impl ForwardingHandler {
     }
 }
 
+/// Why a forwarded request is not this broker's to serve.
+///
+/// Kept abstract rather than pre-built, because the two forwarded paths answer
+/// a refusal in different shapes: a requester matches on the message kind to
+/// decide what happened, so a cache operation refused with a publish's error
+/// type reads to it as a protocol violation rather than a refusal.
+enum Denial {
+    /// Already complete. `NotLeader` is a routing answer and is the same
+    /// message whichever path asked.
+    Answer(InternalMessage),
+    /// A refusal each path wraps in its own error kind.
+    Refused { code: ErrorCode, detail: String },
+}
+
+impl Denial {
+    fn into_publish_answer(self, correlation_id: u64) -> InternalMessage {
+        match self {
+            Self::Answer(message) => message,
+            Self::Refused { code, detail } => error(correlation_id, code, detail),
+        }
+    }
+
+    fn into_cache_answer(self, correlation_id: u64) -> InternalMessage {
+        match self {
+            Self::Answer(message) => message,
+            Self::Refused { code, detail } => {
+                InternalMessage::ForwardCacheError(ForwardCacheError {
+                    correlation_id,
+                    code,
+                    detail,
+                })
+            }
+        }
+    }
+}
+
+impl ForwardingHandler {
+    /// Serve a cache operation forwarded here because this broker owns the
+    /// key's shard.
+    ///
+    /// The same ownership gates as a forwarded publish, for the same reason: a
+    /// broker that served a cache key it no longer owns is the divergence this
+    /// whole path exists to prevent.
+    pub(super) async fn apply_cache_op(&self, op: ForwardCacheOp) -> InternalMessage {
+        let correlation_id = op.correlation_id;
+        let key = ShardKey {
+            tenant_id: op.shard.tenant_id.clone(),
+            namespace: op.shard.namespace.clone(),
+            stream: op.shard.stream.clone(),
+            shard: op.shard.shard,
+            kind: ShardKind::Cache,
+        };
+
+        if let Some(denial) = self.check_ownership(correlation_id, &key, op.shard.generation) {
+            return denial.into_cache_answer(correlation_id);
+        }
+
+        let cache = self.broker.cache();
+        let value = match op.op {
+            CacheOpKind::Put => {
+                let ttl = (op.ttl_ms > 0).then(|| std::time::Duration::from_millis(op.ttl_ms));
+                cache
+                    .put(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                        op.value,
+                        ttl,
+                    )
+                    .await;
+                None
+            }
+            CacheOpKind::Get => {
+                cache
+                    .get(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                    )
+                    .await
+            }
+            CacheOpKind::Delete => {
+                cache
+                    .delete(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                    )
+                    .await
+            }
+        };
+
+        metrics::record_served(metrics::OUTCOME_OK);
+        InternalMessage::ForwardCacheOk(ForwardCacheOk {
+            correlation_id,
+            value,
+        })
+    }
+}
+
 #[async_trait]
 impl PeerRequestHandler for ForwardingHandler {
     async fn handle(&self, request: InternalMessage) -> InternalMessage {
         match request {
             InternalMessage::ForwardPublish(publish) => self.apply(publish).await,
+            InternalMessage::ForwardCacheOp(op) => self.apply_cache_op(op).await,
             // Responses have no business arriving as requests, and a broker that
             // answered one would be inventing a request that was never made.
             other => error(

@@ -161,11 +161,11 @@ fn cache_assignment(shard: u32, leader: &str, generation: u64) -> ShardAssignmen
     }
 }
 
-/// A snapshot carrying cache shards must leave the routing table holding only
-/// the stream shards. Nothing in the data path routes a cache request yet, and
-/// a cache row filed under the same name as a stream would answer for it.
+/// A snapshot carrying cache shards keeps them. They were dropped while nothing
+/// routed a cache request; now that the data path resolves cache keys through
+/// this table, dropping one would make every key in that shard unroutable.
 #[test]
-fn a_snapshot_drops_cache_shards() {
+fn a_snapshot_keeps_cache_shards() {
     let mut owned = ShardOwnership::default();
     owned.reset(vec![
         assignment(0, "broker-a", 1),
@@ -173,23 +173,23 @@ fn a_snapshot_drops_cache_shards() {
         assignment(1, "broker-a", 1),
     ]);
 
-    assert_eq!(owned.len(), 2);
+    assert_eq!(owned.len(), 3);
     assert_eq!(
         owned.get(&key(0)).map(|a| a.leader.as_str()),
         Some("broker-a"),
         "the cache shard must not have taken the stream shard's row",
     );
-    assert!(
+    assert_eq!(
         owned
-            .assignments()
-            .keys()
-            .all(|k| k.kind == ShardKind::Stream),
+            .get(&cache_assignment(0, "broker-b", 1).key)
+            .map(|a| a.leader.as_str()),
+        Some("broker-b"),
     );
 }
 
 /// The key includes the kind, so the two are distinct entries rather than one
-/// overwriting the other. This is what makes dropping caches at ingestion a
-/// filter rather than a data loss: the stream's row is untouched either way.
+/// overwriting the other — which is what lets a broker hold a cache shard and a
+/// stream shard of the same name and route each to its own log.
 #[test]
 fn a_cache_key_is_not_the_stream_key_of_the_same_name() {
     let mut owned = ShardOwnership::default();

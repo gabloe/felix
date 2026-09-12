@@ -66,6 +66,35 @@ fn every_message() -> Vec<InternalMessage> {
             shard: shard(),
             base_offset: 5_000,
         }),
+        InternalMessage::ForwardCacheOp(ForwardCacheOp {
+            correlation_id: 42,
+            shard: shard(),
+            op: CacheOpKind::Put,
+            key: "session:abc".to_string(),
+            value: Bytes::from_static(b"payload"),
+            ttl_ms: 30_000,
+        }),
+        InternalMessage::ForwardCacheOp(ForwardCacheOp {
+            correlation_id: 42,
+            shard: shard(),
+            op: CacheOpKind::Get,
+            key: "session:abc".to_string(),
+            value: Bytes::new(),
+            ttl_ms: 0,
+        }),
+        InternalMessage::ForwardCacheOk(ForwardCacheOk {
+            correlation_id: 42,
+            value: Some(Bytes::from_static(b"payload")),
+        }),
+        InternalMessage::ForwardCacheOk(ForwardCacheOk {
+            correlation_id: 42,
+            value: None,
+        }),
+        InternalMessage::ForwardCacheError(ForwardCacheError {
+            correlation_id: 42,
+            code: ErrorCode::Unavailable,
+            detail: "cache scope not found".to_string(),
+        }),
     ]
 }
 
@@ -347,10 +376,12 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(11).is_err());
+    assert!(Kind::from_u16(14).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
+    assert!(CacheOpKind::from_u8(0).is_err());
+    assert!(CacheOpKind::from_u8(4).is_err());
 }
 
 /// Retryability is a property of the code, so a requester does not have to
@@ -486,8 +517,69 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (8, Kind::ReplicateOk),
         (9, Kind::ReplicateError),
         (10, Kind::ReplicateBootstrap),
+        (11, Kind::ForwardCacheOp),
+        (12, Kind::ForwardCacheOk),
+        (13, Kind::ForwardCacheError),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);
     }
+}
+
+/// A miss and a stored empty value are different answers, and the presence byte
+/// is the only thing separating them. Encode them as the same bytes and a
+/// cached empty value reads back as "not there" forever.
+#[test]
+fn an_empty_cached_value_is_not_a_miss() {
+    let empty = InternalMessage::ForwardCacheOk(ForwardCacheOk {
+        correlation_id: 42,
+        value: Some(Bytes::new()),
+    });
+    let miss = InternalMessage::ForwardCacheOk(ForwardCacheOk {
+        correlation_id: 42,
+        value: None,
+    });
+
+    let empty_bytes = empty.encode().expect("encode");
+    let miss_bytes = miss.encode().expect("encode");
+    assert_ne!(empty_bytes, miss_bytes);
+
+    assert_eq!(InternalMessage::decode(empty_bytes).expect("decode"), empty);
+    assert_eq!(InternalMessage::decode(miss_bytes).expect("decode"), miss);
+}
+
+/// The presence byte has two meanings and no third. A peer sending anything
+/// else is not a peer this can guess for.
+#[test]
+fn an_unknown_cache_value_presence_byte_is_refused() {
+    let ok = InternalMessage::ForwardCacheOk(ForwardCacheOk {
+        correlation_id: 42,
+        value: None,
+    });
+    let mut bytes = ok.encode().expect("encode").to_vec();
+    let last = bytes.len() - 1;
+    bytes[last] = 2;
+
+    assert!(InternalMessage::decode(Bytes::from(bytes)).is_err());
+}
+
+#[test]
+fn an_unknown_cache_operation_is_refused() {
+    let op = InternalMessage::ForwardCacheOp(ForwardCacheOp {
+        correlation_id: 42,
+        shard: shard(),
+        op: CacheOpKind::Get,
+        key: "k".to_string(),
+        value: Bytes::new(),
+        ttl_ms: 0,
+    });
+    let bytes = op.encode().expect("encode").to_vec();
+    let position = bytes
+        .windows(1)
+        .position(|w| w == [CacheOpKind::Get as u8])
+        .expect("the op byte is in there somewhere");
+    let mut broken = bytes;
+    broken[position] = 9;
+
+    assert!(InternalMessage::decode(Bytes::from(broken)).is_err());
 }

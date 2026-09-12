@@ -99,6 +99,7 @@ fn key() -> ShardKey {
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
         shard: 0,
+        kind: felix_router::ShardKind::Stream,
     }
 }
 

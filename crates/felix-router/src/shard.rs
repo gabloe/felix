@@ -17,17 +17,41 @@ use arc_swap::ArcSwap;
 
 use crate::RegionRouter;
 
-/// One shard of one stream.
+/// Whether a shard belongs to a stream or to a cache.
+///
+/// A cache and a stream may share a name within one namespace. When they do,
+/// their shards are unrelated, and a table that could not tell them apart would
+/// hand a cache request the stream's owner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ShardKind {
+    #[default]
+    Stream,
+    Cache,
+}
+
+impl ShardKind {
+    /// The prefix this kind contributes to a stream identity string.
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Stream => "s",
+            Self::Cache => "c",
+        }
+    }
+}
+
+/// One shard of one stream or cache.
 ///
 /// Defined here rather than shared with the control plane or the storage layer,
 /// both of which have their own: the router is a library that must not depend on
-/// either, and the duplication is three fields and a number.
+/// either, and the duplication is three fields, a number, and a kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShardKey {
     pub tenant_id: String,
     pub namespace: String,
+    /// The stream or cache name, disambiguated by `kind`.
     pub stream: String,
     pub shard: u32,
+    pub kind: ShardKind,
 }
 
 /// A node a shard can be served from.
@@ -124,6 +148,22 @@ pub struct RoutingTable {
     shards_per_stream: HashMap<String, u32>,
 }
 
+/// The key `shards_per_stream` is built and looked up under.
+///
+/// One function so the two cannot disagree, and the kind leads because a cache
+/// and a stream may share every other part of it.
+fn stream_id(kind: ShardKind, tenant_id: &str, namespace: &str, stream: &str) -> String {
+    let mut id = String::with_capacity(tenant_id.len() + namespace.len() + stream.len() + 4);
+    id.push_str(kind.prefix());
+    id.push('/');
+    id.push_str(tenant_id);
+    id.push('/');
+    id.push_str(namespace);
+    id.push('/');
+    id.push_str(stream);
+    id
+}
+
 impl RoutingTable {
     pub fn new() -> Self {
         Self::default()
@@ -147,7 +187,7 @@ impl RoutingTable {
             // every shard, and a publish must still resolve keys against the
             // stream's real width or the same key would move as placement
             // catches up.
-            let stream_id = format!("{}/{}/{}", key.tenant_id, key.namespace, key.stream);
+            let stream_id = stream_id(key.kind, &key.tenant_id, &key.namespace, &key.stream);
             let width = shards_per_stream.entry(stream_id).or_insert(0);
             *width = (*width).max(key.shard + 1);
             let leader_ref = nodes.get(&leader).cloned().unwrap_or(NodeRef {
@@ -187,13 +227,14 @@ impl RoutingTable {
     /// `1` when the table has never heard of the stream, which is the answer a
     /// publish needs: an unplaced stream has one shard as far as routing is
     /// concerned, and `shard_for` sends every key to shard 0.
-    pub fn shards_for(&self, tenant_id: &str, namespace: &str, stream: &str) -> u32 {
-        let mut id = String::with_capacity(tenant_id.len() + namespace.len() + stream.len() + 2);
-        id.push_str(tenant_id);
-        id.push('/');
-        id.push_str(namespace);
-        id.push('/');
-        id.push_str(stream);
+    pub fn shards_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> u32 {
+        let id = stream_id(kind, tenant_id, namespace, stream);
         self.shards_per_stream.get(&id).copied().unwrap_or(1).max(1)
     }
 

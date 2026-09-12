@@ -57,6 +57,9 @@ pub enum Kind {
     ReplicateOk = 8,
     ReplicateError = 9,
     ReplicateBootstrap = 10,
+    ForwardCacheOp = 11,
+    ForwardCacheOk = 12,
+    ForwardCacheError = 13,
 }
 
 impl Kind {
@@ -74,6 +77,9 @@ impl Kind {
             8 => Ok(Kind::ReplicateOk),
             9 => Ok(Kind::ReplicateError),
             10 => Ok(Kind::ReplicateBootstrap),
+            11 => Ok(Kind::ForwardCacheOp),
+            12 => Ok(Kind::ForwardCacheOk),
+            13 => Ok(Kind::ForwardCacheError),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -230,6 +236,65 @@ pub struct NotLeader {
     pub generation: u64,
 }
 
+/// Which cache operation a forwarded request carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CacheOpKind {
+    Put = 1,
+    Get = 2,
+    Delete = 3,
+}
+
+impl CacheOpKind {
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(CacheOpKind::Put),
+            2 => Ok(CacheOpKind::Get),
+            3 => Ok(CacheOpKind::Delete),
+            other => Err(Error::UnknownInternalCacheOp(other)),
+        }
+    }
+}
+
+/// A cache operation handed to the broker that owns the key's shard.
+///
+/// One message for all three operations rather than three kinds: they share a
+/// shard reference and a key, differ only in what they carry alongside, and a
+/// single kind keeps the owner's dispatch one match instead of three arms that
+/// must stay in step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardCacheOp {
+    pub correlation_id: u64,
+    pub shard: ShardRef,
+    pub op: CacheOpKind,
+    pub key: String,
+    /// The value to store. Empty for `Get` and `Delete`.
+    pub value: Bytes,
+    /// Expiry in milliseconds, or `0` for none. Only read for `Put`.
+    pub ttl_ms: u64,
+}
+
+/// The owner applied the operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardCacheOk {
+    pub correlation_id: u64,
+    /// The value a `Get` found or a `Delete` removed.
+    ///
+    /// `None` is a miss, and is also what a `Put` always answers — the three
+    /// operations share one response shape, and "no value to report" is the
+    /// honest reading for a write.
+    pub value: Option<Bytes>,
+}
+
+/// The owner could not apply the operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardCacheError {
+    pub correlation_id: u64,
+    pub code: ErrorCode,
+    /// Operator-facing detail. Never parsed for control flow.
+    pub detail: String,
+}
+
 /// The first message on a peer connection, naming who is calling.
 ///
 /// Sent before any request so a version or identity mismatch is found while the
@@ -337,6 +402,9 @@ pub enum InternalMessage {
     ReplicateOk(ReplicateOk),
     ReplicateError(ReplicateError),
     ReplicateBootstrap(ReplicateBootstrap),
+    ForwardCacheOp(ForwardCacheOp),
+    ForwardCacheOk(ForwardCacheOk),
+    ForwardCacheError(ForwardCacheError),
 }
 
 impl InternalMessage {
@@ -352,6 +420,9 @@ impl InternalMessage {
             Self::ReplicateOk(_) => Kind::ReplicateOk,
             Self::ReplicateError(_) => Kind::ReplicateError,
             Self::ReplicateBootstrap(_) => Kind::ReplicateBootstrap,
+            Self::ForwardCacheOp(_) => Kind::ForwardCacheOp,
+            Self::ForwardCacheOk(_) => Kind::ForwardCacheOk,
+            Self::ForwardCacheError(_) => Kind::ForwardCacheError,
         }
     }
 
@@ -372,6 +443,9 @@ impl InternalMessage {
             Self::ReplicateOk(m) => m.correlation_id,
             Self::ReplicateError(m) => m.correlation_id,
             Self::ReplicateBootstrap(m) => m.correlation_id,
+            Self::ForwardCacheOp(m) => m.correlation_id,
+            Self::ForwardCacheOk(m) => m.correlation_id,
+            Self::ForwardCacheError(m) => m.correlation_id,
         }
     }
 
@@ -456,6 +530,37 @@ impl InternalMessage {
                 body.put_u32(m.shard.shard);
                 body.put_u64(m.shard.generation);
                 body.put_u64(m.base_offset);
+            }
+            Self::ForwardCacheOp(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.shard.tenant_id)?;
+                put_str(&mut body, &m.shard.namespace)?;
+                put_str(&mut body, &m.shard.stream)?;
+                body.put_u32(m.shard.shard);
+                body.put_u64(m.shard.generation);
+                body.put_u8(m.op as u8);
+                put_str(&mut body, &m.key)?;
+                body.put_u64(m.ttl_ms);
+                body.put_u32(u32::try_from(m.value.len()).map_err(|_| Error::FrameTooLarge)?);
+                body.extend_from_slice(&m.value);
+            }
+            Self::ForwardCacheOk(m) => {
+                body.put_u64(m.correlation_id);
+                // A presence byte rather than a zero length, so an empty stored
+                // value stays distinguishable from a miss.
+                match &m.value {
+                    Some(value) => {
+                        body.put_u8(1);
+                        body.put_u32(u32::try_from(value.len()).map_err(|_| Error::FrameTooLarge)?);
+                        body.extend_from_slice(value);
+                    }
+                    None => body.put_u8(0),
+                }
+            }
+            Self::ForwardCacheError(m) => {
+                body.put_u64(m.correlation_id);
+                body.put_u16(m.code as u16);
+                put_str(&mut body, &m.detail)?;
             }
         }
 
@@ -648,6 +753,63 @@ impl InternalMessage {
                 };
                 expect_empty(&body)?;
                 Ok(Self::ReplicateBootstrap(message))
+            }
+            Kind::ForwardCacheOp => {
+                let correlation_id = take_u64(&mut body)?;
+                let shard = ShardRef {
+                    tenant_id: take_str(&mut body)?,
+                    namespace: take_str(&mut body)?,
+                    stream: take_str(&mut body)?,
+                    shard: take_u32(&mut body)?,
+                    generation: take_u64(&mut body)?,
+                };
+                let op = CacheOpKind::from_u8(take_u8(&mut body)?)?;
+                let key = take_str(&mut body)?;
+                let ttl_ms = take_u64(&mut body)?;
+                let len = take_u32(&mut body)? as usize;
+                if len > body.remaining() {
+                    return Err(Error::Incomplete);
+                }
+                let value = body.split_to(len);
+                expect_empty(&body)?;
+                Ok(Self::ForwardCacheOp(ForwardCacheOp {
+                    correlation_id,
+                    shard,
+                    op,
+                    key,
+                    value,
+                    ttl_ms,
+                }))
+            }
+            Kind::ForwardCacheOk => {
+                let correlation_id = take_u64(&mut body)?;
+                let value = match take_u8(&mut body)? {
+                    0 => None,
+                    1 => {
+                        let len = take_u32(&mut body)? as usize;
+                        if len > body.remaining() {
+                            return Err(Error::Incomplete);
+                        }
+                        Some(body.split_to(len))
+                    }
+                    // Neither present nor absent is not a value this can guess
+                    // at: a miss and an empty value mean different things.
+                    _ => return Err(Error::Incomplete),
+                };
+                expect_empty(&body)?;
+                Ok(Self::ForwardCacheOk(ForwardCacheOk {
+                    correlation_id,
+                    value,
+                }))
+            }
+            Kind::ForwardCacheError => {
+                let message = ForwardCacheError {
+                    correlation_id: take_u64(&mut body)?,
+                    code: ErrorCode::from_u16(take_u16(&mut body)?)?,
+                    detail: take_str(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::ForwardCacheError(message))
             }
         }
     }

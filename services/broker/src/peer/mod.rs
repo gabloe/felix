@@ -23,7 +23,10 @@ mod tls;
 mod partition;
 pub use config::PeerTransportConfig;
 pub use dispatch::BrokerPeerHandler;
-pub use forward::{ForwardError, ForwardKey, ForwardTarget, PeerRequester, forward_publish};
+pub use forward::{
+    CacheRequest, ForwardError, ForwardKey, ForwardTarget, PeerRequester, forward_cache_op,
+    forward_publish,
+};
 pub use handler::ForwardingHandler;
 pub use partition::PartitionInjector;
 pub use pool::{PeerError, PeerPool};

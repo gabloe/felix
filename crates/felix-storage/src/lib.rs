@@ -17,25 +17,45 @@ pub use ephemeral_cache::EphemeralCache;
 pub use log_cache::LogCache;
 pub use segment::{Corruption, CorruptionKind, CorruptionSite};
 
+// A cache entry is identified by tenant, namespace, cache, shard, and key --
+// five fields before the value and its TTL. Bundling them into a struct would
+// move the argument list rather than shorten it, and every caller has the parts
+// separately anyway.
+#[allow(clippy::too_many_arguments)]
 #[async_trait()]
 pub trait StorageApi: Debug + Send + Sync {
+    /// `shard` is which shard of the cache the key belongs to.
+    ///
+    /// Resolved by the caller, not here: the shard count lives in the routing
+    /// table and storage must not depend on it. A caller that owns exactly one
+    /// shard of everything passes `0`, which is what an unsharded cache always
+    /// was.
     async fn put(
         &self,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
         value: Bytes,
         ttl: Option<Duration>,
     );
 
-    async fn get(&self, tenant_id: &str, namespace: &str, cache: &str, key: &str) -> Option<Bytes>;
+    async fn get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Option<Bytes>;
 
     async fn delete(
         &self,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
+        shard: u32,
         key: &str,
     ) -> Option<Bytes>;
 
@@ -158,13 +178,19 @@ mod tests {
                 "t1",
                 "default",
                 "primary",
+                0,
                 "k",
                 Bytes::from_static(b"v"),
                 Some(Duration::from_millis(10)),
             )
             .await;
         sleep(Duration::from_millis(15)).await;
-        assert!(cache.get("t1", "default", "primary", "k").await.is_none());
+        assert!(
+            cache
+                .get("t1", "default", "primary", 0, "k")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -175,20 +201,26 @@ mod tests {
                 "t1",
                 "default",
                 "primary",
+                0,
                 "k",
                 Bytes::from_static(b"value"),
                 None,
             )
             .await;
         assert_eq!(
-            cache.get("t1", "default", "primary", "k").await,
+            cache.get("t1", "default", "primary", 0, "k").await,
             Some(Bytes::from_static(b"value"))
         );
         assert_eq!(
-            cache.delete("t1", "default", "primary", "k").await,
+            cache.delete("t1", "default", "primary", 0, "k").await,
             Some(Bytes::from_static(b"value"))
         );
-        assert!(cache.get("t1", "default", "primary", "k").await.is_none());
+        assert!(
+            cache
+                .get("t1", "default", "primary", 0, "k")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -201,6 +233,7 @@ mod tests {
                 "t1",
                 "default",
                 "primary",
+                0,
                 "k1",
                 Bytes::from_static(b"a"),
                 None,
@@ -208,7 +241,7 @@ mod tests {
             .await;
         assert!(!cache.is_empty().await);
         assert_eq!(cache.len().await, 1);
-        cache.delete("t1", "default", "primary", "k1").await;
+        cache.delete("t1", "default", "primary", 0, "k1").await;
         assert!(cache.is_empty().await);
         assert_eq!(cache.len().await, 0);
     }
@@ -221,6 +254,7 @@ mod tests {
                 "t1",
                 "default",
                 "primary",
+                0,
                 "k1",
                 Bytes::from_static(b"a"),
                 None,
@@ -231,6 +265,7 @@ mod tests {
                 "t1",
                 "default",
                 "primary",
+                0,
                 "k2",
                 Bytes::from_static(b"b"),
                 None,
@@ -297,26 +332,31 @@ mod tests {
     #[tokio::test]
     async fn get_nonexistent_key_returns_none() {
         let cache = EphemeralCache::new();
-        assert!(cache.get("t1", "ns", "c", "nonexistent").await.is_none());
+        assert!(cache.get("t1", "ns", "c", 0, "nonexistent").await.is_none());
     }
 
     #[tokio::test]
     async fn delete_nonexistent_key_returns_none() {
         let cache = EphemeralCache::new();
-        assert!(cache.delete("t1", "ns", "c", "nonexistent").await.is_none());
+        assert!(
+            cache
+                .delete("t1", "ns", "c", 0, "nonexistent")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn put_overwrites_existing_value() {
         let cache = EphemeralCache::new();
         cache
-            .put("t1", "ns", "c", "k", Bytes::from_static(b"v1"), None)
+            .put("t1", "ns", "c", 0, "k", Bytes::from_static(b"v1"), None)
             .await;
         cache
-            .put("t1", "ns", "c", "k", Bytes::from_static(b"v2"), None)
+            .put("t1", "ns", "c", 0, "k", Bytes::from_static(b"v2"), None)
             .await;
         assert_eq!(
-            cache.get("t1", "ns", "c", "k").await,
+            cache.get("t1", "ns", "c", 0, "k").await,
             Some(Bytes::from_static(b"v2"))
         );
         assert_eq!(cache.len().await, 1);

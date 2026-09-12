@@ -101,6 +101,7 @@ impl ReplicaHandler {
             namespace: request.shard.namespace.clone(),
             stream: request.shard.stream.clone(),
             shard: request.shard.shard,
+            kind: felix_router::ShardKind::Stream,
         };
 
         if let Some(refusal) = self.check_role(correlation_id, &key, request.shard.generation) {
@@ -186,6 +187,7 @@ impl ReplicaHandler {
             namespace: batch.shard.namespace.clone(),
             stream: batch.shard.stream.clone(),
             shard: batch.shard.shard,
+            kind: felix_router::ShardKind::Stream,
         };
 
         if let Some(refusal) = self.check_role(correlation_id, &key, batch.shard.generation) {

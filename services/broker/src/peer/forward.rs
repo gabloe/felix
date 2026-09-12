@@ -26,7 +26,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use bytes::Bytes;
-use felix_wire::internal::{AckMode, ForwardPublish, InternalMessage, ShardRef};
+use felix_wire::internal::{
+    AckMode, CacheOpKind, ForwardCacheOp, ForwardPublish, InternalMessage, ShardRef,
+};
 
 use super::metrics;
 use super::pool::{PeerError, PeerPool};
@@ -240,3 +242,152 @@ fn retry_delay(attempt: u32) -> Duration {
 #[cfg(test)]
 #[path = "forward_tests.rs"]
 mod tests;
+
+/// What a cache operation asks the owner to do.
+///
+/// A separate type from the wire's `CacheOpKind` so callers do not have to
+/// build a `Bytes` and a TTL for a read.
+#[derive(Debug, Clone)]
+pub enum CacheRequest {
+    Put { value: Bytes, ttl_ms: u64 },
+    Get,
+    Delete,
+}
+
+impl CacheRequest {
+    fn parts(&self) -> (CacheOpKind, Bytes, u64) {
+        match self {
+            Self::Put { value, ttl_ms } => (CacheOpKind::Put, value.clone(), *ttl_ms),
+            Self::Get => (CacheOpKind::Get, Bytes::new(), 0),
+            Self::Delete => (CacheOpKind::Delete, Bytes::new(), 0),
+        }
+    }
+
+    /// Whether re-sending this operation after an indeterminate answer is safe.
+    ///
+    /// A `Get` is a read and a `Delete` removes a named key, so re-sending
+    /// either lands on the same state. A `Put` with a TTL does not: the second
+    /// attempt restarts the clock. Treating a write as indeterminate rather
+    /// than retrying it keeps the caller in charge of that decision.
+    fn is_idempotent(&self) -> bool {
+        matches!(self, Self::Get | Self::Delete)
+    }
+}
+
+/// Forward one cache operation and wait for the owner's answer.
+///
+/// Returns the value the owner reported: what a `Get` found, what a `Delete`
+/// removed, and `None` for a `Put` or a miss.
+pub async fn forward_cache_op(
+    pool: &impl PeerRequester,
+    target: &ForwardTarget,
+    key: &ForwardKey,
+    cache_key: &str,
+    request: &CacheRequest,
+) -> Result<Option<Bytes>, ForwardError> {
+    let mut target = target.clone();
+    let mut last = String::new();
+    let (op, value, ttl_ms) = request.parts();
+
+    for attempt in 0..MAX_ATTEMPTS {
+        if attempt > 0 {
+            metrics::record_forward_retry();
+        }
+        let message = InternalMessage::ForwardCacheOp(ForwardCacheOp {
+            correlation_id: 0,
+            shard: ShardRef {
+                tenant_id: key.tenant_id.clone(),
+                namespace: key.namespace.clone(),
+                stream: key.stream.clone(),
+                shard: key.shard,
+                generation: target.generation,
+            },
+            op,
+            key: cache_key.to_string(),
+            value: value.clone(),
+            ttl_ms,
+        });
+
+        match PeerRequester::request(pool, &target.node_id, target.advertise_addr, message).await {
+            Ok(InternalMessage::ForwardCacheOk(ok)) => {
+                metrics::record_forward(metrics::OUTCOME_OK);
+                return Ok(ok.value);
+            }
+            Ok(InternalMessage::NotLeader(moved)) => {
+                last = format!(
+                    "cache shard moved to {} at generation {}",
+                    moved.node_id, moved.generation
+                );
+                let Ok(advertise_addr) = moved.advertise_addr.parse() else {
+                    metrics::record_forward(metrics::OUTCOME_REFUSED);
+                    return Err(ForwardError::Refused {
+                        stream: key.stream.clone(),
+                        detail: format!(
+                            "owner {} advertised an unusable address {}",
+                            moved.node_id, moved.advertise_addr
+                        ),
+                    });
+                };
+                // Same rule as a forwarded publish: a redirect that does not
+                // advance the generation would send this straight back where it
+                // came from.
+                if moved.generation <= target.generation {
+                    metrics::record_forward(metrics::OUTCOME_REFUSED);
+                    return Err(ForwardError::Refused {
+                        stream: key.stream.clone(),
+                        detail: format!(
+                            "owner {} redirected to generation {}, not ahead of {}",
+                            moved.node_id, moved.generation, target.generation
+                        ),
+                    });
+                }
+                target = ForwardTarget {
+                    node_id: moved.node_id,
+                    advertise_addr,
+                    generation: moved.generation,
+                };
+            }
+            Ok(InternalMessage::ForwardCacheError(err)) => {
+                last = format!("{:?}: {}", err.code, err.detail);
+                if !err.code.is_retryable() {
+                    metrics::record_forward(metrics::OUTCOME_REFUSED);
+                    return Err(ForwardError::Refused {
+                        stream: key.stream.clone(),
+                        detail: last,
+                    });
+                }
+                tokio::time::sleep(retry_delay(attempt)).await;
+            }
+            Ok(other) => {
+                metrics::record_forward(metrics::OUTCOME_REFUSED);
+                return Err(ForwardError::Refused {
+                    stream: key.stream.clone(),
+                    detail: format!("owner answered with an unexpected {:?}", other.kind()),
+                });
+            }
+            Err(err) if err.is_retryable() => {
+                last = err.to_string();
+                tokio::time::sleep(retry_delay(attempt)).await;
+            }
+            Err(err @ (PeerError::Disconnected { .. } | PeerError::Timeout { .. }))
+                if !request.is_idempotent() =>
+            {
+                metrics::record_forward(metrics::OUTCOME_INDETERMINATE);
+                return Err(ForwardError::Indeterminate {
+                    node_id: target.node_id,
+                    detail: err.to_string(),
+                });
+            }
+            Err(err) => {
+                last = err.to_string();
+                tokio::time::sleep(retry_delay(attempt)).await;
+            }
+        }
+    }
+
+    metrics::record_forward(metrics::OUTCOME_REFUSED);
+    Err(ForwardError::Refused {
+        stream: key.stream.clone(),
+        detail: last,
+    })
+}

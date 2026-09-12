@@ -177,6 +177,8 @@ impl ControlPlane {
             vec![
                 format!("stream.publish:stream:{tenant_id}/*/*"),
                 format!("stream.subscribe:stream:{tenant_id}/*/*"),
+                format!("cache.read:cache:{tenant_id}/*/*"),
+                format!("cache.write:cache:{tenant_id}/*/*"),
             ],
             Duration::from_secs(3600),
         )

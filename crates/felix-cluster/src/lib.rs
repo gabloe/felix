@@ -180,6 +180,26 @@ impl StreamSpec {
     }
 }
 
+/// A cache the cluster should serve.
+#[derive(Clone, Debug)]
+pub struct CacheSpec {
+    pub name: String,
+    /// How many shards the keyspace is split across. More than one is what
+    /// makes a test actually exercise routing rather than a single owner.
+    pub shards: u32,
+    pub replication_factor: u32,
+}
+
+impl CacheSpec {
+    pub fn new(name: impl Into<String>, shards: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor: 1,
+        }
+    }
+}
+
 /// How to build a cluster.
 #[derive(Clone)]
 pub struct ClusterConfig {
@@ -188,6 +208,9 @@ pub struct ClusterConfig {
     pub namespace: String,
     /// Streams to create.
     pub streams: Vec<StreamSpec>,
+    /// Caches to create. Empty by default, so a test that says nothing about
+    /// caches builds the cluster it always did.
+    pub caches: Vec<CacheSpec>,
     /// Inherit the parent's stdout/stderr rather than discarding it. Useful when
     /// running the harness by hand; noisy inside a test.
     pub inherit_output: bool,
@@ -200,6 +223,7 @@ impl Default for ClusterConfig {
             tenant_id: "t1".to_string(),
             namespace: "ns".to_string(),
             streams: vec![StreamSpec::new("orders", 1)],
+            caches: Vec::new(),
             inherit_output: false,
         }
     }
@@ -357,7 +381,12 @@ impl Cluster {
 
         // Placement is stepped rather than waited on, then the result is
         // verified: a leader for every shard of every stream.
-        let total_shards: usize = config.streams.iter().map(|spec| spec.shards as usize).sum();
+        let total_shards: usize = config
+            .streams
+            .iter()
+            .map(|spec| spec.shards as usize)
+            .chain(config.caches.iter().map(|spec| spec.shards as usize))
+            .sum();
         wait::until(
             READY_TIMEOUT,
             "every shard assigned a leader",
@@ -438,6 +467,54 @@ impl Cluster {
             )
             .await
             .with_context(|| format!("publish to {stream} via {node_id}"))
+    }
+
+    /// Write one cache key through a named broker, whether or not it owns the
+    /// key's shard.
+    ///
+    /// Going through a non-owner deliberately: routing the operation to the
+    /// owner is the behaviour under test, so the harness exercises it rather
+    /// than the easy path.
+    pub async fn cache_put_via(
+        &self,
+        node_id: &str,
+        cache: &str,
+        key: &str,
+        value: &[u8],
+    ) -> Result<()> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        client
+            .cache_put(
+                &self.tenant_id,
+                &self.namespace,
+                cache,
+                key,
+                bytes::Bytes::copy_from_slice(value),
+                None,
+            )
+            .await
+            .with_context(|| format!("cache put {cache}/{key} via {node_id}"))
+    }
+
+    /// Read one cache key through a named broker.
+    pub async fn cache_get_via(
+        &self,
+        node_id: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let value = client
+            .cache_get(&self.tenant_id, &self.namespace, cache, key)
+            .await
+            .with_context(|| format!("cache get {cache}/{key} via {node_id}"))?;
+        Ok(value.map(|value| value.to_vec()))
     }
 
     /// Subscribe on a named broker and return the client and subscription.
@@ -678,6 +755,9 @@ impl Cluster {
             stream: String,
             shard: u32,
             leader: String,
+            /// Absent on an assignment written before caches were placed.
+            #[serde(default)]
+            kind: Option<String>,
         }
 
         let response: Response = self
@@ -690,8 +770,15 @@ impl Cluster {
             .items
             .into_iter()
             .map(|a| {
+                // The kind leads the key: a cache and a stream may share a name,
+                // and collapsing the two here would undercount the shards the
+                // readiness gate is waiting for.
+                let kind = a.kind.as_deref().unwrap_or("stream");
                 (
-                    format!("{}/{}/{}/{}", a.tenant_id, a.namespace, a.stream, a.shard),
+                    format!(
+                        "{kind}/{}/{}/{}/{}",
+                        a.tenant_id, a.namespace, a.stream, a.shard
+                    ),
                     a.leader,
                 )
             })
@@ -729,7 +816,7 @@ impl Cluster {
         stream: &str,
     ) -> Result<std::collections::HashMap<u32, String>> {
         let owners = self.shard_owners().await?;
-        let prefix = format!("{}/{}/{}/", self.tenant_id, self.namespace, stream);
+        let prefix = format!("stream/{}/{}/{}/", self.tenant_id, self.namespace, stream);
         Ok(owners
             .into_iter()
             .filter_map(|(key, node)| {
@@ -790,12 +877,36 @@ impl Cluster {
     }
 
     pub async fn owner(&self, stream: &str) -> Result<String> {
+        self.shard_owner_of("stream", stream, 0).await
+    }
+
+    /// The node leading one shard of one stream or cache.
+    pub async fn shard_owner_of(&self, kind: &str, name: &str, shard: u32) -> Result<String> {
         let owners = self.shard_owners().await?;
-        let key = format!("{}/{}/{}/0", self.tenant_id, self.namespace, stream);
+        let key = format!(
+            "{kind}/{}/{}/{name}/{shard}",
+            self.tenant_id, self.namespace
+        );
         owners
             .get(&key)
             .cloned()
             .ok_or_else(|| anyhow!("no owner for {key}"))
+    }
+
+    /// Every shard of one cache, mapped to the node that leads it.
+    pub async fn cache_shard_owners(
+        &self,
+        cache: &str,
+    ) -> Result<std::collections::HashMap<u32, String>> {
+        let owners = self.shard_owners().await?;
+        let prefix = format!("cache/{}/{}/{cache}/", self.tenant_id, self.namespace);
+        Ok(owners
+            .into_iter()
+            .filter_map(|(key, node)| {
+                let shard = key.strip_prefix(&prefix)?.parse().ok()?;
+                Some((shard, node))
+            })
+            .collect())
     }
 
     /// The node that owns `stream`'s shard 0, and one that does not.
@@ -852,6 +963,11 @@ impl Cluster {
             }
         }
         Ok(total)
+    }
+
+    /// Every broker's id, in start order.
+    pub fn node_ids(&self) -> Vec<String> {
+        self.nodes.iter().map(|n| n.node_id.clone()).collect()
     }
 
     pub fn node(&self, node_id: &str) -> Option<&BrokerNode> {
@@ -1212,6 +1328,26 @@ async fn seed_metadata(
         )
         .await
         .with_context(|| format!("create stream {stream}"))?;
+    }
+
+    for spec in &config.caches {
+        let cache = &spec.name;
+        post(
+            http,
+            &format!(
+                "{base}/v1/tenants/{}/namespaces/{}/caches",
+                config.tenant_id, config.namespace
+            ),
+            token,
+            serde_json::json!({
+                "cache": cache,
+                "display_name": cache,
+                "shards": spec.shards,
+                "replication_factor": spec.replication_factor,
+            }),
+        )
+        .await
+        .with_context(|| format!("create cache {cache}"))?;
     }
     Ok(())
 }

@@ -345,10 +345,15 @@ mod correlation {
     use felix_wire::internal::*;
 
     fn correlation_of(message: &InternalMessage) -> u64 {
+        // `InternalMessage::correlation_id` already answers this; the match is
+        // kept so a new kind has to be considered here too.
         match message {
             InternalMessage::ForwardPublish(m) => m.correlation_id,
             InternalMessage::ForwardPublishOk(m) => m.correlation_id,
             InternalMessage::ForwardPublishError(m) => m.correlation_id,
+            InternalMessage::ForwardCacheOp(m) => m.correlation_id,
+            InternalMessage::ForwardCacheOk(m) => m.correlation_id,
+            InternalMessage::ForwardCacheError(m) => m.correlation_id,
             InternalMessage::NotLeader(m) => m.correlation_id,
             InternalMessage::Hello(m) => m.correlation_id,
             InternalMessage::HelloOk(m) => m.correlation_id,

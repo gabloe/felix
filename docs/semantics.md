@@ -219,12 +219,24 @@ how-to; this is the contract.
 > `a_cache_survives_a_restart`, `an_expiry_survives_a_restart`,
 > `a_later_write_wins`, `compaction_reclaims_overwritten_records`.
 
-**Cache operations are not routed, and two brokers can hold different values for
-the same key with nothing to reconcile them** (#278). Every broker serves its
-own cache, so whichever broker a client reaches defines the key for that client.
-This is the one data path with no ownership, and unlike a missing value the
-divergence is not detectable by a reader. **Do not use the cache from more than
-one broker.**
+**Cache operations are routed to the key's owner** (#278). A key hashes to a
+shard, that shard has exactly one leader, and a broker that receives an
+operation for a key it does not own forwards it there rather than serving a
+second copy. A value written through any broker is readable through every other,
+and two brokers cannot both accept a write for one key.
+
+An operation this broker cannot route is refused, and a read it cannot route is
+an error rather than a miss — reporting a miss would let a client conclude a key
+does not exist when it does, on the owner.
+
+> `crates/felix-cluster/tests/cache_routing.rs`, including
+> `a_value_written_through_one_broker_is_readable_through_every_other` and
+> `two_brokers_writing_one_key_do_not_diverge`.
+
+**A cache's shards are not replicated yet.** Losing the broker that leads a
+cache shard loses that shard's contents until it comes back: the replication
+driver resolves a shard through the stream root, and a cache's log is not there.
+A cache is a durable per-shard log, not a highly available one.
 
 ## Authorization
 
