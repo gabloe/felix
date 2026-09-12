@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789236509392,
+  "lastUpdate": 1789237016376,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7260,6 +7260,72 @@ window.BENCHMARK_DATA = {
             "range": "334.03",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1025.00\nmean: 1144.40\nstdev: 334.03\ncv: 29.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4c87a09e41e9850690a5ff44c6ffe1d19506b0d",
+          "message": "Relicense the server components from Elastic-2.0 to AGPL-3.0 (#299)\n\nThe goal was never commercial. It was to stop someone taking this work,\nclosing it, and selling it. Elastic-2.0 achieves that, and buys something\nnobody wanted along with it: an exclusive right to offer Felix as a managed\nservice, reserved to the copyright holder. That reservation is the only reason\nto prefer ELv2 over copyleft, and it does not describe the intent here.\n\nAGPL-3.0 gets the actual requirement and gives up only the part that was never\nwanted. Anyone may run Felix commercially, including as a hosted service, on\none condition: if they modify it and let users reach it over a network, those\nusers get the source. Reciprocity rather than exclusivity.\n\nTwo consequences of the swap, stated rather than discovered:\n\n- **AGPL permits what ELv2 forbade.** A competitor could offer Felix as a\n  service if they publish their changes. In practice hyperscalers will not\n  touch AGPL and many enterprises ban it outright, so the deterrent is close to\n  total - but it is a deterrent, not a prohibition, and that is the trade.\n\n- **Felix is now open source rather than source-available.** Both halves are\n  OSI-approved. That matters more than the extra prohibition for a project\n  whose point is the craft.\n\nThe permissive half is untouched and is what makes copyleft affordable here:\nfelix-wire, felix-client, felix-transport, felix-common and felix-conformance\nstay Apache-2.0, so everything needed to *talk to* Felix carries no obligation\nat all. Build proprietary applications on top freely. Only the server, the\nthing someone would host, is copyleft.\n\nMechanically: the eleven ELv2 LICENSE files now carry the canonical AGPL-3.0\ntext from gnu.org, and the workspace default moves to AGPL-3.0-only, keeping\nthe fail-closed property that a new crate inherits copyleft unless it\ndeliberately opts into Apache-2.0. deny.toml, the CLA, CONTRIBUTING, the README\nbadge and prose, the conformance and client crate comments, and the\npublish-readiness licence table all follow; its ELASTIC set is now COPYLEFT.\n\nLICENSING.md is rewritten rather than search-and-replaced, because its argument\nchanged: the section explaining what ELv2 restricts is now one explaining what\nAGPL requires, including the two things a reader most needs to know - that\nlinking a proprietary app against the AGPL crates is a problem and the\nApache-2.0 half exists precisely for that, and that many organisations ban AGPL\ndependencies, which is a real cost accepted knowingly.\n\n`task publish:check` passes across all 15 workspace members; cargo metadata\nresolves ten AGPL-3.0-only and five Apache-2.0 as intended.",
+          "timestamp": "2026-09-12T11:14:38-07:00",
+          "tree_id": "db75509f88bd05c138a4cb98b3541aa9d918e33e",
+          "url": "https://github.com/gabloe/felix/commit/d4c87a09e41e9850690a5ff44c6ffe1d19506b0d"
+        },
+        "date": 1789237015419,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.80\nstdev: 0.45\ncv: 0.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 201,
+            "range": "2.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 200.20\nstdev: 2.59\ncv: 1.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 232,
+            "range": "8.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 232.00\nmean: 232.20\nstdev: 8.98\ncv: 3.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.60\nstdev: 0.89\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 393,
+            "range": "11.73",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 393.00\nmean: 395.80\nstdev: 11.73\ncv: 2.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 661,
+            "range": "606.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 661.00\nmean: 916.80\nstdev: 606.88\ncv: 66.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
