@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789235027587,
+  "lastUpdate": 1789236512447,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5668,6 +5668,58 @@ window.BENCHMARK_DATA = {
             "range": "7221.92",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 682704.33\nmean: 683472.99\nstdev: 7221.92\ncv: 1.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "441db4fe7367c3fc1c44ff187c42776b63cea899",
+          "message": "feat: route publishes by key, and make a stream's shards reachable (#240) (#298)\n\nEvery record of every stream landed on shard 0, because the wire carried no\nrouting key. A stream configured with four shards had three that never\nreceived anything, the shard machinery built across M3 and M4 was exercised on\nexactly one shard per stream, and adding brokers could not increase a single\nstream's write throughput -- which is the entire point of having shards.\n\n**`Publish` and `PublishBatch` carry an optional routing key.** Absent means\nshard 0, which is what every record did before and what a single-shard stream\ndoes regardless, so an old client and a new broker exchange the bytes they\nalways did. Present means the broker hashes it against the stream's shard\ncount and routes there.\n\n**A batch is routed as a unit**, by one key. Splitting a batch across shards\nwould make it several batches with several acknowledgements, which is not what\nthe caller asked for.\n\n**The shard count comes from the router's snapshot**, an `ArcSwap` load with no\nlock, rather than the stream catalog behind a `RwLock`. A publish needs it\nbefore it can resolve a key, so it is the hottest question the router is\nasked; the count is derived once when the table is built. It is the highest\nshard index placed plus one rather than the number of assignments, so a key\ndoes not move as placement catches up with a partly-placed stream.\n\n**`Subscribe` carries an optional shard**, and the redirect answers for *that*\nshard: ownership is per shard, so two shards of one stream can send a\nsubscriber to two different brokers. A subscription reads one shard, so\nconsuming a whole multi-shard stream is one subscription per shard. Doing that\nfor the caller is #297, filed rather than folded in, because merging shards\nforces choices about ordering, resumption and partial failure that deserve to\nbe made deliberately.\n\n**Keyed publishes use the JSON encoding.** The binary publish frames are fixed\nlayouts with no room for a key, so adding one is a new frame flag rather than\nan optional field.\n\nThe hand-written batch encoder had to learn the key too. It, not serde, is\nwhat the client's writer task uses, so a key it omitted would never reach the\nbroker and the record would land on shard 0 with nothing to show for it --\nfound by the compiler complaining the destructured `key` was unused, which is\na thin thread to have caught it by, so there is now a test that the fast path\ncarries it and one that an unkeyed batch still emits the bytes it always did.\n\nFive cluster tests that could not previously be written: a stream is placed\nacross brokers, different keys reach different shards, one key always lands on\none shard and stays ordered there, a keyed publish is forwarded to the shard's\nowner, and an unkeyed publish still lands on shard 0.\n\nOrdering is now stated per key rather than per stream in `docs/semantics.md`,\nwith the compatible case spelled out: a stream with one shard keeps total\norder whatever keys are used, which is what makes this safe to add to an\nexisting stream.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T11:05:59-07:00",
+          "tree_id": "7669bc86c06fd6d04be3077e2beea567a5ce07d8",
+          "url": "https://github.com/gabloe/felix/commit/441db4fe7367c3fc1c44ff187c42776b63cea899"
+        },
+        "date": 1789236511734,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 253269.71,
+            "range": "4725.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253269.71\nmean: 252383.35\nstdev: 4725.23\ncv: 1.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 253269.71,
+            "range": "4725.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253269.71\nmean: 252383.35\nstdev: 4725.23\ncv: 1.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 58283.88,
+            "range": "5491.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 58283.88\nmean: 54586.48\nstdev: 5491.47\ncv: 10.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 582838.8,
+            "range": "54914.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 582838.80\nmean: 545864.79\nstdev: 54914.65\ncv: 10.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
