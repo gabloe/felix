@@ -323,11 +323,18 @@ When subscriber queue full:
 - Other subscribers unaffected
 
 :::caution[At-Most-Once Semantics]
-In MVP, dropped events are not recovered. Subscribers may miss messages if they fall behind. Future: at-least-once delivery with acknowledgements.
+A dropped event is not redelivered. A subscriber that falls behind its queue
+misses messages — but on a **durable** stream the loss is detectable and
+recoverable: delivered events carry log offsets, so a gap in offsets is exactly
+a drop, and the subscriber can resume from the offset it last saw. On an
+ephemeral stream there is nothing to resume from.
+
+Consumer groups with acknowledgements and redelivery are not implemented; see
+`docs/semantics.md` for what is guaranteed today.
 :::
 ## Delivery Semantics
 
-### At-Most-Once (Current MVP)
+### At-most-once, per subscriber
 
 Messages are delivered **zero or one time**:
 
@@ -338,9 +345,10 @@ Messages are delivered **zero or one time**:
 - Suitable for real-time signals, metrics, telemetry
 
 **Message loss scenarios**:
-- Subscriber falls behind buffer capacity
+- Subscriber falls behind its bounded queue
 - Network partition
-- Broker restart (ephemeral storage)
+- Broker restart, for an **ephemeral** stream. A durable stream keeps its
+  records, and a subscriber resumes from the offset it last saw
 
 **Example use case**:
 
