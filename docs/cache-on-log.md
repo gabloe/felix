@@ -20,9 +20,11 @@ streams needed it first:
 - **Group commit and fsync policy.** A cache write is an append, so it inherits
   the same throughput lever.
 - **Replication.** The driver ships log records and does not care what semantic
-  reads them. A cache on the log is replicated by the code that already
-  replicates streams, once its shards are placed (#240 and the cache-routing
-  work that follows this).
+  reads them, so the shipping, quorum accounting, and catch-up tracking are all
+  reusable as they stand. What is *not* free is opening the right log: the
+  driver resolves a shard through `open_stream`, and a cache's log lives under
+  the cache root instead. Replicating a cache needs that one seam widened, not a
+  second replication path.
 
 That last point is the argument for doing it this way rather than bolting
 durability onto a hash map: the alternative is a second durability path and a
@@ -102,8 +104,18 @@ the index lock, so this adds no new contention, only a longer hold.
 
 ## What this does not do yet
 
-Cache operations are not routed. Every broker serves its own cache, so a `put`
-on one broker is invisible to a `get` on another, and the control plane does not
-place cache shards. That is the next piece, and it is the same machinery
-publishes and subscribes already use — which is the point of putting the cache
-on the log first.
+The control plane places cache shards, and a cache carries a shard count and a
+replication factor like a stream does. Nothing in the data path acts on that
+yet: brokers drop cache assignments at ingestion rather than route on them.
+
+So cache operations are still unrouted. Every broker serves its own cache, which
+means a `put` on one broker is invisible to a `get` on another — and worse than
+invisible, because two brokers can hold *different* values for one key with
+nothing to reconcile them. A miss is detectable; divergence is not.
+
+Closing that needs three things, in order: the broker resolving a cache key to a
+shard and forwarding to its owner the way a publish already does, the driver
+opening a cache's log so replication covers it, and a decision on what `Leader`
+and `Quorum` mean for a cache read. The machinery is the machinery publishes and
+subscribes already use — which is the point of putting the cache on the log
+first.

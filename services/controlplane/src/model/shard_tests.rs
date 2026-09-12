@@ -8,6 +8,7 @@ fn assignment() -> ShardAssignment {
             namespace: "payments".to_string(),
             stream: "orders".to_string(),
             shard: 2,
+            kind: ShardKind::Stream,
         },
         leader: "broker-a".to_string(),
         replicas: vec!["broker-b".to_string(), "broker-c".to_string()],

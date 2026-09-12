@@ -10,14 +10,15 @@ pub mod stream;
 mod tenant;
 
 pub use cache::{Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest};
+pub(crate) use cache::{default_cache_replication_factor, default_cache_shards};
 pub use namespace::{Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey};
 pub use node::{
     Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec,
     NodeStatus, NodeValidationError,
 };
 pub use shard::{
-    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardState,
-    ShardValidationError,
+    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind,
+    ShardState, ShardValidationError,
 };
 pub use stream::{
     ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, Stream, StreamChange, StreamChangeOp,

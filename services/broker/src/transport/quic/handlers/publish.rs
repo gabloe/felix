@@ -68,7 +68,7 @@ pub(crate) use uni::{
 use crate::auth::AuthContext;
 use crate::peer::ForwardTarget;
 use crate::shard_routing::{Dispatch, IngressRouter, dispatch, shard_for};
-use crate::shard_watch::ShardKey;
+use crate::shard_watch::{ShardKey, ShardKind};
 #[cfg(test)]
 use crate::transport::quic::errors::AckEnqueueError;
 #[cfg(test)]
@@ -266,6 +266,7 @@ pub(crate) fn publish_target(
                 namespace: namespace.to_string(),
                 stream: stream.to_string(),
                 shard: shard_for(1, None),
+                kind: ShardKind::Stream,
             }),
         }),
         PublishRoute::Forward(target) => {
@@ -393,6 +394,7 @@ pub(crate) async fn resolve_route(
             // lands in must agree on it, or a record is written to one shard's
             // log and replicated from another's.
             shard,
+            kind: ShardKind::Stream,
         };
         match dispatch(ingress, &key) {
             Dispatch::Local => {}

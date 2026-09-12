@@ -24,7 +24,7 @@ use felix_wire::internal::{
 use super::metrics;
 use super::server::PeerRequestHandler;
 use crate::shard_routing::{Dispatch, IngressRouter};
-use crate::shard_watch::ShardKey;
+use crate::shard_watch::{ShardKey, ShardKind};
 
 /// Applies forwarded publishes against the local broker.
 pub struct ForwardingHandler {
@@ -72,6 +72,7 @@ impl ForwardingHandler {
             namespace: publish.shard.namespace.clone(),
             stream: publish.shard.stream.clone(),
             shard: publish.shard.shard,
+            kind: ShardKind::Stream,
         };
 
         match self.ingress.dispatch(&key) {

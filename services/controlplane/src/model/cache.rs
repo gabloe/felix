@@ -17,6 +17,26 @@ pub struct Cache {
     pub namespace: String,
     pub cache: String,
     pub display_name: String,
+    /// How many shards the keyspace is split across.
+    ///
+    /// A key is placed by hashing it, so this is what decides which broker owns
+    /// it. Defaults to `1`, which is what every cache created before caches
+    /// were placed reads back as — one owner for the whole keyspace.
+    #[serde(default = "default_cache_shards")]
+    pub shards: u32,
+    /// How many brokers hold a copy of each shard, leader included.
+    #[serde(default = "default_cache_replication_factor")]
+    pub replication_factor: u32,
+}
+
+/// One shard: the whole keyspace has a single owner unless asked otherwise.
+pub(crate) fn default_cache_shards() -> u32 {
+    1
+}
+
+/// Leader-only, matching streams.
+pub(crate) fn default_cache_replication_factor() -> u32 {
+    1
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

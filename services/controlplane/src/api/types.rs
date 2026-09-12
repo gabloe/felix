@@ -78,6 +78,26 @@ pub struct StreamCreateRequest {
 pub struct CacheCreateRequest {
     pub cache: String,
     pub display_name: String,
+    /// How many shards to split the keyspace across. Omitted means one.
+    #[serde(default = "crate::model::default_cache_shards")]
+    pub shards: u32,
+    /// How many brokers hold each shard, leader included. Omitted means one.
+    #[serde(default = "crate::model::default_cache_replication_factor")]
+    pub replication_factor: u32,
+}
+
+/// Matches the serde defaults, so a caller that fills in `..Default::default()`
+/// gets the same cache a caller that omits the fields from JSON gets. Deriving
+/// this instead would default both counts to zero, which places nothing.
+impl Default for CacheCreateRequest {
+    fn default() -> Self {
+        Self {
+            cache: String::new(),
+            display_name: String::new(),
+            shards: crate::model::default_cache_shards(),
+            replication_factor: crate::model::default_cache_replication_factor(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -176,6 +196,10 @@ pub struct ShardReplicaStatus {
     pub namespace: String,
     pub stream: String,
     pub shard: u32,
+    /// Whether `stream` names a stream or a cache. Omitted means a stream,
+    /// which is what every broker that predates cache placement reports.
+    #[serde(default)]
+    pub kind: crate::model::ShardKind,
     /// The assignment generation the reporting broker held. A report from an
     /// older generation is dropped: the replica set may have changed with it.
     pub generation: u64,

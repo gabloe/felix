@@ -35,6 +35,7 @@ fn shard_key() -> ShardKey {
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
         shard: 0,
+        kind: broker::shard_watch::ShardKind::Stream,
     }
 }
 

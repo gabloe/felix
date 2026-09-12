@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use super::{ControlPlaneStore, StoreError};
 use crate::model::{
-    ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy, ShardAssignment, ShardKey,
-    ShardState, Stream, StreamKind, Tenant,
+    Cache, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy, ShardAssignment,
+    ShardKey, ShardKind, ShardState, Stream, StreamKind, Tenant,
 };
 use crate::store::node_contract::node;
 
@@ -15,6 +15,14 @@ const TENANT: &str = "shard-t";
 const NAMESPACE: &str = "shard-ns";
 const STREAM: &str = "orders";
 const SHARDS: u32 = 4;
+/// Deliberately the stream's name, and deliberately a different shard count:
+/// the two must be distinguished by kind and nothing else.
+const CACHE: &str = "orders";
+const CACHE_SHARDS: u32 = 2;
+const _: () = assert!(
+    SHARDS > CACHE_SHARDS,
+    "the cache must have fewer shards than the stream, or the bound test proves nothing",
+);
 
 fn key(shard: u32) -> ShardKey {
     ShardKey {
@@ -22,6 +30,7 @@ fn key(shard: u32) -> ShardKey {
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
         shard,
+        kind: ShardKind::Stream,
     }
 }
 
@@ -70,6 +79,17 @@ async fn seed(store: &dyn ControlPlaneStore) {
         })
         .await;
 
+    let _ = store
+        .create_cache(Cache {
+            tenant_id: TENANT.to_string(),
+            namespace: NAMESPACE.to_string(),
+            cache: CACHE.to_string(),
+            display_name: "Orders cache".to_string(),
+            shards: CACHE_SHARDS,
+            replication_factor: 1,
+        })
+        .await;
+
     for (i, id) in ["broker-x", "broker-y"].iter().enumerate() {
         let _ = store.register_node(node(id, 7500 + i as u16)).await;
     }
@@ -100,6 +120,82 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     deleting_leaves_the_shard_unowned(store).await;
     a_node_leading_a_shard_cannot_be_deleted(store).await;
     a_snapshot_and_the_changes_after_it_lose_nothing(store).await;
+    a_cache_shard_and_a_stream_shard_of_the_same_name_coexist(store).await;
+    a_cache_shard_is_bounded_by_the_cache_not_the_stream(store).await;
+    an_unknown_cache_is_rejected(store).await;
+}
+
+fn cache_key(shard: u32) -> ShardKey {
+    ShardKey {
+        tenant_id: TENANT.to_string(),
+        namespace: NAMESPACE.to_string(),
+        stream: CACHE.to_string(),
+        shard,
+        kind: ShardKind::Cache,
+    }
+}
+
+fn cache_assignment(shard: u32, leader: &str) -> ShardAssignment {
+    ShardAssignment {
+        key: cache_key(shard),
+        leader: leader.to_string(),
+        replicas: Vec::new(),
+        generation: 999,
+        state: ShardState::Assigning,
+    }
+}
+
+/// The collision the kind exists to prevent. Without it these two writes are
+/// the same primary key, and the second silently takes the first's ownership --
+/// so a client would be routed to a broker holding the wrong log entirely.
+async fn a_cache_shard_and_a_stream_shard_of_the_same_name_coexist(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .put_shard_assignment(assignment(0, "broker-x"))
+        .await
+        .expect("stream shard");
+    store
+        .put_shard_assignment(cache_assignment(0, "broker-y"))
+        .await
+        .expect("cache shard");
+
+    let stream_shard = store.get_shard_assignment(&key(0)).await.expect("stream");
+    let cache_shard = store
+        .get_shard_assignment(&cache_key(0))
+        .await
+        .expect("cache");
+
+    assert_eq!(stream_shard.leader, "broker-x");
+    assert_eq!(cache_shard.leader, "broker-y");
+    assert_eq!(store.list_shard_assignments().await.expect("list").len(), 2);
+}
+
+/// The shard bound comes from whichever of the two the key names. Shard 3 is
+/// inside the stream and outside the cache, so resolving the bound against the
+/// wrong one would let this through.
+async fn a_cache_shard_is_bounded_by_the_cache_not_the_stream(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .put_shard_assignment(assignment(SHARDS - 1, "broker-x"))
+        .await
+        .expect("the stream has this shard");
+
+    let err = store
+        .put_shard_assignment(cache_assignment(SHARDS - 1, "broker-x"))
+        .await
+        .expect_err("the cache does not");
+    assert!(matches!(err, StoreError::Conflict(_)), "got {err:?}");
+}
+
+async fn an_unknown_cache_is_rejected(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    let mut orphan = cache_assignment(0, "broker-x");
+    orphan.key.stream = "no-such-cache".to_string();
+    let err = store
+        .put_shard_assignment(orphan)
+        .await
+        .expect_err("unknown cache");
+    assert!(matches!(err, StoreError::NotFound(_)), "got {err:?}");
 }
 
 /// Cases needing an owned handle to share across tasks.

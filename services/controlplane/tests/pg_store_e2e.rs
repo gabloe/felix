@@ -585,6 +585,8 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     let conflict_cache = store
@@ -593,6 +595,8 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary Again".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await;
     assert!(matches!(
@@ -859,6 +863,8 @@ async fn pg_store_additional_paths() -> Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     assert_eq!(store.list_streams("t1", "default").await?.len(), 1);
@@ -1056,6 +1062,8 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             namespace: "ns1".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     store
@@ -1064,6 +1072,8 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             namespace: "ns1".to_string(),
             cache: "secondary".to_string(),
             display_name: "Secondary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     let caches = store.list_caches("t1", "ns1").await?;
@@ -1189,6 +1199,8 @@ async fn pg_store_not_found_and_noop_paths() -> Result<()> {
             namespace: "missing".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await;
     assert!(matches!(missing_cache, Err(store::StoreError::NotFound(_))));
@@ -1300,6 +1312,8 @@ async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
 
@@ -1452,6 +1466,8 @@ async fn pg_store_full_surface_area() -> Result<()> {
             namespace: "default".to_string(),
             cache: "primary".to_string(),
             display_name: "Primary".to_string(),
+            shards: 1,
+            replication_factor: 1,
         })
         .await?;
     assert_eq!(store.list_caches("t1", "default").await?.len(), 1);
