@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789215826045,
+  "lastUpdate": 1789218591555,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5460,6 +5460,58 @@ window.BENCHMARK_DATA = {
             "range": "7518.57",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553384.85\nmean: 552183.11\nstdev: 7518.57\ncv: 1.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e057ce44cd87c40fb8c30b916a8a5fb2821559f",
+          "message": "feat(client): classify failures and jitter the backoff (#119) (#287)\n\n* feat(client): classify failures and jitter the backoff (#119)\n\n`ReconnectPolicy` retried every failure the same way and backed off in\nlockstep. Three gaps, all of which #119 names.\n\n**Failures were not classified.** A credential without `stream.publish` fails\nidentically on every broker and after every backoff, and the policy spent all\nfive attempts and four sleeps discovering that -- 1.55 seconds to deliver an\nanswer that was available immediately. Terminal failures now return at once:\nforbidden, unknown tenant or namespace, missing stream, and the typed cursor\nerror, which is terminal by construction rather than by matching prose.\n\n**Unknown errors are retried, deliberately.** The client protocol carries an\nerror as a string with no code, so classification is string matching and\nstring matching goes stale. A misclassified retryable error costs one wasted\nattempt; a misclassified terminal one costs the operation. The default puts\nthe cheaper mistake on the likely side, and the doc comment says so.\n\n**The backoff had no jitter.** Every client of a cluster notices a failover at\nthe same instant, so an unjittered backoff sends all of them at the freshly\npromoted broker together, at the moment it can least afford it. Now full\njitter -- uniform over `[0, ceiling]` -- which is what the broker's own peer\npool already does to its redials.\n\n**A deadline exists and is off by default.** Attempt counts do not bound time.\nBut a deadline shorter than one attempt's own timeout prevents any retry at\nall: the first attempt spends the budget and the loop exits having tried\nonce. I found that by shipping a 30s default against a 30s publish-ack\ntimeout and watching `a_client_given_one_seed_survives_losing_it` fail --\nexactly the case the policy exists to serve. Any useful default would have to\nbe derived from the per-attempt timeout rather than picked, so the knob is\nthere and the default is `None`.\n\nTests: eight unit tests covering the jitter bound, that the delay actually\nvaries, the cap, and each side of the classification -- including that the\nfailures a failover produces are all retried, because classifying one of\nthose as terminal would turn a recoverable blip into a lost publish. One\nintegration test asserts on the clock: a forbidden publish comes back in\nunder a second where retrying takes 1.55s. Verified load-bearing.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n* fix(client): stop treating \"not found\" as terminal, which broke failover recovery\n\nCI caught a regression I introduced in the previous commit, and it is the\nexact mistake that commit's own doc comment warned about: \"a misclassified\nterminal error costs the operation\".\n\nA broker learns its tenants, namespaces and streams from the control plane\nand opens a shard only once it has been given one, so a broker promoted a\nmoment ago answers \"stream not found\" for the stream it is about to serve.\nBeing named leader and being ready to serve are different moments -- which\nthis repository already knew, in the `publish_when_ready` helper written two\nslices ago for exactly this.\n\nClassifying that as terminal meant a publish through a fresh leader failed\ninstead of retrying, breaking\n`records_published_across_a_failover_are_all_readable` -- the recovery the\nwhole policy exists to provide.\n\nThe terminal set is now the credential and the typed cursor error, and\nnothing else. A permission the token does not carry is a property of its\nclaims rather than of any broker's state, so it fails the same way everywhere\nand for as long as the token lives. Everything a cluster's own state can\nchange -- what a broker knows, what it has opened, who leads -- is a retry.\n\n`stream not found`, `unknown tenant` and `unknown namespace` are now in the\nlist of failures the retry test asserts *are* retried, with the regression\nnamed beside them so the next person does not re-add them.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-12T06:07:42-07:00",
+          "tree_id": "0c296f4f6422affbcaf261b819853c46265bc77f",
+          "url": "https://github.com/gabloe/felix/commit/6e057ce44cd87c40fb8c30b916a8a5fb2821559f"
+        },
+        "date": 1789218590577,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 357704.27,
+            "range": "9018.59",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 357704.27\nmean: 356525.26\nstdev: 9018.59\ncv: 2.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 357704.27,
+            "range": "9018.59",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 357704.27\nmean: 356525.26\nstdev: 9018.59\ncv: 2.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 81027.83,
+            "range": "596.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 81027.83\nmean: 81115.36\nstdev: 596.24\ncv: 0.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 810278.27,
+            "range": "5962.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 810278.27\nmean: 811153.57\nstdev: 5962.39\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
