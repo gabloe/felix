@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789257444028,
+  "lastUpdate": 1789262520685,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -5980,6 +5980,58 @@ window.BENCHMARK_DATA = {
             "range": "8327.80",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 605174.52\nmean: 607607.80\nstdev: 8327.80\ncv: 1.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9c5cd8c12795b2fc5b5677aaec388e651aca324",
+          "message": "Replicate cache shards, so a cache survives losing its leader (#305)\n\nThe last of #278. A cache's shards carried a replication factor and nothing\nshipped them: the driver resolved every shard through the stream provider, so a\ncache's records stayed on one broker and died with it.\n\nA cache shard is a log, so it is now replicated by the machinery that replicates\na stream's. The generation check, the gap and divergence answers, and\nbootstrapping a follower whose history has been trimmed are all the same code\nagainst the same `StreamLog` handle — only the log it wraps differs.\n\n## The kind travels with the batch\n\n`ReplicateCacheRecords` and `ReplicateCacheBootstrap` carry the same bodies as\ntheir stream counterparts. A cache and a stream may share a name, and a follower\nthat guessed wrong would append one's records into the other's log.\n\nNew kinds rather than a field on `ShardRef`, because the internal protocol\nevolves by adding kinds — that rule is written down in `internal-protocol.md`.\nWidening an existing body needs a version bump, and a version bump means an\nupgraded broker cannot talk to one that has not restarted, which is exactly the\nstate a cluster is in halfway through a rolling upgrade. An old peer answers an\nunknown kind with `Malformed`, which is not retryable, so a leader shipping to\none stops and says so rather than writing records somewhere they do not belong.\n\n## The index catches up\n\nA follower is shipped records without going through `put`, so its index knows\nnothing about them. It now reads forward to the tail whenever it is behind\nrather than building once and trusting itself. Without that a promoted follower\nanswers misses for values it is holding on disk — the same rule the segment\nindexes follow, and for the same reason.\n\n## Two bugs found on the way\n\n**The replica report omitted the shard kind.** The control plane filed a cache's\nreport under the stream of the same name, so placement found no caught-up\nreplica and refused to promote. The shard stayed owned by a dead broker.\n\n**Quorum marks were filed under a stream key regardless of kind.** Harmless\ntoday because no cache write waits on a quorum, but it would have taken the mark\nbelonging to a stream of the same name.\n\n## Verification\n\n- `a_cache_value_survives_the_loss_of_its_owner` — writes through the owner,\n  waits for the followers to be level, kills the owner, and reads the value back\n  from the replica promoted in its place. It fails when the driver is put back\n  to resolving every shard as a stream.\n- `the_index_catches_up_with_records_appended_behind_it` — appends straight to\n  the log, the way replication does, and fails without the catch-up.\n- `task test` (85 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## One thing the test taught me\n\nMy first version polled placement and read in the same loop. Promotion needs a\nreplica report that has not expired, and the window is about two seconds wide\nafter a leader is declared dead — so a loop that also waited on reads spent the\nwindow talking to a broker that could not answer yet, and missed it every time.\nThe wait for a new owner is now its own tight loop, as the stream failover test\nalready does it.\n\nCloses #278",
+          "timestamp": "2026-09-12T18:19:33-07:00",
+          "tree_id": "ec71628261cbf8a223a6c9362049ba1427fb49e4",
+          "url": "https://github.com/gabloe/felix/commit/d9c5cd8c12795b2fc5b5677aaec388e651aca324"
+        },
+        "date": 1789262519813,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233334.98,
+            "range": "6652.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233334.98\nmean: 233575.80\nstdev: 6652.99\ncv: 2.85%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233334.98,
+            "range": "6652.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233334.98\nmean: 233575.80\nstdev: 6652.99\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55481.24,
+            "range": "2220.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55481.24\nmean: 54321.12\nstdev: 2220.21\ncv: 4.09%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 554812.37,
+            "range": "22202.07",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 554812.37\nmean: 543211.19\nstdev: 22202.07\ncv: 4.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
