@@ -115,6 +115,14 @@ tasks:
     desc: "Assert the LICENSING.md licence split and crates.io publish-readiness"
     cmds:
       - "python3 scripts/check_publish_metadata.py"
+  docs:evidence:
+    desc: "Assert every test the docs cite as evidence still exists"
+    # Python and git only, no Node and no node_modules, because this has to run
+    # in the Rust CI job: a citation goes stale when someone renames a *test*,
+    # which is a Rust change. The mermaid and diagram checks need docs-site's
+    # dependencies and stay in its build, where a diagram change is made.
+    cmds:
+      - "python3 scripts/check_doc_evidence.py"
   deny:rsa:default:
     cmds:
       - |

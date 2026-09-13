@@ -10,11 +10,13 @@ Felix is a low-latency distributed data backend that unifies event streaming, me
 
 Internally, Felix is built around a single append-only log abstraction. Different external semantics are projections over this core:
 
-- **Streams (Pub/Sub):** Fanout cursors per subscription
-- **Queues:** Shared consumer-group cursors with acknowledgements. The cursors exist and are durable — a group's position is itself a key → latest-value projection, the same one the cache is, so it reuses that machinery rather than adding a second store. Nothing delivers through them yet (#280)
-- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache keys are sharded and routed to their owner like a stream's are, so a value written through any broker is readable through every other — see `docs/cache-on-log.md`
+- **Streams (Pub/Sub):** read the log forward, one cursor per subscription
+- **Caches:** read the log through an index of key to latest offset, rebuilt from the log itself
+- **Queues:** read the log through a cursor shared by a consumer group, with acknowledgements and bounded redelivery
 
-This drastically reduces operational complexity and consistency bugs compared to running Kafka, Redis, and a queueing system side-by-side.
+All three are built. What each one stores, keeps in memory, and rebuilds from the log — and the test behind every claim about them — is in [Projections](/felix/architecture/projections/), which is the page to trust when this one is vaguer.
+
+This reduces operational complexity and consistency bugs compared to running Kafka, Redis, and a queueing system side-by-side. It is also the project's central bet, so the claim is held to its evidence rather than repeated: `scripts/check_doc_evidence.py` fails the docs build if a cited test no longer exists.
 
 ### 2. Low-Latency First
 
