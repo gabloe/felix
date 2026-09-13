@@ -94,17 +94,24 @@ impl ReplicaHandler {
     /// operator's decision, not a leader's — and a log placed over them would
     /// have a hole between what it held and what it was given, which nothing
     /// downstream could detect.
-    pub async fn bootstrap(&self, request: ReplicateBootstrap, is_cache: bool) -> InternalMessage {
+    pub async fn bootstrap(
+        &self,
+        request: ReplicateBootstrap,
+        log_kind: felix_broker::LogKind,
+    ) -> InternalMessage {
         let correlation_id = request.correlation_id;
         let key = felix_router::ShardKey {
             tenant_id: request.shard.tenant_id.clone(),
             namespace: request.shard.namespace.clone(),
             stream: request.shard.stream.clone(),
             shard: request.shard.shard,
-            kind: if is_cache {
-                felix_router::ShardKind::Cache
-            } else {
-                felix_router::ShardKind::Stream
+            // The cursors belong to their stream's shard, so ownership is
+            // checked against that shard rather than a placement of their own.
+            kind: match log_kind {
+                felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
+                felix_broker::LogKind::Stream | felix_broker::LogKind::GroupCursors => {
+                    felix_router::ShardKind::Stream
+                }
             },
         };
 
@@ -117,7 +124,7 @@ impl ReplicaHandler {
         let Some(log) = self
             .broker
             .shard_log_at(
-                is_cache,
+                log_kind,
                 &key.tenant_id,
                 &key.namespace,
                 &key.stream,
@@ -181,17 +188,24 @@ impl ReplicaHandler {
         })
     }
 
-    pub async fn apply(&self, batch: ReplicateRecords, is_cache: bool) -> InternalMessage {
+    pub async fn apply(
+        &self,
+        batch: ReplicateRecords,
+        log_kind: felix_broker::LogKind,
+    ) -> InternalMessage {
         let correlation_id = batch.correlation_id;
         let key = felix_router::ShardKey {
             tenant_id: batch.shard.tenant_id.clone(),
             namespace: batch.shard.namespace.clone(),
             stream: batch.shard.stream.clone(),
             shard: batch.shard.shard,
-            kind: if is_cache {
-                felix_router::ShardKind::Cache
-            } else {
-                felix_router::ShardKind::Stream
+            // The cursors belong to their stream's shard, so ownership is
+            // checked against that shard rather than a placement of their own.
+            kind: match log_kind {
+                felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
+                felix_broker::LogKind::Stream | felix_broker::LogKind::GroupCursors => {
+                    felix_router::ShardKind::Stream
+                }
             },
         };
 
@@ -205,7 +219,7 @@ impl ReplicaHandler {
         let Some(log) = self
             .broker
             .shard_log(
-                is_cache,
+                log_kind,
                 &key.tenant_id,
                 &key.namespace,
                 &key.stream,
@@ -232,7 +246,7 @@ impl ReplicaHandler {
                 // A cache needs no equivalent: it has no commit sequencer, and
                 // its index notices records that arrived underneath it the next
                 // time the shard is read.
-                if !is_cache
+                if log_kind == felix_broker::LogKind::Stream
                     && let Err(err) = self
                         .broker
                         .adopt_replicated(

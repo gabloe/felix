@@ -34,13 +34,35 @@ impl PeerRequestHandler for BrokerPeerHandler {
         match request {
             InternalMessage::ForwardPublish(publish) => self.forwarding.apply(publish).await,
             InternalMessage::ForwardCacheOp(op) => self.forwarding.apply_cache_op(op).await,
-            InternalMessage::ReplicateRecords(batch) => self.replica.apply(batch, false).await,
-            InternalMessage::ReplicateCacheRecords(batch) => self.replica.apply(batch, true).await,
+            InternalMessage::ReplicateRecords(batch) => {
+                self.replica
+                    .apply(batch, felix_broker::LogKind::Stream)
+                    .await
+            }
+            InternalMessage::ReplicateCacheRecords(batch) => {
+                self.replica
+                    .apply(batch, felix_broker::LogKind::Cache)
+                    .await
+            }
+            InternalMessage::ReplicateGroupRecords(batch) => {
+                self.replica
+                    .apply(batch, felix_broker::LogKind::GroupCursors)
+                    .await
+            }
             InternalMessage::ReplicateBootstrap(request) => {
-                self.replica.bootstrap(request, false).await
+                self.replica
+                    .bootstrap(request, felix_broker::LogKind::Stream)
+                    .await
             }
             InternalMessage::ReplicateCacheBootstrap(request) => {
-                self.replica.bootstrap(request, true).await
+                self.replica
+                    .bootstrap(request, felix_broker::LogKind::Cache)
+                    .await
+            }
+            InternalMessage::ReplicateGroupBootstrap(request) => {
+                self.replica
+                    .bootstrap(request, felix_broker::LogKind::GroupCursors)
+                    .await
             }
             // Responses have no business arriving as requests, and a broker that
             // answered one would be inventing a request that was never made.

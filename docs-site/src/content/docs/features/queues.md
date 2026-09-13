@@ -110,11 +110,12 @@ nothing assigns shards across a group's consumers. Running one consumer per
 shard is the application's job today; there is no coordinator handing shards
 out.
 
-**Survival of a leader failover.** The group's position lives on the broker
-leading the shard and is not replicated. If that broker is lost, the promoted
-replica starts the group from the beginning and redelivers everything.
-Technically within at-least-once, and severe — tracked as
-[#314](https://github.com/gabloe/felix/issues/314).
+**A complete picture after a leader failover.** The group's position travels
+with its shard, so a promoted leader resumes where the group had got to rather
+than at the beginning. What does not travel is the **dead-letter list**: the
+promoted leader keeps the position and forgets which records were set aside.
+Those records were already skipped by the cursor, so what is lost is the record
+that they were skipped at all.
 
 ## Configuration
 

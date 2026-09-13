@@ -107,6 +107,18 @@ fn every_message() -> Vec<InternalMessage> {
             shard: shard(),
             base_offset: 5_000,
         }),
+        InternalMessage::ReplicateGroupRecords(ReplicateRecords {
+            correlation_id: 42,
+            shard: shard(),
+            first_offset: 100,
+            checksum: 0x0102_0304,
+            payloads: vec![Bytes::from_static(b"cursor")],
+        }),
+        InternalMessage::ReplicateGroupBootstrap(ReplicateBootstrap {
+            correlation_id: 42,
+            shard: shard(),
+            base_offset: 5_000,
+        }),
     ]
 }
 
@@ -388,7 +400,7 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(16).is_err());
+    assert!(Kind::from_u16(18).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
@@ -534,6 +546,8 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (13, Kind::ForwardCacheError),
         (14, Kind::ReplicateCacheRecords),
         (15, Kind::ReplicateCacheBootstrap),
+        (16, Kind::ReplicateGroupRecords),
+        (17, Kind::ReplicateGroupBootstrap),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);
@@ -622,4 +636,35 @@ fn a_cache_replication_batch_is_not_a_stream_one() {
         stream
     );
     assert_eq!(InternalMessage::decode(cache_bytes).expect("decode"), cache);
+}
+
+/// A shard has more than one log, and all three replication kinds carry the
+/// same body. Only the kind separates them, so a follower that read the kind
+/// wrong would write a stream's records into its cursor log — or the reverse.
+#[test]
+fn the_three_replication_kinds_are_distinguishable() {
+    let body = ReplicateRecords {
+        correlation_id: 42,
+        shard: shard(),
+        first_offset: 1,
+        checksum: 7,
+        payloads: vec![Bytes::from_static(b"x")],
+    };
+    let encoded: Vec<_> = [
+        InternalMessage::ReplicateRecords(body.clone()),
+        InternalMessage::ReplicateCacheRecords(body.clone()),
+        InternalMessage::ReplicateGroupRecords(body),
+    ]
+    .into_iter()
+    .map(|m| (m.clone(), m.encode().expect("encode")))
+    .collect();
+
+    for (message, bytes) in &encoded {
+        assert_eq!(
+            &InternalMessage::decode(bytes.clone()).expect("decode"),
+            message
+        );
+    }
+    let distinct: std::collections::HashSet<_> = encoded.iter().map(|(_, b)| b).collect();
+    assert_eq!(distinct.len(), 3, "two kinds encode identically");
 }

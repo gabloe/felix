@@ -868,47 +868,63 @@ impl Broker {
     /// so a handle held across one goes stale.
     pub async fn shard_log(
         &self,
-        is_cache: bool,
+        kind: crate::LogKind,
         tenant_id: &str,
         namespace: &str,
         name: &str,
         shard: u32,
     ) -> Option<crate::durable::StreamLog> {
-        if is_cache {
-            return self
+        match kind {
+            crate::LogKind::Cache => self
                 .cache
                 .shard_log(tenant_id, namespace, name, shard)
                 .await
-                .map(crate::durable::StreamLog::from_log);
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::GroupCursors => self
+                .consumer_groups
+                .as_ref()?
+                .shard_log(tenant_id, namespace, name, shard)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::Stream => self
+                .durable_storage
+                .as_ref()?
+                .open_stream(tenant_id, namespace, name, shard)
+                .ok(),
         }
-        self.durable_storage
-            .as_ref()?
-            .open_stream(tenant_id, namespace, name, shard)
-            .ok()
     }
 
     /// [`Broker::shard_log`], creating the log at `base_offset` when this broker
     /// has never held the shard. The base it comes back with is the authority.
     pub async fn shard_log_at(
         &self,
-        is_cache: bool,
+        kind: crate::LogKind,
         tenant_id: &str,
         namespace: &str,
         name: &str,
         shard: u32,
         base_offset: u64,
     ) -> Option<crate::durable::StreamLog> {
-        if is_cache {
-            return self
+        match kind {
+            crate::LogKind::Cache => self
                 .cache
                 .shard_log_at(tenant_id, namespace, name, shard, base_offset)
                 .await
-                .map(crate::durable::StreamLog::from_log);
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::GroupCursors => self
+                .consumer_groups
+                .as_ref()?
+                .shard_log_at(tenant_id, namespace, name, shard, base_offset)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::Stream => self
+                .durable_storage
+                .as_ref()?
+                .open_stream_at(tenant_id, namespace, name, shard, base_offset)
+                .ok(),
         }
-        self.durable_storage
-            .as_ref()?
-            .open_stream_at(tenant_id, namespace, name, shard, base_offset)
-            .ok()
     }
 
     pub fn cache(&self) -> &(dyn StorageApi + Send) {

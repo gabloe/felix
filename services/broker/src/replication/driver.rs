@@ -40,6 +40,7 @@ pub async fn replicate_once<R: PeerRequester>(
     marks: &QuorumMarks,
     report_to: Option<&ReportTo>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
+    group_cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
     if broker.durable_storage().is_none() {
         // Nothing to replicate from. Without durable storage a broker's streams
@@ -76,10 +77,13 @@ pub async fn replicate_once<R: PeerRequester>(
 
         // Resolved per pass rather than cached: a cache shard's log is replaced
         // by compaction, and a handle held across one reads the retired copy.
-        let is_cache = key.kind == felix_router::ShardKind::Cache;
+        let log_kind = match key.kind {
+            felix_router::ShardKind::Cache => felix_broker::LogKind::Cache,
+            felix_router::ShardKind::Stream => felix_broker::LogKind::Stream,
+        };
         let Some(log) = broker
             .shard_log(
-                is_cache,
+                log_kind,
                 &key.tenant_id,
                 &key.namespace,
                 &key.stream,
@@ -129,7 +133,7 @@ pub async fn replicate_once<R: PeerRequester>(
             // is not limited to one batch per tick. It ends on the first answer
             // that is not progress, which bounds the work per pass.
             while let Progress::Stored { .. } =
-                ship_once(requester, &log, &shard, is_cache, cursor, MAX_BATCH_BYTES).await
+                ship_once(requester, &log, &shard, log_kind, cursor, MAX_BATCH_BYTES).await
             {
             }
         });
@@ -186,6 +190,19 @@ pub async fn replicate_once<R: PeerRequester>(
             quorum_offset(tail, &entry.followers),
         );
 
+        // A stream shard has a second log beside it: the positions its consumer
+        // groups have reached. It rides the same replica set and the same
+        // generation, so it is shipped here rather than placed separately —
+        // group state has to be wherever the shard's leader is, and move when
+        // the shard moves.
+        //
+        // Deliberately after the report and the quorum mark, and never gating
+        // either: no publish waits on a cursor, and a cursor lagging must not
+        // hold up the records it describes.
+        if key.kind == felix_router::ShardKind::Stream {
+            ship_group_cursors(requester, broker, key, route, group_cursors).await;
+        }
+
         halted += entry
             .followers
             .iter()
@@ -199,6 +216,7 @@ pub async fn replicate_once<R: PeerRequester>(
     // A shard this broker no longer leads keeps no cursors: they would be a
     // belief about a follower under a leadership that has ended.
     cursors.retain(|key, _| live_shards.contains(key));
+    group_cursors.retain(|key, _| live_shards.contains(key));
     // A shard this broker no longer leads stops promising a quorum. Dropping
     // the mark ends any publish still waiting on it, rather than leaving it to
     // run out its timeout for an answer that can no longer come.
@@ -209,6 +227,68 @@ pub async fn replicate_once<R: PeerRequester>(
         metrics::record_lag(lag);
     }
     Pass { worst_lag, reports }
+}
+
+/// Ship a stream shard's consumer-group cursors to the same replicas.
+///
+/// Separate from the shard's own shipping because it must not affect it: no
+/// report is sent for it, no quorum mark is published, and a failure here is
+/// logged rather than allowed to stall the records. The cursors are small and
+/// written only when a contiguous run of acknowledgements closes, so this is
+/// usually a no-op pass.
+async fn ship_group_cursors<R: PeerRequester>(
+    requester: &R,
+    broker: &Arc<Broker>,
+    key: &ShardKey,
+    route: &felix_router::Route,
+    cursors: &mut HashMap<ShardKey, ShardCursors>,
+) {
+    let Some(log) = broker
+        .shard_log(
+            felix_broker::LogKind::GroupCursors,
+            &key.tenant_id,
+            &key.namespace,
+            &key.stream,
+            key.shard,
+        )
+        .await
+    else {
+        // No consumer-group state on this broker, so there is nothing to ship.
+        return;
+    };
+
+    let entry = cursors.entry(key.clone()).or_insert_with(|| ShardCursors {
+        generation: route.generation,
+        followers: Vec::new(),
+    });
+    if entry.generation != route.generation {
+        *entry = ShardCursors {
+            generation: route.generation,
+            followers: Vec::new(),
+        };
+    }
+    reconcile_followers(entry, route);
+
+    let shard = ShardRef {
+        tenant_id: key.tenant_id.clone(),
+        namespace: key.namespace.clone(),
+        stream: key.stream.clone(),
+        shard: key.shard,
+        generation: route.generation,
+    };
+    let shipping = entry.followers.iter_mut().map(|cursor| async {
+        while let Progress::Stored { .. } = crate::replication::ship_once(
+            requester,
+            &log,
+            &shard,
+            felix_broker::LogKind::GroupCursors,
+            cursor,
+            MAX_BATCH_BYTES,
+        )
+        .await
+        {}
+    });
+    futures::future::join_all(shipping).await;
 }
 
 /// The watch's key for a route, carrying the kind across rather than assuming
@@ -359,6 +439,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursors = HashMap::new();
+        let mut group_cursors = HashMap::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
@@ -371,6 +452,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &marks,
                 report_to.as_ref(),
                 &mut cursors,
+                &mut group_cursors,
             )
             .await;
         }

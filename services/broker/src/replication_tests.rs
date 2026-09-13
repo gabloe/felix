@@ -155,7 +155,15 @@ async fn a_stored_batch_advances_the_cursor_to_what_the_follower_reported() {
     let follower = ScriptedFollower::new([Ok(stored(3))]);
     let mut cursor = cursor(0);
 
-    let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let progress = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(progress, Progress::Stored { durable_offset: 3 });
     assert_eq!(cursor.next_offset, 3);
@@ -172,7 +180,15 @@ async fn the_cursor_follows_the_follower_rather_than_the_batch_size() {
     let follower = ScriptedFollower::new([Ok(stored(2))]);
     let mut cursor = cursor(0);
 
-    ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(cursor.next_offset, 2, "the leader trusted its own count");
 }
@@ -186,11 +202,27 @@ async fn a_gap_rewinds_the_cursor_and_the_next_batch_starts_there() {
     let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogGap, 1)), Ok(stored(4))]);
     let mut cursor = cursor(3);
 
-    let first = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let first = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
     assert_eq!(first, Progress::Resume { offset: 1 });
     assert_eq!(cursor.next_offset, 1);
 
-    ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(
         follower.sent(),
@@ -208,12 +240,28 @@ async fn divergence_halts_the_follower_and_nothing_more_is_sent() {
     let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
     let mut cursor = cursor(0);
 
-    let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let progress = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
     assert_eq!(progress, Progress::Halted(Halt::Diverged));
     assert_eq!(cursor.halted, Some(Halt::Diverged));
 
     // A halted follower is not shipped to again, even when asked.
-    let again = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let again = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(again, Progress::Halted(Halt::Diverged));
     assert_eq!(follower.sent().len(), 1, "a halted follower was shipped to");
@@ -227,7 +275,15 @@ async fn being_fenced_halts_the_follower() {
     let follower = ScriptedFollower::new([Ok(refused(ErrorCode::FencedEpoch, 0))]);
     let mut cursor = cursor(0);
 
-    let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let progress = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(progress, Progress::Halted(Halt::Fenced));
     assert_eq!(cursor.halted, Some(Halt::Fenced));
@@ -242,7 +298,15 @@ async fn a_transient_refusal_leaves_the_cursor_alone() {
     let mut cursor = cursor(0);
 
     assert_eq!(
-        ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await,
+        ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES
+        )
+        .await,
         Progress::Retry,
     );
     assert_eq!(
@@ -250,7 +314,15 @@ async fn a_transient_refusal_leaves_the_cursor_alone() {
         "a transient refusal moved the cursor"
     );
 
-    ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
     assert_eq!(
         follower.sent(),
         vec![(0, vec_of(&["a", "b"])), (0, vec_of(&["a", "b"]))],
@@ -269,7 +341,15 @@ async fn an_unreachable_follower_is_retried_without_moving_the_cursor() {
     let mut cursor = cursor(0);
 
     assert_eq!(
-        ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await,
+        ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES
+        )
+        .await,
         Progress::Retry,
     );
     assert_eq!(cursor.next_offset, 0);
@@ -283,7 +363,15 @@ async fn a_follower_that_is_level_is_not_shipped_to() {
     let follower = ScriptedFollower::new([]);
     let mut cursor = cursor(2);
 
-    let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    let progress = ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     assert_eq!(progress, Progress::UpToDate);
     assert!(follower.sent().is_empty(), "an empty batch was shipped");
@@ -299,7 +387,15 @@ async fn a_batch_is_bounded_rather_than_the_whole_backlog() {
 
     // A budget smaller than the backlog's payload bytes, so the read has to
     // stop short of the tail.
-    ship_once(&follower, &log, &shard(), false, &mut cursor, 2).await;
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        2,
+    )
+    .await;
 
     let (_, payloads) = follower.sent().into_iter().next().expect("a batch");
     assert!(
@@ -320,7 +416,15 @@ async fn the_batch_carries_the_checksum_the_follower_will_verify() {
     let follower = ScriptedFollower::new([Ok(stored(2))]);
     let mut cursor = cursor(0);
 
-    ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        BATCH_BYTES,
+    )
+    .await;
 
     let batch = follower.sent.lock().expect("lock")[0].clone();
     assert_eq!(batch.checksum, batch_checksum(&batch.payloads));
@@ -588,7 +692,15 @@ mod trimmed_history {
         let follower = ScriptedFollower::new([Ok(stored(base))]);
         let mut cursor = cursor(0);
 
-        let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        let progress = ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         assert_eq!(progress, Progress::Resume { offset: base });
         assert_eq!(offers(&follower), vec![base]);
@@ -607,10 +719,26 @@ mod trimmed_history {
         let follower = ScriptedFollower::new([Ok(stored(base)), Ok(stored(tail))]);
         let mut cursor = cursor(0);
 
-        ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
         assert_eq!(cursor.next_offset, base);
 
-        let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        let progress = ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         assert!(matches!(progress, Progress::Stored { .. }), "{progress:?}");
         let (first, _) = follower.sent().into_iter().next().expect("a batch");
@@ -626,7 +754,15 @@ mod trimmed_history {
         let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
         let mut cursor = cursor(0);
 
-        let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        let progress = ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         assert_eq!(progress, Progress::Halted(Halt::NeedsBootstrap));
         assert_eq!(cursor.halted, Some(Halt::NeedsBootstrap));
@@ -640,7 +776,15 @@ mod trimmed_history {
         let mut cursor = cursor(0);
 
         for _ in 0..3 {
-            ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+            ship_once(
+                &follower,
+                &log,
+                &shard(),
+                felix_broker::LogKind::Stream,
+                &mut cursor,
+                BATCH_BYTES,
+            )
+            .await;
         }
 
         assert_eq!(offers(&follower).len(), 1, "a refused offer was repeated");
@@ -657,7 +801,15 @@ mod trimmed_history {
         })]);
         let mut cursor = cursor(0);
 
-        let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        let progress = ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         assert_eq!(progress, Progress::Retry);
         assert!(cursor.halted.is_none(), "a timeout halted replication");
@@ -670,7 +822,15 @@ mod trimmed_history {
         let (log, _base, _dir) = trimmed_leader().await;
         let follower = ScriptedFollower::new([Ok(refused(ErrorCode::LogConflict, 0))]);
         let mut cursor = cursor(0);
-        ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         let tail = log.tail_offset().await.expect("tail");
         assert_eq!(quorum_offset(tail, &[cursor.clone(), super::cursor(0)]), 0);
@@ -684,7 +844,15 @@ mod trimmed_history {
         let follower = ScriptedFollower::new([Ok(stored(base + 1))]);
         let mut cursor = cursor(base);
 
-        let progress = ship_once(&follower, &log, &shard(), false, &mut cursor, BATCH_BYTES).await;
+        let progress = ship_once(
+            &follower,
+            &log,
+            &shard(),
+            felix_broker::LogKind::Stream,
+            &mut cursor,
+            BATCH_BYTES,
+        )
+        .await;
 
         assert!(
             matches!(progress, Progress::Stored { .. }),
