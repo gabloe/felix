@@ -230,7 +230,20 @@ Consistency is declared per stream:
 
 A leader serves only while it holds a lease on the shards it leads, so a broker
 that has been superseded stops acknowledging rather than discovering the fact
-later. On failover, only a replica that actually holds the log is promoted: a
+later.
+
+![A lease on one time axis. Broker A may accept writes only until its lease expiry minus epsilon, by its own monotonic clock. The control plane may not grant the next generation to another broker until the expiry plus a margin. The gap between them is a safety interval in which no broker is leader. Below, a write admitted while the lease was valid is delayed past expiry, and the commit-time re-check refuses it.](/felix/diagrams/leader-lease.svg)
+
+The leader stops **ε early** by its own clock; the control plane waits out a
+**margin** on top of the full lease before handing the shard to anyone else. The
+gap between those two instants is a safety interval in which no broker believes
+it is leader, and it is why this works without the two clocks ever agreeing —
+each only has to measure its own elapsed time.
+
+The lease is checked twice, on admission and again immediately before the record
+is committed. The second check is not redundant: a full ingress queue, a slow
+fsync or a stopped VM can take arbitrarily long, and a lease that was valid when
+the request arrived may have expired by the time the bytes reach the disk. On failover, only a replica that actually holds the log is promoted: a
 shard whose leader is gone and whose replicas are behind is left unavailable
 rather than reopened empty, because a silently empty shard *is* the data loss.
 

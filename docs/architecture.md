@@ -45,6 +45,13 @@ Felix prioritizes predictable low latency over maximum batch throughput. Design 
 - Aggressive backpressure and bounded memory everywhere
 - Leader-based writes with tunable acknowledgement policies
 
+Every subscriber has its own bounded queue, so one that cannot keep up sheds
+records rather than slowing anybody else down:
+
+<p align="center">
+  <img src="assets/slow-consumer.svg" alt="One slow subscriber and two fast ones under each overflow policy: under DropNew only the slow subscriber loses records while the publisher and the others run at full rate, and under Block nothing is dropped but everyone is pulled down to the slow subscriber's speed" width="900">
+</p>
+
 ### 3. Kubernetes-Native
 Felix assumes Kubernetes for:
 - Process lifecycle
@@ -74,6 +81,10 @@ Felix uses QUIC as its sole transport:
 - Multiplexed streams per connection
 - Built-in flow control
 - Resistant to head-of-line blocking
+
+<p align="center">
+  <img src="assets/head-of-line.svg" alt="The same lost packet under TCP and under QUIC: under TCP all three streams stop being delivered until the retransmission arrives, while under QUIC only the stream missing bytes waits" width="900">
+</p>
 
 The wire protocol is versioned and explicitly framed to allow forward compatibility.
 

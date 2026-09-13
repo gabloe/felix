@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" width="900" height="470" role="img" aria-label="One slow subscriber and two fast ones, under the two overflow policies. Under DropNew, the default, the slow subscriber's bounded queue fills and further records are dropped for that subscriber alone, while the publisher and the fast subscribers run at full rate. Under Block, the publisher waits for the slowest subscriber, so the publisher and both fast subscribers are pulled down to the slow one's speed and nothing is dropped.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .mono  { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .warn  { fill: var(--accent); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .track { fill: var(--edge-dim); opacity: .26; }
+    .flow  { fill: var(--edge); }
+    .slow  { fill: var(--accent); }
+    .rule  { stroke: var(--edge-dim); stroke-width: 1; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; }
+
+    /* One 15s loop. Each bar is records actually delivered, so a shorter bar is
+       literally less work done. Both rows face the same slow subscriber. */
+    .hide { opacity: 0; }
+
+    /* DropNew: the publisher and the fast subscribers are untouched. */
+    .full { animation: full 15s infinite; }
+    @keyframes full { 0%,5% { width: 0px } 55%,96% { width: 360px } 97%,100% { width: 0px } }
+
+    /* The slow subscriber, in both rows: it fills its queue quickly, then only
+       advances as fast as it can consume. */
+    .slowbar { animation: slowbar 15s infinite; }
+    @keyframes slowbar { 0%,5% { width: 0px } 28% { width: 144px } 55%,96% { width: 180px } 97%,100% { width: 0px } }
+
+    .badge { animation: badge 15s infinite; }
+    @keyframes badge { 0%,28% { opacity: 0 } 31%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    .c1 { animation: c1 15s infinite; } @keyframes c1 { 0%,4% { opacity:0 } 7%,26% { opacity:1 } 27%,100% { opacity:0 } }
+    .c2 { animation: c2 15s infinite; } @keyframes c2 { 0%,27% { opacity:0 } 30%,53% { opacity:1 } 54%,100% { opacity:0 } }
+    .c3 { animation: c3 15s infinite; } @keyframes c3 { 0%,54% { opacity:0 } 57%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .full,.slowbar,.badge,.c1,.c2,.c3 { animation: none; }
+      .full { width: 360px; }
+      .slowbar { width: 180px; }
+      .badge { opacity: 1; }
+      .c3 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">ONE SLOW SUBSCRIBER — RECORDS DELIVERED, UNDER EACH POLICY</text>
+
+  <!-- =============================== DropNew ================================= -->
+  <text class="name" x="30" y="66">DropNew</text>
+  <text class="small" x="30" y="82">the default</text>
+
+  <text class="small" x="192" y="76" text-anchor="end">publisher</text>
+  <rect class="track" x="200" y="66" width="360" height="12" rx="6"/>
+  <rect class="flow full" x="200" y="66" height="12" rx="6"/>
+  <text class="small" x="576" y="76">full rate</text>
+
+  <text class="small" x="192" y="100" text-anchor="end">subscriber A</text>
+  <rect class="track" x="200" y="90" width="360" height="12" rx="6"/>
+  <rect class="flow full" x="200" y="90" height="12" rx="6"/>
+
+  <text class="small" x="192" y="124" text-anchor="end">subscriber B</text>
+  <rect class="track" x="200" y="114" width="360" height="12" rx="6"/>
+  <rect class="flow full" x="200" y="114" height="12" rx="6"/>
+  <text class="small" x="576" y="112">unaffected by C</text>
+
+  <text class="small" x="192" y="148" text-anchor="end">subscriber C (slow)</text>
+  <rect class="track" x="200" y="138" width="360" height="12" rx="6"/>
+  <rect class="slow slowbar" x="200" y="138" height="12" rx="6"/>
+  <text class="warn hide badge" x="576" y="148">queue full — dropped</text>
+
+  <line class="rule" x1="30" y1="188" x2="870" y2="188"/>
+
+  <!-- ================================= Block ================================= -->
+  <text class="name" x="30" y="236">Block</text>
+  <text class="small" x="30" y="252">lossless</text>
+
+  <text class="small" x="192" y="246" text-anchor="end">publisher</text>
+  <rect class="track" x="200" y="236" width="360" height="12" rx="6"/>
+  <rect class="slow slowbar" x="200" y="236" height="12" rx="6"/>
+  <text class="warn hide badge" x="576" y="246">stalled by C</text>
+
+  <text class="small" x="192" y="270" text-anchor="end">subscriber A</text>
+  <rect class="track" x="200" y="260" width="360" height="12" rx="6"/>
+  <rect class="flow slowbar" x="200" y="260" height="12" rx="6"/>
+
+  <text class="small" x="192" y="294" text-anchor="end">subscriber B</text>
+  <rect class="track" x="200" y="284" width="360" height="12" rx="6"/>
+  <rect class="flow slowbar" x="200" y="284" height="12" rx="6"/>
+  <text class="small" x="576" y="282">pulled down to C</text>
+
+  <text class="small" x="192" y="318" text-anchor="end">subscriber C (slow)</text>
+  <rect class="track" x="200" y="308" width="360" height="12" rx="6"/>
+  <rect class="slow slowbar" x="200" y="308" height="12" rx="6"/>
+  <text class="small" x="576" y="318">nothing dropped</text>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body hide c1" x="450" y="360" text-anchor="middle">Every subscriber has its own bounded queue. The slow one fills its queue; the others are untouched by that.</text>
+  <text class="body hide c2" x="450" y="360" text-anchor="middle">DropNew sheds records for the subscriber that cannot keep up, and only for that subscriber.</text>
+  <text class="body hide c3" x="450" y="360" text-anchor="middle">Block loses nothing and makes the slowest subscriber the speed limit for everyone, publisher included.</text>
+
+  <text class="body" x="450" y="404" text-anchor="middle">This is the trade the whole design turns on. A publisher never waits on a subscriber under the default, which is why</text>
+  <text class="body" x="450" y="422" text-anchor="middle">one stalled consumer cannot degrade the rest — and why a subscriber can silently miss records.</text>
+  <text class="body" x="450" y="448" text-anchor="middle">A drop is detectable: delivered events on durable streams carry offsets, so a jump in offsets is exactly a drop.</text>
+</svg>
