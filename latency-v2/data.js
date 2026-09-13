@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789267604472,
+  "lastUpdate": 1789277294347,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7722,6 +7722,72 @@ window.BENCHMARK_DATA = {
             "range": "833.38",
             "unit": "us",
             "extra": "trials: 5\nmedian: 2144.00\nmean: 1998.40\nstdev: 833.38\ncv: 41.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3530610be51dd7d9b290d7d1e9f564dd995d897",
+          "message": "Make consumer-group positions durable, as a projection over the log (#307)\n\nFirst slice of #280. Queues are the third semantic the founding claim names and\nthe only one not built; this is the state everything else needs, and nothing\nmore. **No client can use a queue after this** — there is no wire protocol, no\ndelivery, no acknowledgement and no redelivery.\n\n## A group's position is a projection we already have\n\nA group's committed offset is a key → latest value: the group's name to the\noffset it resumes from. That is exactly the projection the cache is, so this is\na `LogCache` on its own root rather than a second implementation of durability,\nrecovery and compaction. It inherits all three, and it is what \"one core log,\nmany semantics\" is supposed to mean when it is not just a slogan.\n\nIts own root for the reason caches have theirs: a cache named `orders` and the\ngroup state for a stream named `orders` must not share a directory.\n\n## Two properties, both tested by reverting them\n\n**A commit never moves a group backwards.** A late acknowledgement, from a\nconsumer already superseded, would otherwise redeliver every record between to\na group that has finished them.\n\n**Commits are serialised per shard.** Monotonicity alone is not enough: two\nacknowledgements racing can both read the old position, and the one that lands\nsecond rewinds the group. Per shard rather than globally, because a shard is\nalready the unit one broker owns, so it adds no contention ownership did not.\n\nRemoving the guard fails two tests; removing the lock fails the concurrency\ntest on five runs out of five.\n\n## Only with durable storage\n\n`consumer_groups()` is `None` without it, and deliberately not faked in memory.\nA group whose position is lost on restart redelivers everything it had already\nprocessed, which is worse than refusing to run a queue at all.\n\n## Verification\n\n- Eight unit tests: no invented position for a new group, monotonicity, the\n  concurrent case, independence across groups and shards, restart, and that\n  forgetting a group survives a restart too.\n- `a_consumer_group_position_survives_a_restart` goes through a real broker over\n  the layout the binary uses — a correct store nothing is wired to would pass\n  the unit tests and fail this.\n- `task test` (85 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## Docs say what is true\n\nThe status table still reads 🎯 Target, because nothing is usable. It no longer\nsays \"not started\", which stopped being true here. `semantics.md` now says what\nexists and what does not rather than \"no queue semantics\".\n\nRefs #280",
+          "timestamp": "2026-09-12T22:25:48-07:00",
+          "tree_id": "024fc60fc6a83c7584f10e2924c2245481b77e04",
+          "url": "https://github.com/gabloe/felix/commit/f3530610be51dd7d9b290d7d1e9f564dd995d897"
+        },
+        "date": 1789277292246,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 87,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 87.00\nmean: 88.40\nstdev: 3.71\ncv: 4.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 125,
+            "range": "7.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 128.00\nstdev: 7.07\ncv: 5.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 162,
+            "range": "149.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 222.40\nstdev: 149.79\ncv: 67.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 118,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 118.00\nmean: 118.40\nstdev: 0.55\ncv: 0.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 267,
+            "range": "10.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 267.00\nmean: 271.20\nstdev: 10.80\ncv: 3.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1269,
+            "range": "2060.23",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1269.00\nmean: 2000.80\nstdev: 2060.23\ncv: 102.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
