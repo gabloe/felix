@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789325219015,
+  "lastUpdate": 1789328572967,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6708,6 +6708,58 @@ window.BENCHMARK_DATA = {
             "range": "10764.79",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 539749.52\nmean: 540975.42\nstdev: 10764.79\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dfd5ff19631542335f705060e25bf6577afd6835",
+          "message": "Make a drain observable, and a forced termination distinguishable (#321)\n\nPart of #123: \"expose drain state and forced-termination counts\", and \"track\nin-flight requests\".\n\n## A forced termination looked exactly like a clean one\n\n`DrainBudget` already recorded which subsystems overran and logged a warning.\nThat log line goes with the pod. A drain that finished in time and a drain that\nwas cut off both take about the deadline to report, so nothing an operator could\nscrape afterwards told them apart.\n\nFour signals now do:\n\n- `felix_ready_state` — 1 serving, 0 draining. Distinguishes an instance that\n  left rotation deliberately from one that vanished.\n- `felix_inflight_requests` — requests being served, so a drain can be watched\n  falling to zero.\n- `felix_drain_duration_ms`\n- `felix_drain_forced_total{subsystem}` — non-zero means work was dropped. This\n  is the one to alert on.\n\n## In-flight accounting\n\nA guard that decrements on drop, taken by a middleware layer outside the\nhandlers so a new route cannot forget it, and so it counts time spent in every\nother layer too — a request stuck in the trace layer is still one this instance\nowes an answer for.\n\nDrop rather than an explicit release, because a handler that panics would\notherwise leak a slot for the life of the process and make every later drain\nwait out its full deadline. There is a test that panics inside the guard.\n\n## Two things worth recording\n\n`metrics` is behind the `lifecycle` feature, not an unconditional dependency: it\nis only used there, and library consumers should not inherit it.\n\nI first put the new tests in `lifecycle_tests.rs`, a file nothing includes —\nthis crate keeps its tests inline. They compiled and never ran. Then two of them\nturned out to duplicate existing coverage of the drain budget and are gone. What\nremains is the in-flight behaviour, which was untested because it did not exist.\n\n`task test` (86 groups), `task lint`, `task demo:check`, `task docs:evidence`.\n\nRefs #123",
+          "timestamp": "2026-09-13T12:40:14-07:00",
+          "tree_id": "fe425090cd6540ddd10cd0088d135a12f890b952",
+          "url": "https://github.com/gabloe/felix/commit/dfd5ff19631542335f705060e25bf6577afd6835"
+        },
+        "date": 1789328572208,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 288788.03,
+            "range": "5521.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 288788.03\nmean: 287970.35\nstdev: 5521.35\ncv: 1.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 288788.03,
+            "range": "5521.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 288788.03\nmean: 287970.35\nstdev: 5521.35\ncv: 1.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 66053.55,
+            "range": "489.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 66053.55\nmean: 66008.41\nstdev: 489.53\ncv: 0.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 660535.55,
+            "range": "4895.25",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 660535.55\nmean: 660084.06\nstdev: 4895.25\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
