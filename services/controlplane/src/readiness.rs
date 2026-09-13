@@ -70,6 +70,13 @@ pub const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(1);
 /// Why an instance is not ready.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotReady {
+    /// The process is shutting down and should be taken out of rotation.
+    ///
+    /// Checked before the store and never cached: draining is a local fact, it
+    /// only ever moves one way, and an instance that kept answering ready for
+    /// up to a cache window would keep receiving traffic it is about to stop
+    /// serving.
+    Draining,
     /// The check did not finish in time.
     Timeout { after_ms: u64 },
     /// The store answered, and the answer was no.
@@ -82,6 +89,7 @@ impl std::fmt::Display for NotReady {
             Self::Timeout { after_ms } => {
                 write!(f, "the store did not answer within {after_ms}ms")
             }
+            Self::Draining => write!(f, "this instance is shutting down"),
             Self::Store { detail } => write!(f, "{detail}"),
         }
     }
@@ -94,6 +102,10 @@ struct Cached {
 
 /// Answers readiness, bounded and at a fixed cost.
 pub struct Readiness {
+    /// The process-wide lifecycle flag, shared with the metrics endpoint's
+    /// `/ready`. One flag, so the two cannot disagree about whether this
+    /// instance is in rotation.
+    lifecycle: felix_common::lifecycle::Readiness,
     store: Arc<dyn HealthProbe>,
     timeout: Duration,
     ttl: Duration,
@@ -117,7 +129,24 @@ impl Readiness {
     }
 
     pub fn with_limits(store: Arc<dyn HealthProbe>, timeout: Duration, ttl: Duration) -> Self {
+        Self::with_lifecycle(
+            felix_common::lifecycle::Readiness::ready(),
+            store,
+            timeout,
+            ttl,
+        )
+    }
+
+    /// Share the process's lifecycle flag, so `/v1/system/ready` and the metrics
+    /// endpoint's `/ready` answer the same question during a shutdown.
+    pub fn with_lifecycle(
+        lifecycle: felix_common::lifecycle::Readiness,
+        store: Arc<dyn HealthProbe>,
+        timeout: Duration,
+        ttl: Duration,
+    ) -> Self {
         Self {
+            lifecycle,
             store,
             timeout,
             ttl,
@@ -133,6 +162,12 @@ impl Readiness {
     /// [`Readiness::check`], with the clock supplied so the cache is testable
     /// without sleeping.
     pub async fn check_at(&self, now: Instant) -> Result<(), NotReady> {
+        // Before the cache, and before the store. A draining instance must fall
+        // out of rotation on the very next probe, not after the cache window,
+        // and asking a database whether we are shutting down is pointless.
+        if !self.lifecycle.is_ready() {
+            return Err(NotReady::Draining);
+        }
         let mut cached = self.cached.lock().await;
         if let Some(held) = cached.as_ref()
             && now.duration_since(held.at) < self.ttl

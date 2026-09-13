@@ -29,13 +29,17 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let metrics_handle = observability::init_observability("felix-controlplane");
-    let state = build_state(config.clone()).await?;
-    let _backend_name = state.store.backend_name();
 
-    // `readiness` gates `/ready`. The tokens are separate because the metrics
-    // endpoint has to outlive the API drain — that is how an operator watches the
-    // drain happen.
+    // One flag for the whole process. The metrics endpoint's `/ready` and the
+    // API's `/v1/system/ready` both read it, so a drain is visible on both at
+    // once rather than one of them insisting the instance is fine.
+    //
+    // It is created before the state so the state can hold it. The *tokens*
+    // below stay separate because the metrics endpoint has to outlive the API
+    // drain — that is how an operator watches the drain happen.
     let readiness = Readiness::ready();
+    let state = build_state(config.clone(), readiness.clone()).await?;
+    let _backend_name = state.store.backend_name();
     let api_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
 
@@ -193,7 +197,10 @@ where
     Ok(())
 }
 
-async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppState> {
+async fn build_state(
+    config: config::ControlPlaneConfig,
+    lifecycle_readiness: Readiness,
+) -> anyhow::Result<AppState> {
     let store_config = StoreConfig {
         changes_limit: config.changes_limit,
         change_retention_max_rows: config.change_retention_max_rows,
@@ -209,7 +216,10 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
         }
     };
 
-    let readiness = Arc::new(controlplane::readiness::Readiness::with_limits(
+    let readiness = Arc::new(controlplane::readiness::Readiness::with_lifecycle(
+        // The same flag the metrics endpoint reads, so a drain is visible on
+        // both ports at once.
+        lifecycle_readiness.clone(),
         // The store, seen through the one method readiness needs.
         Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&store))),
         std::time::Duration::from_millis(config.readiness_timeout_ms),
@@ -270,7 +280,9 @@ mod tests {
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
-        let state = build_state(config).await.expect("state");
+        let state = build_state(config, Readiness::ready())
+            .await
+            .expect("state");
         assert_eq!(state.region.region_id, "local");
         assert!(!state.features.durable_storage);
     }
@@ -296,7 +308,10 @@ mod tests {
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
-        let err = build_state(config).await.err().expect("missing postgres");
+        let err = build_state(config, Readiness::ready())
+            .await
+            .err()
+            .expect("missing postgres");
         assert!(err.to_string().contains("postgres configuration missing"));
     }
 
@@ -326,7 +341,7 @@ mod tests {
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
-        let err = build_state(config)
+        let err = build_state(config, Readiness::ready())
             .await
             .err()
             .expect("connect should fail");
