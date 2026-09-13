@@ -65,35 +65,28 @@ while let Some(event) = subscription.next_event().await? {
 }
 ```
 
-### Planned Delivery Guarantees (Future)
+### At-least-once, and why there is no third guarantee
 
-**At-least-once delivery** (planned):
+At-least-once is implemented, two ways, and both are described above: replay a
+durable stream from a checkpointed offset, or consume through a **consumer
+group**, which requires an acknowledgement per record, redelivers anything
+unanswered once its visibility timeout lapses, and dead-letters a record that has
+been attempted too many times.
 
-- Messages delivered one or more times
-- Subscriber acknowledgements required
-- Broker retries unacknowledged messages
-- Requires durable storage
-- Applications must handle duplicates
+**Exactly-once is not implemented and is not planned.** At-most-once and
+at-least-once are the two guarantees Felix intends to offer. End-to-end
+exactly-once needs idempotent producers with sequence numbers, transactional
+coordination across the log and the consumer's own state, and deduplication on
+receive — and the last of those has to live in the application regardless,
+because the application is the only thing that knows what makes two records the
+same. Deduplicate there, keyed on something the record carries.
 
-**Exactly-once semantics** (future):
-
-- Messages delivered exactly one time (from application perspective)
-- Idempotent producers with sequence numbers
-- Transactional coordination
-- Deduplication on receive side
-
-Configuration example (future):
-
-```yaml
-streams:
-  - name: orders
-    delivery: at_least_once
-    retention: 7d
-    
-  - name: transactions
-    delivery: exactly_once
-    retention: 30d
-```
+:::caution[A stream's `delivery` field is not enforced]
+The control plane accepts `AtMostOnce` and `AtLeastOnce` on a stream and stores
+the value, but no broker code reads it. What a consumer gets is decided by how
+it reads — a plain subscription, or a consumer group — and not by what the
+stream declares. Do not rely on it.
+:::
 
 ### Message Ordering
 
@@ -278,8 +271,12 @@ publish_queue_wait_timeout_ms: 1000
 
 - Subscription is immediately removed from registry
 - Buffered events for that subscriber are discarded
-- No redelivery when subscriber reconnects
-- Subscriber must re-subscribe (starts from tail)
+- No redelivery: a plain subscription has no record of what was handled. A
+  consumer group does, and redelivers anything claimed but never acknowledged
+  once its visibility timeout lapses
+- Subscriber must re-subscribe. On a durable stream it can resume at a
+  checkpointed offset rather than restarting at the tail; on an ephemeral one
+  the tail is all there is
 
 **Publisher disconnects**:
 
@@ -487,34 +484,27 @@ sequenceDiagram
     B-->>C: ok
 ```
 
-### Authorization (Planned)
+### Authorization
 
-Future: ACL-based authorization per tenant/namespace/stream.
+Enforced. Tenant-scoped tokens are verified at the broker, and publish,
+subscribe and cache operations each check a permission before doing any work.
 
-```yaml
-acls:
-  - tenant: acme-corp
-    namespace: production
-    resource: orders
-    principal: service-account-1
-    permissions: [publish, subscribe]
-    
-  - tenant: acme-corp
-    namespace: production
-    resource: analytics
-    principal: service-account-2
-    permissions: [subscribe]
-```
+A **forwarded** publish is authorized twice — at the broker the client reached
+and again at the shard's owner — so routing a request through the cluster does
+not launder the credential it arrived with.
 
 **Enforcement points**:
-- Publish operations
+- Publish operations, at ingress and at the owner
 - Subscribe operations
 - Cache operations
 - Control plane operations
 
+Per-tenant quotas are a separate thing and are **not** enforced; see below.
+
 ### Quota Enforcement (Planned)
 
-Future: Per-tenant and per-namespace quotas.
+Not implemented. Nothing limits what a tenant can publish, subscribe to, or
+cache. The shape it would take:
 
 ```yaml
 quotas:
@@ -536,14 +526,22 @@ Within a single broker:
 - **Cache consistency**: Single-writer per key (no torn writes)
 - **Subscription isolation**: Independent queues prevent crosstalk
 
-### Multi-Broker Consistency (Future)
+### Multi-Broker Consistency
 
 In a clustered deployment:
 
-- **Shard leadership**: Only one leader per shard
+- **Shard leadership**: Only one leader per shard, and it serves only while it
+  holds a lease. A broker that has been superseded stops acknowledging rather
+  than discovering the fact later
 - **Metadata consistency**: strongly consistent, because it lives in one Postgres that every control-plane instance reads and writes
-- **Cross-shard ordering**: Not guaranteed
-- **Cache consistency**: Eventually consistent across brokers
+- **Cross-shard ordering**: Not guaranteed. Ordering is per key, because a key
+  always resolves to the same shard and a shard is one log on one leader
+- **Cache consistency**: One owner per key, not eventual. A key hashes to a
+  shard, that shard has one owner, and a broker receiving an operation for a key
+  it does not own forwards it there — so a value written through any broker is
+  readable through every other, and two brokers cannot hold divergent values for
+  the same key. A cache write is acknowledged by its leader; a cache cannot
+  declare `Quorum`
 
 ## Failure Scenarios and Behavior
 

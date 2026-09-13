@@ -366,36 +366,47 @@ while let Some(event) = sub.next_event().await? {
 }
 ```
 
-### At-Least-Once (Planned)
+### At-least-once, via a consumer group
 
-Messages delivered **one or more times**:
+Messages delivered **one or more times**. This is a different shape from
+`subscribe`: records are **pulled** rather than pushed, because only the consumer
+knows when it has capacity for more work.
 
-**Planned features**:
-- Subscriber acknowledgements
-- Broker retries unacknowledged messages
-- Requires durable storage
-- Higher latency than at-most-once
-
-**Example** (future API):
+- Each record is claimed by one consumer and not handed to another while the
+  claim holds
+- An acknowledgement finishes a record; the group's cursor advances over a
+  contiguous run, so acknowledging out of order cannot skip a gap
+- Anything unanswered is redelivered once the visibility timeout lapses
+- Redelivery is bounded: past `max_attempts` the record is dead-lettered
+- Requires durable storage, and costs a round trip per settle
 
 ```rust
-let mut sub = client.subscribe_with_acks("tenant", "ns", "orders").await?;
+// Waits up to 5s for work rather than spinning on empty polls.
+let records = client
+    .group_poll_wait("tenant", "ns", "orders", shard, "fulfilment", 32, Duration::from_secs(5))
+    .await?;
 
-while let Some(event) = sub.next_event().await? {
-    process_order(event.payload)?;
-    event.ack().await?;  // Acknowledge processing
+for record in records {
+    match process_order(&record.payload) {
+        Ok(()) => client.group_ack("tenant", "ns", "orders", shard, "fulfilment", record.offset).await?,
+        // Hand it back for immediate redelivery instead of waiting out the timeout.
+        Err(_) => client.group_nack("tenant", "ns", "orders", shard, "fulfilment", record.offset).await?,
+    }
 }
 ```
 
-### Exactly-Once (Future)
+`record.attempts` carries how many times this record has been delivered, so a
+consumer can treat a retry differently from a first attempt.
 
-Messages delivered **exactly one time** (from application perspective):
+See [Queues](/felix/features/queues/) for dead letters, redrive, and the
+ordering rules that make the cursor safe.
 
-**Planned approach**:
-- Idempotent producers with sequence numbers
-- Broker deduplication
-- Transactional coordination
-- Highest latency
+### Exactly-once is not planned
+
+At-most-once and at-least-once are the two guarantees Felix intends to offer.
+Deduplicating on receive has to happen in the application in any case — it is
+the only layer that knows what makes two records the same — so deduplicate
+there, keyed on something the record carries.
 
 ## Performance Tuning
 

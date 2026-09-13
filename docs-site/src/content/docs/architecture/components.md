@@ -333,7 +333,7 @@ The storage layer provides pluggable backends for different durability and perfo
 
 ### Storage Modes
 
-#### Ephemeral Storage (Current)
+#### Ephemeral Storage (the default)
 
 Fully in-memory storage optimized for latency:
 
@@ -349,28 +349,40 @@ Use cases: real-time signals, transient caching, development
 
 Persistent storage with configurable durability:
 
-- **Write-ahead log (WAL)** for crash recovery
-- **Segmented log files** for efficient compaction
-- **Sparse indexes** for offset lookups
-- **Configurable fsync** policies
-- **At-least-once** delivery semantics
+- **Log-structured segment store**, not a write-ahead log: the log *is* the
+  data, and a record is never rewritten. That is what lets recovery trust
+  "valid bytes end at EOF"
+- **Torn-tail repair** on startup; interior corruption fails startup loudly
+  rather than discarding acknowledged records
+- **Sparse indexes** for offset lookups, rebuilt from the segment they describe
+  whenever they are missing, short, or stale — they are derived, never trusted
+- **Configurable fsync** policies, with group commit so one flush serves many
+  waiters
+- **At-least-once** delivery when replayed from a checkpointed offset
 
 ### Retention Policies
 
-Retention is enforced per stream:
+Retention is enforced **per broker, not per stream**, and is off unless it is
+configured:
 
-```yaml
-streams:
-  - name: metrics
-    retention:
-      time: 24h
-      size: 100GB
-      
-  - name: events
-    retention:
-      time: 7d
-      size: 1TB
+```bash
+export FELIX_DURABLE_RETENTION_BYTES=107374182400   # 100 GiB per log
+export FELIX_DURABLE_RETENTION_SECONDS=86400        # 24 hours
+export FELIX_DURABLE_RETENTION_INTERVAL_SECONDS=60  # how often it is checked
 ```
+
+Unset, nothing deletes segments and a durable log grows without bound. Once set,
+the oldest segments are discarded, and a subscription resuming below the oldest
+retained offset is answered with a typed error naming that offset rather than
+silently restarting at the tail.
+
+:::caution[A stream's `retention` field is not enforced]
+The control plane accepts a per-stream `RetentionPolicy` (`max_age_seconds`,
+`max_size_bytes`) and stores it, but no broker code reads it. What a durable log
+actually obeys is the broker-wide configuration above, whatever a stream
+declares. This is the same shape as `DeliveryGuarantee`: declared in metadata,
+not wired to behaviour. Do not rely on it.
+:::
 
 ## Control Plane: Metadata Management
 

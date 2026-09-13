@@ -13,7 +13,7 @@ around as if it exists, or claimed externally.
 - 🎯 **Target** — intended design. Not implemented. May change.
 :::
 :::note[Maintenance]
-**Status markers last verified against the code on 2026-08-15.** This page
+**Status markers last verified against the code on 2026-09-13.** This page
 goes stale the moment a 🎯 row lands, and stale status markers are worse than
 no status markers — a reader who catches one wrong row stops trusting the
 other twenty. Treat updating it as part of shipping any capability listed
@@ -27,9 +27,17 @@ on 🎯 rows means no implementation was found, which is a weaker check.
 :::
 ## The one-sentence answer
 
-**Today:** Felix is a single-node, QUIC-based pub/sub and cache system optimized
-for high-fanout delivery with predictable tail latency and strict slow-consumer
-isolation.
+**Today:** Felix is a QUIC-based replicated log that serves stream, cache, and
+queue semantics from one storage engine, optimized for high-fanout delivery with
+predictable tail latency and strict slow-consumer isolation.
+
+Shards of a stream or cache are placed across brokers, replicated by leader
+leases and log shipping, and survive the loss of a leader; a publish can be made
+to wait for a quorum of the replica set before it is acknowledged. What is not
+yet true of a cluster is spelled out row by row in
+[section 2](#2-what-felix-does-today) — most of the multi-node rows are 🚧
+rather than ✅, and the reason each one is Partial is the fault injection it has
+not been put through, not a missing feature.
 
 The slow-consumer isolation half of that sentence is runnable:
 [`task demo:slow-consumer`](/felix/demos/slow-consumer-isolation/) stalls one
@@ -142,9 +150,10 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Token-based authorization | ✅ Today | OIDC token exchange, tenant-scoped JWTs, broker-side permission checks on publish/subscribe/cache |
 | Control plane metadata service | ✅ Today | REST + OpenAPI, tenant/namespace/stream/cache CRUD, snapshot and changes feeds, in-memory or Postgres backing |
 | Prometheus metrics, health endpoints | ✅ Today | Plus opt-in `telemetry` feature for per-stage timings |
-| Durable streams | ✅ Today | Opt-in per stream via `durable: true`, and only when the broker runs with `FELIX_DURABLE_STORAGE_DIR`. Segmented crash-safe log: CRC-verified records, torn-tail recovery, group commit, three fsync policies. Single node, and nothing trims it |
+| Durable streams | ✅ Today | Opt-in per stream via `durable: true`, and only when the broker runs with `FELIX_DURABLE_STORAGE_DIR`. Segmented crash-safe log: CRC-verified records, torn-tail recovery, group commit, three fsync policies. A durable shard is replicated to followers and survives losing its leader. Retention is available and off by default (`FELIX_DURABLE_RETENTION_BYTES` / `FELIX_DURABLE_RETENTION_SECONDS`); unset, a log grows without bound |
 | Resumable subscriptions | ✅ Today | `Subscribe` takes `latest` / `earliest` / an offset; every delivered event carries its offset (`Event.offset`) so an application can checkpoint and resume at `offset + 1`. Stored history joins live delivery with no gap, backfilling from disk if the live queue overflowed. Durable streams only; bounded by retention when it is configured, unbounded otherwise |
-| Graceful shutdown | 🚧 Partial | Readiness flip, bounded drain, and accept-loop cancellation done; per-subsystem cancellation still open |
+| Queue semantics (consumer groups, acks, redelivery) | 🚧 Partial | A client polls a group, acknowledges a record, or hands it back; an unanswered record is redelivered once the visibility timeout lapses. A claimed record is not handed to a second consumer, and the cursor advances only over a contiguous run of acknowledgements, so an acknowledgement out of order cannot skip a gap. The cursor is a durable key → latest-value projection over a log, monotonic so a late acknowledgement cannot rewind it, and it is replicated with its shard — a promoted replica resumes where the group had reached rather than at zero. Redelivery is bounded: past `max_attempts` a record is dead-lettered, and the delivered record carries its attempt count. Dead letters are pointers into the stream's log, not copies, and can be listed and discarded. Partial because the dead-letter list is not replicated, so a promotion loses it, and a group is bound to the shard the caller names |
+| Graceful shutdown | 🚧 Partial | Readiness flips before the listener closes, and the control plane keeps serving across a configurable hold-off so a load balancer can act on it. Bounded drain against one shared deadline, with a forced termination reported rather than logged as clean. Partial because cancellation is coordinated at the connection boundary rather than per subsystem, and the hold-off is control-plane only |
 | Sharding | 🚧 Partial | Streams carry a shard count, the control plane assigns each shard an owner, and a publish resolves against that ownership before anything else happens. A publish for a shard this broker does not own is forwarded to the owner and acknowledged only once the owner has written it. A publish may carry a routing key, and the key decides the shard, so a stream placed across brokers spreads across them. Ordering becomes per key rather than per stream once a stream has more than one shard; a single-shard stream keeps total order. Partial because a subscription reads one shard, so consuming a whole multi-shard stream means one subscription per shard (#297), and keyed publishes use the JSON encoding because the binary frames have no room for a key |
 | Multi-node clustering and replication | 🚧 Partial | Brokers register, their liveness is tracked, shards are assigned to owners, and a publish that reaches the wrong broker is forwarded to the right one. Shard leaders now replicate committed records to followers, and a follower whose history is gone is given a log starting where the leader's surviving log does. A subscribe sent to a broker that does not hold the shard is now answered with a redirect naming the one that does, rather than being accepted and silently delivering nothing; `ClusterClient` follows it |
 | Leader failover | 🚧 Partial | A lost leader is replaced by a replica that holds the log — never by a broker that does not — in about a second on a local three-node cluster, and a quorum-acknowledged record is readable from the replacement. A shard with no qualifying replica is left unavailable rather than served empty. A leader frozen past its lease and then resumed cannot acknowledge a write the cluster has lost. Proven against process kill, graceful stop, freeze, and partition — a broker severed from its peers while it keeps running and keeps heartbeating, so the control plane still believes it is healthy. Clock skew cannot affect the lease, which reads a monotonic clock and never a wall clock; the assumption that does matter, bounded process suspension, is injected by freezing a leader past its lease. Partial rather than done because the injected faults are still the ones a single machine can produce |
@@ -177,8 +186,19 @@ for behavior at thousands of subscribers or across a network.
 
 ### Delivery semantics today
 
-- **At-most-once.** No redelivery, no publisher-visible confirmation that a
-  subscriber received anything.
+- **At-most-once for a plain subscription.** A subscriber is delivered to
+  best-effort: no redelivery, and no publisher-visible confirmation that anyone
+  received anything. This is the right default for the fanout workloads Felix is
+  aimed at, where the next update supersedes the one that was dropped.
+- **At-least-once through a consumer group.** Polling a group is the other
+  shape: a record is claimed rather than pushed, redelivered if it is not
+  answered for within the visibility timeout, and dead-lettered once it has
+  been attempted too many times. A consumer must expect the same record twice —
+  a crash after handling and before acknowledging is indistinguishable from a
+  crash before handling. See [Queues](/felix/features/queues/).
+- **Exactly-once is not implemented and is not on the roadmap.** The two shapes
+  above are the two Felix intends to offer. Deduplicate in the application,
+  keyed on something in the record.
 - **Per-stream ordering** preserved for a given subscriber. No ordering across streams.
 - **Resumable subscriptions over the wire, for durable streams.** `Subscribe`
   carries an optional `start` — `latest` (the default, and what every older
@@ -198,7 +218,7 @@ for behavior at thousands of subscribers or across a network.
   `FELIX_DURABLE_RETENTION_SECONDS`): unset, a durable stream grows without
   bound; set, the oldest records are discarded and a resume below them fails
   with a typed error naming the oldest retained offset. Tiering is not
-  implemented.
+  implemented ([#172](https://github.com/gabloe/felix/issues/172)).
 
 ---
 
@@ -212,7 +232,6 @@ ship rather than being marked off here.
 |---|---|---|
 | Log-backed cache (one core log, many semantics) | 🚧 Partial | A cache is a log: writes append records, reads go through an index of key → offset rebuilt from the log at startup, and compaction reclaims superseded and expired records without ever rewriting one. Entries survive a restart when the broker has `FELIX_DURABLE_STORAGE_DIR`; without one the cache is in memory, because there is nowhere to write a log. Cache operations are routed: a key hashes to a shard, that shard has one owner, and a broker that receives an operation for a key it does not own forwards it there — so a value written through any broker is readable through every other. A cache's shards are replicated and survive the loss of their leader. Put, get and delete are all on the wire, with delete reporting the value it removed. Partial because a cache declares no consistency level — its writes are acknowledged by the leader, so the guarantee is `Leader` rather than `Quorum` |
 | Gap-free "current state + subsequent changes" subscribe | 🎯 Target | `Subscribe` takes an offset, so *changes since a known point* is gap-free. The missing half is the snapshot: there is no way to ask for current state and subsequent changes in one call |
-| Queue semantics (consumer groups, acks, redelivery) | 🎯 Target | Not usable. Durable group cursors exist — a group's position on a shard is recorded as a key → latest-value projection over a log, monotonic so a late acknowledgement cannot rewind it, and it survives a restart. A client can poll a group, acknowledge a record, and hand one back; an unanswered record is redelivered once the visibility timeout lapses. A claimed record is not handed to a second consumer, and the cursor advances only over a contiguous run of acknowledgements. Target rather than Today because redelivery is unbounded: there is no attempt limit and no dead-letter destination, so a record that always fails is redelivered for ever (#280) |
 | Tiered / cold storage | 🎯 Target | `TieredStore` trait declared, no implementation |
 | Raft consensus for cluster metadata | 🎯 Target | Not started. Raft is the intended mechanism for making control-plane *metadata* highly available, and deliberately not for replicating stream records: shard replication is leader leases plus log shipping, decided in [`docs/replication-design.md`](https://github.com/gabloe/felix/blob/main/docs/replication-design.md) |
 | Cross-region routing and data sovereignty enforcement | 🎯 Target | `felix-router` is a directional region-pair allowlist, not wired into enforcement |
@@ -315,8 +334,8 @@ Felix should not be positioned against any of these, now or later.
 
 - **Not a Kafka replacement.** Kafka is excellent at durable event history,
   long-term retention, replay, and data integration. Felix's durability is meant
-  to serve live distribution, not to compete on retention — it is single-node,
-  and nothing trims a log yet.
+  to serve live distribution, not to compete on retention — there is no tiered
+  or cold storage, and retention is off unless it is configured.
 - **Not a Redis replacement.** Cache semantics in Felix exist as part of a
   state-distribution model, not as a general-purpose data-structure server.
 - **Not a RabbitMQ replacement.** Elaborate routing topologies and traditional
@@ -363,15 +382,28 @@ Felix is a strong fit today if your workload has most of these:
 - updates that matter in milliseconds, not seconds;
 - consumers that run at genuinely different speeds, where one slow consumer must
   not affect the others;
-- data that is fine to lose on restart;
-- tolerance for at-most-once delivery.
+- either tolerance for at-most-once delivery, or work that suits a consumer
+  group's poll-acknowledge-redeliver shape;
+- durability that is opt-in per stream rather than assumed everywhere.
 
-Felix is a strong fit for the **target** architecture, but not yet usable, if you
-additionally need durability, replay, multi-node operation, or consumers that
-must reconstruct state after a disconnect.
+Felix is **usable but early** if you need multi-node operation. Placement,
+replication, quorum acknowledgement, leader failover and client redirection are
+all implemented and tested, including against kill, graceful stop, freeze and
+partition — but every fault so far is one a single machine can produce, there is
+no chaos suite ([#135](https://github.com/gabloe/felix/issues/135)), no
+cluster-scale latency budget ([#136](https://github.com/gabloe/felix/issues/136)),
+and no Kubernetes packaging
+([#131](https://github.com/gabloe/felix/issues/131)). Run it where you can
+tolerate finding the next bug.
 
-Felix is the wrong tool if you need durable history, transactional guarantees,
-exactly-once processing, or a mature multi-language ecosystem.
+Felix is a strong fit for the **target** architecture, but not yet usable, if
+you need a consumer to reconstruct state after a disconnect in one call. Asking
+for *changes since an offset* is gap-free today; asking for *current state and
+every subsequent change* is not, and stitching the two yourself races.
+
+Felix is the wrong tool if you need long-term event history, tiered storage,
+transactional guarantees, exactly-once processing, or a mature multi-language
+ecosystem — the Rust client is the only client.
 
 ---
 

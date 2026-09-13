@@ -186,8 +186,16 @@ to disk before it is fanned out or acknowledged.
   fails startup loudly rather than discarding acknowledged records
 - **Historical replay:** paged reads from disk by offset
 
-Not yet implemented: **retention policies**, **snapshots/compaction**, and
-**tiered storage**. Nothing currently deletes segments on age or size.
+Retention is implemented and off by default: set
+`FELIX_DURABLE_RETENTION_BYTES` or `FELIX_DURABLE_RETENTION_SECONDS` and the
+oldest segments are discarded, with a resume below the oldest retained offset
+answered by a typed error rather than a silent restart at the tail. Unset,
+nothing deletes segments and a log grows without bound.
+
+Not yet implemented: **snapshots**, and **tiered storage**
+([#172](https://github.com/gabloe/felix/issues/172)). Compaction exists, but for
+the cache rather than for streams — a cache log reclaims superseded and expired
+records, and a stream log never rewrites a record at all.
 
 See [Durable Storage](/felix/architecture/durable-storage/).
 
@@ -201,7 +209,9 @@ See [Durable Storage](/felix/architecture/durable-storage/).
 
 ### Single node
 
-- **Delivery:** At-most-once (best-effort)
+- **Delivery:** At-most-once for a plain subscription; at-least-once through a
+  consumer group, which redelivers anything not acknowledged before its
+  visibility timeout
 - **Ordering:** Per-stream ordering preserved per subscriber. For a durable
   stream, the order on disk is authoritative and cursor replay and live
   delivery both follow it.
@@ -226,9 +236,11 @@ rather than reopened empty, because a silently empty shard *is* the data loss.
 
 **Delivery guarantees:**
 
-- **At-least-once:** with durable storage and replay on failure
-- **At-most-once:** best-effort with no retries
-- **Exactly-once:** not implemented
+- **At-most-once:** a plain subscription, best-effort with no retries
+- **At-least-once:** a consumer group, which redelivers until acknowledged and
+  then dead-letters; or a durable stream replayed from a checkpointed offset
+- **Exactly-once:** not implemented, and not planned — see
+  [Semantics](/felix/architecture/semantics/)
 
 ## Multi-Region Architecture (Planned)
 

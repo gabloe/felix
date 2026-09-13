@@ -284,12 +284,15 @@ Stated because a guarantee without its failure model is a slogan.
   choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
-- **Queue semantics are reachable but incomplete** (#280). A client can poll a
-  consumer group, acknowledge a record, and hand one back; a record neither
-  answered for is redelivered once the visibility timeout lapses. What is
-  missing is a bound on redelivery: **a record that always fails is redelivered
-  for ever**, because there is no attempt limit and no dead-letter destination.
-  A queue with a poison record makes no progress past it.
+- **A consumer group's dead-letter list does not survive a failover.** The
+  group's *position* is replicated with its shard, so a promoted replica resumes
+  where the group had reached rather than at zero. The list of offsets the group
+  gave up on is durable on the broker that recorded it and is not shipped, so a
+  promotion loses it: those records stay in the log, and nothing on the new
+  leader says the group already stopped trying them.
+- **A group is bound to the shard the caller names.** Consuming a whole
+  multi-shard stream through a group means polling each shard's group
+  separately, for the same reason a subscription reads one shard.
 
   Delivery is by poll rather than push: a consumer takes work when it has
   capacity, and the broker cannot know when that is. A poll can ask the broker

@@ -176,7 +176,9 @@ Felix provides **tunable consistency** configured per stream:
 - **Leader failover:** A lost leader is replaced only by a replica that holds
   the log, in about a second on a local three-node cluster. A record
   acknowledged under `Quorum` is readable from the replacement. Proven against
-  process kill; partitions and clock skew are not yet testable
+  process kill, graceful stop, freezing a leader past its lease, and partitioning
+  a broker that keeps heartbeating. The lease reads a monotonic clock and never a
+  wall clock, so clock skew cannot affect it
 
 - **At-least-once:** a durable stream persists each record before acknowledging
   it and replays it from any retained offset. A consumer group goes further and

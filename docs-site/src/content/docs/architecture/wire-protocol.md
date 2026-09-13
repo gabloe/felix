@@ -90,9 +90,13 @@ Purpose: Protocol identification and frame synchronization. Decoders should reje
 
 **version (u16, big-endian)**
 
-Protocol version: `1` for current specification
+Protocol version: `1`, and it has stayed `1` on purpose.
 
-Future versions will use different version numbers to enable negotiation and backward compatibility.
+Capabilities are added by negotiating flag and feature bits during the
+handshake, not by bumping this number — see
+[Capability negotiation](#capability-negotiation-not-version-negotiation). The
+field exists so a peer speaking something entirely different is rejected at the
+header rather than misparsed.
 
 **flags (u16, big-endian)**
 
@@ -708,8 +712,8 @@ Felix uses different QUIC stream patterns for different workload characteristics
 - Close stream if error is unrecoverable
 
 **Unknown message type**:
-- Send `error` message
-- Future versions may handle gracefully
+- Send `error` message. A peer should not be sending one: a request that a
+  feature bit gates is only sent to a peer that advertised the bit
 
 ### Application Errors
 
@@ -758,29 +762,34 @@ Any client or server claiming Felix protocol compatibility must pass the full co
 :::
 ## Backward Compatibility
 
-### Version Negotiation (Future)
+### Capability negotiation, not version negotiation
 
-Future protocol versions will negotiate using the `version` field:
+Felix does not bump a protocol version to add a capability. There is no version
+list and no highest-mutually-supported handshake; a peer says what it can do and
+the other side answers with what it will do. This is a deliberate choice, and it
+is why there are two separate mechanisms rather than one:
 
-1. Client sends supported version list in connection metadata
-2. Server selects highest mutually supported version
-3. All subsequent frames use negotiated version
+- **Frame flags** select the *payload layout*. A client offers `client_flags` on
+  `auth` and the broker answers `server_flags` on `auth_ok`, as described under
+  [Capability negotiation](#capability-negotiation) above. Because a flag decides how the body is
+  parsed, an unknown flag bit is **rejected rather than masked off** — masking one
+  means confidently misparsing the body. `ORIGINAL_V1_FLAGS` is what an absent
+  advertisement means, and it is frozen: nothing is ever added to it, because a
+  peer that predates negotiation cannot be asked.
+- **Feature bits** say a *request exists*. They live in their own number space,
+  and an absent advertisement means the peer implements none of them, which is
+  the safe reading rather than a lossy one.
 
-### Feature Flag Negotiation (Future)
-
-Optional features (compression, alternative encodings) will be negotiated via the `flags` field:
-
-1. Client advertises supported flag bits
-2. Server responds with enabled flags
-3. Both sides enable only mutually supported features
+Both are additive. An optional field must default to the pre-existing behaviour,
+so an old peer and a new peer exchange byte-identical frames — that property is
+what makes a rolling upgrade safe, and it is checked by the conformance suite.
 
 ### Deprecation Policy
 
-Deprecated protocol features will:
-
-1. Be marked deprecated for at least 2 major versions
-2. Generate warnings when used
-3. Eventually be removed with major version bump
+Removing a capability is the case this design does not cover, and no capability
+has been removed yet. The mechanism that exists is one-directional: a bit stops
+being advertised, and a peer that never sees it advertised never sends the
+request. Anything stronger would need a policy that does not exist today.
 
 ## Implementation Guidance
 
@@ -821,10 +830,15 @@ Planned protocol enhancements (not in v1):
 
 - **Compression**: Optional zstd or lz4 compression (negotiated via flags)
 - **Encryption metadata**: End-to-end encryption with key IDs in envelope
-- **Message ordering**: Sequence numbers for exactly-once semantics
-- **Acknowledgements**: Consumer acks for at-least-once delivery
 - **Stream filtering**: Server-side filtering to reduce client bandwidth
-- **Historical replay**: Subscribe from offset or timestamp
-- **Multi-tenancy**: Tenant isolation and quotas
+- **Replay by timestamp**: `Subscribe` takes an offset today, not a time
+- **Quotas**: per-tenant and per-namespace limits
 
-These extensions will be added in backward-compatible ways through version negotiation or optional feature flags.
+Since delivered, and no longer on this list: consumer acknowledgements for
+at-least-once delivery (consumer groups), historical replay from an offset, and
+tenant isolation. Sequence numbers for exactly-once are **not** on this list —
+exactly-once is not planned.
+
+These extensions will be added the same way every capability has been: an
+additive flag or feature bit negotiated during the handshake, never a version
+bump.

@@ -317,7 +317,7 @@ docs/
 ├── design.md            # Product design notes
 ├── broker-config.md     # Broker configuration
 ├── client-config.md     # Client configuration
-├── todos.md             # Implementation checklist
+├── todos.md             # The original MVP checklist (historical)
 └── assets/              # Diagrams and images
     └── logo.PNG
 ```
