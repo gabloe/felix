@@ -2,6 +2,8 @@
 use super::*;
 
 const VIS: Duration = Duration::from_secs(30);
+/// High enough that the cases below never reach it. The bound has its own tests.
+const MANY: u32 = 1_000;
 
 fn at(base: Instant, secs: u64) -> Instant {
     base + Duration::from_secs(secs)
@@ -10,19 +12,19 @@ fn at(base: Instant, secs: u64) -> Instant {
 #[test]
 fn a_new_group_hands_out_from_its_committed_position() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(5);
+    let mut group = GroupTracker::new(5, MANY);
 
-    assert_eq!(group.claim(9, 10, now, VIS), vec![5, 6, 7, 8]);
+    assert_eq!(group.claim(9, 10, now, VIS).offsets, vec![5, 6, 7, 8]);
     assert_eq!(group.committed(), 5, "handing out settles nothing");
 }
 
 #[test]
 fn nothing_at_or_above_the_tail_is_handed_out() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
-    assert_eq!(group.claim(0, 10, now, VIS), Vec::<u64>::new());
-    assert_eq!(group.claim(2, 10, now, VIS), vec![0, 1]);
+    assert_eq!(group.claim(0, 10, now, VIS).offsets, Vec::<u64>::new());
+    assert_eq!(group.claim(2, 10, now, VIS).offsets, vec![0, 1]);
 }
 
 /// **The queue property.** A record handed to one consumer is not handed to
@@ -30,14 +32,14 @@ fn nothing_at_or_above_the_tail_is_handed_out() {
 #[test]
 fn an_offset_in_flight_is_not_handed_out_again() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
-    let first = group.claim(4, 2, now, VIS);
-    let second = group.claim(4, 2, now, VIS);
+    let first = group.claim(4, 2, now, VIS).offsets;
+    let second = group.claim(4, 2, now, VIS).offsets;
 
     assert_eq!(first, vec![0, 1]);
     assert_eq!(second, vec![2, 3], "a second consumer got the same records");
-    assert_eq!(group.claim(4, 10, now, VIS), Vec::<u64>::new());
+    assert_eq!(group.claim(4, 10, now, VIS).offsets, Vec::<u64>::new());
 }
 
 /// **The other half of it.** A consumer that stops answering must not hold a
@@ -45,26 +47,32 @@ fn an_offset_in_flight_is_not_handed_out_again() {
 #[test]
 fn a_lapsed_claim_is_handed_out_again() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
-    assert_eq!(group.claim(3, 10, base, VIS), vec![0, 1, 2]);
+    assert_eq!(group.claim(3, 10, base, VIS).offsets, vec![0, 1, 2]);
     // Still held while the claim stands.
-    assert_eq!(group.claim(3, 10, at(base, 29), VIS), Vec::<u64>::new());
+    assert_eq!(
+        group.claim(3, 10, at(base, 29), VIS).offsets,
+        Vec::<u64>::new()
+    );
     // And owed again once it lapses.
-    assert_eq!(group.claim(3, 10, at(base, 31), VIS), vec![0, 1, 2]);
+    assert_eq!(group.claim(3, 10, at(base, 31), VIS).offsets, vec![0, 1, 2]);
 }
 
 #[test]
 fn an_acknowledged_offset_is_never_handed_out_again() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     group.claim(3, 10, base, VIS);
     group.ack(0);
     group.ack(1);
     group.ack(2);
 
-    assert_eq!(group.claim(3, 10, at(base, 300), VIS), Vec::<u64>::new());
+    assert_eq!(
+        group.claim(3, 10, at(base, 300), VIS).offsets,
+        Vec::<u64>::new()
+    );
     assert_eq!(group.committed(), 3);
 }
 
@@ -74,7 +82,7 @@ fn an_acknowledged_offset_is_never_handed_out_again() {
 #[test]
 fn the_cursor_does_not_advance_over_a_gap() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
     group.claim(4, 10, now, VIS);
 
     assert_eq!(group.ack(1), None, "1 is acked but 0 is not");
@@ -91,36 +99,36 @@ fn the_cursor_does_not_advance_over_a_gap() {
 #[test]
 fn an_out_of_order_ack_is_not_redelivered_when_the_gap_closes() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
     group.claim(3, 10, base, VIS);
 
     group.ack(2);
     // 0 and 1 lapse and come back; 2 must not.
-    assert_eq!(group.claim(3, 10, at(base, 31), VIS), vec![0, 1]);
+    assert_eq!(group.claim(3, 10, at(base, 31), VIS).offsets, vec![0, 1]);
 }
 
 #[test]
 fn a_nack_makes_a_record_owed_at_once() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
     group.claim(3, 10, now, VIS);
 
     group.nack(1);
 
     // Immediately, without waiting out the visibility timeout.
-    assert_eq!(group.claim(3, 10, now, VIS), vec![1]);
+    assert_eq!(group.claim(3, 10, now, VIS).offsets, vec![1]);
 }
 
 #[test]
 fn a_nack_after_an_ack_does_not_resurrect_the_record() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
     group.claim(2, 10, now, VIS);
 
     group.ack(1);
     group.nack(1);
 
-    assert_eq!(group.claim(2, 10, now, VIS), Vec::<u64>::new());
+    assert_eq!(group.claim(2, 10, now, VIS).offsets, Vec::<u64>::new());
 }
 
 /// Owed records go out before new ones. A group that preferred new work would
@@ -129,14 +137,14 @@ fn a_nack_after_an_ack_does_not_resurrect_the_record() {
 #[test]
 fn owed_records_go_out_before_new_ones() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     group.claim(2, 10, base, VIS);
     group.nack(0);
     group.nack(1);
 
     // The log has grown, but the owed records go first.
-    assert_eq!(group.claim(10, 3, base, VIS), vec![0, 1, 2]);
+    assert_eq!(group.claim(10, 3, base, VIS).offsets, vec![0, 1, 2]);
 }
 
 /// A late acknowledgement, from a consumer whose claim lapsed and whose record
@@ -145,10 +153,10 @@ fn owed_records_go_out_before_new_ones() {
 #[test]
 fn a_late_ack_after_redelivery_is_harmless() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     group.claim(1, 10, base, VIS);
-    let redelivered = group.claim(1, 10, at(base, 31), VIS);
+    let redelivered = group.claim(1, 10, at(base, 31), VIS).offsets;
     assert_eq!(redelivered, vec![0]);
 
     // The original consumer finally answers.
@@ -166,7 +174,7 @@ fn a_late_ack_after_redelivery_is_harmless() {
 #[test]
 fn an_ack_while_a_record_is_owed_still_finishes_it() {
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     group.claim(2, 10, base, VIS);
     // The claim lapses, so 0 and 1 are owed but not yet re-claimed.
@@ -174,7 +182,7 @@ fn an_ack_while_a_record_is_owed_still_finishes_it() {
 
     assert_eq!(group.ack(0), Some(1));
     assert_eq!(
-        group.claim(2, 10, at(base, 31), VIS),
+        group.claim(2, 10, at(base, 31), VIS).offsets,
         vec![1],
         "an acknowledged record was handed out again",
     );
@@ -184,23 +192,23 @@ fn an_ack_while_a_record_is_owed_still_finishes_it() {
 #[test]
 fn an_ack_after_a_nack_finishes_the_record() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     group.claim(2, 10, now, VIS);
     group.nack(0);
     assert_eq!(group.ack(0), Some(1));
 
-    assert_eq!(group.claim(2, 10, now, VIS), Vec::<u64>::new());
+    assert_eq!(group.claim(2, 10, now, VIS).offsets, Vec::<u64>::new());
 }
 
 #[test]
 fn acking_below_the_cursor_is_ignored() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(10);
+    let mut group = GroupTracker::new(10, MANY);
 
     assert_eq!(group.ack(3), None);
     assert_eq!(group.committed(), 10);
-    assert_eq!(group.claim(12, 10, now, VIS), vec![10, 11]);
+    assert_eq!(group.claim(12, 10, now, VIS).offsets, vec![10, 11]);
 }
 
 /// An acknowledgement for an offset that was never handed out.
@@ -212,14 +220,14 @@ fn acking_below_the_cursor_is_ignored() {
 #[test]
 fn an_ack_for_an_unclaimed_offset_does_not_rewind_the_next_claim() {
     let now = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
 
     for offset in 0..5 {
         group.ack(offset);
     }
     assert_eq!(group.committed(), 5);
 
-    let claimed = group.claim(8, 10, now, VIS);
+    let claimed = group.claim(8, 10, now, VIS).offsets;
     assert_eq!(
         claimed,
         vec![5, 6, 7],
@@ -233,13 +241,13 @@ fn an_ack_for_an_unclaimed_offset_does_not_rewind_the_next_claim() {
 fn every_offset_is_finished_exactly_once() {
     const TAIL: u64 = 200;
     let base = Instant::now();
-    let mut group = GroupTracker::new(0);
+    let mut group = GroupTracker::new(0, MANY);
     let mut finished: Vec<u64> = Vec::new();
     let mut clock = 0u64;
 
     while group.committed() < TAIL {
         clock += 7;
-        let batch = group.claim(TAIL, 5, at(base, clock), VIS);
+        let batch = group.claim(TAIL, 5, at(base, clock), VIS).offsets;
         assert!(!batch.is_empty(), "the group stopped making progress");
         for (i, offset) in batch.into_iter().enumerate() {
             match i % 3 {
@@ -267,4 +275,120 @@ fn every_offset_is_finished_exactly_once() {
         TAIL,
         "some offset was never acknowledged, yet the cursor passed it",
     );
+}
+
+// --- Giving up on a record ---------------------------------------------------
+
+/// **The poison-record bound.** Without it a record that always fails is handed
+/// out for ever and the group never gets past it.
+#[test]
+fn a_record_is_given_up_on_after_the_attempt_bound() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 3);
+
+    // Three deliveries, each abandoned.
+    for round in 0..3 {
+        let claim = group.claim(1, 10, at(base, round * 31), VIS);
+        assert_eq!(claim.offsets, vec![0], "round {round}");
+        assert!(claim.dead_lettered.is_empty(), "round {round}");
+    }
+
+    // The fourth attempt is not made.
+    let claim = group.claim(1, 10, at(base, 4 * 31), VIS);
+    assert!(claim.offsets.is_empty(), "a fourth delivery was attempted");
+    assert_eq!(
+        claim.dead_lettered,
+        vec![DeadLettered {
+            offset: 0,
+            attempts: 3
+        }],
+    );
+}
+
+/// Giving up is reported, not settled here: the caller records the dead letter
+/// first and settles it after, so a crash between the two cannot move the
+/// cursor past a record with nothing saying it was ever tried.
+#[test]
+fn giving_up_does_not_move_the_cursor_by_itself() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 1);
+
+    group.claim(1, 10, base, VIS);
+    let claim = group.claim(1, 10, at(base, 31), VIS);
+
+    assert_eq!(claim.dead_lettered.len(), 1);
+    assert_eq!(group.committed(), 0, "the tracker settled it on its own");
+}
+
+/// The bound counts deliveries, not failures of a particular kind: a nack
+/// counts the same as a claim that lapsed.
+#[test]
+fn nacks_count_towards_the_bound() {
+    let now = Instant::now();
+    let mut group = GroupTracker::new(0, 2);
+
+    assert_eq!(group.claim(1, 10, now, VIS).offsets, vec![0]);
+    group.nack(0);
+    assert_eq!(group.claim(1, 10, now, VIS).offsets, vec![0]);
+    group.nack(0);
+
+    let claim = group.claim(1, 10, now, VIS);
+    assert!(claim.offsets.is_empty());
+    assert_eq!(claim.dead_lettered.len(), 1);
+}
+
+/// A record that succeeds does not carry its attempts forward: the count is
+/// about the record in play, not the offset for ever.
+#[test]
+fn acknowledging_clears_the_attempt_count() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 2);
+
+    group.claim(2, 10, base, VIS);
+    assert_eq!(group.attempts(0), 1);
+    group.ack(0);
+    assert_eq!(group.attempts(0), 0, "a finished record kept its count");
+}
+
+/// Attempts are reported so a consumer can tell a retry from a first delivery
+/// and act differently on it.
+#[test]
+fn the_attempt_count_rises_with_each_delivery() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 10);
+
+    group.claim(1, 10, base, VIS);
+    assert_eq!(group.attempts(0), 1);
+    group.claim(1, 10, at(base, 31), VIS);
+    assert_eq!(group.attempts(0), 2);
+}
+
+/// A bound of zero would give up before delivering anything. Clamped to one, so
+/// every record is tried at least once.
+#[test]
+fn a_bound_of_zero_still_delivers_once() {
+    let now = Instant::now();
+    let mut group = GroupTracker::new(0, 0);
+
+    assert_eq!(group.claim(1, 10, now, VIS).offsets, vec![0]);
+}
+
+/// A poison record does not stop the group: the records behind it still flow.
+#[test]
+fn the_group_makes_progress_past_a_poison_record() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 1);
+
+    // Take 0 and 1; abandon both so they are owed.
+    group.claim(2, 10, base, VIS);
+    let claim = group.claim(2, 10, at(base, 31), VIS);
+    assert!(claim.offsets.is_empty());
+    assert_eq!(claim.dead_lettered.len(), 2);
+
+    // Settle them the way the caller does, and the group moves on.
+    for dead in claim.dead_lettered {
+        group.ack(dead.offset);
+    }
+    assert_eq!(group.committed(), 2);
+    assert_eq!(group.claim(4, 10, at(base, 31), VIS).offsets, vec![2, 3]);
 }

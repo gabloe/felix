@@ -271,11 +271,15 @@ impl Broker {
     pub fn with_consumer_groups(
         mut self,
         groups: Arc<crate::consumer_groups::ConsumerGroups>,
+        dead_letters: Arc<crate::dead_letters::DeadLetters>,
         visibility: std::time::Duration,
+        max_attempts: u32,
     ) -> Self {
         self.group_reader = Some(Arc::new(crate::group_reader::GroupReader::new(
             Arc::clone(&groups),
+            dead_letters,
             visibility,
+            max_attempts,
         )));
         self.consumer_groups = Some(groups);
         self

@@ -16,6 +16,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+/// What one `claim` produced.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Claim {
+    /// Offsets handed to the caller, to deliver and then settle.
+    pub offsets: Vec<u64>,
+    /// Offsets given up on, having been delivered too many times. The caller
+    /// records them and then settles them.
+    pub dead_lettered: Vec<DeadLettered>,
+}
+
 /// One group's position on one shard.
 #[derive(Debug)]
 pub struct GroupTracker {
@@ -32,18 +42,44 @@ pub struct GroupTracker {
     acked_ahead: BTreeSet<u64>,
     /// Owed again — nacked, or claimed by a consumer that stopped answering.
     redeliver: BTreeSet<u64>,
+    /// How many times each unsettled offset has been handed out.
+    ///
+    /// Dropped as soon as an offset settles, so this holds only what is
+    /// currently in play rather than growing with the log.
+    attempts: BTreeMap<u64, u32>,
+    /// Most times a record is handed out before it is given up on.
+    ///
+    /// Without a bound a record that always fails is redelivered for ever and
+    /// the group never gets past it — one poison record stops the queue.
+    max_attempts: u32,
+}
+
+/// A record the group has given up on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeadLettered {
+    pub offset: u64,
+    /// How many times it was handed out before being given up on.
+    pub attempts: u32,
 }
 
 impl GroupTracker {
-    /// A group resuming at `committed`.
-    pub fn new(committed: u64) -> Self {
+    /// A group resuming at `committed`, giving up on a record after
+    /// `max_attempts` deliveries.
+    pub fn new(committed: u64, max_attempts: u32) -> Self {
         Self {
             committed,
             high_water: committed,
             in_flight: BTreeMap::new(),
             acked_ahead: BTreeSet::new(),
             redeliver: BTreeSet::new(),
+            attempts: BTreeMap::new(),
+            max_attempts: max_attempts.max(1),
         }
+    }
+
+    /// How many times `offset` has been handed out, if it is still in play.
+    pub fn attempts(&self, offset: u64) -> u32 {
+        self.attempts.get(&offset).copied().unwrap_or(0)
     }
 
     /// Everything below this is finished.
@@ -63,28 +99,45 @@ impl GroupTracker {
     /// are precisely the records a consumer already failed to finish once.
     ///
     /// `tail` is the shard's log tail: nothing at or above it exists yet.
-    pub fn claim(&mut self, tail: u64, max: usize, now: Instant, visibility: Duration) -> Vec<u64> {
+    pub fn claim(&mut self, tail: u64, max: usize, now: Instant, visibility: Duration) -> Claim {
         self.expire(now);
 
         let deadline = now + visibility;
-        let mut claimed = Vec::with_capacity(max.min(16));
+        let mut claim = Claim {
+            offsets: Vec::with_capacity(max.min(16)),
+            dead_lettered: Vec::new(),
+        };
 
-        while claimed.len() < max
+        while claim.offsets.len() < max
             && let Some(offset) = self.redeliver.iter().next().copied()
         {
             self.redeliver.remove(&offset);
-            self.in_flight.insert(offset, deadline);
-            claimed.push(offset);
+            let attempts = self.attempts.get(&offset).copied().unwrap_or(0);
+            if attempts >= self.max_attempts {
+                // Given up on rather than handed out again. Reported so the
+                // caller can record it, and left unsettled here -- the caller
+                // settles it once that record is durable, or a crash in between
+                // would lose the fact that it was ever tried.
+                claim.dead_lettered.push(DeadLettered { offset, attempts });
+                continue;
+            }
+            self.hand_out(offset, deadline);
+            claim.offsets.push(offset);
         }
 
-        while claimed.len() < max && self.high_water < tail {
+        while claim.offsets.len() < max && self.high_water < tail {
             let offset = self.high_water;
             self.high_water += 1;
-            self.in_flight.insert(offset, deadline);
-            claimed.push(offset);
+            self.hand_out(offset, deadline);
+            claim.offsets.push(offset);
         }
 
-        claimed
+        claim
+    }
+
+    fn hand_out(&mut self, offset: u64, deadline: Instant) {
+        self.in_flight.insert(offset, deadline);
+        *self.attempts.entry(offset).or_insert(0) += 1;
     }
 
     /// Settle one offset. Returns the new committed position if it moved.
@@ -99,6 +152,7 @@ impl GroupTracker {
         self.in_flight.remove(&offset);
         // No longer owed: it has been finished by whoever answered first.
         self.redeliver.remove(&offset);
+        self.attempts.remove(&offset);
         self.acked_ahead.insert(offset);
 
         let before = self.committed;

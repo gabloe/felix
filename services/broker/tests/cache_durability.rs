@@ -58,6 +58,14 @@ async fn start(root: &std::path::Path) -> Result<Running> {
 
     // Group state gets its own root under the same directory, exactly as the
     // broker binary arranges it, so this exercises the real layout.
+    let dead_letters = felix_broker::dead_letters::DeadLetters::open(
+        root.join("dead-letters"),
+        LogConfig {
+            fsync_mode: FsyncMode::None,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        },
+    )?;
     let groups = felix_broker::consumer_groups::ConsumerGroups::open(
         root.join("groups"),
         LogConfig {
@@ -79,7 +87,13 @@ async fn start(root: &std::path::Path) -> Result<Running> {
     let broker = Arc::new(
         Broker::new(Box::new(cache))
             .with_durable_storage(storage)
-            .with_consumer_groups(Arc::new(groups), Duration::from_secs(30)),
+            .with_consumer_groups(
+                Arc::new(groups),
+                Arc::new(dead_letters),
+                Duration::from_secs(30),
+                // Low, so the poison-record test does not need many rounds.
+                2,
+            ),
     );
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;

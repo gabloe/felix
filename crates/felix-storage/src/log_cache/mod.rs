@@ -683,6 +683,31 @@ impl LogCache {
         shard.read_value(&state, entry).await
     }
 
+    /// Every live key in one shard of one cache.
+    ///
+    /// Expired entries are excluded, for the same reason `len` excludes them: a
+    /// key nothing can read is not a key. Order is unspecified — the index is a
+    /// hash map — so a caller that needs one sorts.
+    pub async fn keys(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<String>> {
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let mut state = shard.state.lock().await;
+        shard.ensure_index(&mut state).await?;
+        let now = now_millis();
+        Ok(state
+            .index
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.is_expired(now))
+            .map(|(key, _)| key.clone())
+            .collect())
+    }
+
     /// `delete`, with the failure the trait cannot express.
     pub async fn delete_checked(
         &self,

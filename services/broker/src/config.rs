@@ -93,6 +93,12 @@ pub struct BrokerConfig {
     /// dead consumer's records stuck for that long. Thirty seconds is a
     /// starting point, not a considered default for any particular workload.
     pub group_visibility_timeout_ms: u64,
+    /// Most times a consumer group hands out a record before giving up on it.
+    ///
+    /// Without a bound a record that always fails is redelivered for ever and
+    /// the group never gets past it. A record given up on is recorded as a dead
+    /// letter and the group moves on; the record itself stays in the log.
+    pub group_max_attempts: u32,
     // Disable timing collection for lower overhead.
     pub disable_timings: bool,
     // Max time to wait for control-stream writer to drain.
@@ -208,6 +214,7 @@ impl Default for BrokerConfig {
             publish_queue_wait_timeout_ms: DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS,
             ack_wait_timeout_ms: DEFAULT_ACK_WAIT_TIMEOUT_MS,
             group_visibility_timeout_ms: DEFAULT_GROUP_VISIBILITY_TIMEOUT_MS,
+            group_max_attempts: DEFAULT_GROUP_MAX_ATTEMPTS,
             disable_timings: DEFAULT_DISABLE_TIMINGS,
             control_stream_drain_timeout_ms: DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS,
             shutdown_drain_timeout_ms: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
@@ -394,6 +401,10 @@ const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 /// Thirty seconds. Long enough that ordinary work finishes inside it, short
 /// enough that a dead consumer does not hold its records for minutes.
 const DEFAULT_GROUP_VISIBILITY_TIMEOUT_MS: u64 = 30_000;
+
+/// Five deliveries. Enough that a transient failure is retried through, few
+/// enough that a record that will never succeed is set aside quickly.
+const DEFAULT_GROUP_MAX_ATTEMPTS: u32 = 5;
 const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 // Total budget for draining in-flight work after a termination signal. Kubernetes
 // defaults `terminationGracePeriodSeconds` to 30, and it sends SIGKILL once that
@@ -511,6 +522,11 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_GROUP_VISIBILITY_TIMEOUT_MS);
+        let group_max_attempts = std::env::var("FELIX_GROUP_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_GROUP_MAX_ATTEMPTS);
         let disable_timings = std::env::var("FELIX_DISABLE_TIMINGS")
             .ok()
             .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -673,6 +689,7 @@ impl BrokerConfig {
             publish_queue_wait_timeout_ms,
             ack_wait_timeout_ms,
             group_visibility_timeout_ms,
+            group_max_attempts,
             disable_timings,
             control_stream_drain_timeout_ms,
             shutdown_drain_timeout_ms,

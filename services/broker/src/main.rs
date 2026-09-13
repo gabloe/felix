@@ -228,11 +228,20 @@ where
         Some(durable) => {
             let root = durable.root.join("groups");
             tracing::info!(root = %root.display(), "opening consumer-group state");
-            Some(std::sync::Arc::new(
-                felix_broker::consumer_groups::ConsumerGroups::open(&root, durable.log.clone())
-                    .with_context(|| {
-                        format!("open the consumer-group log at {}", root.display())
-                    })?,
+            let dead_root = durable.root.join("dead-letters");
+            Some((
+                std::sync::Arc::new(
+                    felix_broker::consumer_groups::ConsumerGroups::open(&root, durable.log.clone())
+                        .with_context(|| {
+                            format!("open the consumer-group log at {}", root.display())
+                        })?,
+                ),
+                std::sync::Arc::new(
+                    felix_broker::dead_letters::DeadLetters::open(&dead_root, durable.log.clone())
+                        .with_context(|| {
+                            format!("open the dead-letter log at {}", dead_root.display())
+                        })?,
+                ),
             ))
         }
         None => None,
@@ -243,9 +252,11 @@ where
         .context("configure subscriber queue depth")?
         .with_subscriber_queue_policy(config.subscriber_queue_policy);
     let broker = match consumer_groups {
-        Some(groups) => broker.with_consumer_groups(
+        Some((groups, dead_letters)) => broker.with_consumer_groups(
             groups,
+            dead_letters,
             Duration::from_millis(config.group_visibility_timeout_ms),
+            config.group_max_attempts,
         ),
         None => broker,
     };
