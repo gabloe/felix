@@ -256,6 +256,12 @@ tasks:
     cmds:
       - cargo run -q -p felix-cluster --bin felix-cluster -- failover {{.CLI_ARGS}}
 
+  cluster:consistency:
+    desc: "What Quorum buys and what Leader costs, under one fault"
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -q -p felix-cluster --bin felix-cluster -- consistency {{.CLI_ARGS}}
+
   cluster:demo:tmux:
     desc: The same demo across THREE tmux panes - cluster, subscriber, publisher.
     cmds:

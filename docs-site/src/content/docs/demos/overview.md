@@ -13,7 +13,7 @@ QUIC server on a random local port, runs the scenario, and exits.
 - Demo auth helpers are enabled for convenience (not production-safe).
 - The RBAC live demo starts a control plane, broker, and fake IdP on local ports.
 - All commands are run from the repository root.
-- If you use Task, run `task demo:slow-consumer`, `task demo:state-divergence`, `task demo:queues`, `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
+- If you use Task, run `task demo:slow-consumer`, `task demo:state-divergence`, `task demo:queues`, `task cluster:consistency`, `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
 
 ## Demo catalog
 
@@ -46,6 +46,21 @@ cargo run --release --manifest-path demos/state-divergence/Cargo.toml
 
 ```bash
 cargo run --release -p broker --bin queue-semantics-demo
+```
+
+### Leader vs Quorum (`felix-cluster consistency`)
+
+- The same fault — a leader cut off from its replicas — put to two streams that
+  differ only in `consistency`.
+- Quorum refuses the write while the shard stays available. Leader takes it, and
+  the shard goes unavailable when the leader dies, because promoting a replica
+  would drop a record that was acknowledged.
+- Neither is data loss. The demo's point is that `Leader` trades availability
+  for latency, and moves when you find out.
+- See [Leader vs Quorum](/felix/demos/cluster-consistency/).
+
+```bash
+task cluster:consistency
 ```
 
 ### Slow-consumer Isolation (`demo-slow-consumer`)

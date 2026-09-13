@@ -92,6 +92,44 @@ task demo:queues
   stream's log, so a non-durable stream serves no groups.
 - One shard, one broker. The dead-letter list is not replicated yet.
 
+### Leader vs Quorum (`felix-cluster consistency`)
+
+The same fault put to both consistency levels, on a real three-node cluster.
+
+**Run**
+
+```bash
+task cluster:consistency
+# slower, to read as it runs: task cluster:consistency -- --pace 3
+```
+
+**What it shows**
+
+Two streams identical but for `consistency`, both replicated three ways. The
+fault is a leader cut off from its replicas — followers frozen with `SIGSTOP`,
+so the leader is healthy and alone. Each stream's own followers are frozen in
+turn, so the run does not depend on the two streams sharing a leader.
+
+- **Quorum** refuses the write; the shard stays available. The refused record
+  may still be present, because it landed on the leader before the answer came
+  back — a refusal means "cannot be vouched for", not "did not happen".
+- **Leader** takes the write. The leader is then killed while the replicas are
+  still frozen, and **no replica is promoted**: opening the shard would drop a
+  record that was acknowledged. The shard is unavailable until the old leader
+  returns with its disk.
+
+Neither is data loss. `Leader` trades availability for latency and moves when
+you find out — publish time under Quorum, failover time under Leader.
+
+**Notes**
+
+- Asserts both outcomes, and fails if a shard is ever served *without* a record
+  its leader acknowledged. That would be silent loss rather than unavailability.
+- Recovery is described, not demonstrated: the harness cannot restart a killed
+  broker yet.
+- The counterpart is `task cluster:failover`, which shows a quorum-acknowledged
+  record surviving the loss of the broker that acknowledged it.
+
 ### Slow-consumer Isolation (`demo-slow-consumer`)
 
 **What it shows**: that one slow consumer does not degrade the healthy ones, and
