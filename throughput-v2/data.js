@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789323733718,
+  "lastUpdate": 1789325219015,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6656,6 +6656,58 @@ window.BENCHMARK_DATA = {
             "range": "8386.12",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 559095.67\nmean: 558291.77\nstdev: 8386.12\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d1b51f3d1a674d358310d63d991fa3b828192e9e",
+          "message": "Make the API's readiness know about a shutdown (#320)\n\nPart of #123. The control plane already failed readiness before it stopped\naccepting connections — but only on the metrics endpoint. The API's\n`/v1/system/ready`, added in #122, kept answering ready right up until the\nlistener stopped, which is the window a rolling restart drops requests in.\n\n## Two notions of ready, now one\n\n`felix_common::lifecycle::Readiness` is a process-wide flag the metrics endpoint\nreads and SIGTERM flips. `controlplane::readiness::Readiness` is the bounded,\ncached store probe behind the API endpoint. I added the second in #122 without\nfinding the first, so a draining instance told one port it was leaving and the\nother that it was fine.\n\nThe store probe now holds the lifecycle flag rather than duplicating it. One\nflag, so the two endpoints cannot disagree about whether this instance is in\nrotation. The two *listeners* stay separate deliberately: the metrics endpoint\noutlives the API drain, which is how an operator watches the drain happen.\n\n## Checked before the store, and before the cache\n\n**Before the store**, because nothing a database says changes whether this\nprocess is shutting down, and a struggling database must not delay an instance\nleaving rotation. There is a test asserting a drain check never reaches the\nstore.\n\n**Before the cache**, because an instance that had just cached a healthy answer\nwould otherwise keep taking traffic for a whole cache window after it began\nshutting down. Moving the check after the cache read fails that test.\n\n## Verification\n\nTwelve readiness tests, four of them new: a draining instance is not ready with\na healthy store, the check does not reach the store, a cached ready answer does\nnot outlive the drain, and the two endpoints agree.\n\n`task test` (86 groups), `task lint`, `task demo:check`, `task docs:evidence`.\n\n## What is left of #123\n\nIn-flight request accounting and a metric for forced terminations, so an abort\nat the deadline is visible rather than looking like a clean drain; and the\nrolling-restart test with brokers watching and heartbeating throughout, which is\nthe milestone's completion signal.\n\nRefs #123",
+          "timestamp": "2026-09-13T11:44:18-07:00",
+          "tree_id": "dfec40b6cb70c617c5fc5954e62928f03e9010b7",
+          "url": "https://github.com/gabloe/felix/commit/d1b51f3d1a674d358310d63d991fa3b828192e9e"
+        },
+        "date": 1789325218033,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228486,
+            "range": "6258.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228486.00\nmean: 226861.85\nstdev: 6258.56\ncv: 2.76%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228486,
+            "range": "6258.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228486.00\nmean: 226861.85\nstdev: 6258.56\ncv: 2.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 53974.95,
+            "range": "1076.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 53974.95\nmean: 54097.54\nstdev: 1076.48\ncv: 1.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 539749.52,
+            "range": "10764.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 539749.52\nmean: 540975.42\nstdev: 10764.79\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
