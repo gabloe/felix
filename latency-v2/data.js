@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789314561704,
+  "lastUpdate": 1789315727148,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8118,6 +8118,72 @@ window.BENCHMARK_DATA = {
             "range": "613.86",
             "unit": "us",
             "extra": "trials: 5\nmedian: 829.00\nmean: 1118.20\nstdev: 613.86\ncv: 54.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38aed7b3126614ed2a4343043779562c99eb9d91",
+          "message": "Let a group poll wait for work (#313)\n\nSeventh slice of #280, and the last item on it. An idle consumer polled in a\nloop; it can now hold one request open instead.\n\n`GroupPoll` gains `wait_ms`. Omitted or zero answers immediately, which is what\nevery broker did before — so an older peer degrades to a plain poll rather than\nmisreading the request, and no feature bit is needed. The broker caps it at\n`FELIX_GROUP_MAX_WAIT_MS`, so a client cannot hold a stream open indefinitely.\n\n## The cost lands on the waiting consumer, not the publisher\n\nA waiting poll re-checks every 20ms. The check is a read lock and a field read —\nno I/O, no allocation. An append notification would wake it sooner, but only by\nadding work to the publish path on behalf of a consumer that is by definition\nidle, and that path is the most latency-sensitive thing in the broker.\n\nEach group request already runs on a stream of the client's own, so a wait\nblocks nothing else on the connection.\n\n## Ownership is re-checked while waiting\n\nA shard can move during a wait. Serving the poll afterwards would hand out\nrecords the new owner is handing out too, so the wait ends instead.\n\n## Verification\n\nA waiting poll wakes when a record is published 150ms into a ten-second wait,\nand returns well inside the budget rather than at the end of it. A wait with no\nwork answers empty after its time rather than hanging or erroring. Removing the\nwait fails the first.\n\nA `group_poll` from a client that predates the field decodes with `wait_ms: 0`.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\n## The status row\n\nStill a Target, for a reason I had not written down before: a group is bound to\nthe shard the caller names, and nothing assigns shards across the consumers of a\ngroup. Scaling one past a single consumer per shard is the application's job.\nThat is a real limit and it is now in the table.\n\nRefs #280",
+          "timestamp": "2026-09-13T09:06:35-07:00",
+          "tree_id": "181928ffac347b4d7cd2ef3505ba604e3477693b",
+          "url": "https://github.com/gabloe/felix/commit/38aed7b3126614ed2a4343043779562c99eb9d91"
+        },
+        "date": 1789315724054,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 95,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 95.00\nmean: 95.20\nstdev: 0.45\ncv: 0.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 130,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 129.80\nstdev: 1.92\ncv: 1.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 171,
+            "range": "12.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 171.00\nmean: 174.60\nstdev: 12.30\ncv: 7.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 127.80\nstdev: 1.10\ncv: 0.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 258,
+            "range": "13.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 263.60\nstdev: 13.13\ncv: 4.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 815,
+            "range": "287.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 815.00\nmean: 763.20\nstdev: 287.38\ncv: 37.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
