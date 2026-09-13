@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789315727148,
+  "lastUpdate": 1789315879699,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8184,6 +8184,72 @@ window.BENCHMARK_DATA = {
             "range": "287.38",
             "unit": "us",
             "extra": "trials: 5\nmedian: 815.00\nmean: 763.20\nstdev: 287.38\ncv: 37.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51cf0efa2ae1f8404e810b3e9b506ca2f3fea413",
+          "message": "Hold the projection claim to its evidence, and check it (#315)\n\n#281. The founding claim was description in the architecture pages for as long\nas the project existed. This makes it a page with a citation behind every\nstatement, and a check that the citations still resolve.\n\n## docs/projections.md\n\nOne page per semantic: what it stores in the log, what it keeps in memory, what\nit rebuilds from the log. Every normative claim names the test behind it.\n\nIt also has a section for where the claims stop, so nothing above has to be read\nas covering more than it does — retention outranking a group, a cache having no\nconsistency level, and group state not being replicated.\n\n## scripts/check_doc_evidence.py\n\nA citation naming a test that no longer exists is worse than no citation: the\nclaim reads as verified and nothing checks it. Renaming a test is easy;\nremembering the prose that cites it is not.\n\nThe script extracts every backticked name from a blockquote that *begins* with\none — which is how the convention is written, and what separates a citation from\nan ordinary callout — and fails if no `fn` of that name exists. Forty-five\ncitations across the docs, all resolving.\n\nIt runs in the **Rust** CI job, not only in the docs-site build. A citation goes\nstale when someone renames a test, which is a Rust change on a Rust pull\nrequest; the docs build only runs on pushes to main that touch `docs-site/`, so\nit would never see it. The mermaid and diagram checks stay in the docs build,\nwhich is where they can be run at all — they need its dependencies.\n\n## Two stale claims the audit found\n\n`system-design.md` still said nothing delivers through consumer groups, which\nstopped being true in #310.\n\nAnd the more serious one, now #314: **a consumer group's committed position is\nnot replicated.** It lives on a root nothing places or ships, so a promoted\nreplica has no record of the group and starts it at zero, redelivering\neverything it had finished. Technically within at-least-once, which is why no\ntest failed — every group test is single-broker, and a *restart* is not a\n*failover*.\n\nRefs #281",
+          "timestamp": "2026-09-13T09:07:22-07:00",
+          "tree_id": "c8c54bae4b78dc6e95011f78937ed16d23b80d99",
+          "url": "https://github.com/gabloe/felix/commit/51cf0efa2ae1f8404e810b3e9b506ca2f3fea413"
+        },
+        "date": 1789315878631,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 126,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 126.00\nmean: 126.20\nstdev: 0.84\ncv: 0.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 174,
+            "range": "4.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 174.00\nmean: 174.40\nstdev: 4.10\ncv: 2.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 216,
+            "range": "18.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 216.00\nmean: 223.00\nstdev: 18.68\ncv: 8.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 167,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.80\nstdev: 1.10\ncv: 0.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 339,
+            "range": "6.56",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 339.00\nmean: 343.00\nstdev: 6.56\ncv: 1.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 507,
+            "range": "651.53",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 507.00\nmean: 858.60\nstdev: 651.53\ncv: 75.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
