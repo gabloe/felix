@@ -58,6 +58,40 @@ the divergence — at the cost of the slowest consumer throttling the publisher.
 
 ---
 
+### Queue Semantics (`queue-semantics-demo`)
+
+The other way to read the log. A consumer group hands each record to one
+consumer, waits to be told it was handled, and takes it back if nobody does.
+
+**Run**
+
+```bash
+task demo:queues
+# or: cargo run --release -p broker --bin queue-semantics-demo
+```
+
+**What it shows**
+
+1. Two workers poll one group; no offset is handed to both.
+2. A worker dies holding work. Polling returns nothing while the claims are
+   live; once the visibility timeout lapses another worker gets them, at
+   `attempts = 2`. Nothing is lost — and the demo counts the duplicates,
+   because at-least-once is a promise about loss and not about duplicates.
+3. A job that always fails is retried to `max_attempts`, dead-lettered, and the
+   two jobs queued behind it run anyway. That last part is the point: before
+   there was an attempt bound, one poison record stalled a queue for ever.
+4. A ledger asserting `published = completed + dead-lettered`.
+
+**Notes**
+
+- No sleeps. `GroupReader::poll` takes the current time as an argument, so the
+  demo drives the visibility timeout itself and its output is identical every
+  run. That determinism is why `task demo:check` runs it as a behavioural test:
+  every guarantee it narrates is an assertion.
+- Durable storage is required — a group's cursor is a projection over the
+  stream's log, so a non-durable stream serves no groups.
+- One shard, one broker. The dead-letter list is not replicated yet.
+
 ### Slow-consumer Isolation (`demo-slow-consumer`)
 
 **What it shows**: that one slow consumer does not degrade the healthy ones, and

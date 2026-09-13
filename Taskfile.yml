@@ -148,6 +148,9 @@ tasks:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-orders -- {{.CLI_ARGS}}"]
   demo:pubsub:
     cmds: ["cargo run --release -p broker --bin pubsub-demo-simple -- {{.CLI_ARGS}}"]
+  demo:queues:
+    desc: "Queue semantics: distribution, redelivery, dead letters, and their cost"
+    cmds: ["cargo run --release -p broker --bin queue-semantics-demo -- {{.CLI_ARGS}}"]
   demo:check:
     desc: "Build the standalone demo crates and run their behavioural tests"
     cmds:
@@ -161,6 +164,10 @@ tasks:
       - "cargo build --manifest-path demos/cross_tenant_isolation/Cargo.toml"
       - "cargo test --manifest-path demos/slow-consumer/Cargo.toml"
       - "cargo test --manifest-path demos/state-divergence/Cargo.toml"
+      # The queue demo asserts every guarantee it narrates and bails on any
+      # violation, so running it is the behavioural test. It is deterministic:
+      # it drives the visibility timeout itself rather than sleeping.
+      - "cargo run -q -p broker --bin queue-semantics-demo"
   demo:state-divergence:
     desc: "Counterpart demo: what at-most-once costs a consumer holding local state"
     cmds:

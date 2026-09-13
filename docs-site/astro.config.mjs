@@ -68,6 +68,7 @@ export default defineConfig({
             { label: 'Cross-broker Publishing', slug: 'demos/cross-broker-cluster' },
             { label: 'Slow-consumer Isolation', slug: 'demos/slow-consumer-isolation' },
             { label: 'Local State Divergence', slug: 'demos/state-divergence' },
+            { label: 'Queue Semantics', slug: 'demos/queue-semantics' },
             { label: 'Notifications', slug: 'demos/notifications' },
             { label: 'Orders Pipeline', slug: 'demos/orders' },
           ],

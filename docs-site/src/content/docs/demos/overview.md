@@ -13,7 +13,7 @@ QUIC server on a random local port, runs the scenario, and exits.
 - Demo auth helpers are enabled for convenience (not production-safe).
 - The RBAC live demo starts a control plane, broker, and fake IdP on local ports.
 - All commands are run from the repository root.
-- If you use Task, run `task demo:slow-consumer`, `task demo:state-divergence`, `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
+- If you use Task, run `task demo:slow-consumer`, `task demo:state-divergence`, `task demo:queues`, `task demo:pubsub`, `task demo:cache`, `task demo:latency`, `task demo:notifications`, `task demo:orders`, `task demo:rbac-live`, or `task demo:cross-tenant-isolation`.
 
 ## Demo catalog
 
@@ -29,6 +29,23 @@ QUIC server on a random local port, runs the scenario, and exits.
 
 ```bash
 cargo run --release --manifest-path demos/state-divergence/Cargo.toml
+```
+
+### Queue Semantics (`queue-semantics-demo`)
+
+- The other way to read the log: a consumer group hands each record to one
+  consumer and takes it back if nobody says it was handled.
+- Work distribution, redelivery after a worker dies mid-job, an attempt bound,
+  and a dead letter — with the two jobs queued behind the poison one running
+  anyway, which is the point of the bound.
+- Honest about the cost: it counts the redeliveries, because at-least-once is a
+  promise about loss and not about duplicates.
+- Deterministic — it drives the visibility timeout rather than sleeping — so
+  `task demo:check` runs it as a behavioural test.
+- See [Queue Semantics](/felix/demos/queue-semantics/).
+
+```bash
+cargo run --release -p broker --bin queue-semantics-demo
 ```
 
 ### Slow-consumer Isolation (`demo-slow-consumer`)
