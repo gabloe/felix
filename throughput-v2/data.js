@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789331361322,
+  "lastUpdate": 1789331912650,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6812,6 +6812,58 @@ window.BENCHMARK_DATA = {
             "range": "7993.58",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 532074.26\nmean: 532030.50\nstdev: 7993.58\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a8fdd8e777b33d645d1368d8e342cf8cf0e83779",
+          "message": "Add a queue semantics demo (#324)\n\n* demo: queue semantics, including what at-least-once costs\n\nThere was no runnable demonstration of consumer groups. The features that\nclosed #280 — an attempt bound and dead letters — were the difference between\n\"a queue\" and \"a queue that stalls for ever on one bad record\", and nothing\nshowed that.\n\nFour acts, each starting from a queue state it fully accounts for:\n\n1. Two workers, one group, no offset handed to both.\n2. A worker dies holding work. Polling returns nothing while the claims are\n   live; after the visibility timeout another worker gets them at attempts=2.\n3. A job that always fails is retried to max_attempts, dead-lettered, and the\n   two jobs queued behind it run anyway.\n4. A ledger asserting published = completed + dead-lettered.\n\nAct 2 exists as much for the cost as the guarantee. Those jobs were done twice,\nand the demo counts it: at-least-once is a promise about loss, not about\nduplicates. That is the same reason demos/state-divergence exists — a demo that\nonly shows the good half is advertising.\n\nNo sleeps. `GroupReader::poll` takes the current time as an argument, so the\ndemo drives the visibility timeout rather than waiting on one, and its output\nis byte-identical every run. That determinism is what lets `task demo:check`\nrun it as a behavioural test: every guarantee narrated is an assertion and it\nexits non-zero if one breaks.\n\nControls, each neutering one mechanism:\n\n| Neutered | Fails with |\n|---|---|\n| broker's max_attempts raised, demo still nacks 3 times | \"offset 5 exhausted its attempts but was not dead-lettered\" |\n| visibility timeout never advanced | \"2 job(s) were abandoned but 0 came back\" |\n| the withheld-claims probe polled past the timeout | \"a live claim was handed out again: offset 3\" |\n\nAn earlier draft was wrong in a way worth recording: act 2's \"are the claims\nstill withheld?\" probe silently consumed the jobs act 3 needed, so act 3's\nheadline claim printed \"0 more job(s) finished after it\" — the demo disproving\nits own point. Each act now leaves the queue in a state the next one can\naccount for, and act 2's probe runs when the only outstanding records are the\nabandoned ones, so an empty answer cannot mean anything else.\n\n* docs: animate a consumer group reading the log\n\nThe queues page described the cursor rule in prose: it advances only over a\ncontiguous run of acknowledgements. That rule is the subtlest thing about\nconsumer groups and the hardest to picture, which makes it the one thing on the\npage worth animating rather than writing again.\n\nThe loop runs the case that explains why the rule exists: offset 4 is\nacknowledged while offset 3 is still in flight, and the cursor stops at 3\nanyway. Then 3's claim lapses, it is redelivered, and settling it lets the\ncursor jump past both. Moving the cursor to the highest acknowledged offset\ninstead would be simpler and would silently drop offset 3 on the next restart.\n\nCSS keyframes rather than SMIL: better supported, and it can honour\nprefers-reduced-motion. Frozen, the diagram holds the frame that matters —\n3 in flight, 4 finished, cursor stopped at 3 — so the still is not a\ndegraded version of the point but the point itself.\n\nOne 16s timeline drives every fill, badge, tick, the cursor and the captions,\nso they cannot drift out of step. Theme-aware on the same three-block pattern\nas the other hand-authored diagrams, and duplicated to docs/assets/ under\ncheck-diagram-copies.",
+          "timestamp": "2026-09-13T13:36:03-07:00",
+          "tree_id": "95c6c0ecb7e06a82113174673e20481870b801c3",
+          "url": "https://github.com/gabloe/felix/commit/a8fdd8e777b33d645d1368d8e342cf8cf0e83779"
+        },
+        "date": 1789331912215,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 254685.66,
+            "range": "5399.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254685.66\nmean: 251969.53\nstdev: 5399.38\ncv: 2.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 254685.66,
+            "range": "5399.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 254685.66\nmean: 251969.53\nstdev: 5399.38\ncv: 2.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 58728.61,
+            "range": "1585.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 58728.61\nmean: 59445.38\nstdev: 1585.31\ncv: 2.67%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 587286.07,
+            "range": "15853.07",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 587286.07\nmean: 594453.78\nstdev: 15853.07\ncv: 2.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
