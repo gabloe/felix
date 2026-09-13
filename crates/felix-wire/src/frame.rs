@@ -96,9 +96,23 @@ pub const FEATURE_CACHE_DELETE: u32 = 0x0000_0004;
 /// nothing useful to offer.
 pub const FEATURE_CONSUMER_GROUP: u32 = 0x0000_0008;
 
+/// The broker serves the dead-letter requests: `group_dead_letters`,
+/// `group_discard`, `group_redrive`.
+///
+/// A bit of its own rather than folded into `FEATURE_CONSUMER_GROUP`. That bit
+/// already means "serves poll, ack and nack" to every broker that advertises
+/// it, and a broker built before these requests existed would have no arm for
+/// them — which ends its control loop rather than returning an error. A feature
+/// bit says one set of requests exists, and widening what an existing bit
+/// promises is the one thing that cannot be done safely.
+pub const FEATURE_GROUP_DEAD_LETTERS: u32 = 0x0000_0010;
+
 /// Every feature bit this version implements.
-pub const KNOWN_FEATURES: u32 =
-    FEATURE_TOPOLOGY | FEATURE_REDIRECT | FEATURE_CACHE_DELETE | FEATURE_CONSUMER_GROUP;
+pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
+    | FEATURE_REDIRECT
+    | FEATURE_CACHE_DELETE
+    | FEATURE_CONSUMER_GROUP
+    | FEATURE_GROUP_DEAD_LETTERS;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

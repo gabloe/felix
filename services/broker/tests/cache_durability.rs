@@ -549,3 +549,138 @@ async fn two_groups_each_see_every_record() -> Result<()> {
     running.stop().await;
     Ok(())
 }
+
+/// **The operator's loop, end to end.** A record that always fails is given up
+/// on, listed, and can be put back once the reason is fixed.
+#[tokio::test]
+async fn a_dead_letter_can_be_listed_and_redriven() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    client
+        .publisher()
+        .await?
+        .publish(
+            "t1",
+            "default",
+            QUEUE,
+            b"poison".to_vec(),
+            felix_wire::AckMode::PerMessage,
+        )
+        .await?;
+
+    // The harness broker gives up after two attempts. Hand it back each time.
+    for _ in 0..2 {
+        let claimed = client
+            .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+            .await?;
+        assert_eq!(claimed.len(), 1);
+        client
+            .group_nack("t1", "default", QUEUE, 0, "workers", claimed[0].offset)
+            .await?;
+    }
+
+    // The third poll gives up on it and moves past.
+    assert!(
+        client
+            .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+            .await?
+            .is_empty(),
+        "a record past its attempt bound was delivered again",
+    );
+    let dead = client
+        .group_dead_letters("t1", "default", QUEUE, 0, "workers")
+        .await?;
+    assert_eq!(dead, vec![0]);
+
+    // The reason it failed is fixed, so put it back.
+    client
+        .group_redrive("t1", "default", QUEUE, 0, "workers", 0)
+        .await?;
+    assert!(
+        client
+            .group_dead_letters("t1", "default", QUEUE, 0, "workers")
+            .await?
+            .is_empty(),
+        "a redriven record is still listed as given up on",
+    );
+
+    let again = client
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+    assert_eq!(again.len(), 1, "the redriven record was not delivered");
+    assert_eq!(again[0].attempts, 1, "its attempt count did not start over");
+
+    running.stop().await;
+    Ok(())
+}
+
+/// Discarding drops it from the list without delivering it again.
+#[tokio::test]
+async fn a_dead_letter_can_be_discarded() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    client
+        .publisher()
+        .await?
+        .publish(
+            "t1",
+            "default",
+            QUEUE,
+            b"unprocessable".to_vec(),
+            felix_wire::AckMode::PerMessage,
+        )
+        .await?;
+    for _ in 0..2 {
+        let claimed = client
+            .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+            .await?;
+        client
+            .group_nack("t1", "default", QUEUE, 0, "workers", claimed[0].offset)
+            .await?;
+    }
+    client
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+
+    client
+        .group_discard("t1", "default", QUEUE, 0, "workers", 0)
+        .await?;
+
+    assert!(
+        client
+            .group_dead_letters("t1", "default", QUEUE, 0, "workers")
+            .await?
+            .is_empty(),
+    );
+    assert!(
+        client
+            .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+            .await?
+            .is_empty(),
+        "a discarded record was delivered again",
+    );
+    running.stop().await;
+    Ok(())
+}
+
+/// Redriving something that was never given up on is refused. Reporting success
+/// would have an operator waiting for a delivery that is not coming.
+#[tokio::test]
+async fn redriving_an_offset_that_is_not_a_dead_letter_is_refused() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+
+    let refused = running
+        .client()
+        .await?
+        .group_redrive("t1", "default", QUEUE, 0, "workers", 41)
+        .await;
+
+    assert!(refused.is_err(), "a redrive of nothing reported success");
+    running.stop().await;
+    Ok(())
+}

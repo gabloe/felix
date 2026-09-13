@@ -138,8 +138,29 @@ broker that leads the shard.
 
 ### GroupRecords (server -> client)
 ```
-{ "type": "group_records", "records": [{ "offset": <number>, "payload": "<base64>" }],
+{ "type": "group_records",
+  "records": [{ "offset": <number>, "payload": "<base64>", "attempts": <number> }],
   "request_id": <number> }
+```
+
+`attempts` counts deliveries including this one, so `1` is a first attempt and
+anything higher is a redelivery. Absent means the broker did not report it —
+which is not the same as a first attempt, and a consumer should not treat it as
+one.
+
+### GroupDeadLetters / GroupDiscard / GroupRedrive
+```
+{ "type": "group_dead_letters", "tenant_id": "...", "namespace": "...",
+  "stream": "...", "shard": <number>, "group": "<string>", "request_id": <number> }
+{ "type": "group_discard", ..., "offset": <number>, "request_id": <number> }
+{ "type": "group_redrive", ..., "offset": <number>, "request_id": <number> }
+```
+
+Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
+
+### GroupDeadLetterList (server -> client)
+```
+{ "type": "group_dead_letter_list", "offsets": [<number>], "request_id": <number> }
 ```
 
 ### GroupAck / GroupNack
@@ -369,6 +390,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0002` | `FEATURE_REDIRECT` | The peer understands `not_leader` |
 | `0x0004` | `FEATURE_CACHE_DELETE` | The broker accepts `cache_delete` |
 | `0x0008` | `FEATURE_CONSUMER_GROUP` | The broker serves `group_poll`, `group_ack`, `group_nack` |
+| `0x0010` | `FEATURE_GROUP_DEAD_LETTERS` | The broker serves `group_dead_letters`, `group_discard`, `group_redrive` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -390,9 +412,14 @@ the broker's control loop, so probing costs the connection.
 Note which features depend on what. `FEATURE_TOPOLOGY` and `FEATURE_REDIRECT`
 describe a cluster, so a standalone broker advertises neither.
 `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
-advertised by both. `FEATURE_CONSUMER_GROUP` depends on durable storage rather
-than on clustering: without it a group's position is lost on every restart, so a
-broker with none does not offer the feature at all.
+advertised by both. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
+storage rather than on clustering: without it a group's position is lost on
+every restart, so a broker with none offers neither.
+
+They are two bits rather than one because a bit says which requests exist, and
+widening what an existing bit promises is the one change that cannot be made
+safely — a broker built when `FEATURE_CONSUMER_GROUP` meant only poll, ack and
+nack would advertise it and then meet a request it has no arm for.
 
 An absent `server_features` or `client_features` means that peer implements
 none. This is not a

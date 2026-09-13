@@ -30,6 +30,15 @@ pub struct GroupRecord {
     pub offset: u64,
     #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
     pub payload: Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
+    /// can treat a retry differently.
+    ///
+    /// `0` means the broker did not report it — absent rather than first, since
+    /// claiming a first attempt for an unknown one would have a consumer skip
+    /// exactly the retry handling it wanted.
+    #[serde(default)]
+    pub attempts: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +296,50 @@ pub enum Message {
     // Hand one record back without finishing it, to be redelivered at once
     // rather than after the visibility timeout.
     GroupNack {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
+    },
+    // Offsets this group gave up on. Answered with `GroupDeadLetterList`.
+    //
+    // Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
+    GroupDeadLetters {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        request_id: u64,
+    },
+    // Offsets the group gave up on, lowest first.
+    //
+    // The records are still in the stream's log at these offsets: this is a
+    // list of what to look at, not a copy of it.
+    GroupDeadLetterList {
+        offsets: Vec<u64>,
+        request_id: u64,
+    },
+    // Drop one dead letter from the list, having decided the record is not
+    // worth reprocessing. Does not touch the record itself.
+    GroupDiscard {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
+    },
+    // Put one dead letter back in the queue, its attempt count reset.
+    //
+    // For when the reason it failed has been fixed. The group's cursor is not
+    // moved backwards — the record is owed again, which is a different thing:
+    // everything the group finished stays finished.
+    GroupRedrive {
         tenant_id: String,
         namespace: String,
         stream: String,

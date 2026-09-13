@@ -103,8 +103,57 @@ pub(crate) async fn poll(
         .map(|claimed| GroupRecord {
             offset: claimed.offset,
             payload: claimed.payload,
+            attempts: claimed.attempts,
         })
         .collect())
+}
+
+/// Offsets this group gave up on.
+pub(crate) async fn dead_letters(
+    broker: &Broker,
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+    group: &str,
+) -> Result<Vec<u64>, String> {
+    let (reader, _log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let key = group_key(tenant_id, namespace, stream, shard, group);
+    reader
+        .dead_lettered(&key)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Drop a dead letter, or put it back in the queue.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn manage_dead_letter(
+    broker: &Broker,
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+    group: &str,
+    offset: u64,
+    redrive: bool,
+) -> Result<(), String> {
+    let (reader, _log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let key = group_key(tenant_id, namespace, stream, shard, group);
+    let taken = if redrive {
+        reader.redrive(&key, offset).await
+    } else {
+        reader.discard(&key, offset).await
+    }
+    .map_err(|err| err.to_string())?;
+    if taken {
+        return Ok(());
+    }
+    // Refused rather than silently accepted. An operator told a redrive
+    // succeeded when the offset was never dead-lettered would wait for a
+    // delivery that is not coming.
+    Err(format!("offset {offset} is not a dead letter of {group}"))
 }
 
 /// Finish a record, or hand it back.

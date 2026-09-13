@@ -205,6 +205,25 @@ impl GroupReader {
             .await
     }
 
+    /// Stop tracking one dead letter. Returns whether it was listed.
+    pub async fn discard(&self, key: &GroupKey, offset: u64) -> Result<bool> {
+        self.dead_letters.discard(key, offset).await
+    }
+
+    /// Put one dead letter back in the queue, its attempt count reset.
+    ///
+    /// Returns whether it was taken. Dropped from the list first: a crash
+    /// between the two would otherwise leave the record both listed as given up
+    /// on and queued for delivery, and the next give-up would be its second
+    /// entry rather than its first.
+    pub async fn redrive(&self, key: &GroupKey, offset: u64) -> Result<bool> {
+        if !self.dead_letters.discard(key, offset).await? {
+            return Ok(false);
+        }
+        let tracker = self.tracker_for(key).await?;
+        Ok(tracker.lock().await.redrive(offset))
+    }
+
     async fn settle(
         &self,
         key: &GroupKey,

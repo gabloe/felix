@@ -392,3 +392,85 @@ fn the_group_makes_progress_past_a_poison_record() {
     assert_eq!(group.committed(), 2);
     assert_eq!(group.claim(4, 10, at(base, 31), VIS).offsets, vec![2, 3]);
 }
+
+// --- Putting a dead letter back ----------------------------------------------
+
+/// A redriven record is handed out again, without the cursor moving backwards.
+/// Everything the group finished since stays finished.
+#[test]
+fn a_redriven_record_is_handed_out_again() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 1);
+
+    // 0 and 1 are given up on; the group moves to 2.
+    group.claim(3, 10, base, VIS);
+    let claim = group.claim(3, 10, at(base, 31), VIS);
+    for dead in &claim.dead_lettered {
+        group.ack(dead.offset);
+    }
+    group.ack(2);
+    assert_eq!(group.committed(), 3);
+
+    assert!(group.redrive(0));
+    let again = group.claim(3, 10, at(base, 62), VIS);
+
+    assert_eq!(
+        again.offsets,
+        vec![0],
+        "the redriven record was not reissued"
+    );
+    assert_eq!(
+        group.committed(),
+        3,
+        "redriving rewound the cursor and will repeat finished work",
+    );
+}
+
+/// Its attempt count starts over, or a record redriven after a fix would be
+/// given up on again immediately.
+#[test]
+fn a_redriven_record_gets_its_attempts_back() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 1);
+
+    group.claim(1, 10, base, VIS);
+    let claim = group.claim(1, 10, at(base, 31), VIS);
+    group.ack(claim.dead_lettered[0].offset);
+
+    assert!(group.redrive(0));
+    let again = group.claim(1, 10, at(base, 62), VIS);
+    assert_eq!(again.offsets, vec![0]);
+    assert_eq!(group.attempts(0), 1, "the count did not start over");
+}
+
+/// Finishing a redriven record settles it without disturbing the cursor, which
+/// was never waiting on it.
+#[test]
+fn finishing_a_redriven_record_leaves_the_cursor_alone() {
+    let base = Instant::now();
+    let mut group = GroupTracker::new(0, 1);
+
+    group.claim(1, 10, base, VIS);
+    let claim = group.claim(1, 10, at(base, 31), VIS);
+    group.ack(claim.dead_lettered[0].offset);
+    assert_eq!(group.committed(), 1);
+
+    group.redrive(0);
+    group.claim(1, 10, at(base, 62), VIS);
+    assert_eq!(group.ack(0), None);
+    assert_eq!(group.committed(), 1);
+    // And it is not owed any more.
+    assert!(group.claim(1, 10, at(base, 93), VIS).offsets.is_empty());
+}
+
+/// A record still in play has not been given up on. Redriving it would reset
+/// its attempts and let it evade the bound for ever.
+#[test]
+fn a_record_at_or_above_the_cursor_cannot_be_redriven() {
+    let now = Instant::now();
+    let mut group = GroupTracker::new(0, 3);
+
+    group.claim(2, 10, now, VIS);
+    assert!(!group.redrive(0), "a record in play was redriven");
+    assert!(!group.redrive(5), "a record never delivered was redriven");
+}

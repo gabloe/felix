@@ -147,6 +147,13 @@ impl GroupTracker {
     /// record has since been handed to someone else who will answer too.
     pub fn ack(&mut self, offset: u64) -> Option<u64> {
         if offset < self.committed {
+            // Below the cursor, so the run has already closed over it. That is
+            // an ordinary duplicate — or a redriven record being finished, which
+            // settles it without the cursor moving, since the cursor was never
+            // waiting on it.
+            self.in_flight.remove(&offset);
+            self.redeliver.remove(&offset);
+            self.attempts.remove(&offset);
             return None;
         }
         self.in_flight.remove(&offset);
@@ -173,6 +180,26 @@ impl GroupTracker {
         }
         self.in_flight.remove(&offset);
         self.redeliver.insert(offset);
+    }
+
+    /// Put a record the group gave up on back in play, its attempt count reset.
+    ///
+    /// The cursor is *not* moved backwards. It has already passed this offset,
+    /// and rewinding it would redeliver everything the group finished since.
+    /// The record is owed again instead, which reaches the same consumer
+    /// without disturbing anything else — a queue's order was never a promise,
+    /// and a redriven record is the clearest case of that.
+    ///
+    /// Returns whether it was taken. A record at or above the cursor is refused:
+    /// it has not been given up on, so it is either in play or owed already, and
+    /// resetting its attempts would let it evade the bound for ever.
+    pub fn redrive(&mut self, offset: u64) -> bool {
+        if offset >= self.committed {
+            return false;
+        }
+        self.attempts.remove(&offset);
+        self.redeliver.insert(offset);
+        true
     }
 
     /// Move claims that have lapsed back to owed.
