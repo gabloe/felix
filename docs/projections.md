@@ -11,6 +11,16 @@ here without a citation is a claim nothing checks, which is the failure this
 page exists to prevent. `scripts/check_doc_evidence.py` verifies that every test
 named below still exists.
 
+<p align="center">
+  <img src="assets/three-readings.svg" alt="One append-only log read three ways at once: a stream marker advancing over every record, a queue marker trailing because it moves only as records are acknowledged, and one cache marker per key jumping to that key's newest record" width="900">
+</p>
+
+The three markers are the whole idea. A stream, a queue and a cache are not
+three stores — they are **three ways of pointing into one log**, running at the
+same time over the same bytes. Only the cache treats an older record as dead;
+compaction reclaims those, while a stream reading the same log still returns
+them until retention removes the segment they live in.
+
 ## What they share
 
 Every semantic gets the same four things from the log, and none of them

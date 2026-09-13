@@ -19,6 +19,10 @@ three ways of *reading* that log, not three subsystems.
 
 ![One append-only log per shard, read three ways: as a stream by offset, as a cache through a key index, and as a queue through a cursor shared by a consumer group.](/felix/diagrams/one-log.svg)
 
+[Projections](/felix/architecture/projections/) animates that same picture —
+the three readings advancing over one log at once — and cites the test behind
+each claim.
+
 Everything that follows is a consequence. There is one durability path, one
 recovery path, one placement rule and one replication path, and each semantic is
 a small amount of code on top. When you are deciding where a change belongs, the

@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 510" width="900" height="510" role="img" aria-label="One append-only log read three ways at once. Records carrying a key and a value are appended with ascending offsets. A stream marker advances across every record in order. A queue marker advances over the same records but lags, moving only as records are acknowledged. A cache is not one position but a set: one marker per key, each jumping to the newest record for that key, so records superseded by a later write to the same key are left behind and reclaimed by compaction while the stream still reads them.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 12px ui-sans-serif, system-ui, -apple-system, sans-serif; letter-spacing: .05em; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .key   { fill: var(--ink); font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .warn  { fill: var(--accent); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .rec    { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .spine  { stroke: var(--edge-dim); stroke-width: 1.25; }
+    .mk     { fill: var(--edge); }
+    .mkq    { fill: var(--okay); }
+    .mkc    { fill: var(--accent); }
+    .stale  { stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 4 3; fill: none; }
+    .rule   { stroke: var(--edge-dim); stroke-width: 1; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; --c-step:#e8f0fe;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; --c-step:#24344b; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; --c-step:#24344b; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; --c-step:#e8f0fe; }
+
+    /* One 20s loop. All three readings advance on it at the same time, because
+       that is the claim: they are not three subsystems taking turns, they are
+       three positions into one log. */
+    .hide { opacity: 0; }
+
+    .r0 { animation: r0 20s infinite; } @keyframes r0 { 0%,5% { opacity:0 } 7%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .r1 { animation: r1 20s infinite; } @keyframes r1 { 0%,10% { opacity:0 } 12%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .r2 { animation: r2 20s infinite; } @keyframes r2 { 0%,15% { opacity:0 } 17%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .r3 { animation: r3 20s infinite; } @keyframes r3 { 0%,20% { opacity:0 } 22%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .r4 { animation: r4 20s infinite; } @keyframes r4 { 0%,25% { opacity:0 } 27%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .r5 { animation: r5 20s infinite; } @keyframes r5 { 0%,30% { opacity:0 } 32%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    /* A stream: every record, in order, as fast as they land. */
+    .mstream { animation: mstream 20s infinite; }
+    @keyframes mstream {
+      0%,6% { opacity: 0; transform: translateX(0px) }
+      7%,10%  { opacity: 1; transform: translateX(0px) }
+      12%,15% { opacity: 1; transform: translateX(84px) }
+      17%,20% { opacity: 1; transform: translateX(168px) }
+      22%,25% { opacity: 1; transform: translateX(252px) }
+      27%,30% { opacity: 1; transform: translateX(336px) }
+      32%,96% { opacity: 1; transform: translateX(420px) }
+      97%,100% { opacity: 0; transform: translateX(0px) }
+    }
+
+    /* A queue: the same records, but the cursor moves only when a consumer
+       says it finished one, so it trails the tail by design. */
+    .mqueue { animation: mqueue 20s infinite; }
+    @keyframes mqueue {
+      0%,13% { opacity: 0; transform: translateX(0px) }
+      15%,20% { opacity: 1; transform: translateX(0px) }
+      22%,27% { opacity: 1; transform: translateX(84px) }
+      29%,34% { opacity: 1; transform: translateX(168px) }
+      36%,43% { opacity: 1; transform: translateX(252px) }
+      46%,96% { opacity: 1; transform: translateX(336px) }
+      97%,100% { opacity: 0; transform: translateX(0px) }
+    }
+
+    /* A cache is not one position. It is one per key, and each jumps to the
+       newest record carrying that key. */
+    .mkeyA { animation: mkeyA 20s infinite; }
+    @keyframes mkeyA {
+      0%,6% { opacity: 0; transform: translateX(0px) }
+      7%,15%  { opacity: 1; transform: translateX(0px) }
+      17%,30% { opacity: 1; transform: translateX(168px) }
+      32%,96% { opacity: 1; transform: translateX(420px) }
+      97%,100% { opacity: 0; transform: translateX(0px) }
+    }
+    .mkeyB { animation: mkeyB 20s infinite; }
+    @keyframes mkeyB {
+      0%,11% { opacity: 0; transform: translateX(84px) }
+      12%,25% { opacity: 1; transform: translateX(84px) }
+      27%,96% { opacity: 1; transform: translateX(336px) }
+      97%,100% { opacity: 0; transform: translateX(84px) }
+    }
+    .mkeyC { animation: mkeyC 20s infinite; }
+    @keyframes mkeyC {
+      0%,21% { opacity: 0; transform: translateX(252px) }
+      22%,96% { opacity: 1; transform: translateX(252px) }
+      97%,100% { opacity: 0; transform: translateX(252px) }
+    }
+
+    /* The last beat: what the cache has moved past, and the stream has not. */
+    .super { animation: super 20s infinite; }
+    @keyframes super { 0%,74% { opacity: 0 } 77%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    .c1 { animation: c1 20s infinite; } @keyframes c1 { 0%,6% { opacity:0 } 9%,29% { opacity:1 } 30%,100% { opacity:0 } }
+    .c2 { animation: c2 20s infinite; } @keyframes c2 { 0%,30% { opacity:0 } 33%,49% { opacity:1 } 50%,100% { opacity:0 } }
+    .c3 { animation: c3 20s infinite; } @keyframes c3 { 0%,50% { opacity:0 } 53%,72% { opacity:1 } 73%,100% { opacity:0 } }
+    .c4 { animation: c4 20s infinite; } @keyframes c4 { 0%,73% { opacity:0 } 76%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .r0,.r1,.r2,.r3,.r4,.r5,.mstream,.mqueue,.mkeyA,.mkeyB,.mkeyC,.super,
+      .c1,.c2,.c3,.c4 { animation: none; }
+      .r0,.r1,.r2,.r3,.r4,.r5,.super { opacity: 1; }
+      .mstream { opacity: 1; transform: translateX(420px); }
+      .mqueue  { opacity: 1; transform: translateX(336px); }
+      .mkeyA   { opacity: 1; transform: translateX(420px); }
+      .mkeyB   { opacity: 1; transform: translateX(336px); }
+      .mkeyC   { opacity: 1; transform: translateX(252px); }
+      .c4 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="26" text-anchor="middle">ONE LOG, READ THREE WAYS, ALL AT ONCE</text>
+
+  <!-- ================================ the log ================================ -->
+  <text class="small" x="220" y="60" text-anchor="end">one shard's log</text>
+  <line class="spine" x1="222" y1="96" x2="742" y2="96"/>
+
+  <rect class="rec hide r0" x="230" y="76" width="78" height="40" rx="4"/>
+  <rect class="rec hide r1" x="314" y="76" width="78" height="40" rx="4"/>
+  <rect class="rec hide r2" x="398" y="76" width="78" height="40" rx="4"/>
+  <rect class="rec hide r3" x="482" y="76" width="78" height="40" rx="4"/>
+  <rect class="rec hide r4" x="566" y="76" width="78" height="40" rx="4"/>
+  <rect class="rec hide r5" x="650" y="76" width="78" height="40" rx="4"/>
+
+  <g class="hide r0"><text class="key" x="269" y="101" text-anchor="middle">a=1</text><text class="small" x="269" y="134" text-anchor="middle">off 0</text></g>
+  <g class="hide r1"><text class="key" x="353" y="101" text-anchor="middle">b=1</text><text class="small" x="353" y="134" text-anchor="middle">off 1</text></g>
+  <g class="hide r2"><text class="key" x="437" y="101" text-anchor="middle">a=2</text><text class="small" x="437" y="134" text-anchor="middle">off 2</text></g>
+  <g class="hide r3"><text class="key" x="521" y="101" text-anchor="middle">c=1</text><text class="small" x="521" y="134" text-anchor="middle">off 3</text></g>
+  <g class="hide r4"><text class="key" x="605" y="101" text-anchor="middle">b=2</text><text class="small" x="605" y="134" text-anchor="middle">off 4</text></g>
+  <g class="hide r5"><text class="key" x="689" y="101" text-anchor="middle">a=3</text><text class="small" x="689" y="134" text-anchor="middle">off 5</text></g>
+
+
+  <!-- superseded: the cache has moved past these, the stream has not -->
+  <g class="hide super">
+    <rect class="stale" x="230" y="72" width="78" height="48" rx="5"/>
+    <rect class="stale" x="314" y="72" width="78" height="48" rx="5"/>
+    <rect class="stale" x="398" y="72" width="78" height="48" rx="5"/>
+    <text class="warn" x="437" y="58" text-anchor="middle">superseded for the cache — the stream still reads them</text>
+  </g>
+
+  <line class="rule" x1="30" y1="156" x2="870" y2="156"/>
+
+  <!-- =============================== the stream ============================== -->
+  <text class="name" x="30" y="192">STREAM</text>
+  <text class="small" x="30" y="208">every record</text>
+  <g class="hide mstream">
+    <path class="mk" d="M 269 178 l -8 14 l 16 0 z"/>
+    <text class="small" x="269" y="210" text-anchor="middle" style="fill: var(--edge)">reading</text>
+  </g>
+
+  <!-- =============================== the queue =============================== -->
+  <text class="name" x="30" y="256">QUEUE</text>
+  <text class="small" x="30" y="272">acknowledged</text>
+  <g class="hide mqueue">
+    <path class="mkq" d="M 269 242 l -8 14 l 16 0 z"/>
+    <text class="small" x="269" y="274" text-anchor="middle" style="fill: var(--okay)">cursor</text>
+  </g>
+
+  <!-- =============================== the cache =============================== -->
+  <text class="name" x="30" y="320">CACHE</text>
+  <text class="small" x="30" y="336">one per key</text>
+  <g class="hide mkeyA">
+    <path class="mkc" d="M 269 306 l -8 14 l 16 0 z"/>
+    <text class="small" x="269" y="338" text-anchor="middle" style="fill: var(--accent)">a</text>
+  </g>
+  <g class="hide mkeyB">
+    <path class="mkc" d="M 269 306 l -8 14 l 16 0 z"/>
+    <text class="small" x="269" y="338" text-anchor="middle" style="fill: var(--accent)">b</text>
+  </g>
+  <g class="hide mkeyC">
+    <path class="mkc" d="M 269 306 l -8 14 l 16 0 z"/>
+    <text class="small" x="269" y="338" text-anchor="middle" style="fill: var(--accent)">c</text>
+  </g>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body hide c1" x="450" y="386" text-anchor="middle">One append-only log. Every record has an offset, and a key.</text>
+  <text class="body hide c2" x="450" y="386" text-anchor="middle">A stream is the log read forward: every record, in the order it was written.</text>
+  <text class="body hide c3" x="450" y="386" text-anchor="middle">A queue is a durable cursor over the same records, advancing only as they are acknowledged.</text>
+  <text class="body hide c4" x="450" y="386" text-anchor="middle">A cache is not one position but one per key, each jumping to that key's newest record.</text>
+
+  <text class="body" x="450" y="428" text-anchor="middle">All three are running at once, over the same bytes. Nothing is copied into a second store, and no reading</text>
+  <text class="body" x="450" y="446" text-anchor="middle">can disturb another: a queue's cursor cannot move a stream's, and a cache overwriting a key appends a record.</text>
+  <text class="body" x="450" y="472" text-anchor="middle">This is why a cache shard is replicated by the machinery that replicates a stream — it is the same log.</text>
+  <text class="body" x="450" y="498" text-anchor="middle">Only the cache calls an older record dead. Compaction reclaims those; a stream reads them until retention does.</text>
+</svg>
