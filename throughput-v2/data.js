@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789331912650,
+  "lastUpdate": 1789334083808,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6864,6 +6864,58 @@ window.BENCHMARK_DATA = {
             "range": "15853.07",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 587286.07\nmean: 594453.78\nstdev: 15853.07\ncv: 2.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c427bd4ed63ef86446c6789b20e187f468b7023f",
+          "message": "demo: what Quorum buys and what Leader costs, with a diagram for each (#325)\n\n`task cluster:failover` shows a quorum-acknowledged record surviving the broker\nthat acknowledged it. Nothing showed the other half — what the `Leader` default\ncosts under the same fault — and the docs described `consistency` in a sentence\nwith no picture.\n\nBoth streams are replicated three ways and differ only in `consistency`. The\nfault is a leader cut off from its replicas: followers frozen with SIGSTOP, so\nthe leader is healthy and alone. Each stream's own followers are frozen in turn,\nso the run does not depend on the two streams sharing a leader and cannot flake\non where placement put them.\n\nWhat it found is better than what I expected to write:\n\n- **Quorum** refuses, and says why — \"the batch is durable here but did not\n  reach a majority within 5s\". Not \"the write failed\". The record may well be\n  present afterwards, because it landed on the leader before the answer came\n  back, so a refusal means \"cannot be vouched for\" rather than \"did not happen\".\n  The demo reports that case explicitly rather than glossing it.\n- **Leader** takes the write, and killing the leader leaves the shard\n  **unavailable**: no replica is promoted, because opening the shard would drop\n  a record that was acknowledged. Not silent loss — refusal to serve.\n\nSo the trade is not safety against latency. Both refuse to lose an acknowledged\nrecord; they differ in when you find out. Quorum tells you at publish time while\nyou still hold the record. Leader tells you at failover time, when the only copy\nis on a dead broker's disk.\n\nI had this wrong at first and the harness corrected me. The original design\nresumed the followers before killing the leader, which let replication catch up\nand handed the record over — the opposite of the point. Killing first surfaced\n\"no replica holding this shard's log can take over\", which is the real\nbehaviour and a stronger story than the silent loss I had assumed.\n\nThe demo asserts both outcomes and fails if a shard is ever served *without* a\nrecord its leader acknowledged, which is the failure that would matter.\n\nDocs: a \"Consistency: how many brokers must hold it\" section on the semantics\npage with an animated SVG putting both acknowledgements on one timeline —\nincluding that Leader still replicates, just after answering — and a demo page,\nwhich also closes the gap that the cluster failover demo was never documented on\nthe site at all.",
+          "timestamp": "2026-09-13T14:12:57-07:00",
+          "tree_id": "0bba84ea0c4c9a7b3c41411fe2d8a18cca2a11e8",
+          "url": "https://github.com/gabloe/felix/commit/c427bd4ed63ef86446c6789b20e187f468b7023f"
+        },
+        "date": 1789334083119,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 444803.63,
+            "range": "8913.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 444803.63\nmean: 446304.48\nstdev: 8913.14\ncv: 2.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 444803.63,
+            "range": "8913.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 444803.63\nmean: 446304.48\nstdev: 8913.14\ncv: 2.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 107135.03,
+            "range": "1391.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 107135.03\nmean: 107179.89\nstdev: 1391.50\ncv: 1.30%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1071350.31,
+            "range": "13915.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1071350.31\nmean: 1071798.91\nstdev: 13915.00\ncv: 1.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
