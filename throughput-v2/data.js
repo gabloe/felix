@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789277296927,
+  "lastUpdate": 1789281287817,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6136,6 +6136,58 @@ window.BENCHMARK_DATA = {
             "range": "20242.48",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 669037.02\nmean: 660607.31\nstdev: 20242.48\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a0ab93b8bd8e049bb3fa0265a0e0b40958b13f91",
+          "message": "Track what a consumer group has handed out and what it owes (#308)\n\nSecond slice of #280, and still nothing a client can reach. The durable cursor\nsays where a group has finished; this is everything between there and the tail.\n\n## The rules, and why each one exists\n\n**A claimed record is not handed to a second consumer** while the claim stands.\nThat is the property that makes it a queue rather than a stream.\n\n**A lapsed claim makes the record owed again.** Without it a consumer that stops\nanswering is a permanent hole in the group's progress.\n\n**Owed records go out before new ones.** Preferring new work would starve\nredeliveries behind a fast producer — and those are exactly the records a\nconsumer already failed to finish once.\n\n**The cursor moves only over a contiguous run of acknowledgements.** Advancing\npast a gap marks a record finished that nobody finished, and it is never handed\nout again.\n\n**A record acknowledged while owed is finished, not redelivered.** A claim can\nlapse before its consumer answers; the answer still counts.\n\n## In memory, deliberately\n\nA leader that dies loses what was in flight and the group resumes from its\ndurable cursor, so those records are delivered again. That is at-least-once,\nwhich is what a queue offers regardless. Persisting the in-flight set would buy\na narrower redelivery window at the cost of a write per delivery, and still\nwould not make delivery exactly-once.\n\n## Verified by breaking it\n\nPure logic with the clock passed in, so every rule is testable without waiting\nfor one. Six mutations, each reverting one mechanism:\n\n| mutation | caught by |\n| --- | --- |\n| cursor advances past a gap | 2 tests |\n| new records preferred over owed | 1 |\n| ack does not clear the owed set | 2 |\n| claims never lapse | 3 |\n| nack resurrects an acked record | 1 |\n| cursor may pass the high-water mark | 1 |\n\nTwo of those tests did not exist until the mutation slipped through. An ack\narriving while a record sits *owed* rather than in flight was uncovered, as was\nan ack for an offset never handed out — which nothing in the broker produces,\nbut the tracker takes its input from a client and must not be wrecked by one.\n\n`task test` (85 groups) and `task lint` pass.\n\nRefs #280",
+          "timestamp": "2026-09-12T23:32:26-07:00",
+          "tree_id": "0112c251cedc96565f1990ed8b78a23eae213e82",
+          "url": "https://github.com/gabloe/felix/commit/a0ab93b8bd8e049bb3fa0265a0e0b40958b13f91"
+        },
+        "date": 1789281286939,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 237335.54,
+            "range": "4928.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 237335.54\nmean: 235938.92\nstdev: 4928.29\ncv: 2.09%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 237335.54,
+            "range": "4928.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 237335.54\nmean: 235938.92\nstdev: 4928.29\ncv: 2.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56221.56,
+            "range": "663.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56221.56\nmean: 56542.43\nstdev: 663.05\ncv: 1.17%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 562215.57,
+            "range": "6630.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 562215.57\nmean: 565424.29\nstdev: 6630.57\ncv: 1.17%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
