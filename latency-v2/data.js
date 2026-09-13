@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789305179236,
+  "lastUpdate": 1789307587767,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7986,6 +7986,72 @@ window.BENCHMARK_DATA = {
             "range": "195.41",
             "unit": "us",
             "extra": "trials: 5\nmedian: 597.00\nmean: 679.80\nstdev: 195.41\ncv: 28.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dee8fa0cd8014d71a95d081b5febd1c833e213c5",
+          "message": "Bound redelivery, so a poison record cannot stall a queue (#311)\n\nFifth slice of #280, and the correctness gap the last one left open. A record\nthat always failed was handed out for ever and the group never got past it.\n\nA record delivered `FELIX_GROUP_MAX_ATTEMPTS` times without being finished is\ngiven up on: the offset is recorded as a dead letter and the group moves past\nit. Five by default — enough that a transient failure is retried through, few\nenough that a record which will never succeed is set aside quickly.\n\n## A dead letter is a pointer, not a copy\n\nThe record stays in the stream's log at the recorded offset, readable by an\nordinary replay. So dead-lettering duplicates nothing and loses nothing. What is\nstored is the one fact the log does not already hold: that this group tried this\nrecord and stopped.\n\nThat also sidesteps the awkward part of a conventional dead-letter queue — the\ndestination stream's shard may be led by another broker, and writing there from\nthe group path would need a cross-broker publish inside a poll.\n\nScoped per stream *and* group. Two groups reading one shard fail on different\nrecords, and merging their dead letters would have each answering for the\nother's.\n\n## Recorded before it is settled\n\nA crash between the two would otherwise leave the cursor past a record with\nnothing anywhere saying it was ever attempted — a silent skip rather than a\ndead letter. The tracker reports what it is giving up on and settles nothing\nitself, so the caller controls the order.\n\n## Attempts are reported to the consumer\n\nEach delivery carries its attempt number, so a retry can be handled differently\nfrom a first try. The count is dropped as soon as the record settles, so it is\nabout the record in play rather than the offset for ever.\n\n## Verification\n\nTwenty-three tracker tests and thirteen reader tests, including: a poison record\ngiven up on after the bound while the work behind it still flows, the record\nstill readable from the log at the dead-lettered offset, nacks counting toward\nthe bound the same as lapsed claims, a bound of zero still delivering once, and\ndead letters surviving a restart.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\n## What is left\n\nReading the dead-letter list is a broker-side call with no wire protocol yet,\nand delivery is still a plain poll with no long-polling. Both are noted in the\nstatus table, which stays a Target for those reasons rather than for a\ncorrectness gap.\n\nRefs #280",
+          "timestamp": "2026-09-13T06:50:36-07:00",
+          "tree_id": "236fdbed8eef9424b48728f45aaf75bd06127737",
+          "url": "https://github.com/gabloe/felix/commit/dee8fa0cd8014d71a95d081b5febd1c833e213c5"
+        },
+        "date": 1789307586174,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.00\nstdev: 0.71\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 210,
+            "range": "144.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 210.00\nmean: 274.80\nstdev: 144.91\ncv: 52.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 306,
+            "range": "2645.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 306.00\nmean: 1525.60\nstdev: 2645.47\ncv: 173.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.40\nstdev: 1.14\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 417,
+            "range": "95.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 417.00\nmean: 456.00\nstdev: 95.75\ncv: 21.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 811,
+            "range": "647.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 811.00\nmean: 1151.80\nstdev: 647.30\ncv: 56.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
