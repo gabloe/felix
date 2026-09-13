@@ -8,23 +8,36 @@ Felix provides explicit, tunable delivery guarantees and consistency semantics. 
 
 Felix makes trade-offs explicit rather than hiding them behind ambiguous guarantees. Every semantic choice has observable behavior that can be tested and reasoned about.
 
-:::note[MVP Scope]
-This document describes both current MVP semantics and planned future semantics. MVP limitations are clearly marked.
+:::note[What is built and what is not]
+This page describes behaviour that exists and behaviour that is planned. Where
+they differ it says which. The [status table](/felix/getting-started/what-felix-is-for/)
+is the authority per capability, and [Projections](/felix/architecture/projections/)
+carries the test behind each claim about a semantic.
 :::
 ## Pub/Sub Delivery Semantics
 
-### Delivery Guarantees (MVP)
+### Delivery Guarantees
 
-**Current guarantee: At-most-once**
+A stream's guarantee follows from how it is registered.
 
-In the MVP, Felix provides **at-most-once** delivery semantics for pub/sub:
+**An ephemeral stream is at-most-once.** This is the default:
 
 - Messages are delivered to subscribers zero or one time
 - No retries or redelivery
 - No acknowledgements from subscribers
 - Slow subscribers may drop messages without notification
 
-This semantic is appropriate for:
+**A durable stream is at-least-once.** Every record is written to disk before
+the publish is acknowledged, and a subscriber replays from any retained offset,
+so a record survives a broker restart and can be read again. A stream declared
+`Quorum` waits for a majority of its replicas before acknowledging, so the
+record also survives losing the broker that accepted it.
+
+**A consumer group is at-least-once, and redelivers.** A record handed to a
+consumer that does not answer is handed to another once the visibility timeout
+lapses. See [Projections](/felix/architecture/projections/).
+
+At-most-once is appropriate for:
 - Real-time signals where latest value matters most
 - High-frequency metrics and telemetry
 - Workloads where occasional loss is acceptable
@@ -185,7 +198,7 @@ pub struct Subscription {
 - Each subscriber has `subscriber_queue_capacity` buffer slots (default: 512)
 - When buffer fills, new events are **dropped for that subscriber only**
 - Other subscribers continue receiving events normally
-- No explicit notification of drops in MVP (future: lag metrics)
+- A drop is not announced. For a durable stream a subscriber can *detect* one, because delivered records carry log offsets and a jump between consecutive offsets is exactly a drop.
 
 **Configuration**:
 
@@ -276,7 +289,7 @@ publish_queue_wait_timeout_ms: 1000
 
 **Broker restarts**:
 
-- All in-memory state is lost (ephemeral storage in MVP)
+- In-memory state is lost. Durable streams, the log-backed cache, and consumer-group positions are on disk and survive.
 - Active subscriptions are terminated
 - Clients detect connection loss and must reconnect
 - No historical replay available
@@ -369,7 +382,7 @@ client.cache_put_scoped("tenant2", "prod", "sessions", "user123", data).await?;
 
 ### Eviction Policy
 
-**MVP policy**: Best-effort eviction when memory pressure occurs.
+**Today**: the in-memory cache evicts best-effort under pressure. The log-backed cache does not evict — it compacts, reclaiming superseded and expired records.
 
 - No guaranteed LRU or LFU policy
 - Eviction is opportunistic
@@ -411,7 +424,7 @@ sequenceDiagram
 
 **Behavior**: Last write wins, but order is undefined for concurrent writes.
 
-**No atomic operations in MVP**:
+**No atomic operations**:
 
 - No compare-and-swap
 - No atomic increment
@@ -528,7 +541,7 @@ Within a single broker:
 In a clustered deployment:
 
 - **Shard leadership**: Only one leader per shard
-- **Metadata consistency**: Strongly consistent via RAFT control plane
+- **Metadata consistency**: strongly consistent, because it lives in one Postgres that every control-plane instance reads and writes
 - **Cross-shard ordering**: Not guaranteed
 - **Cache consistency**: Eventually consistent across brokers
 
@@ -559,7 +572,7 @@ In a clustered deployment:
 
 **Process crash**:
 
-- All in-memory state lost (ephemeral storage in MVP)
+- In-memory state is lost. Durable streams, the log-backed cache, and consumer-group positions are on disk and survive.
 - Clients detect connection loss
 - Clients must reconnect to recovered broker
 - Subscriptions must be re-established
@@ -633,15 +646,16 @@ assert!(fast_count >= expected_count);
 
 ## Summary: Semantic Guarantees Matrix
 
-| Property | MVP Guarantee | Future Guarantee |
-|----------|---------------|------------------|
-| **Pub/Sub delivery** | At-most-once | At-least-once, Exactly-once |
-| **Message ordering** | Per-stream | Configurable cross-stream |
-| **Subscriber isolation** | Yes | Yes |
-| **Cache consistency** | Read-your-writes | Tunable (linearizable option) |
-| **TTL precision** | Best-effort (~100ms) | Guaranteed |
-| **Durability** | None (ephemeral) | Configurable per stream |
-| **Authorization** | None | RBAC per resource |
+| Property | Today | Not built |
+|----------|-------|-----------|
+| **Pub/Sub delivery** | At-most-once ephemeral, at-least-once durable | Exactly-once |
+| **Consumer groups** | At-least-once, bounded redelivery, dead letters | Shard assignment across a group's consumers |
+| **Message ordering** | Per shard | Configurable cross-shard |
+| **Subscriber isolation** | Yes | — |
+| **Cache** | Routed to one owner, replicated, read-your-writes through that owner | A declared consistency level; a cache write is acknowledged by its leader |
+| **TTL precision** | Lazy on access, against an absolute expiry | Sweeping expiry |
+| **Durability** | Per stream: ephemeral, or `Leader` or `Quorum` acknowledgement | — |
+| **Authorization** | Tenant-scoped tokens, RBAC per resource, OIDC exchange | — |
 | **Quotas** | None | Per-tenant, per-namespace |
 | **Multi-key operations** | None | Transactions |
 
@@ -649,21 +663,20 @@ assert!(fast_count >= expected_count);
 
 ### Choosing Delivery Semantics
 
-**Use at-most-once (current MVP) when**:
+**Use an ephemeral stream (at-most-once) when**:
 - Latest value is more important than history (sensor data, metrics)
 - Occasional loss is acceptable (telemetry, monitoring)
 - Throughput and latency matter more than guarantees
 - Application implements own deduplication
 
-**Use at-least-once (future) when**:
+**Use a durable stream, or a consumer group (at-least-once) when**:
 - Every message matters (financial transactions, orders)
 - Application can handle duplicates (idempotent processing)
 - Durability matters more than latency
 
-**Use exactly-once (future) when**:
-- Duplicates are unacceptable (billing, accounting)
-- Application cannot easily deduplicate
-- Willing to pay latency cost for guarantees
+**Exactly-once is not implemented**, and is not on the near roadmap. If
+duplicates are unacceptable — billing, accounting — the deduplication has to be
+in the application, keyed on something the record carries.
 
 ### Cache Usage Patterns
 
@@ -679,5 +692,7 @@ assert!(fast_count >= expected_count);
 - Frequently updated counters (better as pub/sub)
 
 :::tip[Design for Semantics]
-Design your application for the semantics Felix provides, not the semantics you wish it had. If you need stronger guarantees than MVP provides, layer them in your application or wait for planned features.
+Design your application for the semantics Felix provides, not the semantics you
+wish it had. Where a guarantee is missing, the honest options are to layer it in
+the application or to choose a different tool — not to assume it will arrive.
 :::

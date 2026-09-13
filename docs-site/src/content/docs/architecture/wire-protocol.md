@@ -200,7 +200,7 @@ Initiate a subscription to a stream.
 
 **Semantics**:
 - Subscription starts at **tail** (current offset)
-- No historical replay in MVP
+- Replay from a retained offset for a durable stream; an ephemeral stream keeps no history to replay
 - Broker responds with `ok` on the control stream
 - Broker opens a new **unidirectional stream** for event delivery
 - First frame on event stream is `EventStreamHello` (see below)
@@ -265,7 +265,7 @@ Event delivery on a subscription stream.
 **Semantics**:
 - Sent on unidirectional event streams
 - One event per frame (unless batched)
-- No acknowledgement from client in MVP
+- No acknowledgement from a plain subscriber. A consumer group acknowledges each record explicitly, which is what makes it redeliverable
 
 #### EventBatch
 
@@ -723,7 +723,7 @@ Felix uses different QUIC stream patterns for different workload characteristics
 
 **Backpressure / resource exhaustion**:
 - Apply QUIC flow control (stop granting credits)
-- Slow subscribers may drop events in MVP
+- A slow subscriber may drop events. Delivered records carry log offsets for a durable stream, so a jump between consecutive offsets is exactly a drop and the client can see it
 
 ## Conformance Testing
 

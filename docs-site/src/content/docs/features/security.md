@@ -688,7 +688,7 @@ client.delete_user_data("tenant", "user-id").await?;
 
 - ✓ Encryption in transit (TLS 1.3)
 - [ ] Encryption at rest (planned)
-- [ ] Access controls (RBAC planned)
+- [x] Access controls: tenant-scoped tokens with RBAC enforced at the broker
 - [ ] Audit logging (planned)
 - [ ] Business associate agreement
 - [ ] Physical security (infrastructure-dependent)

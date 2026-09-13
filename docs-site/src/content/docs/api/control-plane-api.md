@@ -5,7 +5,7 @@ title: "Control Plane API"
 The Felix control plane manages cluster metadata, stream definitions, shard placement, and node membership. This document describes the control plane architecture, APIs, and operational patterns.
 
 :::note[Current Status]
-The control plane HTTP API is implemented for metadata and authentication (token exchange + JWKS). RAFT clustering and some advanced capabilities are planned. This document includes both current HTTP endpoints and future design details.
+The control plane HTTP API is implemented for metadata, placement, and authentication (token exchange and JWKS). Raft clustering is planned and not started. This document covers the current endpoints; where it describes something unbuilt it says so.
 :::
 ## Authentication and Token Exchange (HTTP)
 
@@ -176,18 +176,31 @@ Fetch tenant signing keys (public JWKS) used by brokers to verify Felix tokens.
 
 ## Architecture Overview
 
-The control plane is a separate service that provides strongly consistent metadata management using RAFT consensus.
+The control plane is a separate service holding the metadata brokers read:
+tenants, namespaces, streams, caches, the node catalog, and shard assignments.
+
+It is a **stateless REST service over Postgres**, and consistency comes from
+there rather than from a consensus protocol between instances — instances do not
+know about each other. Run several against one highly available database; each
+answers `/v1/system/ready` only when it can reach a database whose schema
+matches its build.
+
+Raft is the intended way to make this metadata highly available without
+depending on Postgres for it. It is not started.
+
+Today's shape, with the database holding what a Raft group would:
 
 ```mermaid
 graph TB
-    subgraph CONTROLPLANE["Control Plane (RAFT Cluster)"]
-        CONTROLPLANE1["controlplane-0<br/>(Leader)"]
-        CONTROLPLANE2["controlplane-1<br/>(Follower)"]
-        CONTROLPLANE3["controlplane-2<br/>(Follower)"]
-        
-        CONTROLPLANE1 <-->|RAFT| CONTROLPLANE2
-        CONTROLPLANE2 <-->|RAFT| CONTROLPLANE3
-        CONTROLPLANE1 <-->|RAFT| CONTROLPLANE3
+    subgraph CONTROLPLANE["Control Plane (stateless instances)"]
+        CONTROLPLANE1["controlplane-0"]
+        CONTROLPLANE2["controlplane-1"]
+        CONTROLPLANE3["controlplane-2"]
+        PG[("Postgres<br/>metadata and placement")]
+
+        CONTROLPLANE1 --> PG
+        CONTROLPLANE2 --> PG
+        CONTROLPLANE3 --> PG
     end
     
     subgraph Brokers["Broker Data Plane"]

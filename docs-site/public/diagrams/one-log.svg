@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 352" width="900" height="352" role="img" aria-label="One append-only log per shard, read three ways: as a stream by offset, as a cache through a key index, and as a queue through a cursor shared by a consumer group.">
+
+  <style>
+    .h      { fill: var(--ink); font: 600 17px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .name   { fill: var(--ink); font: 600 15px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body   { fill: var(--ink-dim); font: 400 12.5px ui-sans-serif, system-ui, sans-serif; }
+    .tag    { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .mono   { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .rec    { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .card   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .spine  { stroke: var(--edge-dim); stroke-width: 1.25; }
+    .flow   { stroke: var(--edge); stroke-width: 1.75; fill: none; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-dev:#fbe9d6;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-dev:#40301c; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-dev:#40301c; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-dev:#fbe9d6; }
+  </style>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--edge)"/>
+    </marker>
+  </defs>
+
+  <!-- the log -->
+  <text class="tag" x="450" y="30" text-anchor="middle">ONE APPEND-ONLY LOG, PER SHARD</text>
+  <g>
+    <rect class="rec" x="318" y="46" width="40" height="34" rx="4"/>
+    <rect class="rec" x="362" y="46" width="40" height="34" rx="4"/>
+    <rect class="rec" x="406" y="46" width="40" height="34" rx="4"/>
+    <rect class="rec" x="450" y="46" width="40" height="34" rx="4"/>
+    <rect class="rec" x="494" y="46" width="40" height="34" rx="4"/>
+    <rect class="rec" x="538" y="46" width="40" height="34" rx="4"/>
+    <text class="mono" x="318" y="100">0</text>
+    <text class="mono" x="578" y="100" text-anchor="end">n</text>
+  </g>
+  <text class="body" x="450" y="124" text-anchor="middle">Records are never rewritten. Everything below is a way of reading them.</text>
+
+  <!-- one source, three readings -->
+  <path class="spine" d="M 450 140 L 450 162 M 148 162 L 752 162"/>
+  <path class="flow" d="M 148 162 L 148 190" marker-end="url(#a)"/>
+  <path class="flow" d="M 450 162 L 450 190" marker-end="url(#a)"/>
+  <path class="flow" d="M 752 162 L 752 190" marker-end="url(#a)"/>
+
+  <!-- streams -->
+  <rect class="card" x="40" y="194" width="216" height="126" rx="8"/>
+  <text class="name" x="62" y="224">Streams</text>
+  <text class="body" x="62" y="250">Read forward by offset.</text>
+  <text class="body" x="62" y="270">Every subscriber sees</text>
+  <text class="body" x="62" y="288">every record, in order,</text>
+  <text class="body" x="62" y="306">at its own pace.</text>
+
+  <!-- caches -->
+  <rect class="card" x="342" y="194" width="216" height="126" rx="8"/>
+  <text class="name" x="364" y="224">Caches</text>
+  <text class="body" x="364" y="250">Read through an index</text>
+  <text class="body" x="364" y="270">of key to latest offset,</text>
+  <text class="body" x="364" y="288">rebuilt from the log</text>
+  <text class="body" x="364" y="306">rather than trusted.</text>
+
+  <!-- queues -->
+  <rect class="card" x="644" y="194" width="216" height="126" rx="8"/>
+  <text class="name" x="666" y="224">Queues</text>
+  <text class="body" x="666" y="250">Read through a cursor</text>
+  <text class="body" x="666" y="270">shared by a group. One</text>
+  <text class="body" x="666" y="288">consumer holds a record</text>
+  <text class="body" x="666" y="306">at a time.</text>
+</svg>

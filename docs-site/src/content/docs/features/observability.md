@@ -59,7 +59,7 @@ Example JSON log:
 ```
 INFO felix_broker: Broker starting
 INFO felix_broker: QUIC listening on 0.0.0.0:5000
-INFO felix_broker: Control plane sync disabled (MVP mode)
+INFO felix_broker: Control plane sync disabled (no FELIX_CONTROLPLANE_URL)
 INFO felix_broker: Broker ready
 ```
 

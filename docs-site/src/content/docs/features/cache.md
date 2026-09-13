@@ -10,7 +10,7 @@ The Felix cache is:
 
 - **Key-value store** with optional TTL (time-to-live)
 - **Scoped** to `(tenant_id, namespace, cache_name, key)`
-- **In-memory** for lowest latency (ephemeral in MVP)
+- **In-memory** for lowest latency, when the broker has no durable storage configured. With `FELIX_DURABLE_STORAGE_DIR` the cache is backed by a log and survives a restart.
 - **Multiplexed** over pooled QUIC streams
 - **Highly concurrent** with request pipelining
 
@@ -260,7 +260,7 @@ sequenceDiagram
     B-->>C1: value=A or B (undefined)
 ```
 
-### 7. Eviction (MVP: Best-Effort)
+### 7. Eviction (in-memory only: best-effort)
 
 **Current eviction policy**: Best-effort under memory pressure.
 
@@ -636,14 +636,18 @@ cache_max_bytes: 10737418240         # 10 GB
 
 ## Limitations and Planned Features
 
-### Current Limitations (MVP)
+### Current limitations
 
-1. **No persistence**: Cache is ephemeral, lost on broker restart
-2. **No atomic operations**: No compare-and-swap, increment
-3. **No multi-key operations**: No transactions
-4. **No explicit delete**: Use TTL=0 as workaround
-5. **Best-effort eviction**: No guaranteed LRU/LFU
-6. **No cache invalidation broadcast**: Manual coordination needed
+1. **No atomic operations**: no compare-and-swap, no increment
+2. **No multi-key operations**: no transactions
+3. **Best-effort eviction** in the in-memory backend: no guaranteed LRU or LFU. The log-backed cache does not evict at all — it compacts.
+4. **No cache invalidation broadcast**: coordination is the application's
+5. **No declared consistency level**: a write is acknowledged by the shard's leader, so losing that leader between the acknowledgement and replication loses the write. A stream can ask for `Quorum`; a cache cannot.
+
+What used to be listed here and no longer applies: the cache persists across a
+restart when the broker has durable storage, it is routed to a single owner per
+key so two brokers cannot hold different values, its shards are replicated, and
+`cache_delete` is on the wire.
 
 ### Planned Features
 

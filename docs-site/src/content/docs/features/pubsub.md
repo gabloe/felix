@@ -329,12 +329,16 @@ recoverable: delivered events carry log offsets, so a gap in offsets is exactly
 a drop, and the subscriber can resume from the offset it last saw. On an
 ephemeral stream there is nothing to resume from.
 
-Consumer groups with acknowledgements and redelivery are not implemented; see
-`docs/semantics.md` for what is guaranteed today.
+If you need redelivery rather than detection, use a **consumer group**: it
+acknowledges each record and hands back anything unanswered once the visibility
+timeout lapses. See [Projections](/felix/architecture/projections/).
 :::
 ## Delivery Semantics
 
 ### At-most-once, per subscriber
+
+This is what a plain subscription gives. A durable stream can be replayed and a
+consumer group redelivers; both are covered below.
 
 Messages are delivered **zero or one time**:
 
@@ -598,9 +602,12 @@ graph TB
 
 Felix handles fanout efficiently at the broker, so one publish reaches all subscribers.
 
-### Work Queue Pattern (Future)
+### Work Queue Pattern
 
-Consumer groups for load distribution:
+Consumer groups distribute records across workers: poll for a batch,
+acknowledge each record, and anything not answered for is redelivered once the
+visibility timeout lapses. See
+[Projections](/felix/architecture/projections/) for the rules and their limits.
 
 ```rust
 // Future API
@@ -688,9 +695,9 @@ Begin with default configuration and measure. Tune only when you have profiling 
 
 | Feature | Felix | Kafka | Redis Pub/Sub | NATS |
 |---------|-------|-------|---------------|------|
-| Delivery | At-most-once (MVP) | At-least-once | At-most-once | At-most-once |
+| Delivery | At-most-once, or at-least-once for a durable stream | At-least-once | At-most-once | At-most-once |
 | Ordering | Per-stream | Per-partition | No | No |
-| Persistence | Ephemeral (MVP) | Durable | Ephemeral | Optional |
+| Persistence | Per stream: ephemeral or durable | Durable | Ephemeral | Optional |
 | Fanout | Excellent | Good | Excellent | Excellent |
 | Latency | 200-800 µs | 2-10 ms | 100-500 µs | 100-400 µs |
 | Throughput | 150-250k/conn | 100k-1M/broker | 100-500k/conn | 100-300k/conn |

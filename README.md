@@ -82,72 +82,15 @@ Use cases
 - Event pipelines with batch publishing and batch delivery for efficient fanout.
 - Low-latency caching over QUIC with predictable tail latency under load.
 
-The diagram below reflects the single-node in-process MVP.
+![One append-only log per shard, read three ways: as a stream by offset, as a cache through a key index, and as a queue through a cursor shared by a consumer group.](docs/assets/one-log.svg)
 
-```mermaid
-flowchart LR
-    subgraph OPS["Operators / Services"]
-        Op["Operators + Admin tooling"]
-        PubSvc["Publishers"]
-        SubSvc["Subscribers"]
-        IdP["External IdP"]
-    end
+Streams, caches and queues are three readings of the same bytes, not three
+subsystems. They share one durability path, one recovery path, one placement
+rule and one replication path — which is the point of building it this way.
 
-    subgraph C["Client (felix-client)"]
-        API["Publish / Subscribe / Cache APIs"]
-
-        subgraph EVC["Event connections (pooled)"]
-            Ctrl["Control stream (bi)<br/>(per conn: pub/sub, acks, control)"]
-            API --> Ctrl
-        end
-
-        subgraph SUBS["Subscriptions"]
-            SubU["Per-subscription event stream (uni)<br/>(broker → client)"]
-        end
-        API --> SubU
-
-        subgraph CCP["Cache conn pool (N)"]
-            SW["Stream workers (M)<br/>per connection"]
-            CacheS["Cache streams (bi)<br/>request_id request/response mux"]
-            API --> SW
-            SW --> CacheS
-        end
-    end
-
-    subgraph CP["Control plane (services/controlplane)"]
-        CPAPI["Admin + Auth APIs<br/>RBAC + tenancy + metadata"]
-        Store["Metadata store<br/>(in-memory / Postgres)"]
-        CPAPI --> Store
-    end
-
-    subgraph B["Broker (services/broker + felix-broker)"]
-        Ingress["QUIC accept + stream registry<br/>felix-wire framing + stream-type routing"]
-        PS["Pub/Sub core<br/>enqueue + batching + fanout"]
-        Cache["Cache core<br/>log-backed, key index + TTL"]
-        Sync["Control-plane sync<br/>tenants/namespaces/streams/caches"]
-
-        Ingress --> PS
-        Ingress --> Cache
-        Sync --> Ingress
-    end
-
-    subgraph BS["Broker storage backend"]
-        StoreB["In-memory / durable"]
-    end
-
-    Op --> |admin/config| CPAPI
-    PubSvc --> |publish| API
-    SubSvc --> |subscribe| API
-
-    Ctrl <--> |broker protocol + acks| Ingress
-    Ingress --> |events| SubU
-    CacheS <--> |cache ops| Ingress
-    IdP <--> |OIDC/JWKS| CPAPI
-    API <--> |token exchange / auth| CPAPI
-    Sync --> |poll metadata| CPAPI
-    PS <--> |event log / retention| StoreB
-    Cache <--> |cache storage| StoreB
-```
+For how a cluster fits together, see
+[`docs/architecture.md`](docs/architecture.md); for what each reading stores and
+the test behind every claim, [`docs/projections.md`](docs/projections.md).
 
 ## Current Focus
 
@@ -166,7 +109,7 @@ publish path, subscribe/fanout path, and backpressure/concurrency model.
 In-repo design docs (`docs/`):
 - `docs/architecture.md` — system architecture
 - `docs/protocol.md` — wire protocol specification
-- `docs/control-plane.md` — control plane + RAFT plan (draft)
+- `docs/control-plane.md` — control plane; its Raft sections are design intent, not current behaviour
 - `docs/semantics.md` — delivery semantics and guarantees
 - `docs/design.md` — product and protocol design notes
 - `docs/auth.md` — authentication and authorization
@@ -180,20 +123,32 @@ latency/backpressure behavior early to keep p99/p999 predictable.
 
 ---
 
-## MVP Scope
+## What works today
 
-The initial MVP targets:
+- Multi-broker clusters, with every shard of every stream and cache placed on
+  one owner by rendezvous hashing
+- Durable log-structured storage: segments, sparse indexes rebuilt rather than
+  trusted, torn-tail repair, and a refusal to start on interior corruption
+- Replication with leader leases, `Leader` or `Quorum` acknowledgement, and
+  failover to a replica that actually holds the log
+- A log-backed cache, routed to one owner per key and replicated
+- Consumer groups: poll, acknowledge, redeliver, bound the redelivery,
+  dead-letter and redrive
+- A control plane over REST and Postgres, tenant-scoped tokens with RBAC, and
+  capability negotiation on the wire
 
-- Single-node broker
-- In-process pub/sub with fanout
-- Log-backed cache with TTL, durable when the broker has a storage directory
-- Stable wire envelope (v1)
-- Basic observability (structured logs)
-- Tests validating core invariants
+## What does not exist yet
 
-Durability, clustering, and security are layered on incrementally after the MVP. Cross-region
-locality/isolation is treated as a control-plane routing policy without forcing early consensus
-complexity.
+- Raft for control-plane metadata, so its availability does not rest on Postgres
+- Retention: a policy is recorded and nothing acts on it, so a stream grows
+  until the disk does
+- Rebalancing: a shard whose leader is alive is never moved, however uneven that
+  leaves the cluster
+- mTLS between brokers, tiered storage, cross-region bridges, and clients in any
+  language but Rust
+
+The [status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/)
+is kept current per capability and is the page to trust when another disagrees.
 
 ---
 
@@ -225,7 +180,7 @@ demos/
 
 docs/
   architecture.md    # system architecture
-  control-plane.md   # control plane + RAFT plan (DRAFT)
+  control-plane.md   # control plane (Raft sections are design intent)
   protocol.md        # wire protocol specification
   design.md          # product + protocol design notes
   todos.md           # implementation checklist
@@ -269,7 +224,7 @@ match the shared test vectors. It exists to keep client implementations honest:
 any client or server that passes the suite can interoperate without guessing at
 edge cases or relying on Rust-specific behavior.
 
-At this stage, Felix runs as a local, single-node process intended for development and testing.
+Felix runs as a cluster of brokers over a control plane, and as a single broker for development. Neither has been run in production by anyone.
 
 ---
 
@@ -287,16 +242,22 @@ If a feature cannot be enforced in code, it is considered incomplete.
 
 ## Roadmap (Condensed)
 
-- Single-node broker MVP
-- QUIC transport + backpressure
-- Durable log and retention
-- Metadata and control plane with locality-aware routing defaults
-- Intra-region clustering
+Done: QUIC transport with backpressure, the durable log, the control plane and
+placement, intra-region clustering with replication and failover, the log-backed
+cache, consumer groups, and tenant-scoped RBAC.
+
+Next, roughly in order:
+
+- Control-plane high availability, and Raft for its metadata
+- Retention, so a stream stops growing until the disk does
+- mTLS between brokers, and the rest of the security hardening
+- Rebalancing and Kubernetes packaging
+- Tiered storage and cold-tier reads
 - Explicit cross-region bridges
-- Security hardening (mTLS, RBAC, E2EE)
 - Compliance features and auditing
 
-Detailed plans live in `docs/`.
+Detailed plans live in `docs/`, and the per-capability status table on the docs
+site is the authority.
 
 ---
 

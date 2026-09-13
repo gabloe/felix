@@ -145,24 +145,28 @@ Metadata and coordination layer (in progress). Current capabilities include:
 - Auth bootstrap endpoints (JWKS + token exchange)
 - In-memory or Postgres-backed metadata storage
 
+Placement and multi-node coordination are implemented: the control plane assigns
+every shard of every stream and cache to a leader by rendezvous hashing, and
+brokers follow its assignment feed.
+
 Planned next steps:
 
-- RAFT-based consensus for cluster metadata
-- Placement and multi-node coordination
-- Quota and retention policy enforcement
+- Raft-based consensus for cluster metadata, so availability does not depend on
+  Postgres
+- Quota enforcement
 - Fleet-wide health aggregation
 
 ## Consistency & Delivery Guarantees
 
 Felix provides **tunable consistency** configured per stream:
 
-### Current MVP (Single-Node)
+### Ephemeral streams
 
 - **Delivery:** At-most-once (best-effort)
-- **Ordering:** Per-stream ordering preserved for each subscriber
-- **Acknowledgements:** Broker acknowledges receipt, not delivery to subscribers
+- **Ordering:** Per-shard ordering preserved for each subscriber
+- **Acknowledgements:** the broker acknowledges receipt, not delivery to subscribers
 
-### Multi-Node
+### Durable and replicated streams
 
 - **Leader-only acks:** Low latency, no replication wait. The default, and what
   a stream gets unless it asks otherwise
@@ -174,10 +178,14 @@ Felix provides **tunable consistency** configured per stream:
   acknowledged under `Quorum` is readable from the replacement. Proven against
   process kill; partitions and clock skew are not yet testable
 
-### Planned Multi-Node
+- **At-least-once:** a durable stream persists each record before acknowledging
+  it and replays it from any retained offset. A consumer group goes further and
+  redelivers until acknowledged
 
-- **At-least-once:** With durable storage and replay
-- **Exactly-once:** (future) via idempotent producers and transactions
+### Not built
+
+- **Exactly-once.** Not implemented and not near. Deduplicate in the application
+  if duplicates are unacceptable
 
 ## Security Architecture
 
@@ -197,34 +205,25 @@ Felix provides **tunable consistency** configured per stream:
 
 ## Deployment Models
 
-### Single-Node (MVP)
+### Single broker
 
-Current implementation for development and testing:
+For development, and for a workload that fits on one machine. Durable storage
+and the log-backed cache work here; replication has nowhere to go.
 
 ```mermaid
 flowchart TB
-    BROKER["Broker (in-process)<br/><br/>Pub/Sub<br/>Cache<br/>Ephemeral"]
+    BROKER["Broker<br/><br/>Streams · Cache · Queues<br/>Durable or ephemeral"]
 ```
 
-### Multi-Node Cluster (Planned)
+### Multi-broker cluster
 
-```mermaid
-flowchart LR
-    subgraph CONTROL["Control Plane"]
-        RAFT["RAFT Quorum<br/><br/>Metadata<br/>Placement<br/>Health"]
-    end
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
-    subgraph DATA["Data Plane"]
-        direction TB
-        A["Broker A"]
-        B["Broker B"]
-        C["Broker C"]
-    end
-
-    RAFT --- A
-    RAFT --- B
-    RAFT --- C
-```
+The control plane is **REST over Postgres**, not a Raft quorum. It is not on the
+data path: brokers read its assignment feed in the background and resolve an
+owner from a snapshot they already hold. Raft remains the intended way to make
+control-plane metadata highly available without depending on Postgres for it,
+and is not started.
 
 See [Deployment Guides](/felix/deployment/local/) for detailed instructions.
 
