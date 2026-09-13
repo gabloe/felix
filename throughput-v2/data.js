@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789314564195,
+  "lastUpdate": 1789315729764,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6396,6 +6396,58 @@ window.BENCHMARK_DATA = {
             "range": "8466.14",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 565061.47\nmean: 561074.77\nstdev: 8466.14\ncv: 1.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38aed7b3126614ed2a4343043779562c99eb9d91",
+          "message": "Let a group poll wait for work (#313)\n\nSeventh slice of #280, and the last item on it. An idle consumer polled in a\nloop; it can now hold one request open instead.\n\n`GroupPoll` gains `wait_ms`. Omitted or zero answers immediately, which is what\nevery broker did before — so an older peer degrades to a plain poll rather than\nmisreading the request, and no feature bit is needed. The broker caps it at\n`FELIX_GROUP_MAX_WAIT_MS`, so a client cannot hold a stream open indefinitely.\n\n## The cost lands on the waiting consumer, not the publisher\n\nA waiting poll re-checks every 20ms. The check is a read lock and a field read —\nno I/O, no allocation. An append notification would wake it sooner, but only by\nadding work to the publish path on behalf of a consumer that is by definition\nidle, and that path is the most latency-sensitive thing in the broker.\n\nEach group request already runs on a stream of the client's own, so a wait\nblocks nothing else on the connection.\n\n## Ownership is re-checked while waiting\n\nA shard can move during a wait. Serving the poll afterwards would hand out\nrecords the new owner is handing out too, so the wait ends instead.\n\n## Verification\n\nA waiting poll wakes when a record is published 150ms into a ten-second wait,\nand returns well inside the budget rather than at the end of it. A wait with no\nwork answers empty after its time rather than hanging or erroring. Removing the\nwait fails the first.\n\nA `group_poll` from a client that predates the field decodes with `wait_ms: 0`.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\n## The status row\n\nStill a Target, for a reason I had not written down before: a group is bound to\nthe shard the caller names, and nothing assigns shards across the consumers of a\ngroup. Scaling one past a single consumer per shard is the application's job.\nThat is a real limit and it is now in the table.\n\nRefs #280",
+          "timestamp": "2026-09-13T09:06:35-07:00",
+          "tree_id": "181928ffac347b4d7cd2ef3505ba604e3477693b",
+          "url": "https://github.com/gabloe/felix/commit/38aed7b3126614ed2a4343043779562c99eb9d91"
+        },
+        "date": 1789315728758,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 316990.93,
+            "range": "8047.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316990.93\nmean: 317767.14\nstdev: 8047.28\ncv: 2.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 316990.93,
+            "range": "8047.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316990.93\nmean: 317767.14\nstdev: 8047.28\ncv: 2.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74978.35,
+            "range": "1948.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74978.35\nmean: 75415.91\nstdev: 1948.23\ncv: 2.58%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 749783.47,
+            "range": "19482.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 749783.47\nmean: 754159.14\nstdev: 19482.27\ncv: 2.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
