@@ -645,6 +645,18 @@ fn message_cache_operations() {
     let decoded = Message::decode(frame).expect("decode");
     assert_eq!(message, decoded);
 
+    // Test CacheDelete
+    let message = Message::CacheDelete {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "cache1".to_string(),
+        key: "key1".to_string(),
+        request_id: Some(42),
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
     // Test CacheValue with value
     let message = Message::CacheValue {
         tenant_id: "t1".to_string(),
@@ -1092,4 +1104,22 @@ fn an_unkeyed_batch_omits_the_field() {
         !json.contains("key"),
         "an absent key must not appear: {json}"
     );
+}
+
+/// Feature bits say a request *exists*; frame flags select a payload layout.
+/// They are separate number spaces, and a new feature must not disturb either
+/// the frozen v1 flag set or the bits already handed out.
+#[test]
+fn cache_delete_is_a_new_feature_bit_and_disturbs_nothing() {
+    assert_eq!(
+        crate::FEATURE_CACHE_DELETE & (crate::FEATURE_TOPOLOGY | crate::FEATURE_REDIRECT),
+        0,
+        "the new bit overlaps one already in use",
+    );
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_CACHE_DELETE
+    ));
+    // Silence from a peer that predates negotiation must not be read as support.
+    assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_DELETE));
 }

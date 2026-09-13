@@ -126,6 +126,13 @@ have no durable position to checkpoint against.
 { "type": "cache_get", "key": "<string>" }
 ```
 
+### CacheDelete
+```
+{ "type": "cache_delete", "key": "<string>" }
+```
+
+Sent only to a broker that advertised `FEATURE_CACHE_DELETE`.
+
 ### CacheValue (server -> client)
 ```
 { "type": "cache_value", "key": "<string>", "value": "<base64|null>" }
@@ -150,6 +157,9 @@ have no durable position to checkpoint against.
 - PublishBatch returns `ok` once for the batch unless `ack` is `none`.
 - CachePut returns `ok` when stored (TTL is optional).
 - CacheGet returns `cache_value` with `null` when missing/expired.
+- CacheDelete returns `cache_value` carrying whatever was removed, and `null`
+  when the key was not there. Removing a key that does not exist is an answer,
+  not an error.
 - Backpressure: v1 is best-effort; subscribers may miss events if they fall
   behind. With event offsets negotiated a client can *detect* that loss, because
   a gap between consecutive delivered offsets is exactly a drop.
@@ -325,6 +335,7 @@ Features are advertised in the same handshake, in an optional field:
 | --- | --- | --- |
 | `0x0001` | `FEATURE_TOPOLOGY` | The broker answers `topology` |
 | `0x0002` | `FEATURE_REDIRECT` | The peer understands `not_leader` |
+| `0x0004` | `FEATURE_CACHE_DELETE` | The broker accepts `cache_delete` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -337,6 +348,16 @@ The client's set matters for exactly the same reason as the broker's: a broker
 must not send a client a message type it cannot decode. `not_leader` travels
 broker to client, so the broker sends it only to a client that offered
 `FEATURE_REDIRECT`, and answers everyone else with an ordinary `error`.
+
+`FEATURE_CACHE_DELETE` runs the other way, because `cache_delete` is a request:
+a client sends it only to a broker that advertised the bit. Getting that
+backwards is worse than a refused request — an unrecognised message type ends
+the broker's control loop, so probing costs the connection.
+
+Note which features depend on a cluster and which do not. `FEATURE_TOPOLOGY` and
+`FEATURE_REDIRECT` describe a cluster, so a standalone broker advertises
+neither. `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
+advertised by both.
 
 An absent `server_features` or `client_features` means that peer implements
 none. This is not a

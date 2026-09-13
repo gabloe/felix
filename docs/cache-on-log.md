@@ -139,6 +139,22 @@ Three details are load-bearing:
 - **A failed read is an error, not a miss.** Reporting a miss would let a client
   conclude a key does not exist when it does, on the owner.
 
+## Delete
+
+`CacheDelete` is answered with the value it removed, so a caller learns whether
+the key was there without a second round trip. Removing a key that was never
+present is an answer rather than a failure.
+
+It is negotiated: the broker advertises `FEATURE_CACHE_DELETE` in `AuthOk`, and
+a client that does not see the bit reports that the broker cannot delete instead
+of sending the request. That direction matters — an unrecognised message type
+ends a broker's control loop, so probing an older one costs the connection
+rather than returning an error.
+
+The feature is advertised by a standalone broker as well as a clustered one.
+Only the cluster-shaped features — topology and redirect — depend on there being
+a cluster to describe.
+
 ## Replication
 
 A cache's shards are replicated by the machinery that replicates a stream's: the
@@ -167,9 +183,6 @@ trusting itself; without that, a promoted follower answers misses for values it
 is holding on disk.
 
 ## What this does not do yet
-
-**Delete on the wire.** The storage layer and the internal protocol both carry
-delete; the client protocol does not.
 
 **Warming on takeover.** A stream's log is opened while the shard is being
 taken, so a torn tail is repaired before the shard is declared servable. A cache

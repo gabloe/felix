@@ -76,8 +76,17 @@ pub const FEATURE_TOPOLOGY: u32 = 0x0000_0001;
 /// error instead.
 pub const FEATURE_REDIRECT: u32 = 0x0000_0002;
 
+/// The broker understands `CacheDelete`.
+///
+/// Advertised by a *broker*, because this is a request rather than a response:
+/// a client that sent it to a broker predating it would be sending an
+/// unrecognised message type, which is fatal to the broker's control loop. A
+/// client that does not see this bit reports that the broker cannot delete
+/// rather than trying and losing the connection.
+pub const FEATURE_CACHE_DELETE: u32 = 0x0000_0004;
+
 /// Every feature bit this version implements.
-pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY | FEATURE_REDIRECT;
+pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY | FEATURE_REDIRECT | FEATURE_CACHE_DELETE;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

@@ -31,6 +31,9 @@ pub(crate) enum CacheRequest {
         message: Message,
         response: oneshot::Sender<Result<()>>,
     },
+    /// A request answered with `CacheValue`: a read, or a delete reporting what
+    /// it removed. One variant because the exchange is identical — only the
+    /// message sent differs, and the worker does not need to know which.
     Get {
         request_id: u64,
         message: Message,

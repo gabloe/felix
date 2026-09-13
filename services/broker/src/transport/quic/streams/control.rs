@@ -281,15 +281,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         let response = match client_flags {
                             Some(_) => Message::AuthOk {
                                 server_flags: felix_wire::KNOWN_FLAGS,
-                                // Only what this broker can actually answer. A
-                                // broker with no cluster behind it has no
-                                // topology to report, and advertising the
-                                // feature would have clients ask a question it
-                                // would have to refuse.
-                                server_features: Some(match publish_ctx.client_endpoints {
-                                    Some(_) => felix_wire::KNOWN_FEATURES,
-                                    None => 0,
-                                }),
+                                // Only what this broker can actually answer.
+                                //
+                                // The cluster-shaped features are gated on there
+                                // being a cluster: a broker with no topology to
+                                // report would have to refuse the question it
+                                // had invited. Cache delete is not one of those
+                                // -- it works the same on a single node -- so
+                                // gating it too would leave every standalone
+                                // broker unable to offer a request it can serve.
+                                server_features: Some(
+                                    felix_wire::FEATURE_CACHE_DELETE
+                                        | match publish_ctx.client_endpoints {
+                                            Some(_) => {
+                                                felix_wire::FEATURE_TOPOLOGY
+                                                    | felix_wire::FEATURE_REDIRECT
+                                            }
+                                            None => 0,
+                                        },
+                                ),
                             },
                             None => Message::Ok,
                         };
@@ -801,6 +811,121 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 if request_id.is_none() {
                     // When request_id is None, the client is using a "best effort" cache API and the
                     // stream is closed after the single request/response completes.
+                    return Ok(true);
+                }
+            }
+            Message::CacheDelete {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                request_id,
+            } => {
+                // A delete is a write, so it is authorized as one. Letting it
+                // through on `CacheRead` would make read-only credentials able
+                // to destroy data.
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheWrite,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::CacheMessage(Message::Error {
+                                message: format!(
+                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                                ),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    if request_id.is_none() {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+
+                let removed = crate::cache_routing::apply_cache_op(
+                    broker.cache(),
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.peers.as_deref(),
+                    &tenant_id,
+                    &namespace,
+                    &cache,
+                    &key,
+                    crate::peer::CacheRequest::Delete,
+                )
+                .await;
+
+                let value = match removed {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        // Refused rather than reported as "nothing was there".
+                        // A client told the key is gone when the owner still
+                        // holds it would be worse than a plain failure.
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::CacheMessage(Message::Error {
+                                    message: format!("cache delete not served: {reason}"),
+                                }),
+                            )
+                            .await,
+                            &ack_timeout_state,
+                            &ack_throttle_tx,
+                            &cancel_tx,
+                        )
+                        .await?;
+                        if request_id.is_none() {
+                            return Ok(true);
+                        }
+                        continue;
+                    }
+                };
+
+                // Answered with the value that was removed, so a caller learns
+                // whether the key was there without a second round trip.
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::CacheMessage(Message::CacheValue {
+                            tenant_id,
+                            namespace,
+                            cache,
+                            key,
+                            value,
+                            request_id,
+                        }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+                if request_id.is_none() {
                     return Ok(true);
                 }
             }

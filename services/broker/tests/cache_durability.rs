@@ -253,3 +253,71 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
         None,
     )
 }
+
+/// **A delete outlives the broker that performed it.** The case #279 exists for:
+/// until the wire carried a delete, this could only be written against the
+/// storage layer, never end to end.
+///
+/// A tombstone that did not survive a restart would resurrect the value, which
+/// is worse than never having deleted it — the caller was told it was gone.
+#[tokio::test]
+async fn a_deleted_key_stays_deleted_across_a_restart() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+    client
+        .cache_put(
+            "t1",
+            "default",
+            CACHE,
+            "user:1",
+            b"alice".to_vec().into(),
+            None,
+        )
+        .await?;
+    let removed = client
+        .cache_delete("t1", "default", CACHE, "user:1")
+        .await?;
+    assert_eq!(
+        removed.as_deref(),
+        Some(&b"alice"[..]),
+        "a delete should report the value it removed",
+    );
+    assert_eq!(
+        client.cache_get("t1", "default", CACHE, "user:1").await?,
+        None,
+        "the key should be gone before the restart",
+    );
+    running.stop().await;
+
+    let restarted = start(dir.path()).await?;
+    assert_eq!(
+        restarted
+            .client()
+            .await?
+            .cache_get("t1", "default", CACHE, "user:1")
+            .await?,
+        None,
+        "the deleted value came back after a restart",
+    );
+    restarted.stop().await;
+    Ok(())
+}
+
+/// Deleting a key that was never there is an answer, not a failure.
+#[tokio::test]
+async fn deleting_a_missing_key_reports_nothing_removed() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+
+    let removed = running
+        .client()
+        .await?
+        .cache_delete("t1", "default", CACHE, "never-written")
+        .await?;
+
+    assert_eq!(removed, None);
+    running.stop().await;
+    Ok(())
+}
