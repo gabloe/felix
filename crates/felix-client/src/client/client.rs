@@ -822,6 +822,121 @@ impl Client {
         }
     }
 
+    /// Offsets this group gave up on, lowest first.
+    ///
+    /// The records are still in the stream's log at these offsets, readable by
+    /// an ordinary replay — this is a list of what to look at, not a copy of it.
+    pub async fn group_dead_letters(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+    ) -> Result<Vec<u64>> {
+        self.require_dead_letters()?;
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::GroupDeadLetters {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard,
+            group: group.to_string(),
+            request_id,
+        };
+        match self.group_round_trip(message, request_id).await? {
+            Message::GroupDeadLetterList { offsets, .. } => Ok(offsets),
+            other => Err(anyhow::anyhow!(
+                "unexpected answer to a dead-letter list: {other:?}"
+            )),
+        }
+    }
+
+    /// Stop tracking one dead letter, having decided the record is not worth
+    /// reprocessing. The record itself is untouched.
+    pub async fn group_discard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> Result<()> {
+        self.manage_dead_letter(tenant_id, namespace, stream, shard, group, offset, false)
+            .await
+    }
+
+    /// Put one dead letter back in the queue, its attempt count reset.
+    ///
+    /// For when the reason it failed has been fixed. The group's cursor does
+    /// not move backwards: everything it finished stays finished, and only this
+    /// record is delivered again.
+    pub async fn group_redrive(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> Result<()> {
+        self.manage_dead_letter(tenant_id, namespace, stream, shard, group, offset, true)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn manage_dead_letter(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+        redrive: bool,
+    ) -> Result<()> {
+        self.require_dead_letters()?;
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = if redrive {
+            Message::GroupRedrive {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+                shard,
+                group: group.to_string(),
+                offset,
+                request_id,
+            }
+        } else {
+            Message::GroupDiscard {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+                shard,
+                group: group.to_string(),
+                offset,
+                request_id,
+            }
+        };
+        match self.group_round_trip(message, request_id).await? {
+            Message::CacheOk { .. } => Ok(()),
+            other => Err(anyhow::anyhow!(
+                "unexpected answer to a dead-letter change: {other:?}"
+            )),
+        }
+    }
+
+    fn require_dead_letters(&self) -> Result<()> {
+        if felix_wire::supports_feature(
+            self.server_features,
+            felix_wire::FEATURE_GROUP_DEAD_LETTERS,
+        ) {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!("this broker does not serve dead letters",))
+    }
+
     /// One group request on a stream of its own.
     ///
     /// Not the cache workers' streams: those are pipelined against a response
@@ -1085,9 +1200,9 @@ impl std::fmt::Display for SubscribeCursorError {
 /// The request id a group answer echoes, when it carries one.
 fn group_response_id(message: &Message) -> Option<u64> {
     match message {
-        Message::GroupRecords { request_id, .. } | Message::CacheOk { request_id } => {
-            Some(*request_id)
-        }
+        Message::GroupRecords { request_id, .. }
+        | Message::GroupDeadLetterList { request_id, .. }
+        | Message::CacheOk { request_id } => Some(*request_id),
         _ => None,
     }
 }

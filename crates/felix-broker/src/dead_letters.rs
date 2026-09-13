@@ -71,6 +71,26 @@ impl DeadLetters {
         Ok(offsets)
     }
 
+    /// Drop one offset from the list.
+    ///
+    /// Returns whether it was there. Does not touch the record, which stays in
+    /// the stream's log — this only says the group has stopped tracking it as
+    /// an outstanding problem.
+    pub async fn discard(&self, key: &GroupKey, offset: u64) -> Result<bool> {
+        let removed = self
+            .entries
+            .delete_checked(
+                &key.tenant_id,
+                &key.namespace,
+                &scope(key),
+                key.shard,
+                &offset.to_string(),
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(removed.is_some())
+    }
+
     /// Flush every open dead-letter log. Call once during graceful shutdown.
     pub async fn shutdown(&self) -> Result<()> {
         self.entries.shutdown().await.map_err(storage_error)

@@ -663,10 +663,12 @@ fn message_cache_operations() {
             crate::GroupRecord {
                 offset: 7,
                 payload: Bytes::from_static(b"one"),
+                attempts: 1,
             },
             crate::GroupRecord {
                 offset: 9,
                 payload: Bytes::new(),
+                attempts: 3,
             },
         ],
         request_id: 42,
@@ -729,6 +731,12 @@ fn message_cache_operations() {
         ack.encode().expect("encode"),
         nack.encode().expect("encode"),
     );
+
+    // A record delivered by a broker that does not report attempts reads as
+    // unknown rather than as a first attempt.
+    let legacy = r#"{"offset":4,"payload":"YWJj"}"#;
+    let record: crate::GroupRecord = serde_json::from_str(legacy).expect("legacy record");
+    assert_eq!(record.attempts, 0);
 
     // Test CacheDelete
     let message = Message::CacheDelete {
@@ -1216,6 +1224,25 @@ fn cache_delete_is_a_new_feature_bit_and_disturbs_nothing() {
         crate::FEATURE_CONSUMER_GROUP
     ));
     assert!(!crate::supports_feature(0, crate::FEATURE_CONSUMER_GROUP));
+    assert_eq!(
+        crate::FEATURE_GROUP_DEAD_LETTERS
+            & (crate::FEATURE_TOPOLOGY
+                | crate::FEATURE_REDIRECT
+                | crate::FEATURE_CACHE_DELETE
+                | crate::FEATURE_CONSUMER_GROUP),
+        0,
+        "the dead-letter bit overlaps one already in use",
+    );
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_GROUP_DEAD_LETTERS
+    ));
+    // Serving groups does not imply serving dead letters: a broker built before
+    // these requests existed advertises the first bit and not the second.
+    assert!(!crate::supports_feature(
+        crate::FEATURE_CONSUMER_GROUP,
+        crate::FEATURE_GROUP_DEAD_LETTERS
+    ));
     // Silence from a peer that predates negotiation must not be read as support.
     assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_DELETE));
 }
