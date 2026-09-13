@@ -20,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 async fn main() -> anyhow::Result<()> {
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
     // SIGTERM is what Kubernetes, systemd, and `docker stop` send; SIGINT only
-    // covers an interactive Ctrl-C.
+    // covers an interactive Ctrl-C. Evaluated as an argument, so the handlers are
+    // installed before `run_with_shutdown` binds anything — a signal arriving
+    // between binding and awaiting would otherwise kill the process outright.
     run_with_shutdown(config, lifecycle::termination_signal()).await
 }
 

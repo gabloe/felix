@@ -146,48 +146,89 @@ impl Drop for InFlightGuard {
     }
 }
 
-/// Resolves when the process is asked to terminate.
+/// Installs the termination handlers and returns a future resolving when the
+/// process is asked to terminate.
 ///
 /// On Unix this is SIGTERM (Kubernetes, systemd, `docker stop`) or SIGINT (Ctrl-C).
 /// On other platforms only Ctrl-C is available. The signal that fired is logged,
 /// because "which signal did we get" is the first question when a pod is being
 /// killed unexpectedly.
+///
+/// **Handlers are installed when this is called, not when the returned future is
+/// awaited**, so call it before binding any listener. A signal arriving before
+/// the handlers exist terminates the process with the default disposition, with
+/// no drain and no readiness flip.
+///
+/// Must be called from within a Tokio runtime.
 #[cfg(unix)]
-pub async fn termination_signal() {
+pub fn termination_signal() -> impl std::future::Future<Output = ()> {
     use tokio::signal::unix::{SignalKind, signal};
 
-    // If SIGTERM can't be registered we still want SIGINT to work rather than
-    // leaving the process with no shutdown path at all.
-    let mut sigterm = match signal(SignalKind::terminate()) {
-        Ok(stream) => stream,
-        Err(err) => {
-            tracing::error!(
-                error = %err,
-                "failed to install SIGTERM handler; falling back to SIGINT only"
-            );
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!(signal = "SIGINT", "termination signal received");
-            return;
-        }
-    };
+    // Handlers are installed here, when this is *called*, and not when the
+    // returned future is first polled. A caller binds its listeners and only
+    // then reaches the `select!` that awaits this; anything registered lazily
+    // would leave the process reachable but with the default disposition still
+    // in force, and a signal arriving in that window kills it outright instead
+    // of draining. Callers should call this before they bind anything.
+    //
+    // Registering either one can fail, and one working signal is much better
+    // than no shutdown path at all, so each is kept independently.
+    let sigterm = signal(SignalKind::terminate())
+        .inspect_err(|err| {
+            tracing::error!(error = %err, "failed to install SIGTERM handler");
+        })
+        .ok();
+    let sigint = signal(SignalKind::interrupt())
+        .inspect_err(|err| {
+            tracing::error!(error = %err, "failed to install SIGINT handler");
+        })
+        .ok();
+    if sigterm.is_none() && sigint.is_none() {
+        tracing::error!("no termination handler could be installed; shutdown will not be graceful");
+    }
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!(signal = "SIGINT", "termination signal received");
-        }
-        _ = sigterm.recv() => {
-            tracing::info!(signal = "SIGTERM", "termination signal received");
+    async move {
+        // `pending()` stands in for a signal that could not be registered, so
+        // the surviving one still resolves the select rather than racing an
+        // arm that would fire immediately.
+        let mut sigterm = sigterm;
+        let mut sigint = sigint;
+        let terminate = async {
+            match sigterm.as_mut() {
+                Some(stream) => stream.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+        let interrupt = async {
+            match sigint.as_mut() {
+                Some(stream) => stream.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
+        tokio::select! {
+            _ = interrupt => {
+                tracing::info!(signal = "SIGINT", "termination signal received");
+            }
+            _ = terminate => {
+                tracing::info!(signal = "SIGTERM", "termination signal received");
+            }
         }
     }
 }
 
 /// Resolves when the process is asked to terminate.
 ///
-/// Non-Unix targets have no SIGTERM; Ctrl-C is the only portable trigger.
+/// Non-Unix targets have no SIGTERM; Ctrl-C is the only portable trigger. Unlike
+/// the Unix version this cannot install its handler eagerly — `ctrl_c` registers
+/// on first poll and exposes no way to separate the two — so a Ctrl-C between
+/// binding and awaiting this is still lost.
 #[cfg(not(unix))]
-pub async fn termination_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!(signal = "CTRL_C", "termination signal received");
+pub fn termination_signal() -> impl std::future::Future<Output = ()> {
+    async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!(signal = "CTRL_C", "termination signal received");
+    }
 }
 
 /// Tracks a drain against a total deadline shared by every subsystem.
