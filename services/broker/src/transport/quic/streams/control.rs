@@ -834,6 +834,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 shard,
                 group,
                 max_records,
+                wait_ms,
                 request_id,
             } => {
                 // A group is a read position over a stream, so it is authorized
@@ -859,6 +860,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     shard,
                     &group,
                     max_records as usize,
+                    // Capped, so a client cannot hold a broker stream open for
+                    // as long as it likes.
+                    Duration::from_millis(wait_ms.min(config.group_max_wait_ms)),
                 )
                 .await;
                 let records = match polled {

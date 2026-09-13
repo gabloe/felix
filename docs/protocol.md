@@ -130,11 +130,19 @@ have no durable position to checkpoint against.
 ```
 { "type": "group_poll", "tenant_id": "<string>", "namespace": "<string>",
   "stream": "<string>", "shard": <number>, "group": "<string>",
-  "max_records": <number>, "request_id": <number> }
+  "max_records": <number>, "wait_ms": <number>, "request_id": <number> }
 ```
 
 Sent only to a broker that advertised `FEATURE_CONSUMER_GROUP`, and only to the
 broker that leads the shard.
+
+`wait_ms` is how long the broker may hold the request open waiting for work.
+Omitted or `0` answers immediately — which is what a broker that predates
+long-polling does with the field, so an older peer degrades to a plain poll
+rather than misreading the request. The broker caps it at
+`FELIX_GROUP_MAX_WAIT_MS`, so a client cannot hold a stream open indefinitely.
+The wait bounds how long the broker looks, not whether it answers: an empty
+`group_records` after the wait still means nothing was available.
 
 ### GroupRecords (server -> client)
 ```

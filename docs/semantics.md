@@ -292,8 +292,11 @@ Stated because a guarantee without its failure model is a slogan.
   A queue with a poison record makes no progress past it.
 
   Delivery is by poll rather than push: a consumer takes work when it has
-  capacity, and the broker cannot know when that is. Only the broker leading a
-  shard serves its groups.
+  capacity, and the broker cannot know when that is. A poll can ask the broker
+  to wait for work, so an idle consumer costs one open request rather than a
+  round trip per attempt. Only the broker leading a shard serves its groups, and
+  ownership is re-checked while a poll waits — a shard that moves mid-wait ends
+  the wait rather than being served by its former owner.
 
   The rules are fixed. A group's position on a shard is durable, monotonic, and
   survives a restart. Above that position the broker tracks what has been handed

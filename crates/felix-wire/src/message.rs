@@ -273,6 +273,15 @@ pub enum Message {
         group: String,
         // Most records to take. The broker may return fewer, including none.
         max_records: u32,
+        // How long the broker may hold the request open waiting for work,
+        // in milliseconds.
+        //
+        // Omitted or `0` answers immediately with whatever is available, which
+        // is what a broker that predates this does — so an older peer degrades
+        // to a plain poll rather than misreading the request. The broker caps
+        // it; a client cannot hold a stream open indefinitely.
+        #[serde(default)]
+        wait_ms: u64,
         request_id: u64,
     },
     // Records claimed by a `GroupPoll`, in offset order.
