@@ -99,6 +99,8 @@ again — which is at-least-once, the guarantee a queue offers anyway.
 > stop the queue.
 > `only_the_shard_owner_serves_a_group` — two brokers cannot both hand out the
 > same records.
+> `a_group_position_survives_a_leader_failover` — a promoted leader resumes
+> where the group had got to.
 
 ### What a queue does not promise
 
@@ -126,8 +128,8 @@ here has to be read as covering them:
 - **A cache declares no consistency level.** A stream chooses `Leader` or
   `Quorum`; a cache write is acknowledged by its leader, so losing that leader
   between the acknowledgement and the ship loses the write.
-- **Group state is not replicated** (#314). The committed position and the
-  dead-letter list live on the broker that leads the shard, on a root nothing
-  places or ships. A promoted replica has no record of the group and starts it
-  at the beginning, redelivering everything it had finished. Within
-  at-least-once, and severe enough to be a bug rather than a caveat.
+- **Dead letters are not replicated.** The committed position now travels with
+  its shard, but the list of offsets a group gave up on does not: a promoted
+  leader keeps the position and forgets which records were set aside. Those
+  records were already skipped by the cursor, so what is lost is the record that
+  they were skipped at all.

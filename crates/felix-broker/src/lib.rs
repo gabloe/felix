@@ -24,6 +24,22 @@ mod broker;
 mod commit_order;
 mod config;
 pub mod consumer_groups;
+
+/// Which of a shard's logs a request is about.
+///
+/// A stream shard has two: the records themselves, and the consumer-group
+/// cursors kept beside them. Both have to reach a replica, or a promoted leader
+/// serves the records and has no idea where any group had got to — it starts
+/// them at the beginning and redelivers everything already finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LogKind {
+    /// A stream's records.
+    Stream,
+    /// A cache's records.
+    Cache,
+    /// The consumer-group cursors belonging to a stream shard.
+    GroupCursors,
+}
 pub mod dead_letters;
 mod delivery;
 pub mod durable;

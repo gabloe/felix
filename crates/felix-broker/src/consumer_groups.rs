@@ -140,6 +140,38 @@ impl ConsumerGroups {
         Ok(removed.is_some())
     }
 
+    /// The log a shard's cursors are written to.
+    ///
+    /// For replication: the cursors have to reach a replica alongside the
+    /// records they describe.
+    pub async fn shard_log(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+    ) -> Result<felix_storage::disk_log::DiskLog> {
+        self.cursors
+            .shard_log(tenant_id, namespace, stream, shard)
+            .await
+            .map_err(storage_error)
+    }
+
+    /// [`ConsumerGroups::shard_log`], created at `base_offset` if absent.
+    pub async fn shard_log_at(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Result<felix_storage::disk_log::DiskLog> {
+        self.cursors
+            .shard_log_at(tenant_id, namespace, stream, shard, base_offset)
+            .await
+            .map_err(storage_error)
+    }
+
     /// Flush every open cursor log. Call once during graceful shutdown.
     pub async fn shutdown(&self) -> Result<()> {
         self.cursors.shutdown().await.map_err(storage_error)

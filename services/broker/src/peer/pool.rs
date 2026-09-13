@@ -806,6 +806,18 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
             correlation_id,
             ..m
         }),
+        InternalMessage::ReplicateGroupRecords(m) => {
+            InternalMessage::ReplicateGroupRecords(ReplicateRecords {
+                correlation_id,
+                ..m
+            })
+        }
+        InternalMessage::ReplicateGroupBootstrap(m) => {
+            InternalMessage::ReplicateGroupBootstrap(ReplicateBootstrap {
+                correlation_id,
+                ..m
+            })
+        }
         InternalMessage::ReplicateCacheRecords(m) => {
             InternalMessage::ReplicateCacheRecords(ReplicateRecords {
                 correlation_id,
