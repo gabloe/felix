@@ -58,7 +58,10 @@ use tokio_util::task::TaskTracker;
 async fn main() -> Result<()> {
     // Default shutdown trigger: SIGTERM or SIGINT. SIGTERM is what Kubernetes,
     // systemd, and `docker stop` actually send; SIGINT only covers an interactive
-    // Ctrl-C. `run_with_shutdown` is written so we can reuse the same startup logic
+    // Ctrl-C. Evaluated as an argument, so the handlers are installed before
+    // `run_with_shutdown` binds anything — a signal arriving between binding and
+    // awaiting would otherwise kill the process outright.
+    // `run_with_shutdown` is written so we can reuse the same startup logic
     // in tests or alternative hosting environments by passing a different future.
     run_with_shutdown(lifecycle::termination_signal()).await
 }

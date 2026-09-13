@@ -992,6 +992,33 @@ export FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS="5000"   # Fast rollouts, short-lived req
 `terminationGracePeriodSeconds` (default `30`) — so the drain finishes and logs its
 outcome before SIGKILL. See [Graceful Shutdown](/felix/deployment/graceful-shutdown/).
 
+### `FELIX_SHUTDOWN_PREDRAIN_MS`
+
+**Description**: How long the control plane keeps serving after it starts reporting
+unready, before it stops accepting connections. Readiness-first shutdown only helps
+if something has time to act on it: a load balancer learns an instance is draining by
+polling, so closing the listener the moment readiness flips leaves requests still
+being routed to a socket that is gone.
+
+**Applies to**: Control plane.
+
+**Type**: Non-negative integer (milliseconds); `0` skips the wait.
+
+**Default**: `5000`
+
+**Example**:
+```bash
+export FELIX_SHUTDOWN_PREDRAIN_MS="5000"
+export FELIX_SHUTDOWN_PREDRAIN_MS="15000" # readinessProbe periodSeconds 5 x failureThreshold 3
+export FELIX_SHUTDOWN_PREDRAIN_MS="0"     # single instance, nothing routing to it
+```
+
+**Note**: Size it above the prober's `periodSeconds` multiplied by its
+`failureThreshold`, so the load balancer has actually removed this instance before the
+listener closes. It is spent *inside* the platform's kill deadline, so
+`terminationGracePeriodSeconds` must cover this plus
+`FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`. A second SIGTERM ends the wait early.
+
 ## Configuration File
 
 ### `FELIX_BROKER_CONFIG`
@@ -1329,6 +1356,7 @@ absent; they are listed in that script rather than here.
 | `FELIX_READINESS_TIMEOUT_MS` | `2000` | Longest a readiness check may take before it counts as a failure. Keep it below the prober's own timeout so the reason is reported rather than lost. |
 | `FELIX_READINESS_CACHE_TTL_MS` | `1000` | How long a readiness answer is reused. Bounds probe cost regardless of how many probers there are, and bounds how long recovery takes to become visible. |
 | `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Budget for draining in-flight requests after SIGTERM before tasks are cancelled. |
+| `FELIX_SHUTDOWN_PREDRAIN_MS` | `5000` | How long to keep serving after readiness flips to draining, so load balancers remove this instance before the listener closes. `0` skips it. |
 | `FELIX_REGION_ID` | `local` | Region this instance reports. |
 | `FELIX_BOOTSTRAP_ENABLED` | `false` | Enables the first-run bootstrap endpoints. Leave off once credentials exist. |
 | `FELIX_BOOTSTRAP_TOKEN` | — | Token the bootstrap endpoints require. |

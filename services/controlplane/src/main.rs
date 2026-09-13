@@ -20,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 async fn main() -> anyhow::Result<()> {
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
     // SIGTERM is what Kubernetes, systemd, and `docker stop` send; SIGINT only
-    // covers an interactive Ctrl-C.
+    // covers an interactive Ctrl-C. Evaluated as an argument, so the handlers are
+    // installed before `run_with_shutdown` binds anything — a signal arriving
+    // between binding and awaiting would otherwise kill the process outright.
     run_with_shutdown(config, lifecycle::termination_signal()).await
 }
 
@@ -127,6 +129,24 @@ where
             // instance while it can still serve. Must precede the listener stopping.
             readiness.begin_draining();
             tracing::info!("readiness set to draining");
+        }
+    }
+
+    // Step 1b: keep serving while load balancers notice. Without this the
+    // listener closes in the same breath as the readiness flip, and anything
+    // still routed here is refused at the socket.
+    if config.shutdown_predrain_ms > 0 {
+        let hold_off = Duration::from_millis(config.shutdown_predrain_ms);
+        tracing::info!(
+            hold_off_ms = config.shutdown_predrain_ms,
+            "serving while unready so load balancers can drop this instance"
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(hold_off) => {}
+            // An operator who signals twice is asking to skip the wait.
+            _ = lifecycle::termination_signal() => {
+                tracing::info!("second termination signal; ending hold-off early");
+            }
         }
     }
 
@@ -278,6 +298,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -306,6 +327,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -339,6 +361,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -369,6 +392,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -398,6 +422,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };

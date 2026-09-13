@@ -17,6 +17,15 @@ pub const DEFAULT_CHANGES_LIMIT: u64 = 1000;
 // it expires, so this leaves headroom to finish the drain and exit before then.
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 
+/// How long the instance keeps serving after it starts reporting unready.
+///
+/// Readiness-first shutdown only helps if something has time to act on it. A
+/// load balancer learns this instance is draining by polling, so closing the
+/// listener the moment readiness flips means requests are still being routed
+/// here when the socket goes away. This is that gap, and it should exceed the
+/// prober's interval times its failure threshold.
+pub const DEFAULT_SHUTDOWN_PREDRAIN_MS: u64 = 5_000;
+
 /// Two seconds, matching `readiness::DEFAULT_CHECK_TIMEOUT`.
 pub const DEFAULT_READINESS_TIMEOUT_MS: u64 = 2_000;
 /// One second, matching `readiness::DEFAULT_CACHE_TTL`.
@@ -147,6 +156,13 @@ pub struct ControlPlaneConfig {
     // Total budget for draining in-flight requests after SIGTERM/SIGINT before
     // remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
+    /// How long to keep serving after readiness flips to draining, giving load
+    /// balancers time to remove this instance before the listener closes.
+    ///
+    /// Zero skips the wait, which is right for a single instance nothing routes
+    /// to and wrong behind a load balancer. A second termination signal cuts it
+    /// short.
+    pub shutdown_predrain_ms: u64,
     /// Longest a readiness check may take before it is treated as a failure.
     ///
     /// Set below the prober's own timeout, so the answer is this service's
@@ -172,6 +188,7 @@ struct ControlPlaneConfigOverride {
     bootstrap: Option<BootstrapOverride>,
     node_liveness: Option<NodeLivenessOverride>,
     shutdown_drain_timeout_ms: Option<u64>,
+    shutdown_predrain_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,6 +266,12 @@ impl ControlPlaneConfig {
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        // Unlike the drain timeout, zero is a meaningful setting here rather
+        // than an unset one, so it is not filtered out.
+        let shutdown_predrain_ms = std::env::var("FELIX_SHUTDOWN_PREDRAIN_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SHUTDOWN_PREDRAIN_MS);
         let change_retention_max_rows =
             std::env::var("FELIX_CONTROLPLANE_CHANGE_RETENTION_MAX_ROWS")
                 .ok()
@@ -306,6 +329,7 @@ impl ControlPlaneConfig {
             },
             node_liveness,
             shutdown_drain_timeout_ms,
+            shutdown_predrain_ms,
             readiness_timeout_ms,
             readiness_cache_ttl_ms,
         };
@@ -354,6 +378,9 @@ impl ControlPlaneConfig {
             && value > 0
         {
             config.shutdown_drain_timeout_ms = value;
+        }
+        if let Some(value) = override_cfg.shutdown_predrain_ms {
+            config.shutdown_predrain_ms = value;
         }
         if let Some(values) = override_cfg.oidc_allowed_algorithms {
             config.oidc_allowed_algorithms = parse_oidc_allowed_algorithms(values)?;
