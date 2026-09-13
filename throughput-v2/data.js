@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789307590773,
+  "lastUpdate": 1789314564195,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6344,6 +6344,58 @@ window.BENCHMARK_DATA = {
             "range": "25886.02",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 552725.66\nmean: 545388.24\nstdev: 25886.02\ncv: 4.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f8df0cfbbdd33fac6bbfef6e94dbe511004937f",
+          "message": "Make dead letters readable, discardable, and redrivable (#312)\n\nSixth slice of #280. #311 bounded redelivery and recorded what a group gave up\non; the list was reachable only from inside the broker. A list nobody can read\nis a graveyard with extra steps.\n\n`group_dead_letters`, `group_discard`, `group_redrive`, behind a feature bit of\ntheir own.\n\n## A bit of its own, not a widening of the group bit\n\n`FEATURE_CONSUMER_GROUP` already means \"serves poll, ack and nack\" to every\nbroker that advertises it. A broker built before these requests existed would\nadvertise it and then meet a request it has no arm for, which ends its control\nloop. A feature bit says which requests exist; widening what an existing one\npromises is the one change that cannot be made safely.\n\n## Redrive does not rewind the cursor\n\nThe cursor has already passed the record, and moving it back would redeliver\neverything the group finished since. The record is made *owed* instead, which\nreaches a consumer without disturbing anything else — and its attempt count\nstarts over, or a record redriven after the bug was fixed would be given up on\nagain immediately.\n\nAn offset that is not a dead letter is refused rather than accepted quietly. An\noperator told a redrive worked would wait for a delivery that is not coming.\n\n## A claim in #311 that was not true\n\nThat PR said each delivery tells the consumer its attempt number. It did not:\nthe count was tracked broker-side and never put on the wire. `GroupRecord` now\ncarries it, defaulting to `0` for \"the broker did not say\" — not `1`, because\nclaiming a first attempt for an unknown one would have a consumer skip exactly\nthe retry handling it wanted.\n\n## Verification\n\nFour tracker tests for redrive, three end-to-end tests through a real client\ncovering the operator's whole loop — fail twice, get given up on, list it,\nredrive it, see it delivered again with its count reset — plus discard, and a\nredrive of an offset that was never dead-lettered being refused.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\nRefs #280",
+          "timestamp": "2026-09-13T08:46:57-07:00",
+          "tree_id": "b2bae0cc6f38c328ee2398f472c8b806174545d6",
+          "url": "https://github.com/gabloe/felix/commit/2f8df0cfbbdd33fac6bbfef6e94dbe511004937f"
+        },
+        "date": 1789314563228,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235802.72,
+            "range": "2148.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235802.72\nmean: 235732.02\nstdev: 2148.87\ncv: 0.91%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235802.72,
+            "range": "2148.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235802.72\nmean: 235732.02\nstdev: 2148.87\ncv: 0.91%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56506.15,
+            "range": "846.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56506.15\nmean: 56107.48\nstdev: 846.61\ncv: 1.51%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 565061.47,
+            "range": "8466.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 565061.47\nmean: 561074.77\nstdev: 8466.14\ncv: 1.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
