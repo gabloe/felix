@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789320933110,
+  "lastUpdate": 1789323730210,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8382,6 +8382,72 @@ window.BENCHMARK_DATA = {
             "range": "558.22",
             "unit": "us",
             "extra": "trials: 5\nmedian: 606.00\nmean: 862.20\nstdev: 558.22\ncv: 64.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f89fa151f6ca1a0c1cbff5edf448f67fc88320a",
+          "message": "Replicate a consumer group's position with its shard (#319)\n\nCloses #314. A group's committed position lived on a root nothing placed or\nshipped, so a promoted replica had no record of the group and started it at\nzero — handing back everything already finished. Within at-least-once, which is\nwhy nothing failed, and severe: a group that had consumed a million records\nwould be handed all million again.\n\n## A shard has more than one log\n\n`LogKind` names which: the stream's records, a cache's records, or the\nconsumer-group cursors kept beside a stream shard. The replication path was\nalready parameterised by a `is_cache: bool`; it now takes the kind, and\n`ReplicateGroupRecords` and `ReplicateGroupBootstrap` join the pair added for\ncaches. Three kinds carrying one body, told apart only by the kind, so a\nfollower cannot write one of a shard's logs into another.\n\n## Shipped with the shard, not placed beside it\n\nGroup state has to be wherever the shard's leader is, and has to move when the\nshard moves — so it rides the same replica set and the same generation rather\nthan being placed on its own. Ownership on the receiving side is checked against\nthe *stream* shard for the same reason.\n\nIt ships after the report and the quorum mark and gates neither. No publish\nwaits on a cursor, and a cursor falling behind must not hold up the records it\ndescribes.\n\n## The test lied three times before it was true\n\nEach failure was the test, not the code.\n\n1. It passed without the fix. The promoted leader was returning nothing — but I\n   had no evidence it held the records at all, so an empty answer proved\n   nothing. A control group now polls the same shard and must see them.\n2. That control asserted three records and found four, then five: the harness\n   publishes its own startup probes. The count is now taken from what the group\n   actually finished rather than assumed.\n3. It still passed, because the loop waiting for the promoted leader to become\n   ready polled *the group under test* — claiming the very redelivery the\n   assertion was about. It waits on a different group now.\n\nWith the fix reverted it reports \"the group lost its position and was handed 5\nfinished record(s) again\".\n\n## What still does not travel\n\nThe dead-letter list. A promoted leader keeps the position and forgets which\nrecords were set aside; those were already skipped by the cursor, so what is\nlost is the record that they were skipped. `projections.md` and the queues page\nsay so.\n\n`task test` (86 groups), `task lint`, `task demo:check`, `task docs:evidence`.",
+          "timestamp": "2026-09-13T11:19:40-07:00",
+          "tree_id": "0bf55ee91580004318afde20560c9d45f030dc9c",
+          "url": "https://github.com/gabloe/felix/commit/1f89fa151f6ca1a0c1cbff5edf448f67fc88320a"
+        },
+        "date": 1789323728503,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 156.60\nstdev: 3.71\ncv: 2.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "5.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 205.00\nstdev: 5.79\ncv: 2.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 234,
+            "range": "43.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 234.00\nmean: 254.80\nstdev: 43.79\ncv: 17.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 196.80\nstdev: 0.84\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "17.31",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 413.00\nstdev: 17.31\ncv: 4.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 725,
+            "range": "483.60",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 725.00\nmean: 990.20\nstdev: 483.60\ncv: 48.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
