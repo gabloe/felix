@@ -23,6 +23,7 @@ mod telemetry;
 mod broker;
 mod commit_order;
 mod config;
+pub mod consumer_groups;
 mod delivery;
 pub mod durable;
 mod error;

@@ -41,6 +41,7 @@ struct Running {
     tokens: HashMap<String, String>,
     server: Arc<QuicServer>,
     task: tokio::task::JoinHandle<Result<()>>,
+    broker: Arc<Broker>,
 }
 
 async fn start(root: &std::path::Path) -> Result<Running> {
@@ -54,7 +55,17 @@ async fn start(root: &std::path::Path) -> Result<Running> {
     )
     .context("open the cache log")?;
 
-    let broker = Arc::new(Broker::new(Box::new(cache)));
+    // Group state gets its own root under the same directory, exactly as the
+    // broker binary arranges it, so this exercises the real layout.
+    let groups = felix_broker::consumer_groups::ConsumerGroups::open(
+        root.join("groups"),
+        LogConfig {
+            fsync_mode: FsyncMode::None,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        },
+    )?;
+    let broker = Arc::new(Broker::new(Box::new(cache)).with_consumer_groups(Arc::new(groups)));
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
@@ -72,7 +83,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
     let addr = server.local_addr()?;
     let task = tokio::spawn(quic::serve(
         Arc::clone(&server),
-        broker,
+        Arc::clone(&broker),
         config,
         demo_auth.auth,
     ));
@@ -83,6 +94,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
         tokens: demo_auth.tokens,
         server,
         task,
+        broker,
     })
 }
 
@@ -319,5 +331,42 @@ async fn deleting_a_missing_key_reports_nothing_removed() -> Result<()> {
 
     assert_eq!(removed, None);
     running.stop().await;
+    Ok(())
+}
+
+/// A consumer group's position outlives the broker that recorded it, through
+/// the same wiring the binary uses.
+///
+/// The storage-level tests prove the cursors persist; this proves the broker is
+/// actually connected to them. A correct store nothing is wired to would pass
+/// the first and fail here.
+#[tokio::test]
+async fn a_consumer_group_position_survives_a_restart() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let running = start(dir.path()).await?;
+    let groups = running
+        .broker
+        .consumer_groups()
+        .expect("a durable broker keeps group state")
+        .clone();
+    groups
+        .commit("t1", "default", "orders", 0, "workers", 900)
+        .await?;
+    running.stop().await;
+
+    let restarted = start(dir.path()).await?;
+    let position = restarted
+        .broker
+        .consumer_groups()
+        .expect("a durable broker keeps group state")
+        .committed("t1", "default", "orders", 0, "workers")
+        .await?;
+    assert_eq!(
+        position,
+        Some(900),
+        "the group lost its position across a restart",
+    );
+    restarted.stop().await;
     Ok(())
 }

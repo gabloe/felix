@@ -25,7 +25,10 @@ region isolation for compliance purposes until it ships.
 Internally, Felix is built around a single append-only log abstraction. Different external semantics
 are projections over this core:
 - **Streams (Pub/Sub):** fanout cursors per subscription
-- **Queues:** shared consumer-group cursors with acknowledgements
+- **Queues:** shared consumer-group cursors with acknowledgements. The cursors
+  are built and durable — a group's position is itself a key → latest-value
+  projection, the same one the cache is, so it reuses that machinery rather
+  than adding a second store. Nothing delivers through them yet (#280).
 - **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache operations are not yet routed across brokers — see `docs/cache-on-log.md`
 
 This drastically reduces operational complexity and consistency bugs compared to running Kafka,
