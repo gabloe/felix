@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789320557065,
+  "lastUpdate": 1789320933110,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8316,6 +8316,72 @@ window.BENCHMARK_DATA = {
             "range": "287.96",
             "unit": "us",
             "extra": "trials: 5\nmedian: 488.00\nmean: 582.00\nstdev: 287.96\ncv: 49.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0006e400aa7b3de65c9642e02172c84ef1138e35",
+          "message": "Bring the docs into line with what Felix is (#317)\n\nThe site said Felix was a single-node in-process MVP with an ephemeral cache and\nno clustering. Forty-nine places said some version of that, and ten described a\nRaft control plane that does not exist.\n\n## What changed\n\nThe landing page's tagline, its \"working today\" card — which listed shipped\nfeatures as roadmap — and the wiring diagram, which had sixteen nodes, eight\nsubgraphs and crossing edges, and was labelled as the MVP. It is replaced by a\ncustom SVG of the actual pitch: one log, read three ways.\n\nThe delivery guarantees were the worst of it. `semantics.md` said \"at-most-once\n(MVP)\" as though that were the ceiling. Three of four paths are at-least-once: a\ndurable stream, a `Quorum` stream, and a consumer group. That page, the\nguarantee matrix, the FAQ, `pubsub.md` and `wire-protocol.md` all said otherwise.\n\nRaft, stated precisely rather than removed: rejected for replicating *records*,\nstill intended for control-plane *metadata*, and not started. Several pages\nblurred the two, and the FAQ claimed shard replicas use Raft consensus — which\nis the design that was explicitly rejected.\n\n## A page for queues, and a way in\n\nThere was no Features page for consumer groups, so a reader looking for \"how do\nI use a queue\" found nothing. `features/queues.md` covers the loop, what the\nbroker guarantees, retries and dead letters, and — at equal length — what a\nqueue does *not* promise: order, exactly-once, a consumer per group member, and\nsurvival of a leader failover (#314).\n\n`architecture/projections.md` was written but never added to the sidebar.\n\n## The reference was missing 59 variables\n\nIt calls itself a reference, and an operator reading it would conclude the\ncontrol-plane, peer-protocol, membership and consumer-group settings did not\nexist. All of them are now listed, with defaults read from the code rather than\nguessed.\n\n`scripts/check_env_reference.py` fails the build when the code reads a variable\nthe reference does not name, or names one nothing reads. Benchmark, demo and\ntest-harness variables are excluded by name in the script rather than\ndocumented, because they are not operational surface.\n\nIt earned itself immediately: rebasing onto #316 added two readiness variables\nand the check caught both before this was pushed.\n\n## Verification\n\n`task test` (86 groups), `task lint`, `task demo:check`, `task docs:evidence`,\nthe mermaid and diagram checks, and the docs-site build.",
+          "timestamp": "2026-09-13T10:33:00-07:00",
+          "tree_id": "0c8c751db3a974a845d6f9da759c3a98463a6f7f",
+          "url": "https://github.com/gabloe/felix/commit/0006e400aa7b3de65c9642e02172c84ef1138e35"
+        },
+        "date": 1789320930335,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 162.40\nstdev: 0.89\ncv: 0.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 206,
+            "range": "2.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 207.00\nstdev: 2.55\ncv: 1.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 238,
+            "range": "32.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 238.00\nmean: 254.40\nstdev: 32.26\ncv: 12.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "5.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 203.00\nstdev: 5.61\ncv: 2.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 417,
+            "range": "118.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 417.00\nmean: 462.40\nstdev: 118.36\ncv: 25.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 606,
+            "range": "558.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 606.00\nmean: 862.20\nstdev: 558.22\ncv: 64.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
