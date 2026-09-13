@@ -61,6 +61,13 @@ struct Index {
     live_bytes: u64,
     /// Bytes appended since the log was last compacted, live or not.
     log_bytes: u64,
+    /// The offset this index has read up to. Records at or past it are not
+    /// reflected here yet.
+    ///
+    /// `None` means nothing has been read, which is not the same as having read
+    /// an empty log: a shard whose log begins at a trimmed base has no offset
+    /// zero to start from.
+    covered_through: Option<u64>,
 }
 
 /// One cache: its log, and the index derived from it.
@@ -119,6 +126,30 @@ impl LogCache {
         &self.root
     }
 
+    /// The log backing one cache shard.
+    ///
+    /// For replication, which ships a shard's records to followers and needs
+    /// the same log the cache writes to — a second log over the same directory
+    /// would interleave offsets and corrupt the segment.
+    ///
+    /// Returns the log as it stands now, and callers must fetch it again per
+    /// pass rather than holding it. Compaction swaps the shard directory, so a
+    /// handle kept across one keeps reading the retired log. That is harmless
+    /// but not useful: since compaction re-appends the live set at the tail,
+    /// the retired log holds only records the caller already shipped.
+    pub async fn shard_log(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<DiskLog> {
+        Ok(self
+            .shard(tenant, namespace, cache, shard)?
+            .current_log()
+            .await)
+    }
+
     /// Flush every open cache. Call once during graceful shutdown.
     pub async fn shutdown(&self) -> Result<()> {
         let shards: Vec<Arc<CacheShard>> = self.shards.lock().values().cloned().collect();
@@ -128,12 +159,43 @@ impl LogCache {
         Ok(())
     }
 
+    /// Like [`LogCache::shard_log`], but creates the shard's log beginning at
+    /// `base_offset` when it is not there yet.
+    ///
+    /// For a follower being given a cache whose early history the leader has
+    /// already compacted away: its log starts where the surviving records do.
+    /// An existing shard keeps the base recorded in its own first segment.
+    pub async fn shard_log_at(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Result<DiskLog> {
+        Ok(self
+            .shard_with_base(tenant, namespace, cache, shard, Some(base_offset))?
+            .current_log()
+            .await)
+    }
+
     fn shard(
         &self,
         tenant: &str,
         namespace: &str,
         cache: &str,
         shard: u32,
+    ) -> Result<Arc<CacheShard>> {
+        self.shard_with_base(tenant, namespace, cache, shard, None)
+    }
+
+    fn shard_with_base(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: Option<u64>,
     ) -> Result<Arc<CacheShard>> {
         let id = (
             tenant.to_string(),
@@ -155,7 +217,10 @@ impl LogCache {
         };
         let dir = layout::shard_dir(&self.root, &key);
         let label = layout::shard_label(&key);
-        let log = DiskLog::open(dir.clone(), label.clone(), self.config.clone())?;
+        let log = match base_offset {
+            Some(base) => DiskLog::open_at(dir.clone(), label.clone(), self.config.clone(), base)?,
+            None => DiskLog::open(dir.clone(), label.clone(), self.config.clone())?,
+        };
         let open = Arc::new(CacheShard {
             dir,
             label,
@@ -184,6 +249,14 @@ fn now_millis() -> u64 {
 const SCAN_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
 impl CacheShard {
+    /// The log this shard is writing to right now.
+    ///
+    /// Takes the state lock so it cannot observe compaction halfway through the
+    /// directory swap.
+    async fn current_log(&self) -> DiskLog {
+        self.state.lock().await.log.clone()
+    }
+
     /// Rebuild the index by replaying the log.
     ///
     /// Run once, lazily, the first time a cache is touched after opening. The
@@ -191,12 +264,20 @@ impl CacheShard {
     /// indexes follow, and for the same reason: anything recomputable from the
     /// log must be, because then it cannot be stale in a way that matters.
     async fn ensure_index(&self, state: &mut ShardState) -> Result<()> {
-        if state.index.log_bytes != 0 || !state.index.entries.is_empty() {
+        let tail = state.log.tail_offset().await?;
+        // Records can reach this log without going through `write`: a follower
+        // is shipped them directly, and it may later be promoted and asked to
+        // serve them. So this catches up to the tail rather than building once
+        // and trusting itself forever -- the same rule the segment indexes
+        // follow, for the same reason.
+        let resume = state.index.covered_through;
+        if resume == Some(tail) {
             return Ok(());
         }
-        let tail = state.log.tail_offset().await?;
-        let mut offset = state.log.base_offset();
-        let mut index = Index::default();
+        let (mut offset, mut index) = match resume {
+            Some(covered) => (covered, std::mem::take(&mut state.index)),
+            None => (state.log.base_offset(), Index::default()),
+        };
         while offset < tail {
             let records = state
                 .log
@@ -240,6 +321,7 @@ impl CacheShard {
                 offset = record.offset + 1;
             }
         }
+        index.covered_through = Some(tail.max(offset));
         state.index = index;
         Ok(())
     }
@@ -257,6 +339,13 @@ impl CacheShard {
             .await?;
 
         state.index.log_bytes += bytes;
+        // Every caller reaches here through `ensure_index`, so the watermark is
+        // already set; advancing it keeps the next read from rescanning a record
+        // this just applied. Left alone when it is unset rather than invented,
+        // because a watermark that skips unread history is worse than none.
+        if state.index.covered_through.is_some() {
+            state.index.covered_through = Some(appended.first_offset + 1);
+        }
         match op {
             CacheOp::Put {
                 key,
@@ -395,6 +484,7 @@ impl CacheShard {
         std::fs::remove_dir_all(&retired).map_err(StorageError::Io)?;
 
         state.log = DiskLog::open(self.dir.clone(), self.label.clone(), self.config.clone())?;
+        index.covered_through = Some(state.log.tail_offset().await?);
         state.index = index;
         Ok(())
     }
@@ -466,6 +556,45 @@ impl StorageApi for LogCache {
                 tracing::error!(
                     tenant_id, namespace, cache, key, error = %err,
                     "cache delete failed",
+                );
+                None
+            }
+        }
+    }
+
+    async fn shard_log(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Option<DiskLog> {
+        match LogCache::shard_log(self, tenant_id, namespace, cache, shard).await {
+            Ok(log) => Some(log),
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, shard, error = %err,
+                    "could not open a cache shard's log for replication",
+                );
+                None
+            }
+        }
+    }
+
+    async fn shard_log_at(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Option<DiskLog> {
+        match LogCache::shard_log_at(self, tenant_id, namespace, cache, shard, base_offset).await {
+            Ok(log) => Some(log),
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, shard, error = %err,
+                    "could not open a cache shard's log to bootstrap it",
                 );
                 None
             }

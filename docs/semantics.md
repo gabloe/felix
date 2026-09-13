@@ -233,10 +233,18 @@ does not exist when it does, on the owner.
 > `a_value_written_through_one_broker_is_readable_through_every_other` and
 > `two_brokers_writing_one_key_do_not_diverge`.
 
-**A cache's shards are not replicated yet.** Losing the broker that leads a
-cache shard loses that shard's contents until it comes back: the replication
-driver resolves a shard through the stream root, and a cache's log is not there.
-A cache is a durable per-shard log, not a highly available one.
+**A cache's shards are replicated.** A cache created with a replication factor
+above one has its log shipped to followers exactly as a stream's is, and a value
+written before the owning broker dies is readable from the replica promoted in
+its place.
+
+> `crates/felix-cluster/tests/cache_failover.rs::a_cache_value_survives_the_loss_of_its_owner`.
+
+What a cache still does not declare is a consistency level. A stream chooses
+`Leader` or `Quorum`; a cache write is acknowledged by its leader once the
+record is durable there, and replication follows. So losing a leader in the
+window between the acknowledgement and the ship loses that write, which is the
+`Leader` guarantee rather than the `Quorum` one.
 
 ## Authorization
 

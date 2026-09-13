@@ -127,6 +127,29 @@ assignment generation it resolved against; the owner compares it with its own.
 That asymmetry is the point. A generation mismatch in either direction is an
 explicit typed answer, and **never a successful ownership claim**.
 
+### Replicating a cache
+
+A cache shard is a log, so it is replicated by the same exchange as a stream's:
+`ReplicateCacheRecords` carries the same body as `ReplicateRecords`, and the
+follower runs the same tail, gap, and divergence checks against it.
+
+**The kind is in the message kind, not in the shard reference.** A cache and a
+stream may share a name, and a follower that guessed wrong would append one's
+records into the other's log. A separate kind rather than a new field, because
+this protocol evolves by adding kinds: widening `ShardRef` is a change to an
+existing body layout, which needs a version bump, and a version bump means an
+upgraded broker cannot talk to one that has not restarted yet.
+
+An old peer answers an unknown kind with `Malformed`, which is not retryable, so
+a leader shipping to a peer that predates this stops and says so rather than
+silently writing a cache's records somewhere they do not belong.
+
+One property the cache brings that a stream does not: **compaction must not
+renumber the log.** Records are shipped at their offsets, so a leader that
+restarted numbering on compaction would make its offset 0 a different record
+from every follower's. Cache compaction appends the live set at the tail for
+that reason.
+
 ### Forwarded cache operation
 
 A cache key hashes to a shard, and that shard has one owner. A broker that

@@ -41,11 +41,12 @@ pub async fn replicate_once<R: PeerRequester>(
     report_to: Option<&ReportTo>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
-    let Some(storage) = broker.durable_storage() else {
-        // Nothing to replicate from. A broker without durable storage leads
-        // only ephemeral streams, which have no log to ship.
+    if broker.durable_storage().is_none() {
+        // Nothing to replicate from. Without durable storage a broker's streams
+        // are ephemeral and its cache is in memory, so no shard it leads has a
+        // log to ship.
         return Pass::default();
-    };
+    }
 
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
@@ -73,13 +74,26 @@ pub async fn replicate_once<R: PeerRequester>(
         }
         reconcile_followers(entry, route);
 
-        let log = match storage.open_stream(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-        {
-            Ok(log) => log,
-            Err(err) => {
-                tracing::warn!(stream = %key.stream, error = %err, "could not open a shard to replicate");
-                continue;
-            }
+        // Resolved per pass rather than cached: a cache shard's log is replaced
+        // by compaction, and a handle held across one reads the retired copy.
+        let is_cache = key.kind == felix_router::ShardKind::Cache;
+        let Some(log) = broker
+            .shard_log(
+                is_cache,
+                &key.tenant_id,
+                &key.namespace,
+                &key.stream,
+                key.shard,
+            )
+            .await
+        else {
+            tracing::warn!(
+                kind = ?key.kind,
+                name = %key.stream,
+                shard = key.shard,
+                "could not open a shard to replicate",
+            );
+            continue;
         };
         let tail = match log.tail_offset().await {
             Ok(tail) => tail,
@@ -115,8 +129,9 @@ pub async fn replicate_once<R: PeerRequester>(
             // is not limited to one batch per tick. It ends on the first answer
             // that is not progress, which bounds the work per pass.
             while let Progress::Stored { .. } =
-                ship_once(requester, &log, &shard, cursor, MAX_BATCH_BYTES).await
-            {}
+                ship_once(requester, &log, &shard, is_cache, cursor, MAX_BATCH_BYTES).await
+            {
+            }
         });
         futures::future::join_all(shipping).await;
 
@@ -166,13 +181,7 @@ pub async fn replicate_once<R: PeerRequester>(
         // Published after shipping, so a publish waiting on this shard sees the
         // majority move as soon as this pass establishes it.
         marks.publish(
-            &crate::shard_watch::ShardKey {
-                tenant_id: key.tenant_id.clone(),
-                namespace: key.namespace.clone(),
-                stream: key.stream.clone(),
-                shard: key.shard,
-                kind: crate::shard_watch::ShardKind::Stream,
-            },
+            &watch_key(key),
             route.generation,
             quorum_offset(tail, &entry.followers),
         );
@@ -193,24 +202,29 @@ pub async fn replicate_once<R: PeerRequester>(
     // A shard this broker no longer leads stops promising a quorum. Dropping
     // the mark ends any publish still waiting on it, rather than leaving it to
     // run out its timeout for an answer that can no longer come.
-    marks.retain(
-        &live_shards
-            .iter()
-            .map(|key| crate::shard_watch::ShardKey {
-                tenant_id: key.tenant_id.clone(),
-                namespace: key.namespace.clone(),
-                stream: key.stream.clone(),
-                shard: key.shard,
-                kind: crate::shard_watch::ShardKind::Stream,
-            })
-            .collect::<Vec<_>>(),
-    );
+    marks.retain(&live_shards.iter().map(watch_key).collect::<Vec<_>>());
 
     metrics::record_halted(halted);
     if let Some(lag) = worst_lag {
         metrics::record_lag(lag);
     }
     Pass { worst_lag, reports }
+}
+
+/// The watch's key for a route, carrying the kind across rather than assuming
+/// it. A cache shard filed under a stream key would take the mark belonging to
+/// the stream of the same name.
+fn watch_key(key: &ShardKey) -> crate::shard_watch::ShardKey {
+    crate::shard_watch::ShardKey {
+        tenant_id: key.tenant_id.clone(),
+        namespace: key.namespace.clone(),
+        stream: key.stream.clone(),
+        shard: key.shard,
+        kind: match key.kind {
+            felix_router::ShardKind::Cache => crate::shard_watch::ShardKind::Cache,
+            felix_router::ShardKind::Stream => crate::shard_watch::ShardKind::Stream,
+        },
+    }
 }
 
 /// What one replication pass established.
@@ -291,6 +305,14 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
                 "namespace": report.key.namespace,
                 "stream": report.key.stream,
                 "shard": report.key.shard,
+                // Without the kind the control plane files a cache's report
+                // under the stream of the same name, so placement finds no
+                // caught-up replica for the cache and its shard is never
+                // promoted -- the contents are unreachable after a failover.
+                "kind": match report.key.kind {
+                    felix_router::ShardKind::Cache => "cache",
+                    felix_router::ShardKind::Stream => "stream",
+                },
                 "generation": report.generation,
                 "caught_up": report.caught_up,
                 "replica_offsets": report
