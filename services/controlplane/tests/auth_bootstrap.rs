@@ -39,6 +39,7 @@ fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>,
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

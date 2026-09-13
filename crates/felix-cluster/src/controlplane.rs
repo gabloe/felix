@@ -94,6 +94,7 @@ impl ControlPlane {
             readiness: std::sync::Arc::new(::controlplane::readiness::Readiness::new(
                 std::sync::Arc::new(::controlplane::readiness::AlwaysReady),
             )),
+            in_flight: Default::default(),
             replica_positions: Arc::clone(&replica_positions),
         };
 

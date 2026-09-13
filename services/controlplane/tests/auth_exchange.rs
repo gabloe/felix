@@ -225,6 +225,7 @@ async fn exchange_returns_tenant_scoped_token() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -340,6 +341,7 @@ async fn exchange_forbidden_without_policies() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -465,6 +467,7 @@ async fn exchange_supports_group_claim_based_rbac() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -607,6 +610,7 @@ async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -729,6 +733,7 @@ async fn exchange_supports_group_claim_values_with_group_prefix() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

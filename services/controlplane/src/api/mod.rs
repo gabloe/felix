@@ -120,6 +120,7 @@ mod tests {
             readiness: std::sync::Arc::new(crate::readiness::Readiness::new(std::sync::Arc::new(
                 crate::readiness::AlwaysReady,
             ))),
+            in_flight: Default::default(),
             replica_positions: std::sync::Arc::new(
                 crate::replica_positions::ReplicaPositions::new(&Default::default()),
             ),

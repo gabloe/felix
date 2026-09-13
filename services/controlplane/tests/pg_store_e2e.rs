@@ -1795,6 +1795,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

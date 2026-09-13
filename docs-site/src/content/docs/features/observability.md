@@ -588,3 +588,22 @@ curl http://broker:8080/debug/pprof/heap > heap.prof
 :::tip[Observability is Essential]
 Felix is designed to be observable. Structured logs, metrics, and telemetry make it possible to understand system behavior, debug issues quickly, and optimize performance with confidence.
 :::
+
+
+## Shutdown and drain
+
+Four signals, and the reason each one exists.
+
+| Metric | Type | What it tells you |
+| --- | --- | --- |
+| `felix_ready_state` | gauge | `1` while serving, `0` once draining. Distinguishes an instance that left rotation deliberately from one that vanished. |
+| `felix_inflight_requests` | gauge | Requests being served right now. Watch it fall to zero during a drain. |
+| `felix_drain_duration_ms` | gauge | How long the last drain took. |
+| `felix_drain_forced_total` | counter, by `subsystem` | Subsystems cancelled because the deadline expired. **Non-zero means work was dropped.** |
+
+The last one is the point. A drain that finished in time and a drain that was
+cut off both take roughly the deadline to report, so duration alone cannot tell
+them apart — and the log line that says which does not survive the pod.
+
+Alert on `felix_drain_forced_total` increasing. Everything else here is for
+watching a rolling restart happen.

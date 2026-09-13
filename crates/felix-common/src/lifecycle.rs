@@ -57,12 +57,21 @@ impl Readiness {
         }
     }
 
+    /// Whether this process is serving, as a gauge.
+    ///
+    /// `1` while ready, `0` once draining. A log line saying a drain began is
+    /// gone with the pod; this is the thing a dashboard can show and an alert
+    /// can fire on, and it is what distinguishes "the instance left rotation
+    /// deliberately" from "the instance vanished".
+    pub const READY_STATE: &str = "felix_ready_state";
+
     /// Flip to ready once startup work has finished.
     ///
     /// Returns the previous state. Deliberately not the inverse of
     /// [`Readiness::begin_draining`]: a draining instance must never be brought
     /// back, so callers only use this during startup.
     pub fn mark_ready(&self) -> bool {
+        metrics::gauge!(Self::READY_STATE).set(1.0);
         self.ready.swap(true, Ordering::Release)
     }
 
@@ -77,6 +86,7 @@ impl Readiness {
     /// broker can still serve it. Returns the previous state so callers can tell a
     /// first shutdown from a repeated signal.
     pub fn begin_draining(&self) -> bool {
+        metrics::gauge!(Self::READY_STATE).set(0.0);
         self.ready.swap(false, Ordering::Release)
     }
 }
@@ -84,6 +94,55 @@ impl Readiness {
 impl Default for Readiness {
     fn default() -> Self {
         Self::ready()
+    }
+}
+
+/// How many requests are being served right now.
+///
+/// A drain waits for the *server* to finish, which is the right thing to wait
+/// on — but it says nothing about how much was in flight when the signal
+/// arrived, or whether the count reached zero before the deadline. That is the
+/// difference between "drained cleanly" and "the deadline expired and we called
+/// it done", and it is invisible without counting.
+#[derive(Debug, Clone, Default)]
+pub struct InFlight {
+    count: Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl InFlight {
+    /// Requests currently being served.
+    pub const GAUGE: &str = "felix_inflight_requests";
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mark a request started. The returned guard decrements on drop, so a
+    /// handler that panics or returns early cannot leak the count.
+    pub fn enter(&self) -> InFlightGuard {
+        let now = self.count.fetch_add(1, Ordering::AcqRel) + 1;
+        metrics::gauge!(Self::GAUGE).set(now as f64);
+        InFlightGuard {
+            count: Arc::clone(&self.count),
+        }
+    }
+
+    /// How many requests are outstanding.
+    pub fn current(&self) -> i64 {
+        self.count.load(Ordering::Acquire)
+    }
+}
+
+/// Decrements the in-flight count when dropped.
+#[derive(Debug)]
+pub struct InFlightGuard {
+    count: Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        let now = self.count.fetch_sub(1, Ordering::AcqRel) - 1;
+        metrics::gauge!(InFlight::GAUGE).set(now as f64);
     }
 }
 
@@ -184,9 +243,26 @@ impl DrainBudget {
         &self.unfinished
     }
 
-    /// Log the outcome. Forced cancellation is a warning, not an info line: it
-    /// means work was dropped and the operator needs to see it.
+    /// How long the last drain took, in milliseconds.
+    pub const DRAIN_DURATION_MS: &str = "felix_drain_duration_ms";
+    /// Subsystems cancelled because the drain deadline expired.
+    ///
+    /// Counted per subsystem, and deliberately *not* folded into the duration
+    /// gauge: a drain that finished in time and a drain that was cut off both
+    /// take about the deadline to report, and only this tells them apart. A
+    /// non-zero value means work was dropped.
+    pub const DRAIN_FORCED_TOTAL: &str = "felix_drain_forced_total";
+
+    /// Report the outcome, as metrics and as a log line.
+    ///
+    /// Forced cancellation is a warning rather than an info line: it means work
+    /// was dropped and the operator needs to see it. The counter exists because
+    /// the log line does not survive the pod.
     pub fn report(&self) {
+        metrics::gauge!(Self::DRAIN_DURATION_MS).set(self.started.elapsed().as_millis() as f64);
+        for subsystem in &self.unfinished {
+            metrics::counter!(Self::DRAIN_FORCED_TOTAL, "subsystem" => *subsystem).increment(1);
+        }
         let elapsed_ms = self.started.elapsed().as_millis();
         if self.unfinished.is_empty() {
             tracing::info!(elapsed_ms, "drain complete");
@@ -261,5 +337,52 @@ mod tests {
         // Past the deadline nothing else is even polled.
         assert!(!budget.drain("second", std::future::pending()).await);
         assert_eq!(budget.unfinished(), ["first", "second"]);
+    }
+
+    // --- In-flight accounting ----------------------------------------------------
+
+    /// The count has to come back down, or a drain waits for requests that are long
+    /// finished and reports a forced termination that never happened.
+    #[test]
+    fn a_guard_releases_its_slot_when_dropped() {
+        let in_flight = InFlight::new();
+        assert_eq!(in_flight.current(), 0);
+
+        {
+            let _one = in_flight.enter();
+            let _two = in_flight.enter();
+            assert_eq!(in_flight.current(), 2);
+        }
+
+        assert_eq!(in_flight.current(), 0);
+    }
+
+    /// A handler that panics still releases its slot: the guard's `Drop` runs while
+    /// the stack unwinds. Without that, one panic leaks a slot for the life of the
+    /// process and every later drain waits out its full deadline.
+    #[test]
+    fn a_panicking_handler_does_not_leak_a_slot() {
+        let in_flight = InFlight::new();
+        let counted = in_flight.clone();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = counted.enter();
+            panic!("handler blew up");
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(in_flight.current(), 0, "a panic leaked an in-flight slot");
+    }
+
+    /// Clones share one count, so a handler holding a clone of the state is counted
+    /// against the same total the drain reads.
+    #[test]
+    fn clones_share_one_count() {
+        let in_flight = InFlight::new();
+        let other = in_flight.clone();
+
+        let _guard = other.enter();
+
+        assert_eq!(in_flight.current(), 1);
     }
 }

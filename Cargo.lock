@@ -1031,6 +1031,7 @@ dependencies = [
 name = "felix-common"
 version = "0.2.0"
 dependencies = [
+ "metrics",
  "serde",
  "thiserror 2.0.18",
  "tokio",

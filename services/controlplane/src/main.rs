@@ -239,6 +239,7 @@ async fn build_state(
         },
         store,
         readiness,
+        in_flight: Default::default(),
         oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
             std::time::Duration::from_secs(3600),
             std::time::Duration::from_secs(3600),

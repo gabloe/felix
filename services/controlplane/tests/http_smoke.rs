@@ -46,6 +46,7 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1155,6 +1156,7 @@ async fn system_health_reports_unavailable_on_store_failure() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&failing))),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1202,6 +1204,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1271,6 +1274,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1393,6 +1397,7 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1461,6 +1466,7 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
