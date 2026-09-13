@@ -243,6 +243,19 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
+    // Cache delete; answered with `CacheValue` carrying whatever was removed.
+    //
+    // Sent only to a broker that advertised `FEATURE_CACHE_DELETE`: an older one
+    // has no arm for this variant, and an unrecognised message type ends its
+    // control loop.
+    CacheDelete {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+    },
     // Cache read response (value is optional for misses).
     CacheValue {
         tenant_id: String,

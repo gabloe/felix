@@ -358,6 +358,36 @@ async fn run_client_cache(
         .cache_get("t1", "default", "primary", "client-key")
         .await?;
     ensure_cache_expired(expired, "client cache entry should be expired")?;
+
+    // Delete reports what it removed, and removes it.
+    client
+        .cache_put(
+            "t1",
+            "default",
+            "primary",
+            "doomed",
+            Bytes::from_static(b"gone soon"),
+            None,
+        )
+        .await?;
+    let removed = client
+        .cache_delete("t1", "default", "primary", "doomed")
+        .await?;
+    ensure_cache_value(
+        removed,
+        Bytes::from_static(b"gone soon"),
+        "client cache delete should report the value it removed",
+    )?;
+    let after = client
+        .cache_get("t1", "default", "primary", "doomed")
+        .await?;
+    ensure_cache_expired(after, "a deleted key should read as absent")?;
+
+    // Deleting what is not there is an answer, not a failure.
+    let missing = client
+        .cache_delete("t1", "default", "primary", "never-written")
+        .await?;
+    ensure_cache_expired(missing, "deleting a missing key should report nothing")?;
     Ok(())
 }
 

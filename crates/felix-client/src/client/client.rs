@@ -653,6 +653,58 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("cache get response dropped"))?
     }
 
+    /// Remove a key, reporting the value it held.
+    ///
+    /// `Ok(None)` means the key was not there. Both are answers: a delete is not
+    /// an error just because there was nothing to remove.
+    ///
+    /// Fails without sending anything when the broker did not advertise
+    /// [`felix_wire::FEATURE_CACHE_DELETE`]. An unrecognised message type is
+    /// fatal to a broker's control loop, so probing one that predates this would
+    /// cost the connection rather than return an error.
+    pub async fn cache_delete(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<Bytes>> {
+        if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CACHE_DELETE) {
+            return Err(anyhow::anyhow!("this broker does not support cache delete",));
+        }
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CacheDelete {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            request_id: Some(request_id),
+        };
+        let (response_tx, response_rx) = oneshot::channel();
+        let (worker, conn_index) = self.cache_worker();
+        worker
+            .tx
+            .send(CacheRequest::Get {
+                request_id,
+                message,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("cache worker closed"))?;
+
+        let current = self.cache_conn_counts[conn_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
+            .set(current as f64);
+        t_counter!(
+            "felix_client_cache_conn_ops_total",
+            "conn" => conn_index.to_string()
+        )
+        .increment(1);
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("cache delete response dropped"))?
+    }
+
     fn cache_worker(&self) -> (&CacheWorker, usize) {
         // Round-robin pick only.
         //
