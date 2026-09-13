@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789281287817,
+  "lastUpdate": 1789292310981,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6188,6 +6188,58 @@ window.BENCHMARK_DATA = {
             "range": "6630.57",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 562215.57\nmean: 565424.29\nstdev: 6630.57\ncv: 1.17%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cc81b55418ad6839cbcfb5c32d4a46c668eda33",
+          "message": "Read a stream shard as a consumer group (#309)\n\nThird slice of #280. Joins the three pieces: the shard's log holds the records,\nthe durable cursor says where the group has finished, and the in-flight tracker\nholds what is currently handed out. Still no wire protocol, so still nothing a\nclient can reach — but the machinery now works end to end inside the broker.\n\n## The cursor is written only when a run closes\n\nAn acknowledgement above a gap has not finished anything the group could resume\nfrom. Persisting per acknowledgement would either overstate progress or need a\nsecond structure on disk recording which acknowledged offsets were contiguous —\nand that structure is the tracker, which is deliberately in memory.\n\n## Records are fetched one offset at a time\n\nOnce anything has been redelivered the offsets a group is owed are not\ncontiguous, so a range read would return records the group is not owed and skip\nones it is.\n\nThe one-byte budget relies on the read path's rule that a range holding data\nnever answers empty: the first record comes back whatever the budget. Without\nthat, a record larger than the budget would be owed for ever and the group would\nstall on it. There is a test with a 64 KiB record pinning the dependency.\n\n## Retention outranks a group\n\nA record trimmed before the group reached it is skipped and the group moves\npast. Leaving it owed would stall the group for ever on a record that exists\nnowhere.\n\nThis is the one case where a queue drops work, so it is counted rather than\nsilent — `trimmed_skipped()`, because this crate takes no logging dependency and\nthe service layer reports it. A retention window shorter than a group is allowed\nto fall behind loses work, and `semantics.md` now says so.\n\n## Verification\n\nTen tests over a real log and a real cursor, including the headline: work\nfinished before a restart is not handed out again, work still outstanding is.\nAlso two groups over one shard each seeing every record, a lapsed claim reaching\nthe next poll, and fifty records delivered exactly once in order when every\nclaim is answered.\n\nThree mutations: committing on every acknowledgement rather than on a closed\nrun, and starting a group at zero rather than its stored cursor, are both\ncaught. Reading with a large budget is not — correctly, since the extra records\nare discarded, which is wasteful rather than wrong.\n\n`task test` (85 groups) and `task lint` pass.\n\nRefs #280",
+          "timestamp": "2026-09-13T02:36:05-07:00",
+          "tree_id": "878ff2bd8cb11f3335a487b11c9bfc7156043023",
+          "url": "https://github.com/gabloe/felix/commit/6cc81b55418ad6839cbcfb5c32d4a46c668eda33"
+        },
+        "date": 1789292310394,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 234785.21,
+            "range": "3190.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234785.21\nmean: 236669.41\nstdev: 3190.76\ncv: 1.35%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 234785.21,
+            "range": "3190.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234785.21\nmean: 236669.41\nstdev: 3190.76\ncv: 1.35%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57121.08,
+            "range": "1028.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57121.08\nmean: 56768.67\nstdev: 1028.74\ncv: 1.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 571210.84,
+            "range": "10287.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 571210.84\nmean: 567686.67\nstdev: 10287.47\ncv: 1.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
