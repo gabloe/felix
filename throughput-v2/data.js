@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789262520685,
+  "lastUpdate": 1789267607691,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6032,6 +6032,58 @@ window.BENCHMARK_DATA = {
             "range": "22202.07",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 554812.37\nmean: 543211.19\nstdev: 22202.07\ncv: 4.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b8bd89d86c3e85c3d9683ec2bd6776b3e37a900",
+          "message": "Put cache delete on the wire (#306)\n\nCloses #279. `StorageApi::delete` existed, both backends implemented it, the\ninternal protocol carried it — and no client could reach it. An application\ncould write a key and read it, but removed it only by writing a tombstone it\nhad to interpret itself, or by setting a TTL and waiting.\n\n`CacheDelete` is answered with `CacheValue` carrying whatever was removed, so a\ncaller learns whether the key was there without a second round trip. Deleting a\nkey that was never present is an answer, not a failure.\n\nAuthorized as a write. Letting it through on `CacheRead` would make a read-only\ncredential able to destroy data.\n\n## Negotiated in the direction that matters\n\nThe issue asked for a feature bit \"so a broker never sends a client a message it\ncannot decode\". The hazard here runs the other way: `CacheDelete` is a *request*,\nso the risk is a new client sending it to an older broker, where an unrecognised\nmessage type ends the control loop. The broker advertises\n`FEATURE_CACHE_DELETE`, and a client that does not see the bit reports that the\nbroker cannot delete rather than probing and losing the connection.\n\n## A standalone broker advertised nothing at all\n\nEvery feature was gated on `client_endpoints` being present, so a broker with no\ncluster behind it answered `server_features: 0`. That is right for topology and\nredirect, which describe a cluster — and wrong for cache delete, which works the\nsame on one node as on twenty. The advertisement is now split, and the restart\ntests fail without that split, because they run against a standalone broker.\n\n## Verification\n\n- `a_deleted_key_stays_deleted_across_a_restart` — the test #279 was filed for.\n  It could previously only be written against the storage layer; a tombstone\n  that did not survive a restart would resurrect a value the caller was told\n  was gone.\n- `deleting_a_missing_key_reports_nothing_removed`\n- Both fail when the feature gating is put back to cluster-only.\n- Conformance covers delete end to end, including deleting what is not there.\n- `task test` (85 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## Docs\n\n`protocol.md` gains the message, the bit, and the semantics — including which\nfeatures depend on a cluster and which do not, since that distinction is what\nthe gating bug got wrong. The status table no longer lists delete as missing.",
+          "timestamp": "2026-09-12T19:44:19-07:00",
+          "tree_id": "0f09ef971f7e8981810448c92c226c0ec3bacfc6",
+          "url": "https://github.com/gabloe/felix/commit/3b8bd89d86c3e85c3d9683ec2bd6776b3e37a900"
+        },
+        "date": 1789267606942,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232198.9,
+            "range": "2090.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232198.90\nmean: 232716.13\nstdev: 2090.05\ncv: 0.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232198.9,
+            "range": "2090.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232198.90\nmean: 232716.13\nstdev: 2090.05\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55888.24,
+            "range": "1215.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55888.24\nmean: 55328.93\nstdev: 1215.48\ncv: 2.20%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558882.41,
+            "range": "12154.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558882.41\nmean: 553289.32\nstdev: 12154.86\ncv: 2.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
