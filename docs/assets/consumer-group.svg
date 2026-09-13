@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" width="900" height="330" role="img" aria-label="An animated walkthrough of a consumer group reading a log. Records are claimed by consumers A and B, acknowledged, and the group's cursor advances. When offset 4 is acknowledged while offset 3 is still in flight, the cursor stops at 3 rather than skipping it; once offset 3 is redelivered and acknowledged, the cursor jumps past both.">
+
+  <style>
+    .h     { fill: var(--ink); font: 600 16px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .mono  { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .badge { fill: var(--ink); font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .rec    { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .spine  { stroke: var(--edge-dim); stroke-width: 1.25; }
+    .curs   { fill: var(--accent); }
+    .cursor-label { fill: var(--accent); font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe;
+      --c-flight:#fbe9d6; --c-done:#d9ecd9; --c-dead:#efdcdc;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b;
+      --c-flight:#40301c; --c-done:#1f3a28; --c-dead:#43262a; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b;
+      --c-flight:#40301c; --c-done:#1f3a28; --c-dead:#43262a; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe;
+      --c-flight:#fbe9d6; --c-done:#d9ecd9; --c-dead:#efdcdc; }
+
+    /* One 16s loop. Every keyframe percentage below refers to the same
+       timeline, so the record fills, the claim badges, the cursor and the
+       caption cannot drift out of step with each other. */
+    .r0 { animation: r0 16s infinite; }
+    .r1 { animation: r1 16s infinite; }
+    .r2 { animation: r2 16s infinite; }
+    .r3 { animation: r3 16s infinite; }
+    .r4 { animation: r4 16s infinite; }
+
+    @keyframes r0 { 0%,7% { fill: var(--c-step) }   8%,18% { fill: var(--c-flight) } 19%,96% { fill: var(--c-done) }  97%,100% { fill: var(--c-step) } }
+    @keyframes r1 { 0%,7% { fill: var(--c-step) }   8%,18% { fill: var(--c-flight) } 19%,96% { fill: var(--c-done) }  97%,100% { fill: var(--c-step) } }
+    @keyframes r2 { 0%,33% { fill: var(--c-step) } 34%,44% { fill: var(--c-flight) } 45%,96% { fill: var(--c-done) }  97%,100% { fill: var(--c-step) } }
+    /* Offset 3: claimed, lapses back to unclaimed, claimed again, then done. */
+    @keyframes r3 { 0%,33% { fill: var(--c-step) } 34%,63% { fill: var(--c-flight) } 64%,69% { fill: var(--c-step) } 70%,79% { fill: var(--c-flight) } 80%,96% { fill: var(--c-done) } 97%,100% { fill: var(--c-step) } }
+    @keyframes r4 { 0%,33% { fill: var(--c-step) } 34%,44% { fill: var(--c-flight) } 45%,96% { fill: var(--c-done) }  97%,100% { fill: var(--c-step) } }
+
+    /* Which consumer is holding a claim, and the tick once it is settled. */
+    .hold { opacity: 0; }
+    .h0 { animation: h0 16s infinite; }
+    .h1 { animation: h0 16s infinite; }
+    .h2 { animation: h2 16s infinite; }
+    .h3a { animation: h3a 16s infinite; }
+    .h3b { animation: h3b 16s infinite; }
+    .h4 { animation: h2 16s infinite; }
+    @keyframes h0  { 0%,7% { opacity:0 }  8%,18% { opacity:1 } 19%,100% { opacity:0 } }
+    @keyframes h2  { 0%,33% { opacity:0 } 34%,44% { opacity:1 } 45%,100% { opacity:0 } }
+    @keyframes h3a { 0%,33% { opacity:0 } 34%,63% { opacity:1 } 64%,100% { opacity:0 } }
+    @keyframes h3b { 0%,69% { opacity:0 } 70%,79% { opacity:1 } 80%,100% { opacity:0 } }
+
+    .tick { opacity: 0; }
+    .t0 { animation: t0 16s infinite; }
+    .t2 { animation: t2 16s infinite; }
+    .t3 { animation: t3 16s infinite; }
+    @keyframes t0 { 0%,18% { opacity:0 } 19%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    @keyframes t2 { 0%,44% { opacity:0 } 45%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    @keyframes t3 { 0%,79% { opacity:0 } 80%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    /* The cursor sits at the left edge of the lowest offset not yet finished.
+       It slides, so a jump past two records reads as one movement. */
+    .cursor { animation: cursor 16s infinite; }
+    @keyframes cursor {
+      0%,19%   { transform: translateX(0px) }
+      25%,44%  { transform: translateX(128px) }   /* offsets 0-1 done -> 2 */
+      50%,79%  { transform: translateX(192px) }   /* 2 done, 4 done, 3 held -> stops at 3 */
+      86%,96%  { transform: translateX(320px) }   /* 3 finally done -> jumps past 3 and 4 */
+      97%,100% { transform: translateX(0px) }
+    }
+
+    .cap { opacity: 0; }
+    .c1 { animation: c1 16s infinite; }
+    .c2 { animation: c2 16s infinite; }
+    .c3 { animation: c3 16s infinite; }
+    .c4 { animation: c4 16s infinite; }
+    @keyframes c1 { 0%,7% { opacity:0 }  8%,24% { opacity:1 } 25%,100% { opacity:0 } }
+    @keyframes c2 { 0%,33% { opacity:0 } 34%,49% { opacity:1 } 50%,100% { opacity:0 } }
+    @keyframes c3 { 0%,49% { opacity:0 } 50%,69% { opacity:1 } 70%,100% { opacity:0 } }
+    @keyframes c4 { 0%,69% { opacity:0 } 70%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    /* A moving diagram is unreadable for some people and actively unpleasant
+       for others. Frozen, the picture still shows the state that matters:
+       offset 3 in flight, offset 4 finished, and the cursor stopped at 3. */
+    @media (prefers-reduced-motion: reduce) {
+      .r0, .r1, .r2, .r3, .r4,
+      .h0, .h1, .h2, .h3a, .h3b,
+      .t0, .t2, .t3, .cursor, .c1, .c2, .c3, .c4 { animation: none; }
+      .r0, .r1, .r2, .r4 { fill: var(--c-done); }
+      .r3 { fill: var(--c-flight); }
+      .h3a { opacity: 1; }
+      .t0, .t2 { opacity: 1; }
+      .cursor { transform: translateX(192px); }
+      .c3 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="26" text-anchor="middle">ONE CONSUMER GROUP READING A SHARD'S LOG</text>
+
+  <!-- the log -->
+  <line class="spine" x1="120" y1="132" x2="648" y2="132"/>
+
+  <g>
+    <rect class="rec r0" x="140" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec r1" x="204" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec r2" x="268" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec r3" x="332" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec r4" x="396" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec"    x="460" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec"    x="524" y="110" width="54" height="44" rx="4"/>
+    <rect class="rec"    x="588" y="110" width="54" height="44" rx="4"/>
+  </g>
+
+  <!-- settled ticks, drawn inside the record -->
+  <g>
+    <text class="badge tick t0" x="167" y="139" text-anchor="middle">✓</text>
+    <text class="badge tick t0" x="231" y="139" text-anchor="middle">✓</text>
+    <text class="badge tick t2" x="295" y="139" text-anchor="middle">✓</text>
+    <text class="badge tick t3" x="359" y="139" text-anchor="middle">✓</text>
+    <text class="badge tick t2" x="423" y="139" text-anchor="middle">✓</text>
+  </g>
+
+  <!-- who is holding each claim -->
+  <g>
+    <text class="badge hold h0"  x="167" y="100" text-anchor="middle">A</text>
+    <text class="badge hold h1"  x="231" y="100" text-anchor="middle">B</text>
+    <text class="badge hold h2"  x="295" y="100" text-anchor="middle">A</text>
+    <text class="badge hold h3a" x="359" y="100" text-anchor="middle">B</text>
+    <text class="badge hold h3b" x="359" y="100" text-anchor="middle">A · 2nd</text>
+    <text class="badge hold h4"  x="423" y="100" text-anchor="middle">A</text>
+  </g>
+
+  <!-- offsets -->
+  <g>
+    <text class="mono" x="167" y="172" text-anchor="middle">0</text>
+    <text class="mono" x="231" y="172" text-anchor="middle">1</text>
+    <text class="mono" x="295" y="172" text-anchor="middle">2</text>
+    <text class="mono" x="359" y="172" text-anchor="middle">3</text>
+    <text class="mono" x="423" y="172" text-anchor="middle">4</text>
+    <text class="mono" x="487" y="172" text-anchor="middle">5</text>
+    <text class="mono" x="551" y="172" text-anchor="middle">6</text>
+    <text class="mono" x="615" y="172" text-anchor="middle">7</text>
+  </g>
+  <text class="mono" x="656" y="136">→ tail</text>
+
+  <!-- the group's durable cursor -->
+  <g class="cursor">
+    <path class="curs" d="M 167 186 l -7 12 l 14 0 z"/>
+    <text class="cursor-label" x="167" y="214" text-anchor="middle">cursor</text>
+  </g>
+
+  <!-- captions, one per beat -->
+  <text class="body cap c1" x="450" y="252" text-anchor="middle">Each record goes to one consumer. Acknowledged, the cursor moves up.</text>
+  <text class="body cap c2" x="450" y="252" text-anchor="middle">Three claimed at once — a claim is held, not queued behind the one before it.</text>
+  <text class="body cap c3" x="450" y="252" text-anchor="middle">4 is finished, but the cursor stops at 3: it advances only over a contiguous run.</text>
+  <text class="body cap c4" x="450" y="252" text-anchor="middle">3's claim lapsed and it was redelivered. Settled, the cursor jumps past both.</text>
+
+  <text class="body" x="450" y="276" text-anchor="middle">A restart resumes at the cursor, so only 3 is redelivered — never 0, 1 or 2.</text>
+
+  <!-- legend -->
+  <g>
+    <rect class="rec" x="256" y="298" width="14" height="14" rx="3" style="fill: var(--c-step)"/>
+    <text class="mono" x="277" y="309">unread</text>
+    <rect class="rec" x="342" y="298" width="14" height="14" rx="3" style="fill: var(--c-flight)"/>
+    <text class="mono" x="363" y="309">in flight</text>
+    <rect class="rec" x="434" y="298" width="14" height="14" rx="3" style="fill: var(--c-done)"/>
+    <text class="mono" x="455" y="309">acknowledged</text>
+    <path class="curs" d="M 585 300 l -6 10 l 12 0 z"/>
+    <text class="mono" x="598" y="309">the group's cursor</text>
+  </g>
+</svg>

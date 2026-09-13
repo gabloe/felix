@@ -12,6 +12,17 @@ It is the same log underneath — see
 [Projections](/felix/architecture/projections/) — read through a cursor the
 group shares instead of a cursor per subscriber.
 
+![A consumer group reading a shard's log. Records are claimed by consumers A and B and acknowledged one by one, and the group's cursor advances behind them. When offset 4 is acknowledged while offset 3 is still in flight, the cursor stops at 3 rather than skipping it; once offset 3's claim lapses, it is redelivered, and settling it lets the cursor jump past both.](/felix/diagrams/consumer-group.svg)
+
+The moment worth watching is the one in the middle. Offset 4 is acknowledged
+while offset 3 is still held, and **the cursor stops at 3 anyway** — it only ever
+advances over a contiguous run of finished records. That is what makes the
+cursor safe to restart from: everything below it is genuinely done, so a broker
+that restarts redelivers offset 3 and nothing before it.
+
+The alternative — moving the cursor to the highest acknowledged offset — would
+be simpler and would silently drop offset 3 on the next restart.
+
 ## The loop
 
 ```rust
