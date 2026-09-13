@@ -12,6 +12,7 @@ pub mod config;
 pub mod controlplane;
 pub mod core_shards;
 pub mod durable_config;
+pub mod group_ops;
 pub mod lease;
 pub mod lease_metrics;
 pub mod membership;

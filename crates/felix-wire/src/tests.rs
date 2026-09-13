@@ -645,6 +645,91 @@ fn message_cache_operations() {
     let decoded = Message::decode(frame).expect("decode");
     assert_eq!(message, decoded);
 
+    // Test the consumer-group messages
+    let message = Message::GroupPoll {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "jobs".to_string(),
+        shard: 3,
+        group: "workers".to_string(),
+        max_records: 32,
+        request_id: 42,
+    };
+    let frame = message.encode().expect("encode");
+    assert_eq!(Message::decode(frame).expect("decode"), message);
+
+    let message = Message::GroupRecords {
+        records: vec![
+            crate::GroupRecord {
+                offset: 7,
+                payload: Bytes::from_static(b"one"),
+            },
+            crate::GroupRecord {
+                offset: 9,
+                payload: Bytes::new(),
+            },
+        ],
+        request_id: 42,
+    };
+    let frame = message.encode().expect("encode");
+    assert_eq!(Message::decode(frame).expect("decode"), message);
+
+    // An empty batch is an answer, not an error: nothing was available.
+    let message = Message::GroupRecords {
+        records: Vec::new(),
+        request_id: 42,
+    };
+    let frame = message.encode().expect("encode");
+    assert_eq!(Message::decode(frame).expect("decode"), message);
+
+    for message in [
+        Message::GroupAck {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "jobs".to_string(),
+            shard: 3,
+            group: "workers".to_string(),
+            offset: 11,
+            request_id: 42,
+        },
+        Message::GroupNack {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "jobs".to_string(),
+            shard: 3,
+            group: "workers".to_string(),
+            offset: 11,
+            request_id: 42,
+        },
+    ] {
+        let frame = message.clone().encode().expect("encode");
+        assert_eq!(Message::decode(frame).expect("decode"), message);
+    }
+
+    // Ack and nack differ on the wire, or a hand-back would finish the record.
+    let ack = Message::GroupAck {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "jobs".to_string(),
+        shard: 0,
+        group: "g".to_string(),
+        offset: 1,
+        request_id: 1,
+    };
+    let nack = Message::GroupNack {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "jobs".to_string(),
+        shard: 0,
+        group: "g".to_string(),
+        offset: 1,
+        request_id: 1,
+    };
+    assert_ne!(
+        ack.encode().expect("encode"),
+        nack.encode().expect("encode"),
+    );
+
     // Test CacheDelete
     let message = Message::CacheDelete {
         tenant_id: "t1".to_string(),
@@ -1116,10 +1201,21 @@ fn cache_delete_is_a_new_feature_bit_and_disturbs_nothing() {
         0,
         "the new bit overlaps one already in use",
     );
+    assert_eq!(
+        crate::FEATURE_CONSUMER_GROUP
+            & (crate::FEATURE_TOPOLOGY | crate::FEATURE_REDIRECT | crate::FEATURE_CACHE_DELETE),
+        0,
+        "the consumer-group bit overlaps one already in use",
+    );
     assert!(crate::supports_feature(
         crate::KNOWN_FEATURES,
         crate::FEATURE_CACHE_DELETE
     ));
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_CONSUMER_GROUP
+    ));
+    assert!(!crate::supports_feature(0, crate::FEATURE_CONSUMER_GROUP));
     // Silence from a peer that predates negotiation must not be read as support.
     assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_DELETE));
 }

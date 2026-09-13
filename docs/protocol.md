@@ -126,6 +126,29 @@ have no durable position to checkpoint against.
 { "type": "cache_get", "key": "<string>" }
 ```
 
+### GroupPoll
+```
+{ "type": "group_poll", "tenant_id": "<string>", "namespace": "<string>",
+  "stream": "<string>", "shard": <number>, "group": "<string>",
+  "max_records": <number>, "request_id": <number> }
+```
+
+Sent only to a broker that advertised `FEATURE_CONSUMER_GROUP`, and only to the
+broker that leads the shard.
+
+### GroupRecords (server -> client)
+```
+{ "type": "group_records", "records": [{ "offset": <number>, "payload": "<base64>" }],
+  "request_id": <number> }
+```
+
+### GroupAck / GroupNack
+```
+{ "type": "group_ack",  "tenant_id": "...", "namespace": "...", "stream": "...",
+  "shard": <number>, "group": "<string>", "offset": <number>, "request_id": <number> }
+{ "type": "group_nack", ... }
+```
+
 ### CacheDelete
 ```
 { "type": "cache_delete", "key": "<string>" }
@@ -160,6 +183,15 @@ Sent only to a broker that advertised `FEATURE_CACHE_DELETE`.
 - CacheDelete returns `cache_value` carrying whatever was removed, and `null`
   when the key was not there. Removing a key that does not exist is an answer,
   not an error.
+- GroupPoll returns `group_records`, which may be empty: nothing was available
+  is an answer, not an error. Each record is claimed until the broker's
+  visibility timeout lapses, after which it is handed to whoever polls next.
+- GroupAck and GroupNack return `cache_ok`. An ack finishes a record; a nack
+  hands it back for immediate redelivery rather than after the timeout.
+- **Only the broker leading a shard serves its groups.** Any other refuses with
+  `error` rather than an empty batch, because the claim and the acknowledgement
+  have to reach the same in-flight state — two brokers each keeping their own
+  would hand out the same records.
 - Backpressure: v1 is best-effort; subscribers may miss events if they fall
   behind. With event offsets negotiated a client can *detect* that loss, because
   a gap between consecutive delivered offsets is exactly a drop.
@@ -336,6 +368,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0001` | `FEATURE_TOPOLOGY` | The broker answers `topology` |
 | `0x0002` | `FEATURE_REDIRECT` | The peer understands `not_leader` |
 | `0x0004` | `FEATURE_CACHE_DELETE` | The broker accepts `cache_delete` |
+| `0x0008` | `FEATURE_CONSUMER_GROUP` | The broker serves `group_poll`, `group_ack`, `group_nack` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -354,10 +387,12 @@ a client sends it only to a broker that advertised the bit. Getting that
 backwards is worse than a refused request — an unrecognised message type ends
 the broker's control loop, so probing costs the connection.
 
-Note which features depend on a cluster and which do not. `FEATURE_TOPOLOGY` and
-`FEATURE_REDIRECT` describe a cluster, so a standalone broker advertises
-neither. `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
-advertised by both.
+Note which features depend on what. `FEATURE_TOPOLOGY` and `FEATURE_REDIRECT`
+describe a cluster, so a standalone broker advertises neither.
+`FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
+advertised by both. `FEATURE_CONSUMER_GROUP` depends on durable storage rather
+than on clustering: without it a group's position is lost on every restart, so a
+broker with none does not offer the feature at all.
 
 An absent `server_features` or `client_features` means that peer implements
 none. This is not a

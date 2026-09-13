@@ -284,12 +284,18 @@ Stated because a guarantee without its failure model is a slogan.
   choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
-- **No queue semantics reachable by a client** — no wire protocol carries a
-  group subscription, an acknowledgement, or a redelivery (#280), so no
-  application can use one yet.
+- **Queue semantics are reachable but incomplete** (#280). A client can poll a
+  consumer group, acknowledge a record, and hand one back; a record neither
+  answered for is redelivered once the visibility timeout lapses. What is
+  missing is a bound on redelivery: **a record that always fails is redelivered
+  for ever**, because there is no attempt limit and no dead-letter destination.
+  A queue with a poison record makes no progress past it.
 
-  What exists is the machinery behind it, joined to a real log, and its rules
-  are already fixed. A group's position on a shard is durable, monotonic, and
+  Delivery is by poll rather than push: a consumer takes work when it has
+  capacity, and the broker cannot know when that is. Only the broker leading a
+  shard serves its groups.
+
+  The rules are fixed. A group's position on a shard is durable, monotonic, and
   survives a restart. Above that position the broker tracks what has been handed
   out: a record claimed by one consumer is not handed to another while the claim
   stands, a claim that lapses makes the record owed again, and the cursor moves

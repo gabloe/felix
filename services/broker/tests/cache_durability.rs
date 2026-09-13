@@ -28,6 +28,7 @@ use std::time::Duration;
 
 const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const CACHE: &str = "sessions";
+const QUEUE: &str = "jobs";
 
 struct DemoAuthBundle {
     auth: Arc<BrokerAuth>,
@@ -65,11 +66,39 @@ async fn start(root: &std::path::Path) -> Result<Running> {
             ..LogConfig::default()
         },
     )?;
-    let broker = Arc::new(Broker::new(Box::new(cache)).with_consumer_groups(Arc::new(groups)));
+    // Stream logs under their own root, as the binary arranges them. A
+    // consumer group reads a durable stream, so the broker needs both.
+    let storage = felix_broker::durable::DurableStorage::open(
+        root.join("streams"),
+        LogConfig {
+            fsync_mode: FsyncMode::None,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        },
+    )?;
+    let broker = Arc::new(
+        Broker::new(Box::new(cache))
+            .with_durable_storage(storage)
+            .with_consumer_groups(Arc::new(groups), Duration::from_secs(30)),
+    );
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
         .register_cache("t1", "default", CACHE, CacheMetadata)
+        .await?;
+    // A durable stream for the consumer-group tests. Durable because a group
+    // reads a log, and an ephemeral stream has none.
+    broker
+        .register_stream(
+            "t1",
+            "default",
+            QUEUE,
+            felix_broker::StreamMetadata {
+                durable: true,
+                shards: 1,
+                ..Default::default()
+            },
+        )
         .await?;
 
     let config = broker::config::BrokerConfig::from_env()?;
@@ -213,6 +242,8 @@ fn demo_auth_for_tenants(tenants: &[&str], ttl: Duration) -> Result<DemoAuthBund
             format!("ns.manage:namespace:{tenant}/*"),
             format!("cache.read:cache:{tenant}/*/*"),
             format!("cache.write:cache:{tenant}/*/*"),
+            format!("stream.publish:stream:{tenant}/*/*"),
+            format!("stream.subscribe:stream:{tenant}/*/*"),
         ];
         tokens.insert(
             (*tenant).to_string(),
@@ -368,5 +399,139 @@ async fn a_consumer_group_position_survives_a_restart() -> Result<()> {
         "the group lost its position across a restart",
     );
     restarted.stop().await;
+    Ok(())
+}
+
+/// **A client consuming a queue, end to end.** Until the wire carried group
+/// operations this could not be written at all: the machinery was reachable
+/// only from inside the broker.
+#[tokio::test]
+async fn a_client_polls_and_acknowledges_a_consumer_group() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    let publisher = client.publisher().await?;
+    for job in ["one", "two", "three"] {
+        publisher
+            .publish(
+                "t1",
+                "default",
+                QUEUE,
+                job.as_bytes().to_vec(),
+                felix_wire::AckMode::PerMessage,
+            )
+            .await?;
+    }
+
+    let claimed = client
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+    let payloads: Vec<String> = claimed
+        .iter()
+        .map(|r| String::from_utf8(r.payload.to_vec()).expect("utf8"))
+        .collect();
+    assert_eq!(payloads, vec!["one", "two", "three"]);
+
+    // A second poll sees nothing: the first consumer still holds them.
+    assert!(
+        client
+            .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+            .await?
+            .is_empty(),
+        "a claimed record was handed out twice",
+    );
+
+    for record in &claimed {
+        client
+            .group_ack("t1", "default", QUEUE, 0, "workers", record.offset)
+            .await?;
+    }
+
+    running.stop().await;
+
+    // Finished work is not handed out again after a restart.
+    let restarted = start(dir.path()).await?;
+    let after = restarted
+        .client()
+        .await?
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+    assert!(
+        after.is_empty(),
+        "the group repeated work it had already finished",
+    );
+    restarted.stop().await;
+    Ok(())
+}
+
+/// A record handed back is redelivered at once, without waiting out the
+/// visibility timeout.
+#[tokio::test]
+async fn a_nacked_record_is_polled_again() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    client
+        .publisher()
+        .await?
+        .publish(
+            "t1",
+            "default",
+            QUEUE,
+            b"retry me".to_vec(),
+            felix_wire::AckMode::PerMessage,
+        )
+        .await?;
+
+    let first = client
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+    assert_eq!(first.len(), 1);
+
+    client
+        .group_nack("t1", "default", QUEUE, 0, "workers", first[0].offset)
+        .await?;
+
+    let again = client
+        .group_poll("t1", "default", QUEUE, 0, "workers", 10)
+        .await?;
+    assert_eq!(again.len(), 1, "a handed-back record was not redelivered");
+    assert_eq!(again[0].offset, first[0].offset);
+
+    running.stop().await;
+    Ok(())
+}
+
+/// Two groups over one stream are independent: each sees every record.
+#[tokio::test]
+async fn two_groups_each_see_every_record() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    client
+        .publisher()
+        .await?
+        .publish(
+            "t1",
+            "default",
+            QUEUE,
+            b"shared".to_vec(),
+            felix_wire::AckMode::PerMessage,
+        )
+        .await?;
+
+    let first = client
+        .group_poll("t1", "default", QUEUE, 0, "alpha", 10)
+        .await?;
+    let second = client
+        .group_poll("t1", "default", QUEUE, 0, "beta", 10)
+        .await?;
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1, "one group consumed another's work");
+    running.stop().await;
     Ok(())
 }
