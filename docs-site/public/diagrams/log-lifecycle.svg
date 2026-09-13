@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420" role="img" aria-label="An animated walkthrough of a shard's log over time. The active segment fills with records until it reaches the segment size limit, at which point it is sealed: its data and index are synced and the preallocated tail is trimmed away, and a new active segment opens at the next offset. Later the retention timer deletes the oldest sealed segment whole, the log's base offset advances to the start of the next surviving segment, and a read below that offset is answered with a Trimmed error rather than an empty result.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .mono  { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .warn  { fill: var(--accent); font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .seg    { stroke: var(--edge); stroke-width: 1.25; }
+    .prealloc { stroke: var(--edge-dim); stroke-width: 1.25; stroke-dasharray: 5 4; fill: none; }
+    .cap    { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .fill   { fill: var(--edge); opacity: .55; }
+    .base   { fill: var(--accent); }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-sealed:#eef1f5; --c-gone:#efdcdc;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-sealed:#1b2534; --c-gone:#43262a; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-sealed:#1b2534; --c-gone:#43262a; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-sealed:#eef1f5; --c-gone:#efdcdc; }
+
+    /* One 20s loop. Acts: fill, seal and roll, then retention and a trimmed read. */
+    .hide { opacity: 0; }
+    /* Captions share the hidden base for the same reason: with animation off,
+       anything without it would draw on top of the others. */
+    .cp { opacity: 0; }
+
+    /* Segment 2 fills, hits the cap, and becomes sealed. */
+    .grow2 { animation: grow2 20s infinite; }
+    @keyframes grow2 { 0%,4% { width: 26px; opacity: .55 } 30%,31% { width: 150px; opacity: .55 } 34%,96% { width: 150px; opacity: 0 } 97%,100% { width: 26px; opacity: .55 } }
+    .seg2 { animation: seg2 20s infinite; }
+    @keyframes seg2 { 0%,31% { fill: var(--c-step) } 34%,96% { fill: var(--c-sealed) } 97%,100% { fill: var(--c-step) } }
+    /* Preallocated tail: reserved while active, trimmed away at sealing. */
+    .tail2 { animation: tail2 20s infinite; }
+    @keyframes tail2 { 0%,31% { opacity: 1 } 34%,100% { opacity: 0 } }
+    .label2a { animation: label2a 20s infinite; }
+    @keyframes label2a { 0%,31% { opacity: 1 } 34%,100% { opacity: 0 } }
+    .label2b { animation: label2b 20s infinite; }
+    @keyframes label2b { 0%,33% { opacity: 0 } 34%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    /* Segment 3 opens at the next offset once 2 is sealed. */
+    .seg3 { animation: seg3 20s infinite; }
+    @keyframes seg3 { 0%,35% { opacity: 0 } 37%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    /* Retention deletes the oldest sealed segment whole. */
+    .gone { animation: gone 20s infinite; }
+    @keyframes gone { 0%,52% { fill: var(--c-sealed); opacity: 1 } 55%,60% { fill: var(--c-gone); opacity: 1 } 64%,96% { fill: var(--c-gone); opacity: 0 } 97%,100% { fill: var(--c-sealed); opacity: 1 } }
+    .gonelbl { animation: gonelbl 20s infinite; }
+    @keyframes gonelbl { 0%,52% { opacity: 1 } 55%,60% { opacity: 1 } 64%,96% { opacity: 0 } 97%,100% { opacity: 1 } }
+
+    /* base_offset moves to the start of the oldest surviving segment. */
+    .baseptr { animation: baseptr 20s infinite; }
+    @keyframes baseptr { 0%,60% { transform: translateX(0px) } 66%,96% { transform: translateX(178px) } 97%,100% { transform: translateX(0px) } }
+
+    .trim { animation: trim 20s infinite; }
+    @keyframes trim { 0%,71% { opacity: 0 } 73%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    .c1 { animation: c1 20s infinite; } @keyframes c1 { 0%,3% { opacity:0 } 5%,29% { opacity:1 } 30%,100% { opacity:0 } }
+    .c2 { animation: c2 20s infinite; } @keyframes c2 { 0%,30% { opacity:0 } 32%,49% { opacity:1 } 50%,100% { opacity:0 } }
+    .c3 { animation: c3 20s infinite; } @keyframes c3 { 0%,50% { opacity:0 } 52%,69% { opacity:1 } 70%,100% { opacity:0 } }
+    .c4 { animation: c4 20s infinite; } @keyframes c4 { 0%,70% { opacity:0 } 72%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .grow2,.seg2,.tail2,.label2a,.label2b,.seg3,.gone,.gonelbl,.baseptr,.trim,
+      .c1,.c2,.c3,.c4 { animation: none; }
+      .grow2 { width: 150px; }
+      .seg2 { fill: var(--c-sealed); }
+      .tail2,.label2a { opacity: 0; }
+      .label2b,.seg3,.trim { opacity: 1; }
+      .grow2 { opacity: 0; }
+      .gone { opacity: 0; }
+      .gonelbl { opacity: 0; }
+      .baseptr { transform: translateX(178px); }
+      .c3 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">ONE SHARD'S LOG, OVER TIME</text>
+
+  <!-- ============================== the segments ============================= -->
+  <!-- segment 0: the oldest, and the one retention takes -->
+  <g>
+    <rect class="seg gone" x="60" y="60" width="150" height="56" rx="5"/>
+    <g class="gonelbl">
+      <text class="small" x="135" y="84" text-anchor="middle">segment 0</text>
+      <text class="small" x="135" y="100" text-anchor="middle">offsets 0–999</text>
+      <text class="small" x="135" y="134" text-anchor="middle">sealed</text>
+    </g>
+  </g>
+
+  <!-- segment 1 -->
+  <rect class="seg" x="238" y="60" width="150" height="56" rx="5" style="fill: var(--c-sealed)"/>
+  <text class="small" x="313" y="84" text-anchor="middle">segment 1</text>
+  <text class="small" x="313" y="100" text-anchor="middle">offsets 1000–1999</text>
+  <text class="small" x="313" y="134" text-anchor="middle">sealed</text>
+
+  <!-- segment 2: the one that fills and seals on screen -->
+  <rect class="seg seg2" x="416" y="60" width="150" height="56" rx="5"/>
+  <rect class="fill grow2" x="416" y="60" height="56" rx="5"/>
+  <rect class="prealloc tail2" x="416" y="60" width="150" height="56" rx="5"/>
+  <text class="small" x="491" y="84" text-anchor="middle">segment 2</text>
+  <text class="small" x="491" y="100" text-anchor="middle">offsets 2000–</text>
+  <text class="small label2a" x="491" y="134" text-anchor="middle">active</text>
+  <text class="small label2b" x="491" y="134" text-anchor="middle">sealed</text>
+
+  <!-- segment 3: opens when 2 seals -->
+  <g class="hide seg3">
+    <rect class="seg" x="594" y="60" width="150" height="56" rx="5" style="fill: var(--c-step)"/>
+    <text class="small" x="669" y="84" text-anchor="middle">segment 3</text>
+    <text class="small" x="669" y="100" text-anchor="middle">offsets 3000–</text>
+    <text class="small" x="669" y="134" text-anchor="middle">active</text>
+  </g>
+
+  <!-- the size cap that triggers sealing -->
+  <line class="cap" x1="566" y1="46" x2="566" y2="126"/>
+  <text class="mono" x="574" y="44">segment_size_bytes</text>
+
+  <!-- ============================== base_offset ============================== -->
+  <g class="baseptr">
+    <path class="base" d="M 60 160 l -7 -12 l 14 0 z"/>
+    <text class="warn" x="60" y="182" text-anchor="middle">base_offset</text>
+  </g>
+
+  <!-- ================================ the read =============================== -->
+  <g class="hide trim">
+    <text class="mono" x="450" y="228" text-anchor="middle">read offset 500</text>
+    <text class="warn" x="450" y="250" text-anchor="middle">→ Trimmed { requested: 500, oldest: 1000 }</text>
+    <text class="small" x="450" y="272" text-anchor="middle">"those records existed and are gone" — not "nothing here yet"</text>
+  </g>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body cp c1" x="450" y="316" text-anchor="middle">The active segment grows. Space is preallocated ahead of it, without changing the file's size on disk.</text>
+  <text class="body cp c2" x="450" y="316" text-anchor="middle">At the cap it is sealed: data and index synced, the unused tail trimmed, and a new segment opens at the next offset.</text>
+  <text class="body cp c3" x="450" y="316" text-anchor="middle">Retention deletes the oldest sealed segment whole. Never a partial one, and never the active one.</text>
+  <text class="body cp c4" x="450" y="316" text-anchor="middle">base_offset advances, so a read below it is a typed error naming the oldest surviving offset.</text>
+
+  <text class="body" x="450" y="358" text-anchor="middle">Deleting whole segments from the head is what lets a record never be rewritten, and that is what lets</text>
+  <text class="body" x="450" y="376" text-anchor="middle">recovery trust "valid bytes end at EOF". Preallocation reserves blocks without moving EOF, for the same reason.</text>
+  <text class="body" x="450" y="400" text-anchor="middle">Rollover is decided before the write, from the projected size, so one append is always one write.</text>
+</svg>

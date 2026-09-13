@@ -223,7 +223,13 @@ group-commit paths in MySQL and RocksDB.
 
 ## Segments and rollover
 
-A shard's log is one *active* segment plus any number of sealed ones:
+A shard's log is one *active* segment plus any number of sealed ones, and the
+whole of its life — filling, sealing, rolling, and eventually being trimmed away
+by retention — looks like this:
+
+<p align="center">
+  <img src="assets/log-lifecycle.svg" alt="A shard's log over time: the active segment fills to the size cap, is sealed with its preallocated tail trimmed, a new segment opens at the next offset, retention later deletes the oldest sealed segment whole, base_offset advances, and a read below it returns Trimmed" width="900">
+</p>
 
 ```mermaid
 graph LR
@@ -255,6 +261,14 @@ Rules that recovery depends on:
 ## Reads
 
 A read seeks through the sparse index rather than scanning from the head:
+
+<p align="center">
+  <img src="assets/log-append.svg" alt="The active segment and the index derived from it: records appended with ascending offsets, index entries emitted only every 4 KiB, and a read that binary-searches the index, seeks to the entry's byte position, and scans forward over real records" width="900">
+</p>
+
+The entry only says where to start. The forward scan over real records is what
+answers, which is why a stale or missing index costs a rebuild rather than a
+wrong answer.
 
 ```mermaid
 graph LR

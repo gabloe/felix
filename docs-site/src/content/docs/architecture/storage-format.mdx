@@ -19,6 +19,11 @@ Implementation:
 [`crates/felix-storage/src/segment/format.rs`](https://github.com/gabloe/felix/blob/main/crates/felix-storage/src/segment/format.rs).
 The two must move together — a change to one without the other is a bug.
 
+This page is the byte layout. For how those bytes are produced and consumed over
+time — appending, the sparse index, sealing, rollover and retention — see
+[Durable Storage](/felix/architecture/durable-storage/#on-disk-layout), which
+walks both through animated diagrams.
+
 ## Goals
 
 - **Versioned.** A reader that does not understand a file says so instead of

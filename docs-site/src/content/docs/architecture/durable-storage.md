@@ -129,13 +129,41 @@ graph TB
     class I0,I1,I2 index
 ```
 
+### Appending, and reading back
+
+![The active segment and the index derived from it. Records are appended one after another with ascending offsets; index entries are emitted only for the first record and thereafter every four kibibytes, so the index is sparse. A read for an offset binary-searches the index for the greatest entry at or below it, seeks to that byte position, and scans forward over real records until it reaches the one it wants.](/felix/diagrams/log-append.svg)
+
 Each record carries its own length, logical offset, timestamp and a CRC-32 over
 its header and payload. The length comes first and is covered by the checksum, so
 a reader can step to the next record without decoding the current one's payload —
 which is what makes index rebuilds and recovery scans cheap.
 
-Index files are pure accelerators. They carry no checksums, are never trusted on
-their own, and any index that fails to load is rebuilt from its segment.
+Index files are pure accelerators. An entry is emitted for a segment's first
+record and thereafter every `index_spacing_bytes` (4 KiB by default), so the
+index is **sparse**: it says roughly where to start, and the forward scan over
+real records is what actually answers the read.
+
+That is also why they carry no checksums and are never trusted. An entry is only
+ever a starting position for a scan that re-validates what it finds, so a
+missing, short, or stale index costs a rebuild rather than a wrong answer — and
+it is why a freshly written index can safely skip its fsync.
+
+### Sealing, rolling, and retention
+
+![A shard's log over time. The active segment fills until it reaches the segment size limit, then is sealed: data and index synced, the preallocated tail trimmed away, and a new active segment opened at the next offset. Later the retention timer deletes the oldest sealed segment whole, base_offset advances to the start of the next surviving segment, and a read below that offset is answered with a Trimmed error naming the oldest surviving offset.](/felix/diagrams/log-lifecycle.svg)
+
+A shard's log is one **active** segment plus any number of **sealed** ones.
+Rollover is decided *before* a write, from the projected size, so one append is
+always one `write` call and a batch never spans two segments. Sealing syncs the
+data and the index, then trims the preallocated tail so the file on disk is
+exactly its contents.
+
+Retention deletes **whole sealed segments, from the head only** — never a
+partial segment and never the active one, so a log always retains at least what
+was written since its last roll. `base_offset` then advances, and a read below
+it is `Trimmed { requested, oldest }` rather than an empty answer. That
+distinction is the point of the feature: it lets a resuming subscriber tell
+"those records existed and are gone" from "nothing here yet".
 
 The full byte layout, versioning rules, and corruption verdicts are in the
 [Durable Segment Format specification](/felix/architecture/storage-format/).

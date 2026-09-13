@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 410" width="900" height="410" role="img" aria-label="An animated walkthrough of appending to a segment and reading back through its sparse index. Records are appended to the active segment one after another, each with an ascending offset. Index entries are emitted only for the first record and thereafter every four kibibytes of data, so the index is sparse. A read for offset 5 binary-searches the index, finds the greatest entry at or below it, seeks to that byte position, and scans forward through real records until it reaches offset 5.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .mono  { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .frame { stroke: var(--edge-dim); stroke-width: 1.25; fill: none; }
+    .hdr   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-hdr); }
+    .rec   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .ent   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .ptr   { stroke: var(--edge-dim); stroke-width: 1.25; stroke-dasharray: 4 3; fill: none; }
+    .seek  { stroke: var(--accent); stroke-width: 2; fill: none; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-hdr:#dfe6f5;
+      --c-hot:#fbe9d6; --c-done:#d9ecd9;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-hdr:#1c2839;
+      --c-hot:#40301c; --c-done:#1f3a28; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-hdr:#1c2839;
+      --c-hot:#40301c; --c-done:#1f3a28; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-hdr:#dfe6f5;
+      --c-hot:#fbe9d6; --c-done:#d9ecd9; }
+
+    /* One 18s loop shared by everything below. */
+    .fade { opacity: 0; }
+    .a0 { animation: a0 18s infinite; } @keyframes a0 { 0%,3% { opacity:0 } 5%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .a1 { animation: a1 18s infinite; } @keyframes a1 { 0%,6% { opacity:0 } 8%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .a2 { animation: a2 18s infinite; } @keyframes a2 { 0%,9% { opacity:0 } 11%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .a3 { animation: a3 18s infinite; } @keyframes a3 { 0%,12% { opacity:0 } 14%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .a4 { animation: a4 18s infinite; } @keyframes a4 { 0%,15% { opacity:0 } 17%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .a5 { animation: a5 18s infinite; } @keyframes a5 { 0%,18% { opacity:0 } 20%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    /* Records that the read touches animate opacity *and* fill, so each needs a
+       single keyframe set doing both — two classes would leave only the later
+       `animation` declaration in force, and the record would never appear. */
+    .r3 { animation: r3 18s infinite; }
+    @keyframes r3 { 0%,12% { opacity:0; fill: var(--c-step) } 14%,60% { opacity:1; fill: var(--c-step) } 61%,96% { opacity:1; fill: var(--c-hot) } 97%,100% { opacity:0; fill: var(--c-step) } }
+    .r4 { animation: r4 18s infinite; }
+    @keyframes r4 { 0%,15% { opacity:0; fill: var(--c-step) } 17%,65% { opacity:1; fill: var(--c-step) } 66%,96% { opacity:1; fill: var(--c-hot) } 97%,100% { opacity:0; fill: var(--c-step) } }
+    .r5 { animation: r5 18s infinite; }
+    @keyframes r5 { 0%,18% { opacity:0; fill: var(--c-step) } 20%,70% { opacity:1; fill: var(--c-step) } 71%,96% { opacity:1; fill: var(--c-done) } 97%,100% { opacity:0; fill: var(--c-step) } }
+    .ie1 { animation: ie1 18s infinite; }
+    @keyframes ie1 { 0%,29% { opacity:0; fill: var(--c-step) } 31%,52% { opacity:1; fill: var(--c-step) } 53%,96% { opacity:1; fill: var(--c-hot) } 97%,100% { opacity:0; fill: var(--c-step) } }
+
+    /* The index catches up after the records exist, so it is visibly derived
+       from them rather than written alongside as a second source of truth. */
+    .e0 { animation: e0 18s infinite; } @keyframes e0 { 0%,25% { opacity:0 } 27%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .e1 { animation: e1 18s infinite; } @keyframes e1 { 0%,29% { opacity:0 } 31%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    /* The read: search, seek, then scan forward over real records. */
+    .qry  { animation: qry 18s infinite; }  @keyframes qry { 0%,46% { opacity:0 } 48%,96% { opacity:1 } 97%,100% { opacity:0 } }
+    .jump { animation: jump 18s infinite; } @keyframes jump { 0%,55% { opacity:0 } 57%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    .found { animation: found 18s infinite; } @keyframes found { 0%,70% { opacity:0 } 72%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    .c1 { animation: c1 18s infinite; } @keyframes c1 { 0%,4% { opacity:0 } 6%,23% { opacity:1 } 24%,100% { opacity:0 } }
+    .c2 { animation: c2 18s infinite; } @keyframes c2 { 0%,24% { opacity:0 } 26%,44% { opacity:1 } 45%,100% { opacity:0 } }
+    .c3 { animation: c3 18s infinite; } @keyframes c3 { 0%,45% { opacity:0 } 47%,68% { opacity:1 } 69%,100% { opacity:0 } }
+    .c4 { animation: c4 18s infinite; } @keyframes c4 { 0%,69% { opacity:0 } 71%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .a0,.a1,.a2,.a3,.a4,.a5,.r3,.r4,.r5,.e0,.e1,.ie1,.qry,.jump,.found,
+      .c1,.c2,.c3,.c4 { animation: none; }
+      .a0,.a1,.a2,.a3,.a4,.a5,.r3,.r4,.r5,.e0,.e1,.ie1,.qry,.jump,.found { opacity: 1; }
+      .r3,.r4,.ie1 { fill: var(--c-hot); }
+      .r5 { fill: var(--c-done); }
+      .c3 { opacity: 1; }
+    }
+  </style>
+
+  <defs>
+    <marker id="lp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--edge-dim)"/>
+    </marker>
+    <marker id="ls" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">THE ACTIVE SEGMENT, AND THE INDEX DERIVED FROM IT</text>
+
+  <!-- ============================ the segment file =========================== -->
+  <text class="name" x="96" y="54">00000000000000000000.log</text>
+  <text class="mono" x="632" y="54" text-anchor="end">append here →</text>
+  <rect class="frame" x="94" y="62" width="540" height="52" rx="5"/>
+
+  <rect class="hdr" x="100" y="68" width="60" height="40" rx="3"/>
+  <text class="small" x="130" y="92" text-anchor="middle">header</text>
+  <text class="small" x="130" y="128" text-anchor="middle">32 B</text>
+
+  <rect class="rec fade a0"      x="164" y="68" width="78" height="40" rx="3"/>
+  <rect class="rec fade a1"      x="246" y="68" width="60" height="40" rx="3"/>
+  <rect class="rec fade a2"      x="310" y="68" width="92" height="40" rx="3"/>
+  <rect class="rec fade r3" x="406" y="68" width="68" height="40" rx="3"/>
+  <rect class="rec fade r4"      x="478" y="68" width="82" height="40" rx="3"/>
+  <rect class="rec fade r5"      x="564" y="68" width="62" height="40" rx="3"/>
+
+  <g class="fade a0"><text class="small" x="203" y="92" text-anchor="middle">rec 0</text><text class="small" x="203" y="128" text-anchor="middle">off 0</text></g>
+  <g class="fade a1"><text class="small" x="276" y="92" text-anchor="middle">rec 1</text><text class="small" x="276" y="128" text-anchor="middle">off 1</text></g>
+  <g class="fade a2"><text class="small" x="356" y="92" text-anchor="middle">rec 2</text><text class="small" x="356" y="128" text-anchor="middle">off 2</text></g>
+  <g class="fade a3"><text class="small" x="440" y="92" text-anchor="middle">rec 3</text><text class="small" x="440" y="128" text-anchor="middle">off 3</text></g>
+  <g class="fade a4"><text class="small" x="519" y="92" text-anchor="middle">rec 4</text><text class="small" x="519" y="128" text-anchor="middle">off 4</text></g>
+  <g class="fade a5"><text class="small" x="595" y="92" text-anchor="middle">rec 5</text><text class="small" x="595" y="128" text-anchor="middle">off 5</text></g>
+
+  <text class="mono" x="634" y="152" text-anchor="end">records back to back, never rewritten</text>
+
+  <!-- ============================= the index file ============================ -->
+  <text class="name" x="96" y="204">00000000000000000000.index</text>
+  <rect class="frame" x="94" y="212" width="200" height="46" rx="5"/>
+
+  <rect class="hdr" x="100" y="218" width="48" height="34" rx="3"/>
+  <text class="small" x="124" y="239" text-anchor="middle">hdr</text>
+
+  <rect class="ent fade e0" x="152" y="218" width="66" height="34" rx="3"/>
+  <g class="fade e0"><text class="small" x="185" y="233" text-anchor="middle">off 0</text><text class="small" x="185" y="246" text-anchor="middle">pos 32</text></g>
+
+  <rect class="ent fade ie1" x="222" y="218" width="66" height="34" rx="3"/>
+  <g class="fade e1"><text class="small" x="255" y="233" text-anchor="middle">off 3</text><text class="small" x="255" y="246" text-anchor="middle">pos 4128</text></g>
+
+  <path class="ptr fade e0" d="M 185 214 L 199 116" marker-end="url(#lp)"/>
+  <path class="ptr fade e1" d="M 258 214 L 434 116" marker-end="url(#lp)"/>
+
+  <text class="mono" x="310" y="230">one entry per 4 KiB of data —</text>
+  <text class="mono" x="310" y="248">not one per record</text>
+
+  <!-- ================================ the read =============================== -->
+  <g class="fade qry">
+    <text class="mono" x="310" y="316">read offset 5:</text>
+  </g>
+  <g class="fade jump">
+    <path class="seek" d="M 262 262 C 300 300, 420 300, 438 122" marker-end="url(#ls)"/>
+    <text class="small" x="420" y="316" style="fill: var(--accent)">seek to pos 4128, then scan forward</text>
+  </g>
+  <text class="mono fade found" x="595" y="176" text-anchor="middle" style="fill: var(--accent)">found</text>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body fade c1" x="450" y="344" text-anchor="middle">Each record is appended whole, with an offset one higher than the last. Nothing already written is touched.</text>
+  <text class="body fade c2" x="450" y="344" text-anchor="middle">An entry is emitted for the first record, then every 4 KiB — so the index stays small enough to keep in memory.</text>
+  <text class="body fade c3" x="450" y="344" text-anchor="middle">A read binary-searches for the greatest entry at or below the target, seeks there, and scans real records forward.</text>
+  <text class="body fade c4" x="450" y="344" text-anchor="middle">The scan is what answers. The entry only said where to start looking.</text>
+
+  <text class="body" x="450" y="378" text-anchor="middle">Because the index is only ever a starting position, it is never trusted: a missing, short or stale one</text>
+  <text class="body" x="450" y="396" text-anchor="middle">is rebuilt from the segment. That is why index files carry no checksums, and why skipping their fsync is safe.</text>
+</svg>
