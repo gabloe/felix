@@ -48,6 +48,16 @@ fn readiness(store: Arc<Fake>, ttl: Duration) -> Readiness {
     Readiness::with_limits(store, Duration::from_millis(50), ttl)
 }
 
+fn draining_readiness(
+    store: Arc<Fake>,
+    ttl: Duration,
+) -> (Readiness, felix_common::lifecycle::Readiness) {
+    let lifecycle = felix_common::lifecycle::Readiness::ready();
+    let readiness =
+        Readiness::with_lifecycle(lifecycle.clone(), store, Duration::from_millis(50), ttl);
+    (readiness, lifecycle)
+}
+
 #[tokio::test]
 async fn a_healthy_store_is_ready() {
     let store = Fake::new();
@@ -154,4 +164,68 @@ async fn a_failure_is_cached_for_the_same_window() {
         Ok(()),
         "recovery took longer than the window",
     );
+}
+
+// --- Draining ----------------------------------------------------------------
+
+/// **The point of the drain.** A shutting-down instance must leave rotation
+/// while it can still serve, not when its listener stops.
+#[tokio::test]
+async fn a_draining_instance_is_not_ready_even_with_a_healthy_store() {
+    let store = Fake::new();
+    let (readiness, lifecycle) = draining_readiness(Arc::clone(&store), Duration::ZERO);
+
+    assert_eq!(readiness.check().await, Ok(()));
+
+    lifecycle.begin_draining();
+    assert_eq!(readiness.check().await, Err(NotReady::Draining));
+}
+
+/// Draining is answered without asking the store. Nothing a database says
+/// changes whether this process is shutting down, and a struggling database
+/// must not delay an instance leaving rotation.
+#[tokio::test]
+async fn draining_does_not_query_the_store() {
+    let store = Fake::new();
+    let (readiness, lifecycle) = draining_readiness(Arc::clone(&store), Duration::ZERO);
+    lifecycle.begin_draining();
+
+    readiness.check().await.expect_err("draining");
+
+    assert_eq!(store.asked(), 0, "a drain check reached the store");
+}
+
+/// It is answered before the cache, too: an instance that had just cached a
+/// healthy answer would otherwise keep taking traffic for a whole window after
+/// it began shutting down.
+#[tokio::test]
+async fn draining_is_not_delayed_by_a_cached_healthy_answer() {
+    let store = Fake::new();
+    let ttl = Duration::from_secs(30);
+    let (readiness, lifecycle) = draining_readiness(Arc::clone(&store), ttl);
+    let now = Instant::now();
+
+    assert_eq!(readiness.check_at(now).await, Ok(()));
+    lifecycle.begin_draining();
+
+    assert_eq!(
+        readiness.check_at(now).await,
+        Err(NotReady::Draining),
+        "a cached ready answer outlived the drain",
+    );
+}
+
+/// The two endpoints read one flag, so they cannot disagree about whether this
+/// instance is in rotation.
+#[tokio::test]
+async fn the_metrics_flag_and_the_api_check_agree() {
+    let store = Fake::new();
+    let (readiness, lifecycle) = draining_readiness(Arc::clone(&store), Duration::ZERO);
+
+    assert!(lifecycle.is_ready());
+    assert_eq!(readiness.check().await, Ok(()));
+
+    lifecycle.begin_draining();
+    assert!(!lifecycle.is_ready());
+    assert!(readiness.check().await.is_err());
 }

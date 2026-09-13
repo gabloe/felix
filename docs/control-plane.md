@@ -613,6 +613,32 @@ per instance no matter how many probers there are. A transient outage clears on
 its own: readiness returns as soon as the store answers again, within the cache
 window.
 
+### During a shutdown
+
+On SIGTERM the instance **fails readiness first**, before it stops accepting
+connections. A load balancer sees the change and steers traffic away while this
+instance can still serve what it already has, which is what makes a rolling
+restart survivable.
+
+Draining is answered before the store is consulted and before the cache is read:
+
+- **Before the store**, because nothing a database says changes whether this
+  process is shutting down, and a struggling database must not delay an instance
+  leaving rotation.
+- **Before the cache**, because an instance that had just cached a healthy
+  answer would otherwise keep taking traffic for a whole cache window after it
+  began shutting down.
+
+Both `/v1/system/ready` and the metrics endpoint's `/ready` read **one flag**, so
+they cannot disagree about whether this instance is in rotation. The two
+*listeners* are shut down separately and deliberately: the metrics endpoint
+outlives the API drain, which is how an operator watches the drain happen.
+
+After readiness flips, in-flight requests are given
+`FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` to finish against one shared deadline covering
+every subsystem. Anything still running when it expires is aborted, and that is
+reported rather than logged as a clean drain.
+
 ## Open Questions
 - Snapshot cadence and maximum delta size.
 - Placement heuristics and rebalancing triggers.
