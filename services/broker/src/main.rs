@@ -243,7 +243,10 @@ where
         .context("configure subscriber queue depth")?
         .with_subscriber_queue_policy(config.subscriber_queue_policy);
     let broker = match consumer_groups {
-        Some(groups) => broker.with_consumer_groups(groups),
+        Some(groups) => broker.with_consumer_groups(
+            groups,
+            Duration::from_millis(config.group_visibility_timeout_ms),
+        ),
         None => broker,
     };
     let broker = match durable_storage.clone() {

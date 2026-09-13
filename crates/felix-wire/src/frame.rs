@@ -85,8 +85,20 @@ pub const FEATURE_REDIRECT: u32 = 0x0000_0002;
 /// rather than trying and losing the connection.
 pub const FEATURE_CACHE_DELETE: u32 = 0x0000_0004;
 
+/// The broker serves consumer groups: `group_poll`, `group_ack`, `group_nack`.
+///
+/// Advertised by a *broker*, like `FEATURE_CACHE_DELETE` and for the same
+/// reason: these are requests, and sending one to a broker that has no arm for
+/// it ends that broker's control loop rather than returning an error.
+///
+/// A broker with no durable storage never advertises it. A group whose position
+/// is lost on restart redelivers everything it had already finished, so there is
+/// nothing useful to offer.
+pub const FEATURE_CONSUMER_GROUP: u32 = 0x0000_0008;
+
 /// Every feature bit this version implements.
-pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY | FEATURE_REDIRECT | FEATURE_CACHE_DELETE;
+pub const KNOWN_FEATURES: u32 =
+    FEATURE_TOPOLOGY | FEATURE_REDIRECT | FEATURE_CACHE_DELETE | FEATURE_CONSUMER_GROUP;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

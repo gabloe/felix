@@ -705,6 +705,180 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("cache delete response dropped"))?
     }
 
+    /// Take up to `max_records` for a consumer group on one shard.
+    ///
+    /// An empty answer means nothing was available, not an error. Each record
+    /// carries the offset to pass back to [`Client::group_ack`] or
+    /// [`Client::group_nack`]; a record neither finished nor handed back is
+    /// redelivered once the broker's visibility timeout lapses.
+    ///
+    /// Only the broker that leads the shard can serve its groups, because the
+    /// claim and the acknowledgement have to reach the same place. Polling any
+    /// other broker is refused rather than answered emptily.
+    pub async fn group_poll(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        max_records: u32,
+    ) -> Result<Vec<felix_wire::GroupRecord>> {
+        self.require_groups()?;
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::GroupPoll {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard,
+            group: group.to_string(),
+            max_records,
+            request_id,
+        };
+        match self.group_round_trip(message, request_id).await? {
+            Message::GroupRecords { records, .. } => Ok(records),
+            other => Err(anyhow::anyhow!(
+                "unexpected answer to a group poll: {other:?}"
+            )),
+        }
+    }
+
+    /// Finish one record. Everything below the group's cursor stays finished.
+    pub async fn group_ack(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> Result<()> {
+        self.settle_group(tenant_id, namespace, stream, shard, group, offset, true)
+            .await
+    }
+
+    /// Hand one record back without finishing it. It is redelivered at once
+    /// rather than after the visibility timeout.
+    pub async fn group_nack(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> Result<()> {
+        self.settle_group(tenant_id, namespace, stream, shard, group, offset, false)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn settle_group(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+        finish: bool,
+    ) -> Result<()> {
+        self.require_groups()?;
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let build = |tenant_id: String, namespace: String, stream: String, group: String| {
+            if finish {
+                Message::GroupAck {
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                }
+            } else {
+                Message::GroupNack {
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                }
+            }
+        };
+        let message = build(
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+            group.to_string(),
+        );
+        match self.group_round_trip(message, request_id).await? {
+            Message::CacheOk { .. } => Ok(()),
+            other => Err(anyhow::anyhow!(
+                "unexpected answer to a group settle: {other:?}"
+            )),
+        }
+    }
+
+    /// One group request on a stream of its own.
+    ///
+    /// Not the cache workers' streams: those are pipelined against a response
+    /// shape that is always `CacheValue` or `CacheOk`, and a `GroupRecords`
+    /// arriving there would be matched against the wrong request. Same reason
+    /// `topology` opens its own.
+    async fn group_round_trip(&self, message: Message, request_id: u64) -> Result<Message> {
+        let connection = &self.event_connections[0];
+        let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        write_message(&mut send, message)
+            .await
+            .context("send group request")?;
+        let mut scratch = BytesMut::with_capacity(64 * 1024);
+        let answer =
+            read_message_with_limit(&mut recv, &mut scratch, self.runtime_config.max_frame_bytes)
+                .await?;
+        let _ = send.finish();
+        match answer {
+            Some(Message::Error { message }) => {
+                Err(anyhow::anyhow!("group request refused: {message}"))
+            }
+            Some(other) => {
+                // The exchange is one request on one stream, so an answer
+                // carrying a different id belongs to nothing this sent.
+                if let Some(id) = group_response_id(&other)
+                    && id != request_id
+                {
+                    return Err(anyhow::anyhow!(
+                        "group answer carried request id {id}, expected {request_id}",
+                    ));
+                }
+                Ok(other)
+            }
+            None => Err(anyhow::anyhow!("the broker closed the group stream")),
+        }
+    }
+
+    fn require_groups(&self) -> Result<()> {
+        if felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CONSUMER_GROUP) {
+            return Ok(());
+        }
+        // Refused here rather than sent. An unrecognised message type ends the
+        // broker's control loop, so probing one that predates this costs the
+        // connection instead of returning an error.
+        Err(anyhow::anyhow!(
+            "this broker does not serve consumer groups",
+        ))
+    }
+
     fn cache_worker(&self) -> (&CacheWorker, usize) {
         // Round-robin pick only.
         //
@@ -905,5 +1079,15 @@ impl std::fmt::Display for SubscribeCursorError {
                 self.requested, self.available
             ),
         }
+    }
+}
+
+/// The request id a group answer echoes, when it carries one.
+fn group_response_id(message: &Message) -> Option<u64> {
+    match message {
+        Message::GroupRecords { request_id, .. } | Message::CacheOk { request_id } => {
+            Some(*request_id)
+        }
+        _ => None,
     }
 }

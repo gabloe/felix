@@ -24,6 +24,14 @@ use serde::{Deserialize, Serialize};
 /// let decoded = Message::decode(frame).expect("decode");
 /// assert_eq!(message, decoded);
 /// ```
+/// One record handed to a consumer, with the offset it must acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRecord {
+    pub offset: u64,
+    #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
+    pub payload: Bytes,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
@@ -242,6 +250,50 @@ pub enum Message {
         key: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
+    },
+    // Take records for a consumer group, claimed until the visibility timeout.
+    //
+    // A poll rather than a subscription: a queue consumer takes work when it
+    // has capacity for it, and the broker cannot know that. Sent only to a
+    // broker that advertised `FEATURE_CONSUMER_GROUP`.
+    GroupPoll {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        // Most records to take. The broker may return fewer, including none.
+        max_records: u32,
+        request_id: u64,
+    },
+    // Records claimed by a `GroupPoll`, in offset order.
+    //
+    // Empty means nothing was available, which is an answer rather than an
+    // error: the log has no unclaimed records for this group right now.
+    GroupRecords {
+        records: Vec<GroupRecord>,
+        request_id: u64,
+    },
+    // Finish one record. Everything below the group's cursor stays finished.
+    GroupAck {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
+    },
+    // Hand one record back without finishing it, to be redelivered at once
+    // rather than after the visibility timeout.
+    GroupNack {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
     },
     // Cache delete; answered with `CacheValue` carrying whatever was removed.
     //

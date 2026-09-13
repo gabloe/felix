@@ -84,6 +84,8 @@ pub struct Broker {
     // means the broker is in-memory only and durable streams are rejected at
     // registration rather than silently downgraded.
     pub(crate) durable_storage: Option<DurableStorage>,
+    /// Serves consumer groups, when this broker keeps their positions.
+    pub(crate) group_reader: Option<Arc<crate::group_reader::GroupReader>>,
     /// Consumer-group positions, when this broker has somewhere to keep them.
     ///
     /// `None` without durable storage, and deliberately not faked in memory: a
@@ -247,6 +249,7 @@ impl Broker {
             next_stream_handle: AtomicU64::new(1),
             durable_storage: None,
             consumer_groups: None,
+            group_reader: None,
         }
     }
 
@@ -264,13 +267,23 @@ impl Broker {
         self.durable_storage.as_ref()
     }
 
-    /// Where consumer groups keep their positions.
+    /// Where consumer groups keep their positions, and how long a claim stands.
     pub fn with_consumer_groups(
         mut self,
         groups: Arc<crate::consumer_groups::ConsumerGroups>,
+        visibility: std::time::Duration,
     ) -> Self {
+        self.group_reader = Some(Arc::new(crate::group_reader::GroupReader::new(
+            Arc::clone(&groups),
+            visibility,
+        )));
         self.consumer_groups = Some(groups);
         self
+    }
+
+    /// Serves consumer groups, if this broker can.
+    pub fn group_reader(&self) -> Option<&Arc<crate::group_reader::GroupReader>> {
+        self.group_reader.as_ref()
     }
 
     /// Consumer-group positions, if this broker keeps any.

@@ -298,6 +298,16 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                                     | felix_wire::FEATURE_REDIRECT
                                             }
                                             None => 0,
+                                        }
+                                        // Only when there is somewhere to keep a
+                                        // group's position. Without durable
+                                        // storage a group would restart from the
+                                        // beginning on every reconnect, so
+                                        // offering the feature would invite work
+                                        // this broker cannot do.
+                                        | match broker.group_reader() {
+                                            Some(_) => felix_wire::FEATURE_CONSUMER_GROUP,
+                                            None => 0,
                                         },
                                 ),
                             },
@@ -814,6 +824,217 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(true);
                 }
             }
+            Message::GroupPoll {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                max_records,
+                request_id,
+            } => {
+                // A group is a read position over a stream, so it is authorized
+                // as a read of that stream.
+                if !authorize_stream_simple(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamSubscribe,
+                    &namespace,
+                    &stream,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                let polled = crate::group_ops::poll(
+                    &broker,
+                    &publish_ctx,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                    &group,
+                    max_records as usize,
+                )
+                .await;
+                let records = match polled {
+                    Ok(records) => records,
+                    Err(reason) => {
+                        // Refused rather than answered with an empty batch: a
+                        // consumer told "nothing available" would poll for ever
+                        // against a shard this broker does not lead.
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::Message(Message::Error {
+                                    message: format!("group poll not served: {reason}"),
+                                }),
+                            )
+                            .await,
+                            &ack_timeout_state,
+                            &ack_throttle_tx,
+                            &cancel_tx,
+                        )
+                        .await?;
+                        continue;
+                    }
+                };
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::GroupRecords {
+                            records,
+                            request_id,
+                        }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            Message::GroupAck {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                if !authorize_stream_simple(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamSubscribe,
+                    &namespace,
+                    &stream,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                if let Err(reason) = crate::group_ops::settle(
+                    &broker,
+                    &publish_ctx,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                    &group,
+                    offset,
+                    true,
+                )
+                .await
+                {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::Message(Message::Error {
+                                message: format!("group ack not served: {reason}"),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    continue;
+                }
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::CacheOk { request_id }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            Message::GroupNack {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                if !authorize_stream_simple(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamSubscribe,
+                    &namespace,
+                    &stream,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                if let Err(reason) = crate::group_ops::settle(
+                    &broker,
+                    &publish_ctx,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                    &group,
+                    offset,
+                    false,
+                )
+                .await
+                {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::Message(Message::Error {
+                                message: format!("group nack not served: {reason}"),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    continue;
+                }
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::CacheOk { request_id }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
             Message::CacheDelete {
                 tenant_id,
                 namespace,
@@ -929,7 +1150,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(true);
                 }
             }
-            Message::CacheValue { .. }
+            Message::GroupRecords { .. }
+            | Message::CacheValue { .. }
             | Message::CacheOk { .. }
             | Message::Event { .. }
             | Message::EventBatch { .. }

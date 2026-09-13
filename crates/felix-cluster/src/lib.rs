@@ -480,6 +480,65 @@ impl Cluster {
             .with_context(|| format!("publish to {stream} via {node_id}"))
     }
 
+    /// Poll a consumer group through a named broker, whether or not it leads
+    /// the shard.
+    ///
+    /// Going through a non-owner is the case worth testing: only the broker
+    /// that leads a shard may serve its groups, because the claim and the
+    /// acknowledgement have to reach the same in-flight state.
+    pub async fn group_poll_via(
+        &self,
+        node_id: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        max_records: u32,
+    ) -> Result<Vec<Vec<u8>>> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let records = client
+            .group_poll(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                shard,
+                group,
+                max_records,
+            )
+            .await?;
+        Ok(records
+            .into_iter()
+            .map(|record| record.payload.to_vec())
+            .collect())
+    }
+
+    /// Finish one record for a group, through a named broker.
+    pub async fn group_ack_via(
+        &self,
+        node_id: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> Result<()> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        client
+            .group_ack(
+                &self.tenant_id,
+                &self.namespace,
+                stream,
+                shard,
+                group,
+                offset,
+            )
+            .await
+    }
+
     /// Write one cache key through a named broker, whether or not it owns the
     /// key's shard.
     ///
