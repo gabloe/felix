@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789305181134,
+  "lastUpdate": 1789307590773,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6292,6 +6292,58 @@ window.BENCHMARK_DATA = {
             "range": "40143.45",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 563155.94\nmean: 541210.29\nstdev: 40143.45\ncv: 7.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dee8fa0cd8014d71a95d081b5febd1c833e213c5",
+          "message": "Bound redelivery, so a poison record cannot stall a queue (#311)\n\nFifth slice of #280, and the correctness gap the last one left open. A record\nthat always failed was handed out for ever and the group never got past it.\n\nA record delivered `FELIX_GROUP_MAX_ATTEMPTS` times without being finished is\ngiven up on: the offset is recorded as a dead letter and the group moves past\nit. Five by default — enough that a transient failure is retried through, few\nenough that a record which will never succeed is set aside quickly.\n\n## A dead letter is a pointer, not a copy\n\nThe record stays in the stream's log at the recorded offset, readable by an\nordinary replay. So dead-lettering duplicates nothing and loses nothing. What is\nstored is the one fact the log does not already hold: that this group tried this\nrecord and stopped.\n\nThat also sidesteps the awkward part of a conventional dead-letter queue — the\ndestination stream's shard may be led by another broker, and writing there from\nthe group path would need a cross-broker publish inside a poll.\n\nScoped per stream *and* group. Two groups reading one shard fail on different\nrecords, and merging their dead letters would have each answering for the\nother's.\n\n## Recorded before it is settled\n\nA crash between the two would otherwise leave the cursor past a record with\nnothing anywhere saying it was ever attempted — a silent skip rather than a\ndead letter. The tracker reports what it is giving up on and settles nothing\nitself, so the caller controls the order.\n\n## Attempts are reported to the consumer\n\nEach delivery carries its attempt number, so a retry can be handled differently\nfrom a first try. The count is dropped as soon as the record settles, so it is\nabout the record in play rather than the offset for ever.\n\n## Verification\n\nTwenty-three tracker tests and thirteen reader tests, including: a poison record\ngiven up on after the bound while the work behind it still flows, the record\nstill readable from the log at the dead-lettered offset, nacks counting toward\nthe bound the same as lapsed claims, a bound of zero still delivering once, and\ndead letters surviving a restart.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\n## What is left\n\nReading the dead-letter list is a broker-side call with no wire protocol yet,\nand delivery is still a plain poll with no long-polling. Both are noted in the\nstatus table, which stays a Target for those reasons rather than for a\ncorrectness gap.\n\nRefs #280",
+          "timestamp": "2026-09-13T06:50:36-07:00",
+          "tree_id": "236fdbed8eef9424b48728f45aaf75bd06127737",
+          "url": "https://github.com/gabloe/felix/commit/dee8fa0cd8014d71a95d081b5febd1c833e213c5"
+        },
+        "date": 1789307590052,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230673.34,
+            "range": "4219.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230673.34\nmean: 229486.97\nstdev: 4219.29\ncv: 1.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230673.34,
+            "range": "4219.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230673.34\nmean: 229486.97\nstdev: 4219.29\ncv: 1.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55272.57,
+            "range": "2588.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55272.57\nmean: 54538.83\nstdev: 2588.60\ncv: 4.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 552725.66,
+            "range": "25886.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 552725.66\nmean: 545388.24\nstdev: 25886.02\ncv: 4.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
