@@ -620,6 +620,14 @@ connections. A load balancer sees the change and steers traffic away while this
 instance can still serve what it already has, which is what makes a rolling
 restart survivable.
 
+Failing readiness first only helps if something has time to notice. A load
+balancer learns by polling, so the instance keeps serving for
+`FELIX_SHUTDOWN_PREDRAIN_MS` (default `5000`) after the flip and before it stops
+accepting; otherwise the listener closes in the same breath and requests already
+in flight toward it are refused at the socket. Size it above the prober's
+interval times its failure threshold. A second SIGTERM ends the wait, since an
+operator restarting by hand is not waiting on a load balancer.
+
 Draining is answered before the store is consulted and before the cache is read:
 
 - **Before the store**, because nothing a database says changes whether this
@@ -634,7 +642,7 @@ they cannot disagree about whether this instance is in rotation. The two
 *listeners* are shut down separately and deliberately: the metrics endpoint
 outlives the API drain, which is how an operator watches the drain happen.
 
-After readiness flips, in-flight requests are given
+After the hold-off, in-flight requests are given
 `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` to finish against one shared deadline covering
 every subsystem. Anything still running when it expires is aborted, and that is
 reported rather than logged as a clean drain.

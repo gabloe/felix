@@ -130,6 +130,24 @@ where
         }
     }
 
+    // Step 1b: keep serving while load balancers notice. Without this the
+    // listener closes in the same breath as the readiness flip, and anything
+    // still routed here is refused at the socket.
+    if config.shutdown_predrain_ms > 0 {
+        let hold_off = Duration::from_millis(config.shutdown_predrain_ms);
+        tracing::info!(
+            hold_off_ms = config.shutdown_predrain_ms,
+            "serving while unready so load balancers can drop this instance"
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(hold_off) => {}
+            // An operator who signals twice is asking to skip the wait.
+            _ = lifecycle::termination_signal() => {
+                tracing::info!("second termination signal; ending hold-off early");
+            }
+        }
+    }
+
     // Step 2: stop admitting, then drain in-flight requests against one shared
     // deadline covering every subsystem.
     let mut budget = DrainBudget::new(Duration::from_millis(config.shutdown_drain_timeout_ms));
@@ -278,6 +296,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -306,6 +325,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -339,6 +359,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -369,6 +390,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
@@ -398,6 +420,7 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            shutdown_predrain_ms: 0,
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };

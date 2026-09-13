@@ -24,12 +24,18 @@ The order matters more than the individual steps.
    balancers and the Kubernetes endpoints controller stop routing new traffic here
    while the process can still serve it, so clients are steered away from a healthy
    instance rather than discovering a broken one.
-2. **Stop admitting new work.** The broker cancels its QUIC accept loop; the
+2. **Keep serving while that propagates.** The control plane waits
+   `FELIX_SHUTDOWN_PREDRAIN_MS` (default `5000`) before it stops accepting, still
+   answering normally the whole time. Without this the listener closes in the same
+   breath as the readiness flip, and a load balancer that has not polled yet is
+   still sending requests to a socket that has gone away. A second SIGTERM ends the
+   wait early. The broker does not have this yet — see below.
+3. **Stop admitting new work.** The broker cancels its QUIC accept loop; the
    control plane stops accepting new HTTP connections. Already-accepted work is
    untouched.
-3. **Drain, bounded by a deadline.** In-flight connections and requests finish on
+4. **Drain, bounded by a deadline.** In-flight connections and requests finish on
    their own.
-4. **Force-cancel the remainder and name it.** Anything still running when the
+5. **Force-cancel the remainder and name it.** Anything still running when the
    deadline expires is aborted and logged by name at WARN.
 
 `/live` stays `200` throughout. A draining process is alive and working correctly;
@@ -67,10 +73,19 @@ WARN drain deadline expired; forcing cancellation elapsed_ms=25001 deadline_ms=2
 ## Kubernetes configuration
 
 Readiness propagation is not instant. The endpoints controller has to observe the
-`/ready` failure and update every kube-proxy before traffic actually stops arriving,
-and that takes a few seconds. The process cannot wait for something it has no
-visibility into, so use a `preStop` hook to hold the pod open while propagation
-happens — this is the standard pattern, not a workaround for a gap in Felix:
+pod going `Terminating` and update every kube-proxy before traffic actually stops
+arriving, and that takes a few seconds.
+
+There are two ways to cover that gap, and you want one of them, not both stacked:
+
+- A **`preStop` hook** that sleeps before SIGTERM is delivered. This is the standard
+  Kubernetes pattern and it works for the broker and the control plane alike.
+- **`FELIX_SHUTDOWN_PREDRAIN_MS`** on the control plane, which does the same waiting
+  after SIGTERM, with readiness already false. Prefer this outside Kubernetes, where
+  nothing removes an instance from rotation except its readiness probe failing and
+  there is no preStop hook to configure.
+
+The example below uses `preStop`, so it turns the in-process hold-off off:
 
 ```yaml
 spec:
@@ -81,6 +96,9 @@ spec:
         # Leaves ~15s of headroom under the 30s grace period, after the preStop sleep.
         - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
           value: "20000"
+        # preStop already covers propagation; waiting twice only shortens the drain.
+        - name: FELIX_SHUTDOWN_PREDRAIN_MS
+          value: "0"
       lifecycle:
         preStop:
           exec:
@@ -98,8 +116,8 @@ spec:
           port: 9090
 ```
 
-Budget the total: `preStop` sleep + `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` must fit
-inside `terminationGracePeriodSeconds`, or SIGKILL arrives mid-drain and you are
+Budget the total: `preStop` sleep + `FELIX_SHUTDOWN_PREDRAIN_MS` +
+`FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` must fit inside `terminationGracePeriodSeconds`, or SIGKILL arrives mid-drain and you are
 back to dropping in-flight work.
 
 ## What is not covered yet
@@ -115,7 +133,13 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
   contract; they end when their connection task ends.
 - The "an acknowledged publish is never lost solely because SIGTERM arrived"
   guarantee is not yet verified by a test.
-- Coverage is at the accept-loop and readiness level
+- `FELIX_SHUTDOWN_PREDRAIN_MS` is control-plane only. The broker still closes its
+  accept loop immediately after the readiness flip and depends on a `preStop` hook
+  to cover propagation.
+- Broker coverage is at the accept-loop and readiness level
   (`services/broker/tests/graceful_shutdown.rs`). There is no process-level test
-  that spawns the real binary, sends it SIGTERM under active publish/subscribe
-  traffic, and asserts a bounded clean exit.
+  that spawns the real broker binary, sends it SIGTERM under active
+  publish/subscribe traffic, and asserts a bounded clean exit. The control plane
+  has the process-level half (`services/controlplane/tests/main_runtime.rs` sends
+  the real binary a SIGTERM and asserts the ordering above) but not the
+  under-load half.
