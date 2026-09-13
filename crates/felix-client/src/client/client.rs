@@ -724,6 +724,38 @@ impl Client {
         group: &str,
         max_records: u32,
     ) -> Result<Vec<felix_wire::GroupRecord>> {
+        self.group_poll_wait(
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+            group,
+            max_records,
+            std::time::Duration::ZERO,
+        )
+        .await
+    }
+
+    /// [`Client::group_poll`], but the broker may hold the request open for up
+    /// to `wait` waiting for work.
+    ///
+    /// An empty answer still means nothing was available — the wait bounds how
+    /// long the broker looks, not whether it answers. The broker caps the wait,
+    /// so asking for an hour does not get one.
+    ///
+    /// This is how a consumer idles without spinning: one request that waits
+    /// costs one round trip, where repeated immediate polls cost one each.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn group_poll_wait(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        max_records: u32,
+        wait: std::time::Duration,
+    ) -> Result<Vec<felix_wire::GroupRecord>> {
         self.require_groups()?;
         let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
         let message = Message::GroupPoll {
@@ -733,6 +765,7 @@ impl Client {
             shard,
             group: group.to_string(),
             max_records,
+            wait_ms: wait.as_millis() as u64,
             request_id,
         };
         match self.group_round_trip(message, request_id).await? {

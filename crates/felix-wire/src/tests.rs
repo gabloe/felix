@@ -653,6 +653,7 @@ fn message_cache_operations() {
         shard: 3,
         group: "workers".to_string(),
         max_records: 32,
+        wait_ms: 5_000,
         request_id: 42,
     };
     let frame = message.encode().expect("encode");
@@ -731,6 +732,15 @@ fn message_cache_operations() {
         ack.encode().expect("encode"),
         nack.encode().expect("encode"),
     );
+
+    // A poll from a client that predates long-polling asks for no wait, which
+    // is the behaviour every broker had before it.
+    let legacy = r#"{"type":"group_poll","tenant_id":"t1","namespace":"ns",
+        "stream":"jobs","shard":0,"group":"g","max_records":1,"request_id":1}"#;
+    match serde_json::from_str::<Message>(legacy).expect("legacy poll") {
+        Message::GroupPoll { wait_ms, .. } => assert_eq!(wait_ms, 0),
+        other => panic!("expected a group poll, got {other:?}"),
+    }
 
     // A record delivered by a broker that does not report attempts reads as
     // unknown rather than as a first attempt.

@@ -684,3 +684,79 @@ async fn redriving_an_offset_that_is_not_a_dead_letter_is_refused() -> Result<()
     running.stop().await;
     Ok(())
 }
+
+/// A waiting poll returns as soon as work arrives, rather than after its full
+/// wait. This is what lets a consumer idle on one request instead of spinning.
+#[tokio::test]
+async fn a_waiting_poll_wakes_when_work_arrives() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+    let publisher = running.client().await?.publisher().await?;
+
+    let started = std::time::Instant::now();
+    let waiting = tokio::spawn(async move {
+        client
+            .group_poll_wait(
+                "t1",
+                "default",
+                QUEUE,
+                0,
+                "workers",
+                10,
+                Duration::from_secs(10),
+            )
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    publisher
+        .publish(
+            "t1",
+            "default",
+            QUEUE,
+            b"late".to_vec(),
+            felix_wire::AckMode::PerMessage,
+        )
+        .await?;
+
+    let claimed = waiting.await??;
+    assert_eq!(claimed.len(), 1, "the waiting poll missed the record");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the poll waited out its budget instead of waking: {:?}",
+        started.elapsed(),
+    );
+    running.stop().await;
+    Ok(())
+}
+
+/// A wait that finds nothing answers empty rather than hanging or erroring.
+#[tokio::test]
+async fn a_waiting_poll_with_no_work_answers_empty() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+
+    let started = std::time::Instant::now();
+    let claimed = running
+        .client()
+        .await?
+        .group_poll_wait(
+            "t1",
+            "default",
+            QUEUE,
+            0,
+            "workers",
+            10,
+            Duration::from_millis(200),
+        )
+        .await?;
+
+    assert!(claimed.is_empty());
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "the poll returned before its wait was up",
+    );
+    running.stop().await;
+    Ok(())
+}

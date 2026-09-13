@@ -9,7 +9,7 @@
 //! no forwarding: unlike a cache operation, a poll returns records the consumer
 //! then has to acknowledge, and relaying that through a second broker would put
 //! the claim and the acknowledgement on different machines.
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use felix_broker::Broker;
 use felix_broker::group_reader::GroupKey;
@@ -80,7 +80,18 @@ fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: 
     }
 }
 
-/// Take up to `max_records` for a group.
+/// How often a waiting poll re-checks for work.
+///
+/// The check is a read lock and a field read — no I/O, no allocation — so the
+/// cost lands on the consumer that chose to wait and never on a publisher. An
+/// append notification would wake it sooner, but only by adding work to the
+/// publish path on behalf of a consumer that is by definition idle.
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Take up to `max_records` for a group, waiting up to `wait` for work.
+///
+/// The wait happens on a stream of the client's own, so holding it open blocks
+/// nothing else on that connection.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn poll(
     broker: &Broker,
@@ -91,21 +102,39 @@ pub(crate) async fn poll(
     shard: u32,
     group: &str,
     max_records: usize,
+    wait: Duration,
 ) -> Result<Vec<GroupRecord>, String> {
     let (reader, log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
-    let claimed = reader
-        .poll(&key, &log, max_records, Instant::now())
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(claimed
-        .into_iter()
-        .map(|claimed| GroupRecord {
-            offset: claimed.offset,
-            payload: claimed.payload,
-            attempts: claimed.attempts,
-        })
-        .collect())
+    let deadline = Instant::now() + wait;
+
+    loop {
+        let claimed = reader
+            .poll(&key, &log, max_records, Instant::now())
+            .await
+            .map_err(|err| err.to_string())?;
+        if !claimed.is_empty() {
+            return Ok(claimed
+                .into_iter()
+                .map(|claimed| GroupRecord {
+                    offset: claimed.offset,
+                    payload: claimed.payload,
+                    attempts: claimed.attempts,
+                })
+                .collect());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            // An empty answer, which is an answer: nothing was available in the
+            // time the consumer was willing to wait for it.
+            return Ok(Vec::new());
+        }
+        // Ownership is re-checked every round, because the shard can move while
+        // a poll is waiting. Serving one after that would hand out records the
+        // new owner is handing out too.
+        owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
+        tokio::time::sleep(WAIT_POLL_INTERVAL.min(deadline - now)).await;
+    }
 }
 
 /// Offsets this group gave up on.
