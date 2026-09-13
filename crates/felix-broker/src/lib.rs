@@ -27,6 +27,7 @@ pub mod consumer_groups;
 mod delivery;
 pub mod durable;
 mod error;
+pub mod group_delivery;
 mod keys;
 mod registry;
 pub mod replication;
