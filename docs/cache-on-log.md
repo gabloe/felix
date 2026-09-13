@@ -139,13 +139,34 @@ Three details are load-bearing:
 - **A failed read is an error, not a miss.** Reporting a miss would let a client
   conclude a key does not exist when it does, on the owner.
 
-## What this does not do yet
+## Replication
 
-**Replication.** A cache's shards are placed with a replication factor, and the
-driver does not yet ship them: it resolves a shard through `open_stream`, and a
-cache's log is under the cache root. Losing the broker that owns a cache shard
-loses that shard's contents until it returns. This is the one remaining gap
-between a cache and a stream.
+A cache's shards are replicated by the machinery that replicates a stream's: the
+leader ships records at their offsets and a follower checks each batch begins at
+its tail. Everything that makes that safe — the generation check, the gap and
+divergence answers, bootstrapping a follower whose history has been trimmed — is
+the same code, because a cache shard *is* a log.
+
+Three things had to be true for that to work.
+
+**Offsets never rewind.** Compaction appends the live set at the tail rather than
+renumbering from zero, or a leader's offset 0 would be a different record from
+every follower's.
+
+**The kind travels with the batch.** `ReplicateCacheRecords` is a distinct
+message kind with the same body as `ReplicateRecords`, so a follower cannot
+append a cache's records into the stream of the same name. A separate kind
+rather than a field on the shard reference, because the internal protocol
+evolves by adding kinds — widening an existing body needs a version bump, and a
+version bump makes a rolling upgrade impossible.
+
+**The index catches up.** A follower is shipped records without going through
+`put`, so its in-memory index knows nothing about them. The index now reads
+forward to the log's tail whenever it is behind, rather than building once and
+trusting itself; without that, a promoted follower answers misses for values it
+is holding on disk.
+
+## What this does not do yet
 
 **Delete on the wire.** The storage layer and the internal protocol both carry
 delete; the client protocol does not.

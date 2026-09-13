@@ -819,6 +819,60 @@ impl Broker {
         Ok(handle.state.subscriber_count())
     }
 
+    /// The log for one shard, whichever kind of thing it belongs to.
+    ///
+    /// The single place replication resolves a shard's log. A stream's lives in
+    /// the durable-storage provider and a cache's belongs to the cache store,
+    /// and getting that wrong writes a stream log for a cache — an empty
+    /// directory nothing reads, while the real records go unreplicated.
+    ///
+    /// Not cached by the caller: a cache shard's log is replaced by compaction,
+    /// so a handle held across one goes stale.
+    pub async fn shard_log(
+        &self,
+        is_cache: bool,
+        tenant_id: &str,
+        namespace: &str,
+        name: &str,
+        shard: u32,
+    ) -> Option<crate::durable::StreamLog> {
+        if is_cache {
+            return self
+                .cache
+                .shard_log(tenant_id, namespace, name, shard)
+                .await
+                .map(crate::durable::StreamLog::from_log);
+        }
+        self.durable_storage
+            .as_ref()?
+            .open_stream(tenant_id, namespace, name, shard)
+            .ok()
+    }
+
+    /// [`Broker::shard_log`], creating the log at `base_offset` when this broker
+    /// has never held the shard. The base it comes back with is the authority.
+    pub async fn shard_log_at(
+        &self,
+        is_cache: bool,
+        tenant_id: &str,
+        namespace: &str,
+        name: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Option<crate::durable::StreamLog> {
+        if is_cache {
+            return self
+                .cache
+                .shard_log_at(tenant_id, namespace, name, shard, base_offset)
+                .await
+                .map(crate::durable::StreamLog::from_log);
+        }
+        self.durable_storage
+            .as_ref()?
+            .open_stream_at(tenant_id, namespace, name, shard, base_offset)
+            .ok()
+    }
+
     pub fn cache(&self) -> &(dyn StorageApi + Send) {
         // Expose the cache for demos and integrations.
         self.cache.as_ref()

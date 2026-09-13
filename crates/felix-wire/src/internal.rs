@@ -60,6 +60,8 @@ pub enum Kind {
     ForwardCacheOp = 11,
     ForwardCacheOk = 12,
     ForwardCacheError = 13,
+    ReplicateCacheRecords = 14,
+    ReplicateCacheBootstrap = 15,
 }
 
 impl Kind {
@@ -80,6 +82,8 @@ impl Kind {
             11 => Ok(Kind::ForwardCacheOp),
             12 => Ok(Kind::ForwardCacheOk),
             13 => Ok(Kind::ForwardCacheError),
+            14 => Ok(Kind::ReplicateCacheRecords),
+            15 => Ok(Kind::ReplicateCacheBootstrap),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -405,6 +409,17 @@ pub enum InternalMessage {
     ForwardCacheOp(ForwardCacheOp),
     ForwardCacheOk(ForwardCacheOk),
     ForwardCacheError(ForwardCacheError),
+    /// The same body as [`ReplicateRecords`], for a shard that belongs to a
+    /// cache rather than a stream.
+    ///
+    /// A separate kind rather than a field on `ShardRef`, because the protocol
+    /// evolves by adding kinds: widening an existing body would need a version
+    /// bump, and a version bump makes a rolling upgrade impossible. An old peer
+    /// answers this with "unknown kind", which is a typed refusal — the leader
+    /// stops replicating that shard and says so, rather than shipping a cache's
+    /// records into a stream's log.
+    ReplicateCacheRecords(ReplicateRecords),
+    ReplicateCacheBootstrap(ReplicateBootstrap),
 }
 
 impl InternalMessage {
@@ -423,6 +438,8 @@ impl InternalMessage {
             Self::ForwardCacheOp(_) => Kind::ForwardCacheOp,
             Self::ForwardCacheOk(_) => Kind::ForwardCacheOk,
             Self::ForwardCacheError(_) => Kind::ForwardCacheError,
+            Self::ReplicateCacheRecords(_) => Kind::ReplicateCacheRecords,
+            Self::ReplicateCacheBootstrap(_) => Kind::ReplicateCacheBootstrap,
         }
     }
 
@@ -446,6 +463,8 @@ impl InternalMessage {
             Self::ForwardCacheOp(m) => m.correlation_id,
             Self::ForwardCacheOk(m) => m.correlation_id,
             Self::ForwardCacheError(m) => m.correlation_id,
+            Self::ReplicateCacheRecords(m) => m.correlation_id,
+            Self::ReplicateCacheBootstrap(m) => m.correlation_id,
         }
     }
 
@@ -494,7 +513,7 @@ impl InternalMessage {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.node_id)?;
             }
-            Self::ReplicateRecords(m) => {
+            Self::ReplicateRecords(m) | Self::ReplicateCacheRecords(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.shard.tenant_id)?;
                 put_str(&mut body, &m.shard.namespace)?;
@@ -522,7 +541,7 @@ impl InternalMessage {
                 body.put_u64(m.expected_offset);
                 put_str(&mut body, &m.detail)?;
             }
-            Self::ReplicateBootstrap(m) => {
+            Self::ReplicateBootstrap(m) | Self::ReplicateCacheBootstrap(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.shard.tenant_id)?;
                 put_str(&mut body, &m.shard.namespace)?;
@@ -681,7 +700,7 @@ impl InternalMessage {
                 expect_empty(&body)?;
                 Ok(Self::HelloOk(message))
             }
-            Kind::ReplicateRecords => {
+            Kind::ReplicateRecords | Kind::ReplicateCacheRecords => {
                 let correlation_id = take_u64(&mut body)?;
                 let tenant_id = take_str(&mut body)?;
                 let namespace = take_str(&mut body)?;
@@ -707,7 +726,7 @@ impl InternalMessage {
                 }
                 expect_empty(&body)?;
 
-                Ok(Self::ReplicateRecords(ReplicateRecords {
+                let message = ReplicateRecords {
                     correlation_id,
                     shard: ShardRef {
                         tenant_id,
@@ -719,7 +738,11 @@ impl InternalMessage {
                     first_offset,
                     checksum,
                     payloads,
-                }))
+                };
+                Ok(match header.kind {
+                    Kind::ReplicateCacheRecords => Self::ReplicateCacheRecords(message),
+                    _ => Self::ReplicateRecords(message),
+                })
             }
             Kind::ReplicateOk => {
                 let message = ReplicateOk {
@@ -739,7 +762,7 @@ impl InternalMessage {
                 expect_empty(&body)?;
                 Ok(Self::ReplicateError(message))
             }
-            Kind::ReplicateBootstrap => {
+            Kind::ReplicateBootstrap | Kind::ReplicateCacheBootstrap => {
                 let message = ReplicateBootstrap {
                     correlation_id: take_u64(&mut body)?,
                     shard: ShardRef {
@@ -752,7 +775,10 @@ impl InternalMessage {
                     base_offset: take_u64(&mut body)?,
                 };
                 expect_empty(&body)?;
-                Ok(Self::ReplicateBootstrap(message))
+                Ok(match header.kind {
+                    Kind::ReplicateCacheBootstrap => Self::ReplicateCacheBootstrap(message),
+                    _ => Self::ReplicateBootstrap(message),
+                })
             }
             Kind::ForwardCacheOp => {
                 let correlation_id = take_u64(&mut body)?;

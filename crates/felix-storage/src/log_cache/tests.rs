@@ -447,3 +447,54 @@ async fn the_offset_space_survives_compaction_and_a_restart() {
         cache.shutdown().await.expect("shutdown");
     }
 }
+
+/// Records can reach a cache's log without going through `put`.
+///
+/// That is exactly what replication does to a follower: it appends to the log
+/// directly, and the follower may later be promoted and asked to serve what it
+/// was shipped. An index built once and trusted forever would answer those
+/// reads as misses — a value that is on disk, reported absent.
+#[tokio::test]
+async fn the_index_catches_up_with_records_appended_behind_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    // Read once so the index exists and believes it is complete.
+    cache
+        .put_checked(T, NS, C, 0, "first", Bytes::from_static(b"1"), None)
+        .await
+        .expect("put");
+    assert_eq!(
+        cache.get_checked(T, NS, C, 0, "first").await.expect("get"),
+        Some(Bytes::from_static(b"1")),
+    );
+
+    // Now append straight to the log, the way a replica is shipped records.
+    let log = cache.shard_log(T, NS, C, 0).await.expect("shard log");
+    let payload = CacheOp::Put {
+        key: "shipped".to_string(),
+        value: Bytes::from_static(b"2"),
+        expires_at_millis: 0,
+    }
+    .encode();
+    log.append(&[AppendRecord {
+        payload,
+        timestamp_micros: 0,
+    }])
+    .await
+    .expect("append");
+
+    assert_eq!(
+        cache
+            .get_checked(T, NS, C, 0, "shipped")
+            .await
+            .expect("get"),
+        Some(Bytes::from_static(b"2")),
+        "a record on disk was reported absent",
+    );
+    // And the record that was already indexed is still there.
+    assert_eq!(
+        cache.get_checked(T, NS, C, 0, "first").await.expect("get"),
+        Some(Bytes::from_static(b"1")),
+    );
+}

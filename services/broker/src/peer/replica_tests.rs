@@ -118,7 +118,7 @@ async fn a_follower_at_the_leaders_epoch_stores_the_batch() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
 
-    let answer = handler.apply(batch(4, 0, &["a", "b"])).await;
+    let answer = handler.apply(batch(4, 0, &["a", "b"]), false).await;
 
     match answer {
         InternalMessage::ReplicateOk(ok) => {
@@ -138,7 +138,7 @@ async fn a_leader_at_an_older_epoch_is_fenced() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 5));
 
-    let answer = handler.apply(batch(4, 0, &["a"])).await;
+    let answer = handler.apply(batch(4, 0, &["a"]), false).await;
 
     let refused = refusal(&answer);
     assert_eq!(refused.code, ErrorCode::FencedEpoch);
@@ -155,7 +155,7 @@ async fn a_follower_behind_the_epoch_refuses_retryably() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 3));
 
-    let answer = handler.apply(batch(4, 0, &["a"])).await;
+    let answer = handler.apply(batch(4, 0, &["a"]), false).await;
 
     let refused = refusal(&answer);
     assert_eq!(refused.code, ErrorCode::StaleRoute);
@@ -169,7 +169,7 @@ async fn a_broker_outside_the_replica_set_is_refused() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&["broker-c"], 4));
 
-    let answer = handler.apply(batch(4, 0, &["a"])).await;
+    let answer = handler.apply(batch(4, 0, &["a"]), false).await;
 
     assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
 }
@@ -187,7 +187,7 @@ async fn an_unknown_shard_is_treated_as_a_late_watch() {
     ));
     let handler = ReplicaHandler::new(broker, router);
 
-    let answer = handler.apply(batch(4, 0, &["a"])).await;
+    let answer = handler.apply(batch(4, 0, &["a"]), false).await;
 
     let refused = refusal(&answer);
     assert_eq!(refused.code, ErrorCode::StaleRoute);
@@ -200,9 +200,9 @@ async fn an_unknown_shard_is_treated_as_a_late_watch() {
 async fn a_gap_names_the_offset_to_resume_from() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
-    handler.apply(batch(4, 0, &["a", "b"])).await;
+    handler.apply(batch(4, 0, &["a", "b"]), false).await;
 
-    let answer = handler.apply(batch(4, 7, &["h"])).await;
+    let answer = handler.apply(batch(4, 7, &["h"]), false).await;
 
     let refused = refusal(&answer);
     assert_eq!(refused.code, ErrorCode::LogGap);
@@ -215,9 +215,9 @@ async fn a_gap_names_the_offset_to_resume_from() {
 async fn a_conflict_is_reported_as_divergence() {
     let (broker, _dir) = broker_with_storage().await;
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
-    handler.apply(batch(4, 0, &["a", "b"])).await;
+    handler.apply(batch(4, 0, &["a", "b"]), false).await;
 
-    let answer = handler.apply(batch(4, 0, &["a", "DIFFERENT"])).await;
+    let answer = handler.apply(batch(4, 0, &["a", "DIFFERENT"]), false).await;
 
     let refused = refusal(&answer);
     assert_eq!(refused.code, ErrorCode::LogConflict);
@@ -232,7 +232,7 @@ async fn a_replica_without_durable_storage_refuses() {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
 
-    let answer = handler.apply(batch(4, 0, &["a"])).await;
+    let answer = handler.apply(batch(4, 0, &["a"]), false).await;
 
     assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
 }
@@ -248,7 +248,7 @@ async fn every_answer_carries_the_requests_correlation_id() {
     for generation in [3, 4, 5] {
         let mut request = batch(generation, 0, &["a"]);
         request.correlation_id = 99;
-        assert_eq!(handler.apply(request).await.correlation_id(), 99);
+        assert_eq!(handler.apply(request, false).await.correlation_id(), 99);
     }
 }
 
@@ -280,7 +280,7 @@ mod bootstrap {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
 
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         match answer {
             InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE),
@@ -300,9 +300,9 @@ mod bootstrap {
     async fn records_after_a_bootstrap_land_at_the_leaders_offsets() {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
-        handler.bootstrap(offer(4, BASE)).await;
+        handler.bootstrap(offer(4, BASE), false).await;
 
-        let answer = handler.apply(batch(4, BASE, &["a", "b"])).await;
+        let answer = handler.apply(batch(4, BASE, &["a", "b"]), false).await;
 
         match answer {
             InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE + 2),
@@ -317,9 +317,9 @@ mod bootstrap {
     async fn a_replica_holding_records_refuses_to_be_rebased() {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
-        handler.apply(batch(4, 0, &["a", "b"])).await;
+        handler.apply(batch(4, 0, &["a", "b"]), false).await;
 
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         let refused = refusal(&answer);
         assert_eq!(refused.code, ErrorCode::LogConflict);
@@ -333,8 +333,8 @@ mod bootstrap {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
 
-        handler.bootstrap(offer(4, BASE)).await;
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        handler.bootstrap(offer(4, BASE), false).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         match answer {
             InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, BASE),
@@ -350,7 +350,7 @@ mod bootstrap {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 5));
 
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         assert_eq!(refusal(&answer).code, ErrorCode::FencedEpoch);
     }
@@ -361,7 +361,7 @@ mod bootstrap {
         let (broker, _dir) = broker_with_storage().await;
         let handler = ReplicaHandler::new(broker, router_with(&["broker-c"], 4));
 
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
     }
@@ -372,7 +372,7 @@ mod bootstrap {
         let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
         let handler = ReplicaHandler::new(broker, router_with(&[LOCAL], 4));
 
-        let answer = handler.bootstrap(offer(4, BASE)).await;
+        let answer = handler.bootstrap(offer(4, BASE), false).await;
 
         assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
     }

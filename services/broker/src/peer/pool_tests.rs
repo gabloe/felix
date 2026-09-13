@@ -357,10 +357,13 @@ mod correlation {
             InternalMessage::NotLeader(m) => m.correlation_id,
             InternalMessage::Hello(m) => m.correlation_id,
             InternalMessage::HelloOk(m) => m.correlation_id,
-            InternalMessage::ReplicateRecords(m) => m.correlation_id,
+            InternalMessage::ReplicateRecords(m) | InternalMessage::ReplicateCacheRecords(m) => {
+                m.correlation_id
+            }
             InternalMessage::ReplicateOk(m) => m.correlation_id,
             InternalMessage::ReplicateError(m) => m.correlation_id,
-            InternalMessage::ReplicateBootstrap(m) => m.correlation_id,
+            InternalMessage::ReplicateBootstrap(m)
+            | InternalMessage::ReplicateCacheBootstrap(m) => m.correlation_id,
         }
     }
 

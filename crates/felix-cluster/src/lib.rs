@@ -198,6 +198,17 @@ impl CacheSpec {
             replication_factor: 1,
         }
     }
+
+    /// Replicated across `replication_factor` brokers, leader included. What a
+    /// failover test needs: a cache whose contents are on more than one broker
+    /// before its leader is killed.
+    pub fn replicated(name: impl Into<String>, shards: u32, replication_factor: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor,
+        }
+    }
 }
 
 /// How to build a cluster.

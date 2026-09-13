@@ -134,6 +134,7 @@ pub async fn ship_once<R: PeerRequester>(
     requester: &R,
     log: &StreamLog,
     shard: &ShardRef,
+    is_cache: bool,
     cursor: &mut FollowerCursor,
     max_batch_bytes: usize,
 ) -> Progress {
@@ -165,7 +166,7 @@ pub async fn ship_once<R: PeerRequester>(
                 oldest,
                 "the follower is below this leader's oldest record; offering a bootstrap",
             );
-            return offer_bootstrap(requester, shard, cursor, oldest).await;
+            return offer_bootstrap(requester, shard, is_cache, cursor, oldest).await;
         }
         Err(err) => {
             // The leader could not read its own log. Nothing is wrong with the
@@ -187,14 +188,22 @@ pub async fn ship_once<R: PeerRequester>(
 
     let first_offset = records[0].offset;
     let payloads: Vec<Bytes> = records.into_iter().map(|record| record.payload).collect();
-    let request = InternalMessage::ReplicateRecords(ReplicateRecords {
+    let batch = ReplicateRecords {
         // The pool assigns the real id; it owns the connection this lands on.
         correlation_id: 0,
         shard: shard.clone(),
         first_offset,
         checksum: batch_checksum(&payloads),
         payloads,
-    });
+    };
+    // The kind is in the message kind, not in the shard reference: the two
+    // bodies are identical, and a follower that guessed wrong would append a
+    // cache's records to the stream of the same name.
+    let request = if is_cache {
+        InternalMessage::ReplicateCacheRecords(batch)
+    } else {
+        InternalMessage::ReplicateRecords(batch)
+    };
 
     let answer = match requester
         .request(&cursor.node_id, cursor.addr, request)
@@ -251,15 +260,21 @@ pub async fn ship_once<R: PeerRequester>(
 async fn offer_bootstrap<R: PeerRequester>(
     requester: &R,
     shard: &ShardRef,
+    is_cache: bool,
     cursor: &mut FollowerCursor,
     base_offset: u64,
 ) -> Progress {
-    let request = InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+    let offer = ReplicateBootstrap {
         // The pool assigns the real id; it owns the connection this lands on.
         correlation_id: 0,
         shard: shard.clone(),
         base_offset,
-    });
+    };
+    let request = if is_cache {
+        InternalMessage::ReplicateCacheBootstrap(offer)
+    } else {
+        InternalMessage::ReplicateBootstrap(offer)
+    };
     let answer = match requester
         .request(&cursor.node_id, cursor.addr, request)
         .await

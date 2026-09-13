@@ -122,6 +122,15 @@ pub struct StreamLog {
 }
 
 impl StreamLog {
+    /// Wrap a log this handle did not open.
+    ///
+    /// For a cache shard, whose log belongs to the cache store rather than to
+    /// the stream provider. Everything replication does — tail, read, apply,
+    /// divergence — is the same work on either, so it is the same type.
+    pub fn from_log(log: DiskLog) -> Self {
+        Self { log }
+    }
+
     /// Write a publish batch and return its offsets *before* waiting for
     /// durability.
     ///

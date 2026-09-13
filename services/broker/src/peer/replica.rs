@@ -94,44 +94,45 @@ impl ReplicaHandler {
     /// operator's decision, not a leader's — and a log placed over them would
     /// have a hole between what it held and what it was given, which nothing
     /// downstream could detect.
-    pub async fn bootstrap(&self, request: ReplicateBootstrap) -> InternalMessage {
+    pub async fn bootstrap(&self, request: ReplicateBootstrap, is_cache: bool) -> InternalMessage {
         let correlation_id = request.correlation_id;
         let key = felix_router::ShardKey {
             tenant_id: request.shard.tenant_id.clone(),
             namespace: request.shard.namespace.clone(),
             stream: request.shard.stream.clone(),
             shard: request.shard.shard,
-            kind: felix_router::ShardKind::Stream,
+            kind: if is_cache {
+                felix_router::ShardKind::Cache
+            } else {
+                felix_router::ShardKind::Stream
+            },
         };
 
         if let Some(refusal) = self.check_role(correlation_id, &key, request.shard.generation) {
             return refusal;
         }
-        let Some(storage) = self.broker.durable_storage() else {
+        // Creates the log at `base_offset` when this broker has never held the
+        // shard, and opens what is there otherwise. The base it comes back with
+        // is the authority either way.
+        let Some(log) = self
+            .broker
+            .shard_log_at(
+                is_cache,
+                &key.tenant_id,
+                &key.namespace,
+                &key.stream,
+                key.shard,
+                request.base_offset,
+            )
+            .await
+        else {
             metrics::record_replicated(metrics::OUTCOME_REFUSED);
             return refused(
                 correlation_id,
                 ErrorCode::Unauthorized,
                 0,
-                "this broker has no durable storage".to_string(),
+                "this broker has no log for that shard".to_string(),
             );
-        };
-
-        // Creates the log at `base_offset` when this broker has never held the
-        // shard, and opens what is there otherwise. The base it comes back with
-        // is the authority either way.
-        let log = match storage.open_stream_at(
-            &key.tenant_id,
-            &key.namespace,
-            &key.stream,
-            key.shard,
-            request.base_offset,
-        ) {
-            Ok(log) => log,
-            Err(err) => {
-                metrics::record_replicated(metrics::OUTCOME_ERROR);
-                return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
-            }
         };
 
         let base = log.base_offset();
@@ -180,40 +181,45 @@ impl ReplicaHandler {
         })
     }
 
-    pub async fn apply(&self, batch: ReplicateRecords) -> InternalMessage {
+    pub async fn apply(&self, batch: ReplicateRecords, is_cache: bool) -> InternalMessage {
         let correlation_id = batch.correlation_id;
         let key = felix_router::ShardKey {
             tenant_id: batch.shard.tenant_id.clone(),
             namespace: batch.shard.namespace.clone(),
             stream: batch.shard.stream.clone(),
             shard: batch.shard.shard,
-            kind: felix_router::ShardKind::Stream,
+            kind: if is_cache {
+                felix_router::ShardKind::Cache
+            } else {
+                felix_router::ShardKind::Stream
+            },
         };
 
         if let Some(refusal) = self.check_role(correlation_id, &key, batch.shard.generation) {
             return refusal;
         }
 
-        let Some(storage) = self.broker.durable_storage() else {
-            // A replica set naming a broker with no durable storage is a
-            // configuration error, not a transient one. Saying so beats
-            // accepting and silently keeping nothing.
+        // A replica set naming a broker with no log for the shard is a
+        // configuration error, not a transient one. Saying so beats accepting
+        // and silently keeping nothing.
+        let Some(log) = self
+            .broker
+            .shard_log(
+                is_cache,
+                &key.tenant_id,
+                &key.namespace,
+                &key.stream,
+                key.shard,
+            )
+            .await
+        else {
             metrics::record_replicated(metrics::OUTCOME_REFUSED);
             return refused(
                 correlation_id,
                 ErrorCode::Unauthorized,
                 0,
-                "this broker has no durable storage".to_string(),
+                "this broker has no log for that shard".to_string(),
             );
-        };
-
-        let log = match storage.open_stream(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-        {
-            Ok(log) => log,
-            Err(err) => {
-                metrics::record_replicated(metrics::OUTCOME_ERROR);
-                return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
-            }
         };
 
         match replication::apply(&log, batch.first_offset, batch.checksum, &batch.payloads).await {
@@ -222,16 +228,21 @@ impl ReplicaHandler {
                 // of its tail has to be told. Without this the first publish
                 // this broker accepts once promoted waits on commit turns that
                 // were never taken.
-                if let Err(err) = self
-                    .broker
-                    .adopt_replicated(
-                        &key.tenant_id,
-                        &key.namespace,
-                        &key.stream,
-                        key.shard,
-                        applied.durable_offset,
-                    )
-                    .await
+                //
+                // A cache needs no equivalent: it has no commit sequencer, and
+                // its index notices records that arrived underneath it the next
+                // time the shard is read.
+                if !is_cache
+                    && let Err(err) = self
+                        .broker
+                        .adopt_replicated(
+                            &key.tenant_id,
+                            &key.namespace,
+                            &key.stream,
+                            key.shard,
+                            applied.durable_offset,
+                        )
+                        .await
                 {
                     tracing::warn!(
                         stream = %key.stream,

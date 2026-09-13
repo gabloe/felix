@@ -59,6 +59,35 @@ pub trait StorageApi: Debug + Send + Sync {
         key: &str,
     ) -> Option<Bytes>;
 
+    /// The log backing one cache shard, when the cache is log-backed.
+    ///
+    /// `None` for a cache with no log, which has nothing to replicate. Exposed
+    /// on the trait rather than reached for by downcast because replication is
+    /// a legitimate second reader of the same log, and it must be the same log
+    /// the cache writes to.
+    async fn shard_log(
+        &self,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _shard: u32,
+    ) -> Option<crate::disk_log::DiskLog> {
+        None
+    }
+
+    /// The log backing one cache shard, created to begin at `base_offset` if it
+    /// does not exist yet. See [`StorageApi::shard_log`].
+    async fn shard_log_at(
+        &self,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _shard: u32,
+        _base_offset: u64,
+    ) -> Option<crate::disk_log::DiskLog> {
+        None
+    }
+
     async fn len(&self) -> usize;
 
     async fn is_empty(&self) -> bool;
