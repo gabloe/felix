@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789292308826,
+  "lastUpdate": 1789305179236,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7920,6 +7920,72 @@ window.BENCHMARK_DATA = {
             "range": "237.97",
             "unit": "us",
             "extra": "trials: 5\nmedian: 564.00\nmean: 695.80\nstdev: 237.97\ncv: 34.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "600b83c6fbf3a95401f7d15c134d3b24511b03ec",
+          "message": "Put consumer groups on the wire (#310)\n\nFourth slice of #280, and the one that makes a queue usable: a client can now\npoll a group, acknowledge a record, and hand one back.\n\n`group_poll`, `group_ack`, `group_nack`, behind `FEATURE_CONSUMER_GROUP`.\nAdvertised by the broker because these are requests — sending one to a broker\nwith no arm for it ends that broker's control loop rather than returning an\nerror, which is the rule `frame.rs` already states for the other bits.\n\nAdvertised only with durable storage. Without it a group's position is lost on\nevery restart, so offering the feature would invite work the broker cannot do.\n\n## Poll rather than push\n\nA queue consumer takes work when it has capacity for it, and the broker cannot\nknow when that is. The cost is that an idle consumer polls; long-polling would\nfix that and is not here.\n\n## Only the shard's leader serves a group\n\nThere is no forwarding, unlike a cache operation. A poll returns records the\nconsumer must then acknowledge, and relaying that through a second broker would\nput the claim and the acknowledgement on different machines — two brokers each\nkeeping their own in-flight state would hand out the same records and neither\nwould know. Any other broker refuses rather than answering emptily: a consumer\ntold \"nothing available\" would poll for ever against a shard it cannot be\nserved by.\n\n## Authorized as a read\n\nA group is a read position over a stream, so `stream.subscribe` covers all\nthree operations. None of them writes stream data.\n\n## Verification\n\n- Three end-to-end tests through a real broker and a real client: poll,\n  acknowledge, restart, and confirm finished work is not repeated; a nacked\n  record polled again at once; two groups over one stream each seeing every\n  record.\n- Two cluster tests, because the ownership gate cannot be exercised on a single\n  node — `dispatch` returns `Local` either way there. Removing the gate fails\n  `only_the_shard_owner_serves_a_group`.\n- Wire round-trips for every new message, including an empty batch and that ack\n  and nack differ on the wire.\n- `task test` (86 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## The gap this leaves, stated plainly\n\n**Redelivery is unbounded.** There is no attempt limit and no dead-letter\ndestination, so a record that always fails is redelivered for ever and the queue\nmakes no progress past it. `semantics.md` and the status table now say so; the\nrow stays a Target rather than moving to Today because of it.\n\nRefs #280",
+          "timestamp": "2026-09-13T06:10:35-07:00",
+          "tree_id": "350a4a675ec51a8d702f8de01c738d33ec33c5af",
+          "url": "https://github.com/gabloe/felix/commit/600b83c6fbf3a95401f7d15c134d3b24511b03ec"
+        },
+        "date": 1789305178244,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 158.60\nstdev: 1.34\ncv: 0.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 200,
+            "range": "3.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 201.60\nstdev: 3.65\ncv: 1.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 250,
+            "range": "108.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 250.00\nmean: 293.80\nstdev: 108.58\ncv: 36.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.00\nstdev: 0.71\ncv: 0.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 396,
+            "range": "7.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 396.00\nmean: 396.20\nstdev: 7.95\ncv: 2.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 597,
+            "range": "195.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 597.00\nmean: 679.80\nstdev: 195.41\ncv: 28.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
