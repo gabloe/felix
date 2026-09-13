@@ -142,6 +142,10 @@ synchronized clocks.
 
 The safety interval is the whole mechanism, so it is worth seeing:
 
+<p align="center">
+  <img src="assets/leader-lease.svg" alt="A lease on one time axis: broker A stops accepting at expiry minus epsilon by its own clock, the control plane grants the next generation no earlier than expiry plus a margin, and the gap between them is a safety interval in which no broker is leader" width="900">
+</p>
+
 ```mermaid
 sequenceDiagram
     participant A as Broker A (leader at G)

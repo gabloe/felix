@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 452" width="900" height="452" role="img" aria-label="The same lost packet under TCP and under QUIC. Three logical streams are carried over one connection. A packet belonging to stream 2 is lost. Under TCP all three streams stop being delivered until the retransmission arrives, because they share one ordered byte stream. Under QUIC only stream 2 stops; streams 1 and 3 keep being delivered throughout, because each stream is ordered independently.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .warn  { fill: var(--accent); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .okay  { fill: var(--okay); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .track { fill: var(--edge-dim); opacity: .24; }
+    .got   { fill: var(--edge); }
+    .held  { fill: var(--accent); }
+    .rule  { stroke: var(--edge-dim); stroke-width: 1; }
+    .lossx { stroke: var(--accent); stroke-width: 2.25; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; }
+
+    /* One 14s loop. Each bar is bytes handed to the application on that stream,
+       so a flat stretch is a stall the application can feel. The loss happens at
+       the same instant in both rows and to the same stream. */
+    .hide { opacity: 0; }
+
+    /* Stalled: delivery stops at the gap and resumes when the retransmission
+       lands. The flat stretch between 30% and 55% is the head-of-line block. */
+    .stalled { animation: stalled 14s infinite; }
+    @keyframes stalled { 0%,4% { width: 0px } 30%,55% { width: 176px } 78%,96% { width: 352px } 97%,100% { width: 0px } }
+
+    /* Unblocked: the same wire, the same loss, no pause. */
+    .flowing { animation: flowing 14s infinite; }
+    @keyframes flowing { 0%,4% { width: 0px } 78%,96% { width: 352px } 97%,100% { width: 0px } }
+
+    .loss { animation: loss 14s infinite; }
+    @keyframes loss { 0%,29% { opacity: 0 } 32%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+    .retx { animation: retx 14s infinite; }
+    @keyframes retx { 0%,54% { opacity: 0 } 57%,72% { opacity: 1 } 75%,100% { opacity: 0 } }
+    .verdict { animation: verdict 14s infinite; }
+    @keyframes verdict { 0%,34% { opacity: 0 } 37%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    .c1 { animation: c1 14s infinite; } @keyframes c1 { 0%,3% { opacity:0 } 6%,28% { opacity:1 } 29%,100% { opacity:0 } }
+    .c2 { animation: c2 14s infinite; } @keyframes c2 { 0%,29% { opacity:0 } 32%,54% { opacity:1 } 55%,100% { opacity:0 } }
+    .c3 { animation: c3 14s infinite; } @keyframes c3 { 0%,55% { opacity:0 } 58%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .stalled,.flowing,.loss,.retx,.verdict,.c1,.c2,.c3 { animation: none; }
+      .stalled { width: 176px; }
+      .flowing { width: 352px; }
+      .loss,.verdict { opacity: 1; }
+      .retx { opacity: 0; }
+      .c2 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">ONE LOST PACKET, BELONGING TO STREAM 2</text>
+
+  <!-- ================================== TCP ================================== -->
+  <text class="name" x="30" y="70">TCP + TLS</text>
+  <text class="small" x="30" y="86">one ordered byte stream</text>
+
+  <text class="small" x="202" y="76" text-anchor="end">stream 1</text>
+  <rect class="track" x="210" y="66" width="352" height="14" rx="7"/>
+  <rect class="got stalled" x="210" y="66" height="14" rx="7"/>
+  <text class="warn hide verdict" x="578" y="76">held, not lost</text>
+
+  <text class="small" x="202" y="104" text-anchor="end">stream 2</text>
+  <rect class="track" x="210" y="94" width="352" height="14" rx="7"/>
+  <rect class="held stalled" x="210" y="94" height="14" rx="7"/>
+  <g class="hide loss">
+    <path class="lossx" d="M 380 92 l 14 18 M 394 92 l -14 18"/>
+    <text class="warn" x="387" y="52" text-anchor="middle">packet lost</text>
+  </g>
+
+  <text class="small" x="202" y="132" text-anchor="end">stream 3</text>
+  <rect class="track" x="210" y="122" width="352" height="14" rx="7"/>
+  <rect class="got stalled" x="210" y="122" height="14" rx="7"/>
+  <text class="warn hide verdict" x="578" y="132">held, not lost</text>
+
+  <text class="small hide retx" x="450" y="160" text-anchor="middle">…the retransmission arrives, and all three resume together…</text>
+
+  <line class="rule" x1="30" y1="182" x2="870" y2="182"/>
+
+  <!-- ================================= QUIC ================================== -->
+  <text class="name" x="30" y="236">QUIC</text>
+  <text class="small" x="30" y="252">a stream ordered on its own</text>
+
+  <text class="small" x="202" y="242" text-anchor="end">stream 1</text>
+  <rect class="track" x="210" y="232" width="352" height="14" rx="7"/>
+  <rect class="got flowing" x="210" y="232" height="14" rx="7"/>
+  <text class="okay hide verdict" x="578" y="242">never notices</text>
+
+  <text class="small" x="202" y="270" text-anchor="end">stream 2</text>
+  <rect class="track" x="210" y="260" width="352" height="14" rx="7"/>
+  <rect class="held stalled" x="210" y="260" height="14" rx="7"/>
+  <g class="hide loss">
+    <path class="lossx" d="M 380 258 l 14 18 M 394 258 l -14 18"/>
+    <text class="warn" x="387" y="218" text-anchor="middle">the same packet</text>
+  </g>
+
+  <text class="small" x="202" y="298" text-anchor="end">stream 3</text>
+  <rect class="track" x="210" y="288" width="352" height="14" rx="7"/>
+  <rect class="got flowing" x="210" y="288" height="14" rx="7"/>
+  <text class="okay hide verdict" x="578" y="298">never notices</text>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body hide c1" x="450" y="344" text-anchor="middle">Three logical streams, one connection, the same traffic on both.</text>
+  <text class="body hide c2" x="450" y="344" text-anchor="middle">TCP is one ordered byte stream, so a gap holds back everything behind it — unrelated streams included.</text>
+  <text class="body hide c3" x="450" y="344" text-anchor="middle">QUIC orders each stream separately, so only the stream missing bytes waits for them.</text>
+
+  <text class="body" x="450" y="388" text-anchor="middle">Nothing was lost for streams 1 and 3 either way. Under TCP their bytes had already arrived and</text>
+  <text class="body" x="450" y="406" text-anchor="middle">simply could not be handed over, because the transport cannot say which bytes belong to which stream.</text>
+  <text class="body" x="450" y="432" text-anchor="middle">This is why Felix multiplexes over QUIC streams rather than over one connection's byte stream.</text>
+</svg>

@@ -310,6 +310,10 @@ The hard part is not reading history. It is joining history to live delivery
 without losing a record in between, and the ordering that achieves it is not the
 obvious one.
 
+<p align="center">
+  <img src="assets/subscribe-join.svg" alt="Two orderings for joining stored history to live delivery: reading first leaves a window with no subscriber in it and loses a publish landing there, while registering first captures it and leaves a closed range to read from disk" width="900">
+</p>
+
 ```mermaid
 sequenceDiagram
     autonumber

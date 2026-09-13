@@ -272,6 +272,13 @@ QUIC handles packet loss better than TCP:
 - Other streams continue normally
 - Faster recovery via improved congestion control
 
+![The same lost packet under TCP and under QUIC. Three logical streams share one connection and a packet belonging to stream 2 is lost. Under TCP all three streams stop being delivered until the retransmission arrives, because they share one ordered byte stream. Under QUIC only stream 2 stops, because each stream is ordered on its own.](/felix/diagrams/head-of-line.svg)
+
+Nothing was lost for streams 1 and 3 in either case. Under TCP their bytes had
+already arrived and simply could not be handed over, because the transport has
+no way to say which bytes belong to which stream. That is the difference the
+whole comparison rests on.
+
 **Measured impact** (1% packet loss, fanout=10):
 
 | Metric | TCP + TLS | QUIC |

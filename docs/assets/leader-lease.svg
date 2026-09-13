@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 442" width="900" height="442" role="img" aria-label="A leader lease on one time axis. Broker A may accept writes only until its lease expiry minus epsilon, by its own monotonic clock. The control plane may not grant the next generation to another broker until the lease expiry plus a margin. The gap between those two instants is the safety interval, during which no broker is leader, and it is why leases are safe without synchronised clocks. Below, a write admitted while the lease was valid is paused long enough that the lease expires before the record reaches disk; the commit-time re-check refuses it.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .warn  { fill: var(--accent); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .okay  { fill: var(--okay); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .axis  { stroke: var(--edge-dim); stroke-width: 1.25; }
+    .tickl { stroke: var(--edge-dim); stroke-width: 1; stroke-dasharray: 3 3; }
+    .track { fill: var(--edge-dim); opacity: .22; }
+    .hold  { fill: var(--edge); }
+    .stop  { fill: var(--accent); }
+    .band  { fill: var(--accent); opacity: .14; }
+    .head  { stroke: var(--ink-dim); stroke-width: 1.25; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; }
+
+    /* One 18s loop. A playhead sweeps the axis once and everything below is
+       keyed to the instant it passes, so the diagram cannot disagree with
+       itself about what happened when. */
+    .hide { opacity: 0; }
+
+    .play { animation: play 18s infinite; }
+    @keyframes play { 0%,8% { transform: translateX(0px); opacity: 0 } 10% { opacity: 1 } 88% { transform: translateX(650px); opacity: 1 } 90%,100% { transform: translateX(650px); opacity: 0 } }
+
+    /* Broker A may accept writes until expiry − ε, by its own clock. */
+    .leased { animation: leased 18s infinite; }
+    @keyframes leased { 0%,8% { width: 0px } 47%,96% { width: 320px } 97%,100% { width: 0px } }
+    .refusing { animation: refusing 18s infinite; }
+    @keyframes refusing { 0%,47% { width: 0px } 88%,96% { width: 330px } 97%,100% { width: 0px } }
+
+    .interval { animation: interval 18s infinite; }
+    @keyframes interval { 0%,46% { opacity: 0 } 49%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+    /* The band is translucent by design, so its fade has to land on .14 rather
+       than 1 — an opacity keyframe replaces the class's own opacity outright. */
+    .bandfade { animation: bandfade 18s infinite; }
+    @keyframes bandfade { 0%,46% { opacity: 0 } 49%,96% { opacity: .14 } 97%,100% { opacity: 0 } }
+    .grant { animation: grant 18s infinite; }
+    @keyframes grant { 0%,67% { opacity: 0 } 70%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    /* The write that is admitted, then delayed past its own lease. */
+    .admit { animation: admit 18s infinite; }
+    @keyframes admit { 0%,35% { opacity: 0 } 37%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+    .paused { animation: paused 18s infinite; }
+    @keyframes paused { 0%,36% { width: 0px } 58%,96% { width: 180px } 97%,100% { width: 0px } }
+    .refused { animation: refused 18s infinite; }
+    @keyframes refused { 0%,57% { opacity: 0 } 60%,96% { opacity: 1 } 97%,100% { opacity: 0 } }
+
+    .c1 { animation: c1 18s infinite; } @keyframes c1 { 0%,8% { opacity:0 } 11%,45% { opacity:1 } 46%,100% { opacity:0 } }
+    .c2 { animation: c2 18s infinite; } @keyframes c2 { 0%,46% { opacity:0 } 49%,66% { opacity:1 } 67%,100% { opacity:0 } }
+    .c3 { animation: c3 18s infinite; } @keyframes c3 { 0%,67% { opacity:0 } 70%,96% { opacity:1 } 97%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .play,.leased,.refusing,.interval,.bandfade,.grant,.admit,.paused,.refused,
+      .c1,.c2,.c3 { animation: none; }
+      .play { opacity: 0; }
+      .leased { width: 320px; }
+      .refusing { width: 330px; }
+      .paused { width: 180px; }
+      .interval,.grant,.admit,.refused { opacity: 1; }
+      .bandfade { opacity: .14; }
+      .c2 { opacity: 1; }
+    }
+  </style>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">A LEASE, ON ONE TIME AXIS — WHY NO CLOCK NEEDS TO AGREE</text>
+
+  <!-- the safety interval, drawn behind everything -->
+  <rect class="band hide bandfade" x="470" y="52" width="170" height="230" rx="4"/>
+
+  <!-- instants -->
+  <line class="tickl" x1="150" y1="52" x2="150" y2="282"/>
+  <line class="tickl" x1="470" y1="52" x2="470" y2="282"/>
+  <line class="tickl" x1="640" y1="52" x2="640" y2="282"/>
+  <text class="small" x="150" y="46" text-anchor="middle">t — lease granted</text>
+  <text class="small" x="470" y="46" text-anchor="middle">t + L − ε</text>
+  <text class="small" x="640" y="46" text-anchor="middle">t + L + margin</text>
+
+  <!-- the playhead -->
+  <line class="head hide play" x1="150" y1="56" x2="150" y2="286"/>
+
+  <!-- ============================ broker A's lane ============================ -->
+  <text class="name" x="30" y="88">Broker A</text>
+  <text class="small" x="30" y="104">leader at G</text>
+
+  <rect class="track" x="150" y="80" width="650" height="16" rx="8"/>
+  <rect class="hold leased" x="150" y="80" height="16" rx="8"/>
+  <rect class="stop refusing" x="470" y="80" height="16" rx="8"/>
+  <text class="small" x="300" y="120" text-anchor="middle">may accept writes</text>
+  <text class="warn hide interval" x="710" y="120" text-anchor="middle">refuses</text>
+
+  <!-- ========================== the control plane lane ======================= -->
+  <text class="name" x="30" y="176">Control plane</text>
+  <text class="small" x="30" y="192">grants generations</text>
+
+  <rect class="track" x="150" y="168" width="650" height="16" rx="8"/>
+  <g class="hide grant">
+    <rect class="hold" x="640" y="168" width="160" height="16" rx="8"/>
+    <text class="okay" x="660" y="206" text-anchor="middle">grants G+1 to B</text>
+  </g>
+
+  <text class="warn hide interval" x="555" y="248" text-anchor="middle">SAFETY INTERVAL</text>
+  <text class="small hide interval" x="555" y="266" text-anchor="middle">nobody is leader</text>
+
+  <!-- ======================= the write that gets delayed ===================== -->
+  <text class="name" x="30" y="322">One write</text>
+  <text class="small" x="30" y="338">admitted, then delayed</text>
+
+  <line class="tickl" x1="380" y1="300" x2="380" y2="352"/>
+  <rect class="track" x="150" y="314" width="650" height="16" rx="8"/>
+  <rect class="stop paused" x="380" y="314" height="16" rx="8"/>
+  <text class="small hide admit" x="380" y="308" text-anchor="middle">admitted — lease valid</text>
+  <text class="warn hide refused" x="562" y="352" text-anchor="middle">a pause: GC, a slow fsync, a stopped VM</text>
+  <text class="warn hide refused" x="562" y="368" text-anchor="middle">re-checked before commit → refused</text>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body hide c1" x="450" y="398" text-anchor="middle">A leader serves only while it holds a lease, and it stops ε early — by its own clock, never a shared one.</text>
+  <text class="body hide c2" x="450" y="398" text-anchor="middle">The control plane waits out a margin on top of the full lease before it hands the shard to anyone else.</text>
+  <text class="body hide c3" x="450" y="398" text-anchor="middle">Between the two lies an interval in which no broker believes it is leader. Two clocks never have to agree.</text>
+
+  <text class="body" x="450" y="432" text-anchor="middle">The lease is checked twice: on admission, and again before the record is committed.</text>
+</svg>

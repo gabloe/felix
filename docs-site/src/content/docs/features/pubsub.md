@@ -322,6 +322,16 @@ When subscriber queue full:
 - New events are dropped for that subscriber
 - Other subscribers unaffected
 
+![One slow subscriber and two fast ones, under each overflow policy. Under DropNew, the default, the slow subscriber's bounded queue fills and further records are dropped for that subscriber alone while the publisher and the fast subscribers run at full rate. Under Block nothing is dropped, and the publisher and both fast subscribers are pulled down to the slow subscriber's speed.](/felix/diagrams/slow-consumer.svg)
+
+This is the trade the whole design turns on. Under the default a publisher never
+waits on a subscriber, which is exactly why one stalled consumer cannot degrade
+the rest — and exactly why a subscriber can silently miss records.
+
+`DropOld` is accepted in configuration and counted separately, but it currently
+behaves as `DropNew`: the arriving record is the one discarded. The metric
+`felix_sub_queue_drop_old_emulated_total` is what tells you that happened.
+
 :::caution[At-Most-Once Semantics]
 A dropped event is not redelivered. A subscriber that falls behind its queue
 misses messages — but on a **durable** stream the loss is detectable and

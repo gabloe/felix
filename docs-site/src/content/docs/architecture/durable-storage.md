@@ -168,6 +168,24 @@ distinction is the point of the feature: it lets a resuming subscriber tell
 The full byte layout, versioning rules, and corruption verdicts are in the
 [Durable Segment Format specification](/felix/architecture/storage-format/).
 
+## Resuming a subscription
+
+Durability is only half of a resume: records surviving a restart is worthless if
+a reconnecting client cannot say where it got to. A subscriber asks for a start
+position — `latest`, `earliest`, or an exact offset — and every delivered event
+carries its offset, so the client has something to checkpoint.
+
+The hard part is not reading history. It is **joining history to live delivery
+without losing a record in between**, and the ordering that achieves it is not
+the obvious one.
+
+![Two orderings for joining stored history to live delivery. Reading history first and registering the live subscription afterwards leaves a window with no subscriber in it, so a publish landing there is never delivered. Registering first, clamped to the oldest offset the replay ring holds, captures that publish; the older range is only then read from disk, and it is closed because nothing can grow it.](/felix/diagrams/subscribe-join.svg)
+
+Registering first pins the live edge. Everything below it is a **closed range** —
+nothing can grow it — so the disk read that follows cannot race a publish. Do it
+the other way around and the window between the two steps has nobody listening
+in it.
+
 ## Recovery
 
 ```mermaid
