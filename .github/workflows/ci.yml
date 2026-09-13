@@ -68,6 +68,13 @@ jobs:
       - name: Publish-readiness and licence split
         run: task publish:check
 
+      # A doc citing a test is broken by renaming the *test*, which is a Rust
+      # change on a Rust pull request -- so it is checked here rather than only
+      # in the docs-site build, which runs on pushes to main that touch
+      # docs-site/ and would never see it.
+      - name: Documentation evidence
+        run: task docs:evidence
+
       # Demos under demos/ that declare their own [workspace] are excluded from the
       # repository workspace, so `task lint` and `task test` never reach them and
       # they can break silently. Build all three, and run the slow-consumer demo's

@@ -6,7 +6,8 @@
     "dev": "astro dev",
     "check:mermaid": "node ../scripts/check-mermaid.mjs",
     "check:diagrams": "node ../scripts/check-diagram-copies.mjs",
-    "build": "npm run check:mermaid && npm run check:diagrams && astro build",
+    "check:evidence": "python3 ../scripts/check_doc_evidence.py",
+    "build": "npm run check:mermaid && npm run check:diagrams && npm run check:evidence && astro build",
     "preview": "astro preview"
   },
   "dependencies": {
