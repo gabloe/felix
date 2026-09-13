@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789262517596,
+  "lastUpdate": 1789267604472,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7656,6 +7656,72 @@ window.BENCHMARK_DATA = {
             "range": "398.60",
             "unit": "us",
             "extra": "trials: 5\nmedian: 542.00\nmean: 734.20\nstdev: 398.60\ncv: 54.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b8bd89d86c3e85c3d9683ec2bd6776b3e37a900",
+          "message": "Put cache delete on the wire (#306)\n\nCloses #279. `StorageApi::delete` existed, both backends implemented it, the\ninternal protocol carried it — and no client could reach it. An application\ncould write a key and read it, but removed it only by writing a tombstone it\nhad to interpret itself, or by setting a TTL and waiting.\n\n`CacheDelete` is answered with `CacheValue` carrying whatever was removed, so a\ncaller learns whether the key was there without a second round trip. Deleting a\nkey that was never present is an answer, not a failure.\n\nAuthorized as a write. Letting it through on `CacheRead` would make a read-only\ncredential able to destroy data.\n\n## Negotiated in the direction that matters\n\nThe issue asked for a feature bit \"so a broker never sends a client a message it\ncannot decode\". The hazard here runs the other way: `CacheDelete` is a *request*,\nso the risk is a new client sending it to an older broker, where an unrecognised\nmessage type ends the control loop. The broker advertises\n`FEATURE_CACHE_DELETE`, and a client that does not see the bit reports that the\nbroker cannot delete rather than probing and losing the connection.\n\n## A standalone broker advertised nothing at all\n\nEvery feature was gated on `client_endpoints` being present, so a broker with no\ncluster behind it answered `server_features: 0`. That is right for topology and\nredirect, which describe a cluster — and wrong for cache delete, which works the\nsame on one node as on twenty. The advertisement is now split, and the restart\ntests fail without that split, because they run against a standalone broker.\n\n## Verification\n\n- `a_deleted_key_stays_deleted_across_a_restart` — the test #279 was filed for.\n  It could previously only be written against the storage layer; a tombstone\n  that did not survive a restart would resurrect a value the caller was told\n  was gone.\n- `deleting_a_missing_key_reports_nothing_removed`\n- Both fail when the feature gating is put back to cluster-only.\n- Conformance covers delete end to end, including deleting what is not there.\n- `task test` (85 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## Docs\n\n`protocol.md` gains the message, the bit, and the semantics — including which\nfeatures depend on a cluster and which do not, since that distinction is what\nthe gating bug got wrong. The status table no longer lists delete as missing.",
+          "timestamp": "2026-09-12T19:44:19-07:00",
+          "tree_id": "0f09ef971f7e8981810448c92c226c0ec3bacfc6",
+          "url": "https://github.com/gabloe/felix/commit/3b8bd89d86c3e85c3d9683ec2bd6776b3e37a900"
+        },
+        "date": 1789267602471,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 154,
+            "range": "3.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 154.00\nmean: 154.40\nstdev: 3.21\ncv: 2.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 206,
+            "range": "10.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 211.40\nstdev: 10.69\ncv: 5.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 779,
+            "range": "259.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 779.00\nmean: 902.40\nstdev: 259.84\ncv: 28.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 195.80\nstdev: 1.10\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 437,
+            "range": "29.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 437.00\nmean: 439.60\nstdev: 29.92\ncv: 6.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 2144,
+            "range": "833.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 2144.00\nmean: 1998.40\nstdev: 833.38\ncv: 41.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
