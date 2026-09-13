@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789331910652,
+  "lastUpdate": 1789334081277,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8712,6 +8712,72 @@ window.BENCHMARK_DATA = {
             "range": "942.39",
             "unit": "us",
             "extra": "trials: 5\nmedian: 647.00\nmean: 1159.60\nstdev: 942.39\ncv: 81.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c427bd4ed63ef86446c6789b20e187f468b7023f",
+          "message": "demo: what Quorum buys and what Leader costs, with a diagram for each (#325)\n\n`task cluster:failover` shows a quorum-acknowledged record surviving the broker\nthat acknowledged it. Nothing showed the other half — what the `Leader` default\ncosts under the same fault — and the docs described `consistency` in a sentence\nwith no picture.\n\nBoth streams are replicated three ways and differ only in `consistency`. The\nfault is a leader cut off from its replicas: followers frozen with SIGSTOP, so\nthe leader is healthy and alone. Each stream's own followers are frozen in turn,\nso the run does not depend on the two streams sharing a leader and cannot flake\non where placement put them.\n\nWhat it found is better than what I expected to write:\n\n- **Quorum** refuses, and says why — \"the batch is durable here but did not\n  reach a majority within 5s\". Not \"the write failed\". The record may well be\n  present afterwards, because it landed on the leader before the answer came\n  back, so a refusal means \"cannot be vouched for\" rather than \"did not happen\".\n  The demo reports that case explicitly rather than glossing it.\n- **Leader** takes the write, and killing the leader leaves the shard\n  **unavailable**: no replica is promoted, because opening the shard would drop\n  a record that was acknowledged. Not silent loss — refusal to serve.\n\nSo the trade is not safety against latency. Both refuse to lose an acknowledged\nrecord; they differ in when you find out. Quorum tells you at publish time while\nyou still hold the record. Leader tells you at failover time, when the only copy\nis on a dead broker's disk.\n\nI had this wrong at first and the harness corrected me. The original design\nresumed the followers before killing the leader, which let replication catch up\nand handed the record over — the opposite of the point. Killing first surfaced\n\"no replica holding this shard's log can take over\", which is the real\nbehaviour and a stronger story than the silent loss I had assumed.\n\nThe demo asserts both outcomes and fails if a shard is ever served *without* a\nrecord its leader acknowledged, which is the failure that would matter.\n\nDocs: a \"Consistency: how many brokers must hold it\" section on the semantics\npage with an animated SVG putting both acknowledgements on one timeline —\nincluding that Leader still replicates, just after answering — and a demo page,\nwhich also closes the gap that the cluster failover demo was never documented on\nthe site at all.",
+          "timestamp": "2026-09-13T14:12:57-07:00",
+          "tree_id": "0bba84ea0c4c9a7b3c41411fe2d8a18cca2a11e8",
+          "url": "https://github.com/gabloe/felix/commit/c427bd4ed63ef86446c6789b20e187f468b7023f"
+        },
+        "date": 1789334079347,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 60,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 60.00\nmean: 59.80\nstdev: 0.84\ncv: 1.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 82,
+            "range": "3.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 82.00\nmean: 80.40\nstdev: 3.13\ncv: 3.89%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 113,
+            "range": "48.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 113.00\nmean: 131.60\nstdev: 48.32\ncv: 36.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 78,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 78.00\nmean: 78.20\nstdev: 0.45\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 176,
+            "range": "23.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 176.00\nmean: 181.60\nstdev: 23.16\ncv: 12.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 549,
+            "range": "643.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 549.00\nmean: 846.00\nstdev: 643.71\ncv: 76.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
