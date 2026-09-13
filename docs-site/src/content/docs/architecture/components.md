@@ -310,11 +310,14 @@ The cache provides low-latency key-value operations with TTL:
 
 **Implementation characteristics**:
 
-- In-memory hash map with TTL tracking
-- Lazy expiration on access
 - Scoped to `(tenant_id, namespace, cache_name, key)`
-- No persistence in MVP (ephemeral)
-- Best-effort eviction under memory pressure
+- Lazy expiration on access, against an absolute expiry that survives a restart
+- Two backends. Without durable storage: an in-memory hash map, lost on restart,
+  evicted best-effort under pressure. With it: a log, read through an index of
+  key to latest offset that is rebuilt from the log rather than trusted from
+  disk, and compacted rather than evicted
+- Sharded and routed, so exactly one broker owns each key, and replicated with
+  the machinery that replicates a stream
 
 **Performance profile** (localhost, concurrency=32):
 
@@ -342,7 +345,7 @@ Fully in-memory storage optimized for latency:
 
 Use cases: real-time signals, transient caching, development
 
-#### Durable Storage (Planned)
+#### Durable Storage
 
 Persistent storage with configurable durability:
 
@@ -371,7 +374,7 @@ streams:
 
 ## Control Plane: Metadata Management
 
-The control plane is a separate service (planned) that manages cluster metadata and configuration.
+The control plane is a separate service that manages cluster metadata, placement, and configuration.
 
 ### Metadata Scope
 
@@ -385,16 +388,23 @@ The control plane stores authoritative information about:
 
 ### Consistency Model
 
-Metadata uses **strong consistency** via RAFT:
+Metadata is **strongly consistent because it is in one Postgres**, not because
+the control plane runs a consensus protocol. Instances are stateless and do not
+know about each other; every write and every read goes to the database.
 
-- Single leader accepts all metadata writes
-- Quorum replication for durability
-- Linearizable reads from leader
-- Follower reads for stale-ok queries
+- Writes are transactions, so a shard has one current assignment
+- Change feeds are sequenced from a locked row rather than a sequence, because a
+  sequence hands out numbers in request order and not commit order — a snapshot
+  taken between two commits would resume past a change it never saw
+- Placement is a pure function of a metadata snapshot, so two instances planning
+  the same cluster reach the same answer without agreeing on one
+
+Raft would move this off Postgres and is not started.
 
 ### Broker Synchronization
 
-Brokers are not part of the RAFT cluster. They consume metadata via:
+Brokers do not participate in control-plane state at all. They consume metadata
+via:
 
 ```mermaid
 sequenceDiagram
@@ -422,10 +432,16 @@ sequenceDiagram
 
 When the control plane leader fails:
 
-1. RAFT elects a new leader (typically < 1 second)
-2. Brokers detect disconnection and reconnect
-3. Brokers resume watching from last known version
-4. No data-plane disruption during control plane failover
+1. A load balancer removes the instance, because `/v1/system/ready` stops
+   answering for it
+2. Brokers reconnect and reach a different instance
+3. Brokers resume watching from the last sequence number they saw
+4. No data-plane disruption: an owner is resolved from a routing snapshot each
+   broker already holds, so publishes and reads continue while the control plane
+   is entirely unreachable
+
+What *does* stop is anything needing a decision: no shard is placed and no
+failover happens until an instance is reachable again.
 
 :::note[Data Plane Independence]
 Brokers cache all necessary metadata to continue serving reads and writes during control plane unavailability. Only administrative operations and new stream creation are affected.
@@ -484,7 +500,7 @@ Each component exposes its own configuration surface:
 | **felix-transport** | Connection pools, window sizes, TLS settings |
 | **felix-broker** | Queue depths, worker counts, batching parameters |
 | **felix-storage** | Retention policies, cache sizes, durability modes |
-| **Control Plane** | RAFT tuning, snapshot intervals, health check periods |
+| **Control Plane** | Postgres pool sizing, readiness probe timings, reconcile interval |
 
 See the [Performance Tuning](/felix/features/performance/) guide for detailed configuration examples.
 

@@ -134,7 +134,7 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 
 **Storage types**:
 - `EphemeralStore`: In-memory with TTL
-- `DurableStore`: Persistent log (planned)
+- `DurableStore`: persistent log-structured segment store
 - `CacheStore`: Key-value with expiration
 
 #### felix-client

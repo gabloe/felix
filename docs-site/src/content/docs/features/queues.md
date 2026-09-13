@@ -1,0 +1,129 @@
+---
+title: "Queues and Consumer Groups"
+description: "Distribute work across consumers with acknowledgements, redelivery, and dead letters."
+---
+
+A **consumer group** reads a stream as work rather than as a broadcast. Where
+every subscriber to a stream sees every record, the members of a group divide
+the records between them: one consumer holds a record at a time, and the record
+is not finished until someone says so.
+
+It is the same log underneath — see
+[Projections](/felix/architecture/projections/) — read through a cursor the
+group shares instead of a cursor per subscriber.
+
+## The loop
+
+```rust
+loop {
+    // Wait up to five seconds for work rather than spinning.
+    let batch = client
+        .group_poll_wait("t1", "default", "jobs", 0, "workers", 16, Duration::from_secs(5))
+        .await?;
+
+    for record in batch {
+        match handle(&record.payload).await {
+            Ok(()) => {
+                client.group_ack("t1", "default", "jobs", 0, "workers", record.offset).await?;
+            }
+            Err(_) => {
+                // Hand it back now rather than waiting out the timeout.
+                client.group_nack("t1", "default", "jobs", 0, "workers", record.offset).await?;
+            }
+        }
+    }
+}
+```
+
+An empty batch means nothing was available, not an error.
+
+## What the broker guarantees
+
+**A record is held by one consumer at a time.** While a claim stands, no other
+poll receives that record.
+
+**A claim expires.** A consumer that stops answering does not hold a record for
+ever: after `FELIX_GROUP_VISIBILITY_TIMEOUT_MS` the record is owed again and
+goes to whoever polls next. This is why the loop above must be able to see the
+same record twice.
+
+**The cursor moves only over a contiguous run of acknowledgements.** If you
+finish offset 6 while 5 is still outstanding, the group's saved position stays
+below 5. Acknowledging out of order is fine; the position simply waits.
+
+**Owed records go out before new ones**, so a redelivery is not starved behind a
+fast producer.
+
+> `an_offset_in_flight_is_not_handed_out_again`,
+> `a_lapsed_claim_is_handed_out_again`,
+> `the_cursor_does_not_advance_over_a_gap`,
+> `owed_records_go_out_before_new_ones`.
+
+## Retries and giving up
+
+Every delivery carries `attempts`, counting this one. `1` is a first attempt;
+anything higher is a redelivery, so a consumer can behave differently on a
+retry — log it, route it elsewhere, or give up early.
+
+After `FELIX_GROUP_MAX_ATTEMPTS` deliveries the broker gives up on a record: the
+offset is recorded as a **dead letter** and the group moves past it. Without
+that bound, one record that always fails stops the queue at that offset for
+ever.
+
+```rust
+let dead = client.group_dead_letters("t1", "default", "jobs", 0, "workers").await?;
+for offset in dead {
+    // The record is still in the log at this offset.
+    // Fixed the bug? Put it back:
+    client.group_redrive("t1", "default", "jobs", 0, "workers", offset).await?;
+    // Genuinely unprocessable? Stop tracking it:
+    // client.group_discard("t1", "default", "jobs", 0, "workers", offset).await?;
+}
+```
+
+**A dead letter is a pointer, not a copy.** The record stays in the stream's log
+at that offset, readable by an ordinary replay. Nothing is duplicated, and
+nothing is moved somewhere you have to go and find.
+
+A redrive resets the record's attempt count and makes it owed again. It does
+**not** move the group's cursor backwards, so everything already finished stays
+finished.
+
+> `a_record_is_given_up_on_after_the_attempt_bound`,
+> `a_redriven_record_is_handed_out_again`,
+> `a_redriven_record_gets_its_attempts_back`.
+
+## What a queue does not promise
+
+**Order.** A shared cursor gives it up the moment two consumers hold adjacent
+records, and a redelivery reorders regardless of how many consumers there are. A
+queue preserves the order records are *handed out* in and says nothing about the
+order they are finished in. If you need per-key ordering, use a stream with a
+routing key so related records land on one shard.
+
+**Exactly-once.** A record can arrive twice — after a claim lapses, after a
+leader is lost, or after a redrive. Handlers must tolerate seeing the same
+record again.
+
+**A consumer per group member.** A group is bound to the shard you name, and
+nothing assigns shards across a group's consumers. Running one consumer per
+shard is the application's job today; there is no coordinator handing shards
+out.
+
+**Survival of a leader failover.** The group's position lives on the broker
+leading the shard and is not replicated. If that broker is lost, the promoted
+replica starts the group from the beginning and redelivers everything.
+Technically within at-least-once, and severe — tracked as
+[#314](https://github.com/gabloe/felix/issues/314).
+
+## Configuration
+
+| Variable | Default | What it controls |
+| --- | --- | --- |
+| `FELIX_GROUP_VISIBILITY_TIMEOUT_MS` | `30000` | How long a claim stands before the record is owed again. Too short redelivers work still being done; too long leaves a dead consumer's records stuck. |
+| `FELIX_GROUP_MAX_ATTEMPTS` | `5` | Deliveries before a record is dead-lettered. |
+| `FELIX_GROUP_MAX_WAIT_MS` | `30000` | Cap on how long a polling client may ask the broker to wait. |
+
+Groups need durable storage: without `FELIX_DURABLE_STORAGE_DIR` the broker does
+not advertise the feature at all, because a position lost on every restart would
+redeliver everything each time.

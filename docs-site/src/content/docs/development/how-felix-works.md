@@ -12,12 +12,16 @@ Code references use `path::symbol` rather than line numbers because symbols are
 more stable as the implementation changes.
 
 :::danger[Current implementation versus intended architecture]
-Felix currently has a highly optimized single-node data plane: QUIC
-transport, authenticated publish/subscribe, fanout, and an ephemeral cache.
-The repository also contains foundations for durable storage, routing,
-consensus, and multi-node operation, but those pieces are not all wired into
-the running broker. This guide explicitly distinguishes implemented behavior
-from planned behavior.
+Felix runs as a cluster: brokers own shards placed by the control plane, forward
+what they do not own, replicate what they lead, and fail over to a caught-up
+replica. Durable storage, the log-backed cache, and consumer groups are wired
+into the running broker.
+
+What is *not* built is listed on the
+[status table](/felix/getting-started/what-felix-is-for/), which is the page to
+trust per capability — notably Raft for control-plane metadata, rebalancing, and
+mTLS between brokers. This guide distinguishes implemented behaviour from
+planned behaviour as it goes.
 :::
 ## 1. The shortest useful mental model
 
@@ -627,9 +631,10 @@ The important distinction is broker configuration:
 - With `ack_on_commit = true`, the broker waits until the publish worker
   completes `publish_batch_to_handle`.
 
-In the current single-node broker, "commit" means the in-memory append and
-fanout operation completed. It does **not** mean a durable disk write or
-replication quorum.
+What "commit" means depends on how the stream was registered. For an ephemeral
+stream it is the in-memory append and fanout, and nothing more. For a durable
+stream it is a write that has reached disk under the stream's fsync policy; for
+one declared `Quorum` it is a write a majority of the shard's replicas hold.
 
 Commit acknowledgements use:
 

@@ -173,14 +173,24 @@ segments on age or size. See
 
 ### How does clustering work?
 
-**Current**: Single-node broker only.
+**Built**:
+- **Sharding**: streams and caches are divided into shards and distributed
+  across brokers by rendezvous hashing
+- **One leader per shard** accepts writes; a broker that receives a request for
+  a shard it does not lead forwards it or refuses
+- **Replication**: the leader ships log records to its followers. **Not Raft** —
+  per-shard Raft was considered and rejected, because a consensus group per
+  shard multiplies its cost by the shard count for a problem leader leases plus
+  log shipping already solve. See `docs/replication-design.md`.
+- **Failover**: only a replica that actually holds the log is promoted. A shard
+  whose leader is gone and whose replicas are behind is left unavailable rather
+  than reopened empty, because a silently empty shard *is* the data loss
+- **Metadata service**: the control plane tracks topology and placement
 
-**Planned**:
-- **Sharding**: Streams divided into shards, distributed across brokers
-- **Replication**: Raft-based consensus for shard replicas
-- **Leader election**: One leader per shard accepts writes
-- **Follower reads**: Optional read-from-follower for scalability
-- **Metadata service**: Control plane tracks topology and routing
+**Not built**:
+- **Follower reads.** Every read goes to the leader
+- **Rebalancing.** A shard whose leader is alive is never moved, however uneven
+  that leaves the cluster
 
 See [Control Plane documentation](/felix/api/control-plane-api/) for details.
 
@@ -481,26 +491,37 @@ See [Project Structure](/felix/development/project-structure/) for details.
 
 ## Roadmap Questions
 
-### When will Felix have durability?
+### Does Felix have durability?
 
-Durable storage is planned for **Q2 2026** (tentative):
+Yes, per stream. A stream registered with `durable: true` writes every record to
+a log-structured segment store before acknowledging the publish, and a
+subscriber can replay from any retained offset.
 
-- WAL-based append log
-- Segmented storage
-- Retention policies
-- Replay from offset
+- Segmented storage, with sparse indexes rebuilt from the segments rather than
+  trusted from disk
+- Torn-tail repair at startup; interior corruption refuses to start rather than
+  silently losing acknowledged records
+- Replay from offset, joining live delivery with no gap and no duplicate
 
-Track progress in GitHub issues.
+**Retention is the gap**: a policy is accepted and recorded, and nothing deletes
+segments on age or size yet. A stream grows until the disk does.
 
-### When will clustering be available?
+### Is clustering available?
 
-Multi-node clustering is in active development:
+Yes. Sharding, replication, and the control plane are built:
 
-- **Sharding**: Q1 2026 (tentative)
-- **Replication**: Q2 2026 (tentative)
-- **Control plane**: In progress
+- **Sharding**: every stream and cache is split into shards, each with one
+  owning broker chosen by rendezvous hashing
+- **Replication**: leaders ship log records to followers; `Quorum` streams wait
+  for a majority before acknowledging
+- **Failover**: a lost leader is replaced by a replica that holds the log, in
+  about a second on a local three-node cluster
+- **Control plane**: REST over Postgres, placing shards on a timer
 
-See [Control Plane docs](/felix/api/control-plane-api/) for design.
+What is missing is **rebalancing** — a shard whose leader is alive is never
+moved, however uneven that leaves the cluster — and **mTLS between brokers**.
+
+See [Control Plane docs](/felix/api/control-plane-api/).
 
 ### Will there be clients for other languages?
 

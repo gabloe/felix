@@ -82,6 +82,7 @@ export default defineConfig({
             { label: 'Durable Storage', slug: 'architecture/durable-storage' },
             { label: 'Durable Segment Format', slug: 'architecture/storage-format' },
             { label: 'Semantics', slug: 'architecture/semantics' },
+            { label: 'Projections', slug: 'architecture/projections' },
           ],
         },
         {
@@ -99,6 +100,7 @@ export default defineConfig({
           items: [
             { label: 'QUIC Transport', slug: 'features/quic-transport' },
             { label: 'Pub/Sub Streaming', slug: 'features/pubsub' },
+            { label: 'Queues and Consumer Groups', slug: 'features/queues' },
             { label: 'Distributed Cache', slug: 'features/cache' },
             { label: 'Performance Tuning', slug: 'features/performance' },
             { label: 'Performance & Platform Notes', slug: 'features/performance-platform-notes' },

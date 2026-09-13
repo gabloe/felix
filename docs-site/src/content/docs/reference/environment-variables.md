@@ -1300,3 +1300,98 @@ cargo run --release -p broker -- --validate-config
 - **Full configuration details**: [Configuration Reference](/felix/reference/configuration/)
 - **Troubleshooting**: [Troubleshooting Guide](/felix/reference/troubleshooting/)
 - **Performance tuning**: [Performance Guide](/felix/features/performance/)
+
+## Reference: every remaining variable
+
+The sections above cover the variables most deployments touch, each with an
+example and the reasoning. What follows is the rest, in brief, so the page is
+**complete** — `scripts/check_env_reference.py` fails the build if a variable
+exists in the code and is not named here.
+
+Variables used only by benchmarks, demos and the test harness are deliberately
+absent; they are listed in that script rather than here.
+
+### Control plane
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_CONTROLPLANE_BIND` | `0.0.0.0:8443` | Address the control-plane API listens on. |
+| `FELIX_CONTROLPLANE_METRICS_BIND` | — | Separate address for the metrics endpoint. |
+| `FELIX_CONTROLPLANE_CONFIG` | — | Path to a config file; environment variables override it. |
+| `FELIX_CONTROLPLANE_STORAGE_BACKEND` | `memory` | `memory` or `postgres`. `memory` loses everything on restart. |
+| `FELIX_CONTROLPLANE_POSTGRES_URL` | — | Connection string. Required when the backend is `postgres`. |
+| `FELIX_CONTROLPLANE_POSTGRES_MAX_CONNECTIONS` | `10` | Pool size. Caps concurrent database work. |
+| `FELIX_CONTROLPLANE_POSTGRES_CONNECT_TIMEOUT_MS` | `5000` | Bounds establishing a new physical connection. |
+| `FELIX_CONTROLPLANE_POSTGRES_ACQUIRE_TIMEOUT_MS` | `5000` | Bounds waiting for a pooled connection before failing fast. |
+| `FELIX_CONTROLPLANE_CHANGES_LIMIT` | `1000` | Maximum changes returned by one changefeed page. |
+| `FELIX_CONTROLPLANE_CHANGE_RETENTION_MAX_ROWS` | `10000` | Bounds the append-only change tables. Smaller means a watcher can fall behind sooner and need a fresh snapshot. |
+| `FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS` | — | Comma-separated JWS algorithms accepted from an upstream IdP. |
+| `FELIX_READINESS_TIMEOUT_MS` | `2000` | Longest a readiness check may take before it counts as a failure. Keep it below the prober's own timeout so the reason is reported rather than lost. |
+| `FELIX_READINESS_CACHE_TTL_MS` | `1000` | How long a readiness answer is reused. Bounds probe cost regardless of how many probers there are, and bounds how long recovery takes to become visible. |
+| `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Budget for draining in-flight requests after SIGTERM before tasks are cancelled. |
+| `FELIX_REGION_ID` | `local` | Region this instance reports. |
+| `FELIX_BOOTSTRAP_ENABLED` | `false` | Enables the first-run bootstrap endpoints. Leave off once credentials exist. |
+| `FELIX_BOOTSTRAP_TOKEN` | — | Token the bootstrap endpoints require. |
+| `FELIX_BOOTSTRAP_BIND_ADDR` | — | Restricts bootstrap to a separate listener. |
+
+### Node identity and membership
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_NODE_ID` | — | This broker's identity in the cluster. Must be stable across restarts. |
+| `FELIX_NODE_ADVERTISE_ADDR` | — | Address peers should reach this broker on. |
+| `FELIX_CLIENT_ADVERTISE_ADDR` | — | Address *clients* should reach it on, when it differs from the peer address. |
+| `FELIX_NODE_TOKEN` / `FELIX_NODE_TOKEN_FILE` | — | Credential this broker presents to the control plane. |
+| `FELIX_NODE_HEARTBEAT_INTERVAL_MS` | `5000` | How often a broker reports itself alive. |
+| `FELIX_NODE_EXPIRY_TIMEOUT_MS` | `15000` | Silence after which a node is considered gone. Placement will not promote a replica whose last report is older than roughly twice this. |
+| `FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS` | `2000` | How often expiry is evaluated. |
+| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement re-plans. Bounds how quickly a failover happens. |
+| `FELIX_CP_URL`, `FELIX_CP_SYNC_INTERVAL_MS` | — | Short aliases used by the demos and cluster harness. |
+
+### Peer protocol, between brokers
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_INTERNAL_BIND` | — | Address for the broker-to-broker QUIC endpoint. Separate from the client one. |
+| `FELIX_INTERNAL_CONNS_PER_PEER` | `1` | Connections held to each peer. |
+| `FELIX_INTERNAL_STREAMS_PER_CONN` | `4` | Multiplexed streams per peer connection, so one large forwarded batch does not block smaller requests. |
+| `FELIX_INTERNAL_MAX_INFLIGHT` | `1024` | Outstanding requests allowed per peer. |
+| `FELIX_INTERNAL_REQUEST_TIMEOUT_MS` | `5000` | Bounds one forwarded request. |
+| `FELIX_INTERNAL_HANDSHAKE_TIMEOUT_MS` | `2000` | Bounds dialling a peer that is gone. |
+| `FELIX_INTERNAL_IDLE_TIMEOUT_MS` | `60000` | Idle timeout on a peer connection. |
+| `FELIX_INTERNAL_RECONNECT_BASE_MS` | `50` | First reconnect backoff after losing a peer. |
+| `FELIX_INTERNAL_RECONNECT_MAX_MS` | `5000` | Backoff ceiling. |
+| `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` | `5000` | Longest a `Quorum` publish waits for a majority before failing. |
+
+### Consumer groups
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_GROUP_VISIBILITY_TIMEOUT_MS` | `30000` | How long a consumer's claim on a record stands. |
+| `FELIX_GROUP_MAX_ATTEMPTS` | `5` | Deliveries before a record is dead-lettered. |
+| `FELIX_GROUP_MAX_WAIT_MS` | `30000` | Cap on a long-polling client's requested wait. |
+
+### Durable storage tuning
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_DURABLE_ROLLOVER_THRESHOLD_PERCENT` | — | How full a segment gets before a rollover is prepared. |
+| `FELIX_DURABLE_MAX_OVERSHOOT_PERCENT` | — | How far a segment may exceed its target rather than splitting a batch. |
+| `FELIX_DURABLE_REPAIR_CHECKSUM_TAIL` | — | Whether recovery re-verifies checksums over the tail as well as the structure. |
+
+### Client and transport
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FELIX_CLIENT_CONFIG` | — | Path to a client config file. |
+| `FELIX_AUTH_TENANT`, `FELIX_AUTH_TOKEN`, `FELIX_TOKEN` | — | Credentials a client presents. |
+| `FELIX_KEEPALIVE_MS` | — | QUIC keep-alive interval. |
+| `FELIX_MAX_IDLE_TIMEOUT_MS` | `60000` | QUIC idle timeout before a connection is dropped. |
+| `FELIX_EVENT_ROUTER_MAX_PENDING` | `16384` | Events buffered by the client's router before it applies backpressure. |
+| `FELIX_SUB_DEDICATED_THREAD`, `FELIX_SUB_DEDICATED_QUEUE_CAPACITY` | — | Give a subscription its own thread and queue. |
+| `FELIX_SUB_DELIVERY_SHAPING`, `FELIX_SUB_EGRESS_CONNS` | — | Delivery shaping and egress fan-out on the broker. |
+| `FELIX_PUBLISH_SHARDING` / `FELIX_PUB_SHARDING` | — | Route publishes to a worker by stream rather than round-robin. |
+| `FELIX_PUMP_COLOCATE` | — | Colocate the delivery pump with the publish worker for a stream. |
+| `FELIX_WORKER_THREADS` | — | Tokio worker threads. Defaults to the core count. |
+| `FELIX_TIMING_SAMPLE_EVERY` | — | Sample rate for timing histograms. |
+| `FELIX_SERVICE_INSTANCE_ID` | — | Instance identity reported in telemetry. |

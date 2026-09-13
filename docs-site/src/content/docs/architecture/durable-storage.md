@@ -281,10 +281,9 @@ makes it fail rather than print the wrong numbers.
 
 ## Limits today
 
-- **One log per stream.** `shards` is carried through to the shard key but the
-  data path is not yet sharded.
 - **No retention.** `truncate` exists for replication's benefit; nothing deletes
-  segments on age or size yet.
+  segments on age or size yet. A stream's retention policy is accepted and
+  recorded, and nothing acts on it.
 - **No tiered storage.** `TieredStore` and its companions are declared traits
   with no implementation. There is no hot/cold split and no cold-tier read path;
   every read comes from local segments. Sealed segments are immutable and carry
