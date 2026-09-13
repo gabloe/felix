@@ -13,5 +13,6 @@ pub mod membership_metrics;
 pub mod model;
 pub mod observability;
 pub mod placement;
+pub mod readiness;
 pub mod replica_positions;
 pub mod store;

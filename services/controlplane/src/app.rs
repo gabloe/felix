@@ -36,6 +36,8 @@ pub struct AppState {
     /// second control-plane instance starts knowing nothing and cannot promote
     /// until leaders have reported to *it* — see `docs/replication-design.md`.
     pub replica_positions: Arc<crate::replica_positions::ReplicaPositions>,
+    /// Whether this instance can serve, bounded and cached.
+    pub readiness: Arc<crate::readiness::Readiness>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -60,6 +62,17 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/system/health",
             axum::routing::get(api::system::system_health),
+        )
+        // Two probes, because they drive different actions: `live` decides
+        // whether to restart the process, `ready` whether to send it traffic.
+        // See `docs/control-plane.md` for the intervals these expect.
+        .route(
+            "/v1/system/live",
+            axum::routing::get(api::system::system_live),
+        )
+        .route(
+            "/v1/system/ready",
+            axum::routing::get(api::system::system_ready),
         )
         .route(
             "/v1/regions",

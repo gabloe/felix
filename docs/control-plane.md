@@ -14,7 +14,16 @@ the data plane and does not carry user payloads.
 - Strong consistency for data reads and writes (handled by dataplane + storage).
 
 ## RAFT Scope (Control Plane Only)
-The RAFT log stores authoritative metadata:
+
+> **Design intent, not current behaviour.** The control plane is a stateless
+> REST service over Postgres; there is no Raft group, no Raft log, and no
+> leader election among control-plane instances. Availability comes from running
+> several instances against a highly available Postgres, which is what the
+> readiness section below is for. Raft remains the intended answer for making
+> metadata highly available without depending on Postgres for it, and is not
+> started. Everything in this section describes that end state.
+
+The RAFT log would store authoritative metadata:
 - Node membership and health state (up/down, drains).
 - Stream/shard placement and leadership.
 - Cluster-wide config (retention, limits, feature flags).
@@ -552,19 +561,57 @@ a query and produce no duplicate events.
 - Object store access is configured per broker (later), not in the control plane.
 
 ### Storage
-- Control plane uses a PVC per pod for RAFT logs and snapshots.
+- Control plane pods are stateless today: all metadata is in Postgres, and an
+  instance holds nothing worth a volume. The PVC below belongs to the Raft end
+  state described above.
+- (Intended) Control plane uses a PVC per pod for RAFT logs and snapshots.
 - Dataplane brokers use PVCs for durable log segments (when enabled).
 
 ### Services
-- Headless Service for control plane peer discovery (RAFT).
+- (Intended) Headless Service for control plane peer discovery (RAFT). Not
+  needed today: instances do not know about each other.
 - ClusterIP Service for control plane client API (watch/snapshot/health).
 - Separate Service for broker QUIC ingress.
 
 ### Scheduling + Ops
-- Control plane replicas: 3 or 5 (odd count for quorum).
-- Use PodDisruptionBudgets to preserve quorum and shard ownership.
+- Control plane replicas: two or more. An odd count matters only for the Raft
+  end state; instances share nothing today, so any number works and two is
+  enough to survive losing one.
+- Use PodDisruptionBudgets so a rolling deploy cannot take every instance at
+  once.
 - Prefer anti-affinity for control plane pods to avoid single-node failure.
-- Configure liveness/readiness probes on control plane API endpoints.
+- Configure liveness and readiness probes as described under
+  [Health probes](#health-probes).
+
+## Health probes
+
+Two endpoints, because they drive different actions.
+
+| Path | Question | What fails it | Wire it to |
+| --- | --- | --- | --- |
+| `/v1/system/live` | Should this process be restarted? | Nothing outside the process. It touches no database and answers `200` whenever the runtime can answer at all. | liveness probe |
+| `/v1/system/ready` | Should this instance get traffic? | The store not answering, answering an error, or being on an older schema than this build expects. `503` with a reason. | readiness probe |
+| `/v1/system/health` | — | The same check as `/v1/system/ready`. Kept because deployments already point at it. | nothing new |
+
+**Liveness must not check the database.** A liveness probe drives restarts, and
+an external database outage that fails one restarts every instance, repeatedly,
+for a fault none of them caused and no restart can fix. That is the single most
+important line here.
+
+Recommended settings, and why:
+
+| Setting | Value | Reason |
+| --- | --- | --- |
+| readiness `periodSeconds` | `2`–`5` | The answer is cached for `FELIX_READINESS_CACHE_TTL_MS` (1s), so polling faster costs nothing extra but gains nothing either. |
+| readiness `timeoutSeconds` | `3` | Above `FELIX_READINESS_TIMEOUT_MS` (2s), so the service answers before the prober gives up and the reason is reported rather than lost. |
+| readiness `failureThreshold` | `2`–`3` | One slow answer during a Postgres failover should not pull an instance out. |
+| liveness `periodSeconds` | `10` | It answers from memory; there is nothing to poll hard for. |
+| liveness `failureThreshold` | `3` | A restart is the most expensive response available. |
+
+The readiness check is bounded and cached, so its cost is one query per second
+per instance no matter how many probers there are. A transient outage clears on
+its own: readiness returns as soon as the store answers again, within the cache
+window.
 
 ## Open Questions
 - Snapshot cadence and maximum delta size.

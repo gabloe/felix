@@ -67,6 +67,9 @@ impl Cluster {
             bootstrap_enabled: false,
             bootstrap_token: None,
             node_liveness: LIVENESS,
+            readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+                std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+            )),
             replica_positions: std::sync::Arc::new(
                 controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
             ),

@@ -43,6 +43,9 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1126,8 +1129,13 @@ impl AuthStore for FailingStore {
     }
 }
 
+/// Health answers 503 when the store does not, and it must probe the *real*
+/// store to do so — a readiness wired to something that cannot fail would make
+/// this pass while the endpoint reported ready during an outage.
 #[tokio::test]
-async fn system_health_reports_internal_error_on_store_failure() {
+async fn system_health_reports_unavailable_on_store_failure() {
+    let failing: Arc<dyn controlplane::store::ControlPlaneAuthStore + Send + Sync> =
+        Arc::new(FailingStore::default());
     let state = AppState {
         region: Region {
             region_id: "local".to_string(),
@@ -1139,11 +1147,14 @@ async fn system_health_reports_internal_error_on_store_failure() {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore::default()),
+        store: Arc::clone(&failing),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&failing))),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1156,7 +1167,18 @@ async fn system_health_reports_internal_error_on_store_failure() {
         .body(Body::empty())
         .expect("health");
     let response = app.clone().oneshot(health).await.expect("health");
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // 503, not 500: this says "do not send me traffic", which a load balancer
+    // acts on. A 500 reads as a fault to page someone about.
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // And liveness is unaffected, which is the whole point of the split: an
+    // unreachable database must not restart the process.
+    let live = Request::builder()
+        .uri("/v1/system/live")
+        .body(Body::empty())
+        .expect("live");
+    let response = app.clone().oneshot(live).await.expect("live");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -1177,6 +1199,9 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1243,6 +1268,9 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1362,6 +1390,9 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -1427,6 +1458,9 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
         bootstrap_enabled: true,
         bootstrap_token: Some("secret".to_string()),
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

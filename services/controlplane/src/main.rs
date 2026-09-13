@@ -209,6 +209,13 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
         }
     };
 
+    let readiness = Arc::new(controlplane::readiness::Readiness::with_limits(
+        // The store, seen through the one method readiness needs.
+        Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&store))),
+        std::time::Duration::from_millis(config.readiness_timeout_ms),
+        std::time::Duration::from_millis(config.readiness_cache_ttl_ms),
+    ));
+
     Ok(AppState {
         region: Region {
             region_id: config.region_id,
@@ -221,6 +228,7 @@ async fn build_state(config: config::ControlPlaneConfig) -> anyhow::Result<AppSt
             bridges: false,
         },
         store,
+        readiness,
         oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
             std::time::Duration::from_secs(3600),
             std::time::Duration::from_secs(3600),
@@ -259,6 +267,8 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
+            readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
         let state = build_state(config).await.expect("state");
         assert_eq!(state.region.region_id, "local");
@@ -283,6 +293,8 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
+            readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
         let err = build_state(config).await.err().expect("missing postgres");
         assert!(err.to_string().contains("postgres configuration missing"));
@@ -311,6 +323,8 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
+            readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
         let err = build_state(config)
             .await
@@ -339,6 +353,8 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
+            readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
         run_with_shutdown(config, async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -366,6 +382,8 @@ mod tests {
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
+            readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
+            readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
         run_with_shutdown(config, async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
