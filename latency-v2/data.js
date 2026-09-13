@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789328570456,
+  "lastUpdate": 1789331357651,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8580,6 +8580,72 @@ window.BENCHMARK_DATA = {
             "range": "3424.47",
             "unit": "us",
             "extra": "trials: 5\nmedian: 630.00\nmean: 2270.00\nstdev: 3424.47\ncv: 150.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d74d6caf51b8ea478022e63d8610de5da1b0c0b",
+          "message": "Keep serving after readiness flips, so a drain is observable (#322)\n\n* feat(controlplane): keep serving after readiness flips, so drains are observable\n\nReadiness-first shutdown only helps if something has time to act on it. The\ncontrol plane flipped readiness to draining and cancelled the listener in the\nsame breath, microseconds apart, so a load balancer polling every couple of\nseconds was still routing here when the socket went away — the requests that\nreadiness-first exists to protect.\n\nFELIX_SHUTDOWN_PREDRAIN_MS (default 5000) is that gap. The instance reports\nunready and keeps answering normally until it elapses. A second termination\nsignal ends it early, since an operator restarting by hand is not waiting on a\nload balancer.\n\nThe ordering test asserts both sides: 503 from /v1/system/ready alongside 200\nfrom /v1/system/live on the same connection. 503 on its own would also be\nproduced by a process that had stopped serving, which is the failure being\nruled out; liveness answering proves the server is still there and chose to\nreport itself unready.\n\nUnder Kubernetes a preStop hook already covers propagation, so the deployment\nexample sets this to 0 rather than waiting twice. It is the mechanism to reach\nfor outside Kubernetes, where nothing removes an instance from rotation except\nits readiness probe failing.\n\nControls: removing the hold-off fails readiness_fails_before_the_listener_closes\nand nothing else; removing the second-signal escape hatch fails\na_second_signal_cuts_the_hold_off_short and nothing else.\n\n* fix(lifecycle): install termination handlers before anything binds\n\nCI failed `binary_starts_and_stops_on_sigint_without_bootstrap` with \"exited\nwith signal: 2 (SIGINT)\" — the default disposition, meaning no handler was\ninstalled when the signal arrived.\n\n`termination_signal` was an `async fn`, so `signal(SignalKind::terminate())`\nand `ctrl_c()` did not register until the returned future was first polled.\nCallers bind their listeners and only then reach the `select!` that awaits it,\nso between the port answering and that `select!` the process was reachable with\nSIGTERM still set to terminate. A signal there kills it outright: no readiness\nflip, no drain. That is the exact failure the drain path exists to prevent, and\nit applied to the broker as well as the control plane.\n\nIt surfaced now because this branch adds two more control-plane processes to a\ntest binary that spawns them concurrently, which widened the window enough for\na loaded CI runner to land in it.\n\nNow a plain `fn` returning a future: handlers are installed by the call, which\nboth call sites evaluate as an argument before the callee binds anything.\nSIGINT moves from `ctrl_c()` to an explicit `SignalKind::interrupt()` stream so\nit registers eagerly too, and the two are kept independently — one working\nsignal beats no shutdown path when registering the other fails.\n\nThe test raises SIGTERM at the test process after calling but before polling.\nWith registration lazy the whole test binary dies of SIGTERM rather than one\nassertion failing, which is the loudest possible control. It lives in\n`controlplane` because `felix-common`'s `lifecycle` is behind a non-default\nfeature that the workspace test run does not enable.",
+          "timestamp": "2026-09-13T13:26:37-07:00",
+          "tree_id": "e9f6581688c9c69b1e3e59af53ec9ac9691b07b4",
+          "url": "https://github.com/gabloe/felix/commit/4d74d6caf51b8ea478022e63d8610de5da1b0c0b"
+        },
+        "date": 1789331355142,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.80\nstdev: 1.48\ncv: 0.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 209.20\nstdev: 3.27\ncv: 1.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 250,
+            "range": "19.60",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 250.00\nmean: 254.60\nstdev: 19.60\ncv: 7.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 202,
+            "range": "6.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 204.20\nstdev: 6.06\ncv: 2.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 431,
+            "range": "322.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 431.00\nmean: 568.00\nstdev: 322.85\ncv: 56.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1431,
+            "range": "637.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1431.00\nmean: 1453.00\nstdev: 637.99\ncv: 43.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
