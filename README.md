@@ -26,17 +26,23 @@ implementation are still moving quickly.
 
 ## System Overview
 
-Felix is a low-latency, QUIC-based pub/sub and cache system designed for high fanout,
-high throughput, and predictable tail latency when properly tuned.
+Felix is a low-latency, QUIC-based replicated log designed for high fanout, high
+throughput, and predictable tail latency when properly tuned.
 
-At its core, Felix uses a framed protocol (felix-wire) over QUIC streams to unify
-event streaming (publish/subscribe) and request/response caching (put/get with TTL),
-with explicit control over multiplexing, batching, and flow control.
+Streams, caches, and queues are three semantics over that one log rather than
+three subsystems: a stream is the log read forward, a cache is a key → latest-value
+projection of it, and a queue is a durable cursor over it. A framed protocol
+(felix-wire) over QUIC streams carries all three, with explicit control over
+multiplexing, batching, and flow control.
+
+Shards are placed across brokers by the control plane, replicated by leader leases
+and log shipping, and survive losing a leader; a publish can be made to wait for a
+quorum of the replica set before it is acknowledged.
 
 Core components
 - `felix-wire`: framed binary protocol for all clients and brokers.
 - `felix-transport`: QUIC abstraction layer (client/server, pools, stream lifecycle).
-- `felix-broker`: pub/sub logic, cache storage, stream registry, fanout.
+- `felix-broker`: pub/sub logic, cache and queue projections, stream registry, fanout.
 - `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
 - `felix-storage`: storage layer for broker.
 - `services/broker`: runnable broker node.
@@ -94,9 +100,12 @@ the test behind every claim, [`docs/projections.md`](docs/projections.md).
 
 ## Current Focus
 
+- Control-plane availability and resiliency: readiness that reflects real
+  dependencies, drains that a load balancer can act on, and surviving a rolling
+  restart
+- Hardening the multi-node story — chaos testing, cluster-scale latency budgets,
+  and authenticating the broker-to-broker surface
 - Fanout, backpressure, and isolation as core product behavior
-- Broker/data-plane foundations
-- Control-plane metadata and sync (including locality-aware routing policies)
 - Protocol and conformance
 
 ## Docs
@@ -115,7 +124,7 @@ In-repo design docs (`docs/`):
 - `docs/auth.md` — authentication and authorization
 - `docs/broker-config.md`, `docs/client-config.md` — config field reference with example profiles
 - `docs/demos.md` — demo binaries and what each one shows
-- `docs/todos.md` — implementation checklist
+- `docs/todos.md` — the original MVP checklist, kept as a historical record
 
 The project is intentionally building depth before breadth: defining a
 stable wire envelope and internal data model, and measuring
@@ -140,8 +149,10 @@ latency/backpressure behavior early to keep p99/p999 predictable.
 ## What does not exist yet
 
 - Raft for control-plane metadata, so its availability does not rest on Postgres
-- Retention: a policy is recorded and nothing acts on it, so a stream grows
-  until the disk does
+- Per-stream retention: a policy is recorded on the stream and nothing reads it.
+  Retention itself works, but it is configured per broker
+  (`FELIX_DURABLE_RETENTION_BYTES` / `_SECONDS`) and is off unless set, so by
+  default a log grows until the disk does
 - Rebalancing: a shard whose leader is alive is never moved, however uneven that
   leaves the cluster
 - mTLS between brokers, tiered storage, cross-region bridges, and clients in any
@@ -183,7 +194,7 @@ docs/
   control-plane.md   # control plane (Raft sections are design intent)
   protocol.md        # wire protocol specification
   design.md          # product + protocol design notes
-  todos.md           # implementation checklist
+  todos.md           # the original MVP checklist (historical)
   assets/            # documentation images (logo, diagrams)
 
 docs-site/           # Astro Starlight site sources
@@ -249,7 +260,7 @@ cache, consumer groups, and tenant-scoped RBAC.
 Next, roughly in order:
 
 - Control-plane high availability, and Raft for its metadata
-- Retention, so a stream stops growing until the disk does
+- Per-stream retention, so a stream's declared policy is the one enforced
 - mTLS between brokers, and the rest of the security hardening
 - Rebalancing and Kubernetes packaging
 - Tiered storage and cold-tier reads

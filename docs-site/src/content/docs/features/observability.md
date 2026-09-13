@@ -257,9 +257,11 @@ let fanout_timings = telemetry::fanout_timings();
 // Find slowest stage
 ```
 
-## Metrics (Planned)
+## Metrics
 
-Felix will expose metrics in Prometheus format for integration with standard monitoring stacks.
+Felix exposes metrics in Prometheus format for integration with standard
+monitoring stacks. The broker and the control plane each serve their own
+endpoint.
 
 ### Metrics Endpoint
 
@@ -413,19 +415,34 @@ readinessProbe:
   periodSeconds: 10
 ```
 
-## Distributed Tracing (Future)
+## Distributed Tracing
 
-Felix will support OpenTelemetry for distributed tracing:
+The broker builds an OTLP tracer provider on startup and installs a
+`tracing-opentelemetry` layer when one is available. It is best-effort: if the
+collector cannot be reached the broker starts anyway and logs without traces,
+because losing telemetry must not stop a broker from serving.
 
-**Configuration**:
+**Configuration** is by environment variable. Felix does take a YAML config file
+(`FELIX_BROKER_CONFIG`, see [Configuration](/felix/reference/configuration/)),
+but it has no tracing keys — the exporter speaks OTLP over gRPC (tonic) and is
+configured entirely through the standard OTel variables:
 
-```yaml
-tracing:
-  enabled: true
-  exporter: otlp
-  endpoint: http://otel-collector:4317
-  sample_rate: 0.1                     # Sample 10% of requests
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+export RUST_LOG=info                      # the tracing subscriber's filter
 ```
+
+Resource attributes are attached from the environment, so a span carries where
+it came from without the broker being told twice:
+
+| Variable | Becomes |
+|---|---|
+| `FELIX_SERVICE_INSTANCE_ID`, falling back to `HOSTNAME` | `service.instance.id` |
+| `K8S_CLUSTER_NAME` | `k8s.cluster.name` |
+| `K8S_NAMESPACE_NAME` | `k8s.namespace.name` |
+| `K8S_POD_NAME` | `k8s.pod.name` |
+| `CLOUD_REGION` | `cloud.region` |
+| `DEPLOYMENT_ENVIRONMENT` | `deployment.environment` |
 
 **Example trace**:
 

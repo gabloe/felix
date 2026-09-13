@@ -1,13 +1,23 @@
 # Felix MVP To-Do List
 
-This list tracks only the **minimal single-node MVP**. Items beyond MVP live in
-future planning docs.
+**The MVP described here was completed, and Felix has moved well past it.** This
+file is kept as the historical checklist and for the design sketches and answered
+open questions further down, which are still the reasoning behind the current
+storage layer.
 
-## What the MVP Achieves
-The MVP delivers a single-node broker that accepts QUIC connections, supports
-publish/subscribe over a framed v1 protocol, and provides an in-memory TTL cache.
-It focuses on correctness and operability (tests, demo, basic wiring) rather than
-durability, clustering, or advanced observability.
+It is **not** the place to look for current status. Two places are:
+
+- The [status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/),
+  kept current per capability, and the authority when anything disagrees with it.
+- [GitHub issues and milestones](https://github.com/gabloe/felix/issues) for what
+  is being worked on.
+
+## What the MVP Achieved
+A single-node broker that accepts QUIC connections, supports publish/subscribe
+over a framed v1 protocol, and provides an in-memory TTL cache — focused on
+correctness and operability rather than durability, clustering, or advanced
+observability. Durability, clustering, replication, failover, the log-backed
+cache, and consumer groups all landed afterwards.
 
 ---
 
@@ -43,7 +53,7 @@ durability, clustering, or advanced observability.
       exactly as long as waiting on the connection. What is still untested is a real
       signal: `run_with_shutdown` is driven by a synthetic future in tests, and nothing
       sends an actual SIGTERM to a running process.
-- [ ] Backpressure defaults (caps per connection/subscription)
+- [X] Backpressure defaults (caps per connection/subscription)
 
 ## Broker core (`felix-broker`)
 - [X] In-memory stream registry (explicit registration)
@@ -69,25 +79,35 @@ durability, clustering, or advanced observability.
 - [X] Client can publish to a named stream over QUIC
 - [X] Subscribers receive stream events over QUIC
 - [X] Cache `put/get` available over QUIC
-- [ ] Latency target: p999 <= 1 ms for small payloads on localhost baseline
+- [X] Latency target: p999 <= 1 ms for small payloads on localhost baseline —
+      met with margin: 214–251 µs at fanout 1 and 340–483 µs at fanout 10. See
+      [Benchmarks](https://gabloe.github.io/felix/features/benchmarks/).
 - [X] Basic metrics exist and show throughput/latency
 - [X] Unit tests cover wire encode/decode and broker fanout behavior
 
-## Post-MVP (explicitly out of scope for minimal MVP)
-- [ ] Queue semantics (consumer groups, ack/redelivery, delivery guarantees)
-- [ ] Distributed cache backed by Raft/consensus
-- [ ] Multi-node clustering and replication
-- [ ] Design sharding/replication/quorum to move beyond single-node; align with the RAFT control-plane draft and work through the details
+## Post-MVP (out of scope for the minimal MVP; since delivered)
+- [X] Queue semantics — consumer groups with poll, acknowledge, hand-back,
+      visibility-timeout redelivery, an attempt bound, and dead letters.
+- [X] Distributed cache — though **not** by Raft. A key routes to one owner and
+      the shard is replicated by leader leases and log shipping; per-shard Raft was
+      considered and rejected in [replication-design.md](replication-design.md).
+- [X] Multi-node clustering and replication
+- [X] Design sharding/replication/quorum to move beyond single-node — settled in
+      [replication-design.md](replication-design.md). Raft remains the intended
+      answer for control-plane *metadata* and not for replicating records.
 
 ## Data scalability with sharding
 - [X] Streams should be defined with shard count
-- [ ] Caches should be defined with shard count
-- [ ] Ops should be directed to the correct shard leader
-- [ ] Leader election should be managed
-- [ ] Leader failover should be handled (RAFT handles it?)
+- [X] Caches should be defined with shard count (`Cache::shards`)
+- [X] Ops should be directed to the correct shard leader — a publish or cache
+      operation for a shard this broker does not own is forwarded to the owner.
+- [X] Leader election should be managed — the control plane assigns, and a lease
+      fences the assignment.
+- [X] Leader failover should be handled — by promotion of a replica that holds
+      the log, not by Raft.
 
 ## Data durability and persistence
-- [ ] Add durable backend for control plane
+- [X] Add durable backend for control plane — Postgres, with `sqlx::migrate!`.
 - [X] Add durable backend for data plane — segmented, checksummed, crash-safe
       log behind `StreamMetadata::durable`. See
       [Durable Storage](durable-storage.md).
@@ -127,7 +147,8 @@ durability, clustering, or advanced observability.
    [Durable Storage](durable-storage.md).
 
 ## Performance optimization
-- [ ] Figure out how to handle backpressure
+- [X] Figure out how to handle backpressure — bounded queues at every stage with
+      an explicit overflow policy; defaults validated under sustained overload.
 - [X] Measure P999 tail latency and throughput
 - [ ] Identify optimizations and minspec clustering for optimization
 
@@ -135,7 +156,7 @@ durability, clustering, or advanced observability.
 - [ ] Define scale unit boundaries (per-tenant vs per-namespace vs per-cache/stream)
 - [ ] Create Helm chart or Kustomize manifests for control plane + broker
 - [ ] Add ConfigMap/Secret wiring (QUIC bind, control plane URL, auth keys)
-- [ ] Implement readiness/liveness endpoints used by probes
+- [X] Implement readiness/liveness endpoints used by probes
 - [ ] Expose service types (ClusterIP + optional LoadBalancer) for broker QUIC
 - [ ] Add horizontal scaling plan (replicas + shard assignment)
 - [ ] Add PodDisruptionBudget and resource requests/limits

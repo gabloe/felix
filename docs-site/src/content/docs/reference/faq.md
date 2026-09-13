@@ -13,9 +13,15 @@ Felix is a low-latency, QUIC-based pub/sub and distributed cache system designed
 Key features:
 
 - **QUIC transport**: Modern, multiplexed, encrypted by default
-- **Unified protocol**: Single wire protocol for pub/sub and cache
+- **Unified protocol**: Single wire protocol for streams, cache, and queues —
+  all three are semantics over one log
 - **Predictable latency**: Optimized for p99/p999, not just throughput
-- **Kubernetes-native**: Designed for cloud-native deployments
+- **Replicated**: Shards are placed across brokers, replicated by leader leases
+  and log shipping, and survive losing a leader; a publish can wait for a quorum
+- **Cloud-native in design, not yet in packaging**: readiness and liveness
+  endpoints, a bounded drain on SIGTERM, and stateless control-plane instances
+  over Postgres — but there are no published Helm charts or manifests
+  ([#131](https://github.com/gabloe/felix/issues/131))
 - **Region-aware routing** *(planned)*: `felix-router` has a basic region-bridge allowlist today; enforced data-residency guarantees are not yet implemented — see [System Design: Multi-Region Architecture](/felix/architecture/system-design/#multi-region-architecture-planned)
 
 ### How is Felix different from Kafka?
@@ -27,7 +33,7 @@ Felix is **not** a Kafka replacement but serves different use cases:
 | **Transport** | QUIC (UDP) | TCP |
 | **Encryption** | Built-in (TLS 1.3) | Optional (TLS/SASL) |
 | **Latency focus** | p99/p999 optimization | Throughput optimization |
-| **Primitives** | Pub/sub + cache unified | Log-based streaming |
+| **Primitives** | Streams, cache, and queues over one log | Log-based streaming |
 | **Persistence** | Optional per stream | Always durable |
 | **Fanout** | Native high fanout | Consumer groups |
 | **Use case** | Low-latency streaming, real-time cache | High-throughput log processing |
