@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789292310981,
+  "lastUpdate": 1789305181134,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6240,6 +6240,58 @@ window.BENCHMARK_DATA = {
             "range": "10287.47",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 571210.84\nmean: 567686.67\nstdev: 10287.47\ncv: 1.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "600b83c6fbf3a95401f7d15c134d3b24511b03ec",
+          "message": "Put consumer groups on the wire (#310)\n\nFourth slice of #280, and the one that makes a queue usable: a client can now\npoll a group, acknowledge a record, and hand one back.\n\n`group_poll`, `group_ack`, `group_nack`, behind `FEATURE_CONSUMER_GROUP`.\nAdvertised by the broker because these are requests — sending one to a broker\nwith no arm for it ends that broker's control loop rather than returning an\nerror, which is the rule `frame.rs` already states for the other bits.\n\nAdvertised only with durable storage. Without it a group's position is lost on\nevery restart, so offering the feature would invite work the broker cannot do.\n\n## Poll rather than push\n\nA queue consumer takes work when it has capacity for it, and the broker cannot\nknow when that is. The cost is that an idle consumer polls; long-polling would\nfix that and is not here.\n\n## Only the shard's leader serves a group\n\nThere is no forwarding, unlike a cache operation. A poll returns records the\nconsumer must then acknowledge, and relaying that through a second broker would\nput the claim and the acknowledgement on different machines — two brokers each\nkeeping their own in-flight state would hand out the same records and neither\nwould know. Any other broker refuses rather than answering emptily: a consumer\ntold \"nothing available\" would poll for ever against a shard it cannot be\nserved by.\n\n## Authorized as a read\n\nA group is a read position over a stream, so `stream.subscribe` covers all\nthree operations. None of them writes stream data.\n\n## Verification\n\n- Three end-to-end tests through a real broker and a real client: poll,\n  acknowledge, restart, and confirm finished work is not repeated; a nacked\n  record polled again at once; two groups over one stream each seeing every\n  record.\n- Two cluster tests, because the ownership gate cannot be exercised on a single\n  node — `dispatch` returns `Local` either way there. Removing the gate fails\n  `only_the_shard_owner_serves_a_group`.\n- Wire round-trips for every new message, including an empty batch and that ack\n  and nack differ on the wire.\n- `task test` (86 groups), `task lint`, `task demo:check`, `task conformance`.\n\n## The gap this leaves, stated plainly\n\n**Redelivery is unbounded.** There is no attempt limit and no dead-letter\ndestination, so a record that always fails is redelivered for ever and the queue\nmakes no progress past it. `semantics.md` and the status table now say so; the\nrow stays a Target rather than moving to Today because of it.\n\nRefs #280",
+          "timestamp": "2026-09-13T06:10:35-07:00",
+          "tree_id": "350a4a675ec51a8d702f8de01c738d33ec33c5af",
+          "url": "https://github.com/gabloe/felix/commit/600b83c6fbf3a95401f7d15c134d3b24511b03ec"
+        },
+        "date": 1789305180719,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230768.21,
+            "range": "4474.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230768.21\nmean: 230819.17\nstdev: 4474.94\ncv: 1.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230768.21,
+            "range": "4474.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230768.21\nmean: 230819.17\nstdev: 4474.94\ncv: 1.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56315.59,
+            "range": "4014.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56315.59\nmean: 54121.03\nstdev: 4014.34\ncv: 7.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 563155.94,
+            "range": "40143.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 563155.94\nmean: 541210.29\nstdev: 40143.45\ncv: 7.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
