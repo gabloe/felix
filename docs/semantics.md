@@ -284,9 +284,22 @@ Stated because a guarantee without its failure model is a slogan.
   choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
-- **No queue semantics reachable by a client** — nothing delivers to a consumer
-  group, acknowledges, or redelivers (#280). What exists is the foundation: a
-  group's position on a shard is durable, monotonic, and survives a restart. No
-  wire protocol carries it, so no application can use it yet.
+- **No queue semantics reachable by a client** — no wire protocol carries a
+  group subscription, an acknowledgement, or a redelivery (#280), so no
+  application can use one yet.
+
+  What exists is the machinery behind it, and its rules are already fixed. A
+  group's position on a shard is durable, monotonic, and survives a restart. Above
+  that position the broker tracks what has been handed out: a record claimed by
+  one consumer is not handed to another while the claim stands, a claim that
+  lapses makes the record owed again, and the cursor moves only over a
+  contiguous run of acknowledgements — never past a gap, which would mark a
+  record finished that nobody finished.
+
+  The in-flight set is deliberately **not** durable. A leader that dies loses it
+  and the group resumes from its cursor, so those records are delivered a second
+  time. That is at-least-once, which is what a queue offers regardless;
+  persisting it would narrow the redelivery window at the cost of a write per
+  delivery and still would not make delivery exactly-once.
 - **Retention is per stream and unbounded by default.** A stream with no
   retention policy grows until the disk does not.
