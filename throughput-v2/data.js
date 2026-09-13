@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789315729764,
+  "lastUpdate": 1789315882118,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6448,6 +6448,58 @@ window.BENCHMARK_DATA = {
             "range": "19482.27",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 749783.47\nmean: 754159.14\nstdev: 19482.27\ncv: 2.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51cf0efa2ae1f8404e810b3e9b506ca2f3fea413",
+          "message": "Hold the projection claim to its evidence, and check it (#315)\n\n#281. The founding claim was description in the architecture pages for as long\nas the project existed. This makes it a page with a citation behind every\nstatement, and a check that the citations still resolve.\n\n## docs/projections.md\n\nOne page per semantic: what it stores in the log, what it keeps in memory, what\nit rebuilds from the log. Every normative claim names the test behind it.\n\nIt also has a section for where the claims stop, so nothing above has to be read\nas covering more than it does — retention outranking a group, a cache having no\nconsistency level, and group state not being replicated.\n\n## scripts/check_doc_evidence.py\n\nA citation naming a test that no longer exists is worse than no citation: the\nclaim reads as verified and nothing checks it. Renaming a test is easy;\nremembering the prose that cites it is not.\n\nThe script extracts every backticked name from a blockquote that *begins* with\none — which is how the convention is written, and what separates a citation from\nan ordinary callout — and fails if no `fn` of that name exists. Forty-five\ncitations across the docs, all resolving.\n\nIt runs in the **Rust** CI job, not only in the docs-site build. A citation goes\nstale when someone renames a test, which is a Rust change on a Rust pull\nrequest; the docs build only runs on pushes to main that touch `docs-site/`, so\nit would never see it. The mermaid and diagram checks stay in the docs build,\nwhich is where they can be run at all — they need its dependencies.\n\n## Two stale claims the audit found\n\n`system-design.md` still said nothing delivers through consumer groups, which\nstopped being true in #310.\n\nAnd the more serious one, now #314: **a consumer group's committed position is\nnot replicated.** It lives on a root nothing places or ships, so a promoted\nreplica has no record of the group and starts it at zero, redelivering\neverything it had finished. Technically within at-least-once, which is why no\ntest failed — every group test is single-broker, and a *restart* is not a\n*failover*.\n\nRefs #281",
+          "timestamp": "2026-09-13T09:07:22-07:00",
+          "tree_id": "c8c54bae4b78dc6e95011f78937ed16d23b80d99",
+          "url": "https://github.com/gabloe/felix/commit/51cf0efa2ae1f8404e810b3e9b506ca2f3fea413"
+        },
+        "date": 1789315881725,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 251316.96,
+            "range": "5918.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251316.96\nmean: 250479.24\nstdev: 5918.55\ncv: 2.36%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 251316.96,
+            "range": "5918.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251316.96\nmean: 250479.24\nstdev: 5918.55\ncv: 2.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59471.25,
+            "range": "2525.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59471.25\nmean: 59548.94\nstdev: 2525.14\ncv: 4.24%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 594712.47,
+            "range": "25251.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 594712.47\nmean: 595489.39\nstdev: 25251.46\ncv: 4.24%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
