@@ -84,6 +84,12 @@ pub struct Broker {
     // means the broker is in-memory only and durable streams are rejected at
     // registration rather than silently downgraded.
     pub(crate) durable_storage: Option<DurableStorage>,
+    /// Consumer-group positions, when this broker has somewhere to keep them.
+    ///
+    /// `None` without durable storage, and deliberately not faked in memory: a
+    /// group whose position is lost on restart redelivers everything it had
+    /// already processed, which is worse than refusing to run a queue at all.
+    pub(crate) consumer_groups: Option<Arc<crate::consumer_groups::ConsumerGroups>>,
 }
 
 // `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
@@ -240,6 +246,7 @@ impl Broker {
             subscriber_queue_policy: DEFAULT_SUB_QUEUE_POLICY,
             next_stream_handle: AtomicU64::new(1),
             durable_storage: None,
+            consumer_groups: None,
         }
     }
 
@@ -255,6 +262,20 @@ impl Broker {
     /// Durable storage, if this broker has any.
     pub fn durable_storage(&self) -> Option<&DurableStorage> {
         self.durable_storage.as_ref()
+    }
+
+    /// Where consumer groups keep their positions.
+    pub fn with_consumer_groups(
+        mut self,
+        groups: Arc<crate::consumer_groups::ConsumerGroups>,
+    ) -> Self {
+        self.consumer_groups = Some(groups);
+        self
+    }
+
+    /// Consumer-group positions, if this broker keeps any.
+    pub fn consumer_groups(&self) -> Option<&Arc<crate::consumer_groups::ConsumerGroups>> {
+        self.consumer_groups.as_ref()
     }
 
     pub fn with_topic_capacity(mut self, capacity: usize) -> Result<Self> {

@@ -217,10 +217,35 @@ where
         }
     };
 
+    // Consumer-group positions live on their own root, for the same reason the
+    // cache does: a stream named `orders` and a cache named `orders` must not
+    // share a directory, and neither must the group state for either.
+    //
+    // Only with durable storage. A group whose position is lost on restart
+    // redelivers everything it had already processed, so an in-memory version
+    // would be worse than not offering queues at all.
+    let consumer_groups = match &durable_config {
+        Some(durable) => {
+            let root = durable.root.join("groups");
+            tracing::info!(root = %root.display(), "opening consumer-group state");
+            Some(std::sync::Arc::new(
+                felix_broker::consumer_groups::ConsumerGroups::open(&root, durable.log.clone())
+                    .with_context(|| {
+                        format!("open the consumer-group log at {}", root.display())
+                    })?,
+            ))
+        }
+        None => None,
+    };
+
     let broker = Broker::new(cache)
         .with_topic_capacity(config.subscriber_queue_capacity.max(1))
         .context("configure subscriber queue depth")?
         .with_subscriber_queue_policy(config.subscriber_queue_policy);
+    let broker = match consumer_groups {
+        Some(groups) => broker.with_consumer_groups(groups),
+        None => broker,
+    };
     let broker = match durable_storage.clone() {
         Some(storage) => broker.with_durable_storage(storage),
         None => broker,

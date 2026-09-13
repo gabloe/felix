@@ -284,7 +284,9 @@ Stated because a guarantee without its failure model is a slogan.
   choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
-- **No queue semantics** — consumer groups, acknowledgements and redelivery are
-  not implemented (#280).
+- **No queue semantics reachable by a client** — nothing delivers to a consumer
+  group, acknowledges, or redelivers (#280). What exists is the foundation: a
+  group's position on a shard is durable, monotonic, and survives a restart. No
+  wire protocol carries it, so no application can use it yet.
 - **Retention is per stream and unbounded by default.** A stream with no
   retention policy grows until the disk does not.
