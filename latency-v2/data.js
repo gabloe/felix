@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789277294347,
+  "lastUpdate": 1789281285019,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -7788,6 +7788,72 @@ window.BENCHMARK_DATA = {
             "range": "2060.23",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1269.00\nmean: 2000.80\nstdev: 2060.23\ncv: 102.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a0ab93b8bd8e049bb3fa0265a0e0b40958b13f91",
+          "message": "Track what a consumer group has handed out and what it owes (#308)\n\nSecond slice of #280, and still nothing a client can reach. The durable cursor\nsays where a group has finished; this is everything between there and the tail.\n\n## The rules, and why each one exists\n\n**A claimed record is not handed to a second consumer** while the claim stands.\nThat is the property that makes it a queue rather than a stream.\n\n**A lapsed claim makes the record owed again.** Without it a consumer that stops\nanswering is a permanent hole in the group's progress.\n\n**Owed records go out before new ones.** Preferring new work would starve\nredeliveries behind a fast producer — and those are exactly the records a\nconsumer already failed to finish once.\n\n**The cursor moves only over a contiguous run of acknowledgements.** Advancing\npast a gap marks a record finished that nobody finished, and it is never handed\nout again.\n\n**A record acknowledged while owed is finished, not redelivered.** A claim can\nlapse before its consumer answers; the answer still counts.\n\n## In memory, deliberately\n\nA leader that dies loses what was in flight and the group resumes from its\ndurable cursor, so those records are delivered again. That is at-least-once,\nwhich is what a queue offers regardless. Persisting the in-flight set would buy\na narrower redelivery window at the cost of a write per delivery, and still\nwould not make delivery exactly-once.\n\n## Verified by breaking it\n\nPure logic with the clock passed in, so every rule is testable without waiting\nfor one. Six mutations, each reverting one mechanism:\n\n| mutation | caught by |\n| --- | --- |\n| cursor advances past a gap | 2 tests |\n| new records preferred over owed | 1 |\n| ack does not clear the owed set | 2 |\n| claims never lapse | 3 |\n| nack resurrects an acked record | 1 |\n| cursor may pass the high-water mark | 1 |\n\nTwo of those tests did not exist until the mutation slipped through. An ack\narriving while a record sits *owed* rather than in flight was uncovered, as was\nan ack for an offset never handed out — which nothing in the broker produces,\nbut the tracker takes its input from a client and must not be wrecked by one.\n\n`task test` (85 groups) and `task lint` pass.\n\nRefs #280",
+          "timestamp": "2026-09-12T23:32:26-07:00",
+          "tree_id": "0112c251cedc96565f1990ed8b78a23eae213e82",
+          "url": "https://github.com/gabloe/felix/commit/a0ab93b8bd8e049bb3fa0265a0e0b40958b13f91"
+        },
+        "date": 1789281283053,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 148,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 148.00\nmean: 148.20\nstdev: 1.10\ncv: 0.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 188,
+            "range": "104.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 188.00\nmean: 234.60\nstdev: 104.21\ncv: 44.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 219,
+            "range": "136.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 219.00\nmean: 283.60\nstdev: 136.45\ncv: 48.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 190,
+            "range": "6.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 190.00\nmean: 192.20\nstdev: 6.65\ncv: 3.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 381,
+            "range": "358.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 381.00\nmean: 539.80\nstdev: 358.45\ncv: 66.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 694,
+            "range": "930.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 694.00\nmean: 1047.00\nstdev: 930.45\ncv: 88.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
