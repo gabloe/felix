@@ -88,6 +88,53 @@ it reads — a plain subscription, or a consumer group — and not by what the
 stream declares. Do not rely on it.
 :::
 
+### Consistency: how many brokers must hold it
+
+A durable stream is replicated to a set of brokers — one leader and its
+replicas. `consistency` on the stream decides **how many of them must hold a
+record before the publisher is told it is safe.**
+
+![The same publish under two consistency levels. Under Leader, the shard's leader writes the record durably and acknowledges immediately; the replicas receive their copies afterwards, and the acknowledgement did not wait for them. Under Quorum, the leader writes durably, ships the record to both replicas, and acknowledges only once a majority of the replica set holds it, so the acknowledgement arrives later. A bar beneath each row shows the time until the client is told, and the Quorum bar is more than twice as long.](/felix/diagrams/quorum-ack.svg)
+
+**`Leader`** — the default. The leader writes the record to its own log,
+durably, and answers. Replication still happens; the acknowledgement simply
+does not wait for it. One round trip.
+
+**`Quorum`** — the leader writes durably, ships the record to its replicas
+concurrently, and answers once a **majority of the replica set, counting
+itself**, holds it. On a set of three that is two, so one unreachable replica
+costs nothing — the leader is not waiting for all of them, only for enough.
+
+Note what `Quorum` does *not* change. The record is written the same way, to the
+same log, with the same fsync policy. What changes is what the acknowledgement
+**means**:
+
+> A `Quorum` acknowledgement survives losing the leader. A `Leader`
+> acknowledgement is a promise only that one broker can keep.
+
+#### What each one costs
+
+`Quorum` costs latency, and it costs availability at the other end: a stream
+that cannot reach a majority **stops accepting writes** rather than accepting
+ones it might not keep. A publish with no reachable majority is refused, and a
+refusal means *"this cannot be vouched for"* rather than *"this did not
+happen"* — the record may well have landed on the leader. Retry, and make the
+retry idempotent.
+
+`Leader` is one round trip instead of two, and it moves the moment you find out.
+If the leader dies holding a record nothing else has, the control plane will not
+promote a replica, because promoting one would open the shard **without** that
+record and no reader could tell. The shard is left unavailable until the old
+leader returns with its disk.
+
+So the trade is not really safety against latency. Both refuse to lose an
+acknowledged record; they differ in **when you learn there is a problem** —
+`Quorum` at publish time, while you still hold the record, or `Leader` at
+failover time, when the only copy is on a broker that is gone.
+
+[`task cluster:consistency`](/felix/demos/cluster-consistency/) runs exactly
+that: the same fault put to both, on a real three-node cluster.
+
 ### Message Ordering
 
 **Within a stream**: Ordering is preserved per publisher-broker-subscriber path.

@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400" role="img" aria-label="The same publish under two consistency levels, on one timeline. Under Leader, the shard's leader writes the record durably and acknowledges immediately, before its replicas have it. Under Quorum, the leader writes durably, ships the record to both replicas, and only acknowledges once a majority of the replica set holds it — so the acknowledgement arrives later, and the elapsed bar beneath it is longer.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .mono  { fill: var(--ink-dim); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .ackt  { fill: var(--accent); font: 600 12px ui-sans-serif, system-ui, sans-serif; }
+
+    .box   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .flow  { stroke: var(--edge); stroke-width: 1.75; fill: none; }
+    .ack   { stroke: var(--accent); stroke-width: 2; fill: none; }
+    .rule  { stroke: var(--edge-dim); stroke-width: 1; }
+    .barbg { fill: var(--edge-dim); opacity: .28; }
+    .bar   { fill: var(--accent); }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-hot:#fbe9d6; --c-done:#d9ecd9;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-hot:#40301c; --c-done:#1f3a28; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --c-step:#24344b; --c-hot:#40301c; --c-done:#1f3a28; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --c-step:#e8f0fe; --c-hot:#fbe9d6; --c-done:#d9ecd9; }
+
+    /* Both rows run the same 12s timeline and receive the same publish at the
+       same instant, so the only thing that differs between them is when the
+       acknowledgement comes back. */
+    .fade { opacity: 0; }
+
+    .pub    { animation: pub 12s infinite; }
+    @keyframes pub { 0%,5% { opacity:0 } 8%,13% { opacity:1 } 16%,100% { opacity:0 } }
+
+    /* The leader has it durably at 14% in both rows. */
+    .leaderbox { animation: leaderbox 12s infinite; }
+    @keyframes leaderbox { 0%,13% { fill: var(--c-step) } 14%,92% { fill: var(--c-done) } 93%,100% { fill: var(--c-step) } }
+
+    .ackL { animation: ackL 12s infinite; }
+    @keyframes ackL { 0%,15% { opacity:0 } 17%,92% { opacity:1 } 93%,100% { opacity:0 } }
+
+    /* Quorum: ship to both replicas, then acknowledge once one of them has it
+       (leader + one = 2 of 3, a majority). */
+    .ship { animation: ship 12s infinite; }
+    @keyframes ship { 0%,14% { opacity:0 } 17%,28% { opacity:1 } 31%,100% { opacity:0 } }
+
+    /* Leader does not skip replication; it just does not wait for it. The
+       copies land after the client has already been told. */
+    .lrep1 { animation: lrep1 12s infinite; }
+    @keyframes lrep1 { 0%,44% { fill: var(--c-step) } 45%,92% { fill: var(--c-done) } 93%,100% { fill: var(--c-step) } }
+    .lrep2 { animation: lrep2 12s infinite; }
+    @keyframes lrep2 { 0%,51% { fill: var(--c-step) } 52%,92% { fill: var(--c-done) } 93%,100% { fill: var(--c-step) } }
+
+    .rep1 { animation: rep1 12s infinite; }
+    @keyframes rep1 { 0%,26% { fill: var(--c-step) } 27%,92% { fill: var(--c-done) } 93%,100% { fill: var(--c-step) } }
+    /* The third copy lands too, later — it just was not waited for. */
+    .rep2 { animation: rep2 12s infinite; }
+    @keyframes rep2 { 0%,40% { fill: var(--c-step) } 41%,92% { fill: var(--c-done) } 93%,100% { fill: var(--c-step) } }
+
+    .ackQ { animation: ackQ 12s infinite; }
+    @keyframes ackQ { 0%,28% { opacity:0 } 30%,92% { opacity:1 } 93%,100% { opacity:0 } }
+
+    /* Elapsed until the acknowledgement. Each bar grows from the publish and
+       freezes the moment its row answers, so the difference is a length. */
+    .barL { animation: barL 12s infinite; }
+    @keyframes barL { 0%,6% { width: 0px } 16%,92% { width: 100px } 93%,100% { width: 0px } }
+    .barQ { animation: barQ 12s infinite; }
+    @keyframes barQ { 0%,6% { width: 0px } 30%,92% { width: 240px } 93%,100% { width: 0px } }
+
+    .lblL { animation: ackL 12s infinite; }
+    .lblQ { animation: ackQ 12s infinite; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .pub, .leaderbox, .ackL, .ship, .rep1, .rep2, .lrep1, .lrep2, .ackQ,
+      .barL, .barQ, .lblL, .lblQ { animation: none; }
+      .leaderbox, .rep1, .rep2, .lrep1, .lrep2 { fill: var(--c-done); }
+      .ackL, .ackQ, .lblL, .lblQ { opacity: 1; }
+      .barL { width: 100px; }
+      .barQ { width: 240px; }
+    }
+  </style>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--edge)"/>
+    </marker>
+    <marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+
+  <text class="tag" x="450" y="24" text-anchor="middle">ONE PUBLISH, TWO CONSISTENCY LEVELS, THE SAME REPLICA SET</text>
+
+  <!-- ============================= row 1: Leader ============================ -->
+  <text class="name" x="30" y="62">consistency: Leader</text>
+  <text class="mono" x="30" y="80">the default</text>
+
+  <rect class="box" x="188" y="52" width="86" height="38" rx="5"/>
+  <text class="mono" x="231" y="76" text-anchor="middle">client</text>
+
+  <rect class="box leaderbox" x="380" y="52" width="104" height="38" rx="5"/>
+  <text class="mono" x="432" y="76" text-anchor="middle">leader</text>
+
+  <rect class="box lrep1" x="600" y="40" width="104" height="26" rx="5"/>
+  <text class="mono" x="652" y="58" text-anchor="middle">replica</text>
+  <rect class="box lrep2" x="600" y="76" width="104" height="26" rx="5"/>
+  <text class="mono" x="652" y="94" text-anchor="middle">replica</text>
+
+  <path class="flow fade pub" d="M 278 66 L 372 66" marker-end="url(#ar)"/>
+  <g class="fade ackL">
+    <path class="ack" d="M 372 82 L 282 82" marker-end="url(#aa)"/>
+    <text class="ackt" x="327" y="102" text-anchor="middle">acknowledged</text>
+  </g>
+  <text class="mono" x="652" y="118" text-anchor="middle">copies land after the ack, not before</text>
+
+  <line class="rule" x1="30" y1="128" x2="870" y2="128"/>
+
+  <!-- ============================= row 2: Quorum ============================ -->
+  <text class="name" x="30" y="176">consistency: Quorum</text>
+  <text class="mono" x="30" y="194">majority of 3 = 2</text>
+
+  <rect class="box" x="188" y="166" width="86" height="38" rx="5"/>
+  <text class="mono" x="231" y="190" text-anchor="middle">client</text>
+
+  <rect class="box leaderbox" x="380" y="166" width="104" height="38" rx="5"/>
+  <text class="mono" x="432" y="190" text-anchor="middle">leader</text>
+
+  <rect class="box rep1" x="600" y="154" width="104" height="26" rx="5"/>
+  <text class="mono" x="652" y="172" text-anchor="middle">replica</text>
+  <rect class="box rep2" x="600" y="190" width="104" height="26" rx="5"/>
+  <text class="mono" x="652" y="208" text-anchor="middle">replica</text>
+
+  <path class="flow fade pub" d="M 278 180 L 372 180" marker-end="url(#ar)"/>
+  <path class="flow fade ship" d="M 490 176 L 592 167" marker-end="url(#ar)"/>
+  <path class="flow fade ship" d="M 490 192 L 592 203" marker-end="url(#ar)"/>
+  <g class="fade ackQ">
+    <path class="ack" d="M 372 214 L 282 214" marker-end="url(#aa)"/>
+    <text class="ackt" x="327" y="234" text-anchor="middle">acknowledged</text>
+  </g>
+  <text class="mono" x="652" y="234" text-anchor="middle">one of these is enough: 2 of 3</text>
+
+  <!-- ========================= elapsed until the ack ======================== -->
+  <text class="tag" x="30" y="278">TIME UNTIL THE CLIENT IS TOLD</text>
+
+  <text class="mono" x="178" y="302" text-anchor="end">Leader</text>
+  <rect class="barbg" x="188" y="292" width="480" height="12" rx="6"/>
+  <rect class="bar barL" x="188" y="292" height="12" rx="6"/>
+  <text class="mono fade lblL" x="680" y="302">leader only</text>
+
+  <text class="mono" x="178" y="326" text-anchor="end">Quorum</text>
+  <rect class="barbg" x="188" y="316" width="480" height="12" rx="6"/>
+  <rect class="bar barQ" x="188" y="316" height="12" rx="6"/>
+  <text class="mono fade lblQ" x="680" y="326">a majority</text>
+
+  <text class="body" x="450" y="364" text-anchor="middle">Quorum does not make the write safer to perform — it makes the acknowledgement mean more.</text>
+  <text class="body" x="450" y="384" text-anchor="middle">A Quorum ack survives losing the leader. A Leader ack is a promise only that broker can keep.</text>
+</svg>
