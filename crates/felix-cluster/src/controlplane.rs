@@ -91,6 +91,9 @@ impl ControlPlane {
             bootstrap_enabled: false,
             bootstrap_token: None,
             node_liveness: LIVENESS,
+            readiness: std::sync::Arc::new(::controlplane::readiness::Readiness::new(
+                std::sync::Arc::new(::controlplane::readiness::AlwaysReady),
+            )),
             replica_positions: Arc::clone(&replica_positions),
         };
 

@@ -288,6 +288,20 @@ impl PostgresStore {
         Ok(Self { pool, config })
     }
 
+    /// The newest migration this build carries.
+    ///
+    /// A database *ahead* of it is fine — that is the first half of a rolling
+    /// deploy, and the old code keeps working against the new schema because
+    /// migrations are additive. Behind it is not: this build would use a column
+    /// that is not there yet.
+    fn newest_migration() -> i64 {
+        sqlx::migrate!("./migrations")
+            .iter()
+            .map(|migration| migration.version)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Page size limit for change queries.
     ///
     /// This bounds response size, memory usage, and tail latency for callers polling changes.
@@ -1929,8 +1943,30 @@ impl ControlPlaneStore for PostgresStore {
         Ok(exists)
     }
 
+    /// Connectivity *and* schema, in one query.
+    ///
+    /// `SELECT 1` proves only that a connection was available. An instance can
+    /// hold connections to a database whose schema is older than the code —
+    /// during a rolling deploy, or when someone points it at the wrong
+    /// database — and it would answer that probe while failing every request
+    /// that touches a table it expects. Comparing the applied migration to the
+    /// newest embedded one catches that, and costs the same round trip.
     async fn health_check(&self) -> StoreResult<()> {
-        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        let applied: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success")
+                .fetch_one(&self.pool)
+                .await?;
+        let Some(applied) = applied else {
+            return Err(StoreError::Unexpected(anyhow!(
+                "the database has no migrations applied"
+            )));
+        };
+        let expected = Self::newest_migration();
+        if applied < expected {
+            return Err(StoreError::Unexpected(anyhow!(
+                "the database is at migration {applied}, this build expects {expected}"
+            )));
+        }
         Ok(())
     }
 

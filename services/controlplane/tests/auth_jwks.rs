@@ -62,6 +62,9 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -113,6 +116,9 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
         bootstrap_enabled: false,
         bootstrap_token: None,
         node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

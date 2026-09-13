@@ -435,6 +435,10 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
         bootstrap_enabled: true,
         bootstrap_token: Some(BOOTSTRAP_TOKEN.to_string()),
         node_liveness: Default::default(),
+        // The demo's store is in-memory, which has nothing to be unready about.
+        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
+            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        )),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

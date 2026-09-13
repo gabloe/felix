@@ -120,6 +120,21 @@ pub fn api_internal(message: &str, err: &StoreError) -> ApiError {
 /// Build a 500 Internal Server Error without a store error.
 ///
 /// Returns a generic internal error response with the provided message.
+/// An error with a status the caller chose.
+///
+/// For the cases where the status *is* the answer rather than a fault report —
+/// readiness answering 503 is a statement about this instance, not a bug.
+pub fn api_error(status: StatusCode, code: &str, message: &str) -> ApiError {
+    ApiError {
+        status,
+        body: ErrorResponse {
+            code: code.to_string(),
+            message: message.to_string(),
+            request_id: None,
+        },
+    }
+}
+
 pub fn api_internal_message(message: &str) -> ApiError {
     // Internal error without a concrete store error to log.
     ApiError {

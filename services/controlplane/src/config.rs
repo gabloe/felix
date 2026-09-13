@@ -16,6 +16,11 @@ pub const DEFAULT_CHANGES_LIMIT: u64 = 1000;
 // Kubernetes defaults `terminationGracePeriodSeconds` to 30 and sends SIGKILL once
 // it expires, so this leaves headroom to finish the drain and exit before then.
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
+
+/// Two seconds, matching `readiness::DEFAULT_CHECK_TIMEOUT`.
+pub const DEFAULT_READINESS_TIMEOUT_MS: u64 = 2_000;
+/// One second, matching `readiness::DEFAULT_CACHE_TTL`.
+pub const DEFAULT_READINESS_CACHE_TTL_MS: u64 = 1_000;
 pub const DEFAULT_CHANGE_RETENTION_MAX_ROWS: i64 = 10_000;
 /// How often a healthy broker is expected to report health.
 pub const DEFAULT_NODE_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
@@ -142,6 +147,16 @@ pub struct ControlPlaneConfig {
     // Total budget for draining in-flight requests after SIGTERM/SIGINT before
     // remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
+    /// Longest a readiness check may take before it is treated as a failure.
+    ///
+    /// Set below the prober's own timeout, so the answer is this service's
+    /// rather than the network giving up first.
+    pub readiness_timeout_ms: u64,
+    /// How long a readiness answer is reused before the store is asked again.
+    ///
+    /// Bounds probe cost at one query per window however many probers there
+    /// are, and bounds how long recovery takes to become visible.
+    pub readiness_cache_ttl_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,6 +240,10 @@ impl ControlPlaneConfig {
             shard_reconcile_interval_ms: parse_positive_env("FELIX_SHARD_RECONCILE_INTERVAL_MS")
                 .unwrap_or(DEFAULT_SHARD_RECONCILE_INTERVAL_MS),
         };
+        let readiness_timeout_ms = parse_positive_env("FELIX_READINESS_TIMEOUT_MS")
+            .unwrap_or(DEFAULT_READINESS_TIMEOUT_MS);
+        let readiness_cache_ttl_ms = parse_positive_env("FELIX_READINESS_CACHE_TTL_MS")
+            .unwrap_or(DEFAULT_READINESS_CACHE_TTL_MS);
         let shutdown_drain_timeout_ms = std::env::var("FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -287,6 +306,8 @@ impl ControlPlaneConfig {
             },
             node_liveness,
             shutdown_drain_timeout_ms,
+            readiness_timeout_ms,
+            readiness_cache_ttl_ms,
         };
         config.validate()?;
         Ok(config)
