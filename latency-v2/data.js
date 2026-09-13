@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789307587767,
+  "lastUpdate": 1789314561704,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8052,6 +8052,72 @@ window.BENCHMARK_DATA = {
             "range": "647.30",
             "unit": "us",
             "extra": "trials: 5\nmedian: 811.00\nmean: 1151.80\nstdev: 647.30\ncv: 56.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f8df0cfbbdd33fac6bbfef6e94dbe511004937f",
+          "message": "Make dead letters readable, discardable, and redrivable (#312)\n\nSixth slice of #280. #311 bounded redelivery and recorded what a group gave up\non; the list was reachable only from inside the broker. A list nobody can read\nis a graveyard with extra steps.\n\n`group_dead_letters`, `group_discard`, `group_redrive`, behind a feature bit of\ntheir own.\n\n## A bit of its own, not a widening of the group bit\n\n`FEATURE_CONSUMER_GROUP` already means \"serves poll, ack and nack\" to every\nbroker that advertises it. A broker built before these requests existed would\nadvertise it and then meet a request it has no arm for, which ends its control\nloop. A feature bit says which requests exist; widening what an existing one\npromises is the one change that cannot be made safely.\n\n## Redrive does not rewind the cursor\n\nThe cursor has already passed the record, and moving it back would redeliver\neverything the group finished since. The record is made *owed* instead, which\nreaches a consumer without disturbing anything else — and its attempt count\nstarts over, or a record redriven after the bug was fixed would be given up on\nagain immediately.\n\nAn offset that is not a dead letter is refused rather than accepted quietly. An\noperator told a redrive worked would wait for a delivery that is not coming.\n\n## A claim in #311 that was not true\n\nThat PR said each delivery tells the consumer its attempt number. It did not:\nthe count was tracked broker-side and never put on the wire. `GroupRecord` now\ncarries it, defaulting to `0` for \"the broker did not say\" — not `1`, because\nclaiming a first attempt for an unknown one would have a consumer skip exactly\nthe retry handling it wanted.\n\n## Verification\n\nFour tracker tests for redrive, three end-to-end tests through a real client\ncovering the operator's whole loop — fail twice, get given up on, list it,\nredrive it, see it delivered again with its count reset — plus discard, and a\nredrive of an offset that was never dead-lettered being refused.\n\n`task test` (86 groups), `task lint`, `task demo:check`.\n\nRefs #280",
+          "timestamp": "2026-09-13T08:46:57-07:00",
+          "tree_id": "b2bae0cc6f38c328ee2398f472c8b806174545d6",
+          "url": "https://github.com/gabloe/felix/commit/2f8df0cfbbdd33fac6bbfef6e94dbe511004937f"
+        },
+        "date": 1789314559739,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 157.20\nstdev: 1.92\ncv: 1.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "9.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 207.00\nstdev: 9.35\ncv: 4.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 233,
+            "range": "174.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 233.00\nmean: 355.00\nstdev: 174.46\ncv: 49.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 195,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 195.00\nmean: 195.20\nstdev: 1.10\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 399,
+            "range": "15.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 400.40\nstdev: 15.77\ncv: 3.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 829,
+            "range": "613.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 829.00\nmean: 1118.20\nstdev: 613.86\ncv: 54.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
