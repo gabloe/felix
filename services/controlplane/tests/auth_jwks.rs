@@ -65,6 +65,7 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
@@ -119,6 +120,7 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
+        in_flight: Default::default(),
         replica_positions: std::sync::Arc::new(
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),

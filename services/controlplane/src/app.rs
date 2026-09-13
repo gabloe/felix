@@ -38,6 +38,22 @@ pub struct AppState {
     pub replica_positions: Arc<crate::replica_positions::ReplicaPositions>,
     /// Whether this instance can serve, bounded and cached.
     pub readiness: Arc<crate::readiness::Readiness>,
+    /// Requests currently being served, so a drain can say what it waited for.
+    pub in_flight: felix_common::lifecycle::InFlight,
+}
+
+/// Count a request for the whole time it is being served.
+///
+/// Placed outside the handlers so it cannot be forgotten on a new route, and so
+/// it counts time spent in every other layer too — a request stuck in the trace
+/// layer is still a request this instance owes an answer for.
+async fn count_in_flight(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let _guard = state.in_flight.enter();
+    next.run(request).await
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -215,6 +231,10 @@ pub fn build_router(state: AppState) -> Router {
             utoipa_swagger_ui::SwaggerUi::new("/docs").url("/v1/openapi.json", ApiDoc::openapi()),
         )
         .layer(trace_layer)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            count_in_flight,
+        ))
         .with_state(state)
 }
 
