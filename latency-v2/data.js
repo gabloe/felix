@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789334081277,
+  "lastUpdate": 1789341266317,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8778,6 +8778,72 @@ window.BENCHMARK_DATA = {
             "range": "643.71",
             "unit": "us",
             "extra": "trials: 5\nmedian: 549.00\nmean: 846.00\nstdev: 643.71\ncv: 76.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b5684cec831efce7ebc8b8a868606ee3ee8631d",
+          "message": "Animate the concepts that motion actually explains (#326)\n\n* docs: animate the append-only log — index, sealing, rollover, retention\n\nThe storage docs had byte layouts and a rollover mermaid, but nothing showed\nthe log *working*. Two animations, because the two halves are different shapes\nand one diagram doing both would have been unreadable:\n\n**log-append.svg** — records appended with ascending offsets, index entries\nemitted only every 4 KiB, and a read that binary-searches the index, seeks to\nthe entry's byte position, and scans forward over real records. The index is\ndrawn filling in *after* the records exist, because it is derived from them\nrather than a second source of truth, and the caption lands on why that matters:\nan entry is only a starting position, so a missing or stale index costs a\nrebuild rather than a wrong answer — which is also why index files carry no\nchecksums and can skip their fsync.\n\n**log-lifecycle.svg** — the active segment filling to the cap with its\npreallocated tail drawn dashed, sealing (data and index synced, tail trimmed),\na new segment opening at the next offset, retention deleting the oldest sealed\nsegment whole, base_offset advancing, and a read below it answered\n`Trimmed { requested, oldest }` rather than empty.\n\nSame conventions as the other hand-authored diagrams: CSS keyframes on one\nshared loop, theme-aware in three blocks, prefers-reduced-motion honoured with\na frozen frame that still carries the point, and duplicated to docs/assets so\nGitHub renders them too.\n\nAlso adds scripts/check-diagram-animations.mjs, wired into the docs build.\n`animation` is a single CSS property rather than a list, so two classes on one\nelement leave only the later one running. That shipped in a draft of\nlog-append.svg: three records animated their fill and consequently never faded\nin at all, and nothing warned — valid SVG, no console error, the diagram just\nquietly stopped telling its story. Reintroducing that exact markup fails the\ncheck and nothing else does.\n\n* docs: animate the four remaining concepts motion actually helps\n\nFour more, chosen because each is a sequence or a race rather than structure —\nthe cases where prose makes a reader reconstruct a timeline in their head.\n\n**subscribe-join.svg** — the ordering that joins stored history to live\ndelivery. Two rows, the same publish arriving at the same instant: read history\nfirst and the window between the steps has nobody in it, so offset 16 is never\ndelivered; register first, clamped to the oldest offset the replay ring holds,\nand the same publish is captured while the range left to read from disk is\nclosed. This was a real bug (#253) and the intuitive order is the wrong one,\nwhich is exactly what makes it worth showing rather than asserting.\n\n**slow-consumer.svg** — DropNew against Block, as bars of records actually\ndelivered. Under the default the slow subscriber's bar stops short and the\npublisher's does not; under Block every bar is the slow one's length. The trade\nthe whole design turns on, in one picture.\n\nWorth noting what this one does *not* claim: `DropOld` is accepted in\nconfiguration and counted separately, but the code puts it in the same match arm\nas `DropNew` and discards the arriving record. Animating three distinct\nbehaviours would have documented one that does not exist, so the diagram shows\nthe two real ones and the page says plainly what `DropOld` does, naming the\n`felix_sub_queue_drop_old_emulated_total` counter that reveals it.\n\n**head-of-line.svg** — one lost packet belonging to stream 2. Under TCP all\nthree streams stop; under QUIC only stream 2 does. The point the bars make that\nthe bulleted list did not: nothing was lost for streams 1 and 3 either way,\ntheir bytes had already arrived and simply could not be handed over.\n\n**leader-lease.svg** — the safety interval, on one time axis with a playhead.\nThe leader stops ε early by its own clock, the control plane waits out a margin\non top of the full lease, and the gap between them is an interval in which\nnobody is leader. Underneath, a write admitted while the lease was valid is\ndelayed past expiry and refused by the commit-time re-check — the reason that\nsecond check is not redundant.\n\nTwo bugs the render pass caught, both silent:\n\n- The safety-interval band is translucent by design, and its fade animated\n  opacity to 1, which replaces the class's own `opacity: .14` outright. It\n  rendered as a solid block over the text it was meant to sit behind.\n- The captions in log-lifecycle had no hidden base, so with `animation: none`\n  under prefers-reduced-motion all four drew on top of each other.\n\nNeither is caught by the animation-class check, which only knows about two\nclasses racing for the same element. Both are now commented where they were\nfixed.\n\nAlso corrects something I got wrong when surveying: group-commit.svg is already\nanimated, with its own shared 6s loop and reduced-motion handling. It needed\nnothing.",
+          "timestamp": "2026-09-13T16:11:53-07:00",
+          "tree_id": "15d8d4c0b26eab42df54488b3f1da9c269d55ff6",
+          "url": "https://github.com/gabloe/felix/commit/5b5684cec831efce7ebc8b8a868606ee3ee8631d"
+        },
+        "date": 1789341263719,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.00\nstdev: 1.00\ncv: 0.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "3.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 203.20\nstdev: 3.70\ncv: 1.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 240,
+            "range": "108.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 240.00\nmean: 288.60\nstdev: 108.82\ncv: 37.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "3.08",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.00\nstdev: 3.08\ncv: 1.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 406,
+            "range": "119.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 406.00\nmean: 455.80\nstdev: 119.27\ncv: 26.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 592,
+            "range": "600.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 592.00\nmean: 847.40\nstdev: 600.55\ncv: 70.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
