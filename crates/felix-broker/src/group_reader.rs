@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 use crate::consumer_groups::ConsumerGroups;
+use crate::dead_letters::DeadLetters;
 use crate::error::{BrokerError, Result};
 use crate::group_delivery::GroupTracker;
 
@@ -36,6 +37,9 @@ pub struct GroupKey {
 pub struct Claimed {
     pub offset: u64,
     pub payload: bytes::Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is the first attempt; anything higher is a redelivery.
+    pub attempts: u32,
 }
 
 /// Every group this broker is serving, and the state each one holds.
@@ -46,6 +50,8 @@ pub struct Claimed {
 #[derive(Debug)]
 pub struct GroupReader {
     cursors: Arc<ConsumerGroups>,
+    dead_letters: Arc<DeadLetters>,
+    max_attempts: u32,
     trackers: Mutex<HashMap<GroupKey, Arc<Mutex<GroupTracker>>>>,
     visibility: Duration,
     /// Records a group was owed and can never receive, because retention
@@ -58,13 +64,34 @@ pub struct GroupReader {
 }
 
 impl GroupReader {
-    pub fn new(cursors: Arc<ConsumerGroups>, visibility: Duration) -> Self {
+    pub fn new(
+        cursors: Arc<ConsumerGroups>,
+        dead_letters: Arc<DeadLetters>,
+        visibility: Duration,
+        max_attempts: u32,
+    ) -> Self {
         Self {
             cursors,
+            dead_letters,
+            max_attempts: max_attempts.max(1),
             trackers: Mutex::new(HashMap::new()),
             visibility,
             trimmed: AtomicU64::new(0),
         }
+    }
+
+    /// How many times a record is handed out before the group gives up on it.
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Offsets this group has given up on, in the order it gave up.
+    ///
+    /// The records themselves are still in the stream's log — this is a list of
+    /// what to look at, not a copy of it, so nothing is duplicated and nothing
+    /// is lost.
+    pub async fn dead_lettered(&self, key: &GroupKey) -> Result<Vec<u64>> {
+        self.dead_letters.list(key).await
     }
 
     /// How long a claim stands before the record is owed again.
@@ -101,19 +128,32 @@ impl GroupReader {
     ) -> Result<Vec<Claimed>> {
         let tail = log.tail_offset().await?;
         let tracker = self.tracker_for(key).await?;
-        let offsets = {
+        let claim = {
             let mut tracker = tracker.lock().await;
             tracker.claim(tail, max, now, self.visibility)
         };
 
-        let mut claimed = Vec::with_capacity(offsets.len());
-        for offset in offsets {
+        // Recorded before being settled. A crash in between would otherwise
+        // move the cursor past a record with nothing anywhere saying the group
+        // ever tried it -- the record would be silently skipped rather than
+        // dead-lettered.
+        for dead in &claim.dead_lettered {
+            self.dead_letters.record(key, dead.offset).await?;
+            self.settle(key, &tracker, dead.offset).await?;
+        }
+
+        let mut claimed = Vec::with_capacity(claim.offsets.len());
+        for offset in claim.offsets {
             match log.read_from(offset, 1).await {
                 Ok(records) => match records.into_iter().next() {
-                    Some(record) => claimed.push(Claimed {
-                        offset,
-                        payload: record.payload,
-                    }),
+                    Some(record) => {
+                        let attempts = tracker.lock().await.attempts(offset);
+                        claimed.push(Claimed {
+                            offset,
+                            payload: record.payload,
+                            attempts,
+                        })
+                    }
                     // The offset is below the tail and yet holds nothing. Give
                     // the claim back rather than dropping it silently: a record
                     // the group is owed and never receives would stall the
@@ -214,7 +254,7 @@ impl GroupReader {
             // the log still holds. Starting at the tail would silently skip
             // everything published before the group first connected.
             .unwrap_or(0);
-        let tracker = Arc::new(Mutex::new(GroupTracker::new(committed)));
+        let tracker = Arc::new(Mutex::new(GroupTracker::new(committed, self.max_attempts)));
         trackers.insert(key.clone(), Arc::clone(&tracker));
         Ok(tracker)
     }

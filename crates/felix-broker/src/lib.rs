@@ -24,6 +24,7 @@ mod broker;
 mod commit_order;
 mod config;
 pub mod consumer_groups;
+pub mod dead_letters;
 mod delivery;
 pub mod durable;
 mod error;
