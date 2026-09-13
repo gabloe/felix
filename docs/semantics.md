@@ -288,13 +288,20 @@ Stated because a guarantee without its failure model is a slogan.
   group subscription, an acknowledgement, or a redelivery (#280), so no
   application can use one yet.
 
-  What exists is the machinery behind it, and its rules are already fixed. A
-  group's position on a shard is durable, monotonic, and survives a restart. Above
-  that position the broker tracks what has been handed out: a record claimed by
-  one consumer is not handed to another while the claim stands, a claim that
-  lapses makes the record owed again, and the cursor moves only over a
-  contiguous run of acknowledgements — never past a gap, which would mark a
-  record finished that nobody finished.
+  What exists is the machinery behind it, joined to a real log, and its rules
+  are already fixed. A group's position on a shard is durable, monotonic, and
+  survives a restart. Above that position the broker tracks what has been handed
+  out: a record claimed by one consumer is not handed to another while the claim
+  stands, a claim that lapses makes the record owed again, and the cursor moves
+  only over a contiguous run of acknowledgements — never past a gap, which would
+  mark a record finished that nobody finished. Two groups over one shard are
+  independent; each sees every record.
+
+  **Retention outranks a group.** A record removed by retention before a group
+  reached it is skipped, and the group moves past it — leaving it owed would
+  stall the group for ever on a record that exists nowhere. That is the one case
+  where a queue drops work, it is counted rather than silent, and it means a
+  retention window shorter than a group is allowed to fall behind loses work.
 
   The in-flight set is deliberately **not** durable. A leader that dies loses it
   and the group resumes from its cursor, so those records are delivered a second
