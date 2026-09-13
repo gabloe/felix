@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789315879699,
+  "lastUpdate": 1789320557065,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8250,6 +8250,72 @@ window.BENCHMARK_DATA = {
             "range": "651.53",
             "unit": "us",
             "extra": "trials: 5\nmedian: 507.00\nmean: 858.60\nstdev: 651.53\ncv: 75.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07f92d60cec78ef093027749bece66cbee1cad3e",
+          "message": "Split control-plane liveness from readiness (#316)\n\n* Split control-plane liveness from readiness\n\n#122, the first of M7. One endpoint answered both questions, and they drive\ndifferent actions.\n\n## Liveness must not check the database\n\nA liveness probe drives restarts. Pointing one at an endpoint that checks\nPostgres turns one external outage into every instance restarting, repeatedly,\nfor a fault none of them caused and no restart can fix.\n\n`/v1/system/live` therefore touches nothing outside the process.\n`/v1/system/ready` is the one that can fail, and answers 503 — a statement about\nthis instance, which a load balancer acts on, rather than 500, which reads as a\nfault to page someone about. `/v1/system/health` is kept as the readiness check,\nbecause deployments already point at it.\n\n## The check is bounded and cached\n\nA probe that hangs is worse than one that fails: the prober keeps sending\ntraffic to an instance nobody has heard from. Two seconds, below a typical probe\ntimeout so the answer is this service's.\n\nCached for a second, so ten load balancers polling cost one query rather than\nten on the pool real work needs. A failure is cached the same way, which bounds\nhow long recovery takes to become visible — the cost of not hammering a database\nthat is already struggling.\n\n## The health check now verifies the schema\n\nIt was `SELECT 1`, which proves a connection was available and nothing else. An\ninstance can hold connections to a database whose schema is older than its code\n-- mid-rolling-deploy, or pointed at the wrong database -- and pass that while\nfailing every request that touches a table it expects. It now compares the\napplied migration against the newest embedded one, in the same round trip. A\ndatabase *ahead* is fine; migrations are additive and that is the first half of\na rolling deploy.\n\n## Readiness depends on one method, not the whole store\n\n`HealthProbe` is that method. A test can supply a backend that fails on command,\nwhich the full store trait cannot.\n\n## A test my own change weakened\n\nAdding a field to `AppState` touched 23 construction sites, and I scripted them\nto `AlwaysReady`. One of those tests builds a *failing* store deliberately —\nwith an always-ready probe it passed while asserting nothing. It now probes the\nreal store, asserts 503, and also asserts liveness is still 200, which is the\nproperty the whole split exists for.\n\n## Docs\n\n`control-plane.md` gains a probe table with recommended intervals and the reason\nfor each. Its Raft sections are marked as design intent rather than current\nbehaviour: there is no Raft group, and the document read as though there were.\n\n`task test` (86 groups) and `task lint` pass.\n\nRefs #122\n\n* Give the demo crates the readiness field\n\nThe demos declare their own workspace, so `task lint` and `task test` never\nreach them and CI caught this after the fact. Both use the control plane's\nin-memory store, which has nothing to be unready about, so both get\n`AlwaysReady`.\n\nMy miss: CLAUDE.md names this trap explicitly and I did not run `task\ndemo:check` before pushing a change to a public struct.",
+          "timestamp": "2026-09-13T10:26:47-07:00",
+          "tree_id": "a203f1579dd54324f25e04b7ffea285b7e6188a2",
+          "url": "https://github.com/gabloe/felix/commit/07f92d60cec78ef093027749bece66cbee1cad3e"
+        },
+        "date": 1789320554733,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 100,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 100.00\nmean: 100.80\nstdev: 1.64\ncv: 1.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 135,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 135.00\nmean: 135.60\nstdev: 1.52\ncv: 1.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 163,
+            "range": "69.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 194.60\nstdev: 69.94\ncv: 35.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 131,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 131.00\nmean: 130.20\nstdev: 1.30\ncv: 1.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 282,
+            "range": "8.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 282.00\nmean: 283.40\nstdev: 8.35\ncv: 2.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 488,
+            "range": "287.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 488.00\nmean: 582.00\nstdev: 287.96\ncv: 49.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
