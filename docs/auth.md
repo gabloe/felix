@@ -189,6 +189,13 @@ Why it exists:
    - `FELIX_BOOTSTRAP_ENABLED=true`
    - `FELIX_BOOTSTRAP_BIND_ADDR=127.0.0.1:9095` (or cluster-internal address)
    - `FELIX_BOOTSTRAP_TOKEN=<random secret>`
+   - optionally `FELIX_BOOTSTRAP_TOKEN_PREVIOUS=<the token being rotated out>`,
+     accepted alongside the current one so a rotation is a rolling deploy
+     rather than an outage
+   - optionally `FELIX_BOOTSTRAP_TLS_CERT` / `FELIX_BOOTSTRAP_TLS_KEY` /
+     `FELIX_BOOTSTRAP_TLS_CLIENT_CA` (all three), which makes the bootstrap
+     listener terminate mTLS and refuse, at the handshake, any client without
+     a certificate signed by that CA
 2) Operator calls the internal endpoint:
    - `POST /internal/bootstrap/tenants/{tenant_id}/initialize`
    - header `X-Felix-Bootstrap-Token: <token>`
@@ -198,7 +205,15 @@ Why it exists:
    - seeds IdP issuers
    - seeds RBAC policies + groupings
    - marks the tenant as bootstrapped
+   All of it commits as one atomic store operation, exactly once per tenant:
+   racing the call against itself — including through different control-plane
+   instances behind one load balancer — produces one winner and `409` for
+   everyone else, and a failure part-way leaves the tenant retryable rather
+   than half-initialized.
 4) Operator disables bootstrap after use.
+
+The threat model, token lifetime and replay rules, the rotation procedure, and
+recovery steps are in [security/bootstrap.md](security/bootstrap.md).
 
 ### Example
 

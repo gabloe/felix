@@ -82,40 +82,21 @@ pub async fn initialize(
         .await
         .map_err(|err| api_internal("failed to check tenant", &err))?;
 
-    if tenant_exists {
-        let bootstrapped = state
-            .store
-            .tenant_auth_is_bootstrapped(&tenant_id)
-            .await
-            .map_err(|err| api_internal("failed to check bootstrap state", &err))?;
-        if bootstrapped {
-            return Err(api_conflict(
-                "already_initialized",
-                "tenant already initialized",
-            ));
-        }
-    } else {
-        state
+    if !tenant_exists {
+        match state
             .store
             .create_tenant(Tenant {
                 tenant_id: tenant_id.clone(),
                 display_name: body.display_name.clone(),
             })
             .await
-            .map_err(|err| api_internal("failed to create tenant", &err))?;
-    }
-
-    let keys = match state.store.ensure_signing_key_current(&tenant_id).await {
-        Ok(keys) => keys,
-        Err(err) => return Err(api_internal("failed to ensure signing keys", &err)),
-    };
-
-    for issuer in &body.idp_issuers {
-        state
-            .store
-            .upsert_idp_issuer(&tenant_id, issuer.clone())
-            .await
-            .map_err(|err| api_internal("failed to upsert issuer", &err))?;
+        {
+            Ok(_) => {}
+            // Another instance created it between our check and this write;
+            // the atomic bootstrap below decides who actually initializes it.
+            Err(crate::store::StoreError::Conflict(_)) => {}
+            Err(err) => return Err(api_internal("failed to create tenant", &err)),
+        }
     }
 
     let mut policies = body.policies.clone();
@@ -171,17 +152,30 @@ pub async fn initialize(
         }
     }
 
-    state
+    // One store operation, so N instances racing on the same tenant produce
+    // exactly one winner and everyone else a clean conflict — never two key
+    // sets where the reported `kid` belongs to the overwritten one.
+    let keys = match state
         .store
-        .seed_rbac_policies_and_groupings(&tenant_id, policies, groupings)
+        .bootstrap_tenant_auth(
+            &tenant_id,
+            crate::store::TenantAuthSeed {
+                issuers: body.idp_issuers.clone(),
+                policies,
+                groupings,
+            },
+        )
         .await
-        .map_err(|err| api_internal("failed to seed rbac", &err))?;
-
-    state
-        .store
-        .set_tenant_auth_bootstrapped(&tenant_id, true)
-        .await
-        .map_err(|err| api_internal("failed to update bootstrap state", &err))?;
+    {
+        Ok(keys) => keys,
+        Err(crate::store::StoreError::Conflict(_)) => {
+            return Err(api_conflict(
+                "already_initialized",
+                "tenant already initialized",
+            ));
+        }
+        Err(err) => return Err(api_internal("failed to bootstrap tenant auth", &err)),
+    };
 
     Ok(Json(BootstrapInitializeResponse {
         tenant_id: tenant_id.clone(),
@@ -191,6 +185,14 @@ pub async fn initialize(
     }))
 }
 
+/// The bootstrap credential check: a shared token, with room for two.
+///
+/// Two accepted tokens is what makes rotation a rolling deploy instead of an
+/// outage: the new token ships as `token` with the old one demoted to
+/// `previous_token`, both generations of instance accept both, and the old one
+/// is dropped once the deploy settles. Transport-level client authentication is
+/// enforced *before* this runs when bootstrap mTLS is configured — see
+/// [`crate::tls`] — which is the second factor the token alone does not give.
 fn ensure_bootstrap_authorized(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let token = match headers.get("X-Felix-Bootstrap-Token") {
         Some(value) => value
@@ -199,16 +201,20 @@ fn ensure_bootstrap_authorized(state: &AppState, headers: &HeaderMap) -> Result<
         None => return Err(api_unauthorized("missing bootstrap token")),
     };
 
-    let expected = state
-        .bootstrap_token
-        .as_ref()
-        .ok_or_else(|| api_internal_message("bootstrap token missing"))?;
+    if state.bootstrap_tokens.is_empty() {
+        return Err(api_internal_message("bootstrap token missing"));
+    }
 
-    if !constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+    // Every candidate is compared, in constant time each, so neither the match
+    // nor which token matched shows up as a timing difference.
+    let mut matched = false;
+    for expected in &state.bootstrap_tokens {
+        matched |= constant_time_eq(token.as_bytes(), expected.as_bytes());
+    }
+    if !matched {
         return Err(api_unauthorized("invalid bootstrap token"));
     }
 
-    // TODO: add optional mTLS validation hook for bootstrap requests.
     Ok(())
 }
 

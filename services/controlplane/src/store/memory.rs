@@ -214,6 +214,10 @@ pub struct InMemoryStore {
     rbac_groupings: Arc<RwLock<HashMap<String, Vec<GroupingRule>>>>,
     /// Per-tenant auth bootstrap completion.
     auth_bootstrapped: Arc<RwLock<HashMap<String, bool>>>,
+    /// Serializes `bootstrap_tenant_auth`, standing in for the row lock the
+    /// Postgres backend takes. Held across the whole operation; nothing else
+    /// acquires it, so it cannot deadlock against the field locks above.
+    bootstrap_serial: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl InMemoryStore {
@@ -244,6 +248,7 @@ impl InMemoryStore {
             rbac_policies: Arc::new(RwLock::new(HashMap::new())),
             rbac_groupings: Arc::new(RwLock::new(HashMap::new())),
             auth_bootstrapped: Arc::new(RwLock::new(HashMap::new())),
+            bootstrap_serial: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -1336,6 +1341,42 @@ impl AuthStore for InMemoryStore {
             }
         }
         Ok(())
+    }
+
+    async fn bootstrap_tenant_auth(
+        &self,
+        tenant_id: &str,
+        seed: crate::store::TenantAuthSeed,
+    ) -> StoreResult<TenantSigningKeys> {
+        let _serial = self.bootstrap_serial.lock().await;
+
+        if !self.tenants.read().await.contains_key(tenant_id) {
+            return Err(StoreError::NotFound("tenant".into()));
+        }
+        if self
+            .auth_bootstrapped
+            .read()
+            .await
+            .get(tenant_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            return Err(StoreError::Conflict("tenant already initialized".into()));
+        }
+
+        let keys = self.ensure_signing_key_current(tenant_id).await?;
+        for issuer in seed.issuers {
+            self.upsert_idp_issuer(tenant_id, issuer).await?;
+        }
+        self.seed_rbac_policies_and_groupings(tenant_id, seed.policies, seed.groupings)
+            .await?;
+        // Last, so a failure above leaves the tenant retryable rather than
+        // half-initialized and claimed.
+        self.auth_bootstrapped
+            .write()
+            .await
+            .insert(tenant_id.to_string(), true);
+        Ok(keys)
     }
 }
 

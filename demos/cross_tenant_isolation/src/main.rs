@@ -433,7 +433,7 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
         store,
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
-        bootstrap_token: Some(BOOTSTRAP_TOKEN.to_string()),
+        bootstrap_tokens: vec![BOOTSTRAP_TOKEN.to_string()],
         node_liveness: Default::default(),
         // The demo's store is in-memory, which has nothing to be unready about.
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(

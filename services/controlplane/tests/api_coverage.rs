@@ -31,7 +31,7 @@ fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
         store: Arc::new(store),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),

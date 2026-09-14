@@ -1360,7 +1360,11 @@ absent; they are listed in that script rather than here.
 | `FELIX_REGION_ID` | `local` | Region this instance reports. |
 | `FELIX_BOOTSTRAP_ENABLED` | `false` | Enables the first-run bootstrap endpoints. Leave off once credentials exist. |
 | `FELIX_BOOTSTRAP_TOKEN` | — | Token the bootstrap endpoints require. |
-| `FELIX_BOOTSTRAP_BIND_ADDR` | — | Restricts bootstrap to a separate listener. |
+| `FELIX_BOOTSTRAP_TOKEN_PREVIOUS` | — | The token being rotated out, still accepted alongside the current one so a rotation is a rolling deploy rather than an outage. Requires `FELIX_BOOTSTRAP_TOKEN`. |
+| `FELIX_BOOTSTRAP_BIND_ADDR` | `127.0.0.1:9095` | Restricts bootstrap to a separate listener. |
+| `FELIX_BOOTSTRAP_TLS_CERT` | — | PEM certificate chain the bootstrap listener presents. All three TLS variables together, or startup fails — a partial set is a misconfiguration, not "TLS off". |
+| `FELIX_BOOTSTRAP_TLS_KEY` | — | PEM private key for the bootstrap listener's certificate. |
+| `FELIX_BOOTSTRAP_TLS_CLIENT_CA` | — | PEM CA bundle; only clients presenting a certificate signed by it can complete the TLS handshake with the bootstrap listener. |
 
 ### Node identity and membership
 

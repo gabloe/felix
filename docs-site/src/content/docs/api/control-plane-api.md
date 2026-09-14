@@ -139,7 +139,7 @@ cover.
 
 ### Internal Bootstrap API (Day-0)
 
-Used once per tenant to seed auth before any admin tokens exist. Disabled by default and bound to a separate internal address when enabled.
+Used once per tenant to seed auth before any admin tokens exist. Disabled by default and bound to a separate internal address when enabled; the listener can additionally require mTLS (see [Security](/felix/features/security/#bootstrap-mode-day-0)).
 
 ```http
 POST /internal/bootstrap/tenants/{tenant_id}/initialize
@@ -152,6 +152,20 @@ Content-Type: application/json
   "initial_admin_principals": ["p:alice"]
 }
 ```
+
+Initialization is atomic and exactly-once per tenant, across every
+control-plane instance: exactly one concurrent call wins and returns `200`
+with the tenant's signing-key id; every other returns
+`409 already_initialized`. A failed call leaves the tenant retryable — the
+bootstrapped flag only commits together with a complete seed.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | This call performed the initialization; the response carries `kid` and the tenant JWKS URL |
+| `400` | Validation failed (empty display name, no admin principals, blank issuer) |
+| `401` | Missing or wrong `X-Felix-Bootstrap-Token` |
+| `404` | Bootstrap is not enabled on this control plane |
+| `409` | The tenant is already initialized — by an earlier call, or by a concurrent one that won |
 
 ### GET /v1/tenants/{tenant_id}/.well-known/jwks.json
 

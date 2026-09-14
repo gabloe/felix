@@ -2364,6 +2364,151 @@ fn decode_key(value: &[u8], label: &str) -> StoreResult<[u8; 32]> {
 }
 
 impl PostgresStore {
+    /// The auth writes below are shared between the pool-backed trait methods
+    /// and the single transaction `bootstrap_tenant_auth` runs, so each
+    /// statement exists once rather than once per path.
+    async fn upsert_idp_issuer_on(
+        conn: &mut sqlx::PgConnection,
+        tenant_id: &str,
+        issuer: &IdpIssuerConfig,
+    ) -> StoreResult<()> {
+        let audiences = serde_json::to_value(&issuer.audiences)?;
+        sqlx::query(
+            "INSERT INTO idp_issuers (tenant_id, issuer, audiences, discovery_url, jwks_url, subject_claim, groups_claim) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (tenant_id, issuer) DO UPDATE SET \
+                audiences = EXCLUDED.audiences, \
+                discovery_url = EXCLUDED.discovery_url, \
+                jwks_url = EXCLUDED.jwks_url, \
+                subject_claim = EXCLUDED.subject_claim, \
+                groups_claim = EXCLUDED.groups_claim",
+        )
+        .bind(tenant_id)
+        .bind(&issuer.issuer)
+        .bind(audiences)
+        .bind(&issuer.discovery_url)
+        .bind(&issuer.jwks_url)
+        .bind(&issuer.claim_mappings.subject_claim)
+        .bind(&issuer.claim_mappings.groups_claim)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_rbac_policy_on(
+        conn: &mut sqlx::PgConnection,
+        tenant_id: &str,
+        policy: &PolicyRule,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(&policy.subject)
+        .bind(&policy.object)
+        .bind(&policy.action)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_rbac_grouping_on(
+        conn: &mut sqlx::PgConnection,
+        tenant_id: &str,
+        grouping: &GroupingRule,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO rbac_groupings (tenant_id, user_id, role) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(&grouping.user)
+        .bind(&grouping.role)
+        .execute(conn)
+        .await?;
+        Ok(())
+    }
+
+    /// All signing keys a tenant has, or `None` when it has none yet.
+    async fn load_signing_keys_on(
+        conn: &mut sqlx::PgConnection,
+        tenant_id: &str,
+    ) -> StoreResult<Option<TenantSigningKeys>> {
+        // We fetch all keys to support rotation; callers will try `current` first.
+        let rows: Vec<DbSigningKey> = sqlx::query_as(
+            "SELECT kid, alg, private_pem, public_pem, status \
+             FROM tenant_signing_keys WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(conn)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let mut current: Option<SigningKey> = None;
+        let mut previous = Vec::new();
+        for row in rows {
+            // Parse and validate EdDSA-only key material from raw bytes.
+            // Private key bytes are stored as raw Ed25519 seeds, not PKCS8.
+            let key = SigningKey {
+                kid: row.kid,
+                alg: parse_algorithm(&row.alg)?,
+                private_key: decode_key(&row.private_pem, "private key")?,
+                public_key: decode_key(&row.public_pem, "public key")?,
+            };
+            match row.status.as_str() {
+                "current" => current = Some(key),
+                "previous" => previous.push(key),
+                _ => {}
+            }
+        }
+
+        let current = current.ok_or_else(|| StoreError::NotFound("signing keys".into()))?;
+        Ok(Some(TenantSigningKeys { current, previous }))
+    }
+
+    async fn insert_signing_keys_on(
+        conn: &mut sqlx::PgConnection,
+        tenant_id: &str,
+        keys: &TenantSigningKeys,
+    ) -> StoreResult<()> {
+        let current_alg = algorithm_to_str(keys.current.alg);
+        // Store raw Ed25519 seeds; never serialize or log these values.
+        sqlx::query(
+            "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
+             VALUES ($1, $2, $3, $4, $5, 'current')",
+        )
+        .bind(tenant_id)
+        .bind(&keys.current.kid)
+        .bind(current_alg)
+        .bind(keys.current.private_key.as_slice())
+        .bind(keys.current.public_key.as_slice())
+        .execute(&mut *conn)
+        .await?;
+
+        for key in &keys.previous {
+            let alg = algorithm_to_str(key.alg);
+            // Store previous keys for rotation; still valid for verification.
+            sqlx::query(
+                "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
+                 VALUES ($1, $2, $3, $4, $5, 'previous')",
+            )
+            .bind(tenant_id)
+            .bind(&key.kid)
+            .bind(alg)
+            .bind(key.private_key.as_slice())
+            .bind(key.public_key.as_slice())
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn refresh_counts(&self) -> StoreResult<()> {
         let stream_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM streams")
             .fetch_one(&self.pool)
@@ -2408,28 +2553,8 @@ impl AuthStore for PostgresStore {
     }
 
     async fn upsert_idp_issuer(&self, tenant_id: &str, issuer: IdpIssuerConfig) -> StoreResult<()> {
-        let audiences = serde_json::to_value(&issuer.audiences)?;
-        sqlx::query(
-            "INSERT INTO idp_issuers (tenant_id, issuer, audiences, discovery_url, jwks_url, subject_claim, groups_claim) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (tenant_id, issuer) DO UPDATE SET \
-                audiences = EXCLUDED.audiences, \
-                discovery_url = EXCLUDED.discovery_url, \
-                jwks_url = EXCLUDED.jwks_url, \
-                subject_claim = EXCLUDED.subject_claim, \
-                groups_claim = EXCLUDED.groups_claim",
-        )
-        .bind(tenant_id)
-        .bind(&issuer.issuer)
-        .bind(audiences)
-        .bind(&issuer.discovery_url)
-        .bind(&issuer.jwks_url)
-        .bind(&issuer.claim_mappings.subject_claim)
-        .bind(&issuer.claim_mappings.groups_claim)
-        .execute(&self.pool)
-        .await
-        ?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        Self::upsert_idp_issuer_on(&mut conn, tenant_id, &issuer).await
     }
 
     async fn delete_idp_issuer(&self, tenant_id: &str, issuer: &str) -> StoreResult<()> {
@@ -2474,68 +2599,20 @@ impl AuthStore for PostgresStore {
     }
 
     async fn add_rbac_policy(&self, tenant_id: &str, policy: PolicyRule) -> StoreResult<()> {
-        sqlx::query(
-            "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(tenant_id)
-        .bind(&policy.subject)
-        .bind(&policy.object)
-        .bind(&policy.action)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        Self::insert_rbac_policy_on(&mut conn, tenant_id, &policy).await
     }
 
     async fn add_rbac_grouping(&self, tenant_id: &str, grouping: GroupingRule) -> StoreResult<()> {
-        sqlx::query(
-            "INSERT INTO rbac_groupings (tenant_id, user_id, role) \
-             VALUES ($1, $2, $3) \
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(tenant_id)
-        .bind(&grouping.user)
-        .bind(&grouping.role)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        Self::insert_rbac_grouping_on(&mut conn, tenant_id, &grouping).await
     }
 
     async fn get_tenant_signing_keys(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
-        // We fetch all keys to support rotation; callers will try `current` first.
-        let rows: Vec<DbSigningKey> = sqlx::query_as(
-            "SELECT kid, alg, private_pem, public_pem, status \
-             FROM tenant_signing_keys WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        if rows.is_empty() {
-            return Err(StoreError::NotFound("signing keys".into()));
-        }
-
-        let mut current: Option<SigningKey> = None;
-        let mut previous = Vec::new();
-        for row in rows {
-            // Parse and validate EdDSA-only key material from raw bytes.
-            // Private key bytes are stored as raw Ed25519 seeds, not PKCS8.
-            let key = SigningKey {
-                kid: row.kid,
-                alg: parse_algorithm(&row.alg)?,
-                private_key: decode_key(&row.private_pem, "private key")?,
-                public_key: decode_key(&row.public_pem, "public key")?,
-            };
-            match row.status.as_str() {
-                "current" => current = Some(key),
-                "previous" => previous.push(key),
-                _ => {}
-            }
-        }
-
-        let current = current.ok_or_else(|| StoreError::NotFound("signing keys".into()))?;
-        Ok(TenantSigningKeys { current, previous })
+        let mut conn = self.pool.acquire().await?;
+        Self::load_signing_keys_on(&mut conn, tenant_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound("signing keys".into()))
     }
 
     async fn set_tenant_signing_keys(
@@ -2553,39 +2630,7 @@ impl AuthStore for PostgresStore {
             .bind(tenant_id)
             .execute(&mut *tx)
             .await?;
-
-        let current_alg = algorithm_to_str(keys.current.alg);
-        // Store raw Ed25519 seeds; never serialize or log these values.
-        sqlx::query(
-            "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
-             VALUES ($1, $2, $3, $4, $5, 'current')",
-        )
-        .bind(tenant_id)
-        .bind(&keys.current.kid)
-        .bind(current_alg)
-        .bind(keys.current.private_key.as_slice())
-        .bind(keys.current.public_key.as_slice())
-        .execute(&mut *tx)
-        .await
-        ?;
-
-        for key in &keys.previous {
-            let alg = algorithm_to_str(key.alg);
-            // Store previous keys for rotation; still valid for verification.
-            sqlx::query(
-                "INSERT INTO tenant_signing_keys (tenant_id, kid, alg, private_pem, public_pem, status) \
-                 VALUES ($1, $2, $3, $4, $5, 'previous')",
-            )
-            .bind(tenant_id)
-            .bind(&key.kid)
-            .bind(alg)
-            .bind(key.private_key.as_slice())
-            .bind(key.public_key.as_slice())
-            .execute(&mut *tx)
-            .await
-            ?;
-        }
-
+        Self::insert_signing_keys_on(&mut tx, tenant_id, &keys).await?;
         tx.commit().await?;
         // Invalidate derived key cache so new keys take effect immediately.
         crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
@@ -2639,33 +2684,69 @@ impl AuthStore for PostgresStore {
     ) -> StoreResult<()> {
         // Seed policy/grouping data atomically to avoid partial authorization state.
         let mut tx = self.pool.begin().await?;
-        for policy in policies {
-            sqlx::query(
-                "INSERT INTO rbac_policies (tenant_id, subject, object, action) \
-                 VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT DO NOTHING",
-            )
-            .bind(tenant_id)
-            .bind(&policy.subject)
-            .bind(&policy.object)
-            .bind(&policy.action)
-            .execute(&mut *tx)
-            .await?;
+        for policy in &policies {
+            Self::insert_rbac_policy_on(&mut tx, tenant_id, policy).await?;
         }
-        for grouping in groupings {
-            sqlx::query(
-                "INSERT INTO rbac_groupings (tenant_id, user_id, role) \
-                 VALUES ($1, $2, $3) \
-                 ON CONFLICT DO NOTHING",
-            )
-            .bind(tenant_id)
-            .bind(&grouping.user)
-            .bind(&grouping.role)
-            .execute(&mut *tx)
-            .await?;
+        for grouping in &groupings {
+            Self::insert_rbac_grouping_on(&mut tx, tenant_id, grouping).await?;
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn bootstrap_tenant_auth(
+        &self,
+        tenant_id: &str,
+        seed: crate::store::TenantAuthSeed,
+    ) -> StoreResult<TenantSigningKeys> {
+        let mut tx = self.pool.begin().await?;
+
+        // The tenant row is the bootstrap lock: `FOR UPDATE` serializes racing
+        // initializes across every control-plane instance, and whoever waited
+        // sees the winner's committed flag rather than the stale `false` it
+        // read before blocking.
+        let bootstrapped: Option<bool> = sqlx::query_scalar(
+            "SELECT auth_bootstrapped FROM tenants WHERE tenant_id = $1 FOR UPDATE",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match bootstrapped {
+            None => return Err(StoreError::NotFound("tenant".into())),
+            Some(true) => {
+                return Err(StoreError::Conflict("tenant already initialized".into()));
+            }
+            Some(false) => {}
+        }
+
+        let keys = match Self::load_signing_keys_on(&mut tx, tenant_id).await? {
+            Some(keys) => keys,
+            None => {
+                let keys = crate::auth::keys::generate_signing_keys()?;
+                Self::insert_signing_keys_on(&mut tx, tenant_id, &keys).await?;
+                keys
+            }
+        };
+
+        for issuer in &seed.issuers {
+            Self::upsert_idp_issuer_on(&mut tx, tenant_id, issuer).await?;
+        }
+        for policy in &seed.policies {
+            Self::insert_rbac_policy_on(&mut tx, tenant_id, policy).await?;
+        }
+        for grouping in &seed.groupings {
+            Self::insert_rbac_grouping_on(&mut tx, tenant_id, grouping).await?;
+        }
+
+        sqlx::query("UPDATE tenants SET auth_bootstrapped = TRUE WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        // Only after commit: an uncommitted key must never enter the cache.
+        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
+        Ok(keys)
     }
 }
 

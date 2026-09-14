@@ -70,6 +70,18 @@ On a forced one — work was dropped, and this is the line to alert on:
 WARN drain deadline expired; forcing cancellation elapsed_ms=25001 deadline_ms=25000 unfinished=["quic_connections"]
 ```
 
+## Watching a drain happen
+
+The log line dies with the pod; these survive on the metrics endpoint, which
+is deliberately torn down last:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_ready_state` | `1` in rotation, `0` draining — the same flag both `/ready` endpoints read |
+| `felix_inflight_requests` | requests currently being served, so "waiting on what?" has an answer |
+| `felix_drain_duration_ms` | how long the last drain took |
+| `felix_drain_forced_total{subsystem}` | subsystems cut off by the deadline — non-zero means work was dropped, and this counter is the thing to alert on |
+
 ## Kubernetes configuration
 
 Readiness propagation is not instant. The endpoints controller has to observe the
@@ -140,6 +152,8 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
   (`services/broker/tests/graceful_shutdown.rs`). There is no process-level test
   that spawns the real broker binary, sends it SIGTERM under active
   publish/subscribe traffic, and asserts a bounded clean exit. The control plane
-  has the process-level half (`services/controlplane/tests/main_runtime.rs` sends
-  the real binary a SIGTERM and asserts the ordering above) but not the
-  under-load half.
+  has both halves: `services/controlplane/tests/main_runtime.rs` sends the real
+  binary a SIGTERM and asserts the ordering above, and
+  `services/controlplane/tests/rolling_restart.rs` restarts every instance of a
+  two-instance deployment — and kills one outright — under continuous broker
+  heartbeat and watch traffic, asserting zero failed calls.

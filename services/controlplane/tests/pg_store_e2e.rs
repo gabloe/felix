@@ -261,8 +261,15 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
         .get_or_try_init(|| async {
             eprintln!("pg-tests: starting postgres container");
             let docker = Box::leak(Box::new(Cli::default()));
-            let container = std::panic::catch_unwind(|| docker.run(Postgres::default()))
-                .map_err(|_| sqlx::Error::Protocol("docker run panicked".into()))?;
+            // The module's default tag is Postgres 11, which predates the
+            // generated columns migration 0009 uses; pin the version the
+            // supported deployment path (`task pg:up`) runs.
+            let container = std::panic::catch_unwind(|| {
+                docker.run(
+                    testcontainers::RunnableImage::from(Postgres::default()).with_tag("16-alpine"),
+                )
+            })
+            .map_err(|_| sqlx::Error::Protocol("docker run panicked".into()))?;
             let port = container.get_host_port_ipv4(5432);
             let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
             // Avoid logging the full URL in case it includes credentials.
@@ -1790,7 +1797,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
         store: store.clone(),
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
-        bootstrap_token: Some("token".to_string()),
+        bootstrap_tokens: vec!["token".to_string()],
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -1849,5 +1856,91 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
         "pg-tests: jwks contains {} keys (current + previous)",
         keys_list.len()
     );
+    Ok(())
+}
+
+/// The `FOR UPDATE` claim in `bootstrap_tenant_auth`, exercised for real:
+/// racing initializes through one Postgres must produce exactly one winner,
+/// and the keys the winner reports must be the keys the tenant holds.
+#[tokio::test]
+#[serial]
+async fn pg_bootstrap_tenant_auth_is_atomic_and_exactly_once() -> Result<()> {
+    let Some(fixture) = pg_store().await? else {
+        return Ok(());
+    };
+    let store = &fixture.store;
+
+    // A tenant that does not exist is NotFound, not silently created: the
+    // handler owns tenant creation, the store owns the claim.
+    let missing = store
+        .bootstrap_tenant_auth(
+            "missing",
+            store::TenantAuthSeed {
+                issuers: Vec::new(),
+                policies: Vec::new(),
+                groupings: Vec::new(),
+            },
+        )
+        .await;
+    assert!(matches!(missing, Err(store::StoreError::NotFound(_))));
+
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "Tenant One".to_string(),
+        })
+        .await?;
+
+    let seed = || store::TenantAuthSeed {
+        issuers: vec![IdpIssuerConfig {
+            issuer: "https://issuer.example.com".to_string(),
+            audiences: vec!["felix-controlplane".to_string()],
+            discovery_url: None,
+            jwks_url: Some("https://issuer.example.com/jwks".to_string()),
+            claim_mappings: ClaimMappings {
+                subject_claim: "sub".to_string(),
+                groups_claim: None,
+            },
+        }],
+        policies: vec![PolicyRule {
+            subject: "role:tenant-admin".to_string(),
+            object: "tenant:t1".to_string(),
+            action: "tenant.manage".to_string(),
+        }],
+        groupings: vec![GroupingRule {
+            user: "p:admin".to_string(),
+            role: "role:tenant-admin".to_string(),
+        }],
+    };
+
+    let mut racers = Vec::new();
+    for _ in 0..4 {
+        let store = Arc::clone(store);
+        let seed = seed();
+        racers.push(tokio::spawn(async move {
+            store.bootstrap_tenant_auth("t1", seed).await
+        }));
+    }
+
+    let mut winner_kid = None;
+    let mut conflicts = 0;
+    for racer in racers {
+        match racer.await.expect("join") {
+            Ok(keys) => {
+                assert!(winner_kid.is_none(), "two initializes both claimed the win");
+                winner_kid = Some(keys.current.kid);
+            }
+            Err(store::StoreError::Conflict(_)) => conflicts += 1,
+            Err(other) => panic!("unexpected bootstrap error: {other}"),
+        }
+    }
+    assert_eq!(conflicts, 3);
+
+    assert!(store.tenant_auth_is_bootstrapped("t1").await?);
+    let held = store.get_tenant_signing_keys("t1").await?;
+    assert_eq!(Some(held.current.kid), winner_kid);
+    assert_eq!(store.list_idp_issuers("t1").await?.len(), 1);
+    assert_eq!(store.list_rbac_policies("t1").await?.len(), 1);
+    assert_eq!(store.list_rbac_groupings("t1").await?.len(), 1);
     Ok(())
 }

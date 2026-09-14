@@ -223,6 +223,20 @@ FELIX_BOOTSTRAP_BIND_ADDR=127.0.0.1:9095
 FELIX_BOOTSTRAP_TOKEN=<random secret>
 ```
 
+Two optional hardening layers, independent of each other:
+
+- **Token rotation without an outage.** `FELIX_BOOTSTRAP_TOKEN_PREVIOUS`
+  holds the token being retired; both are accepted (each compared in constant
+  time) while a rolling deploy replaces one with the other. Setting only the
+  previous token fails startup — that shape means the rotation removed the
+  wrong half.
+- **mTLS on the bootstrap listener.** `FELIX_BOOTSTRAP_TLS_CERT`,
+  `FELIX_BOOTSTRAP_TLS_KEY`, and `FELIX_BOOTSTRAP_TLS_CLIENT_CA` (all three,
+  or startup fails rather than coming up half-secured) make the listener
+  terminate TLS itself and refuse, at the handshake, any client without a
+  certificate signed by that CA. An unauthenticated caller never reaches the
+  endpoint, so the token never even gets read.
+
 2. Call the internal endpoint (bound to the bootstrap address):
 
 ```
@@ -249,6 +263,16 @@ Content-Type: application/json
 ```
 
 3. Disable bootstrap after the initial setup.
+
+Initialization is **atomic and exactly-once per tenant**: the signing keys,
+issuers, RBAC seed, and the bootstrapped flag commit as one store operation,
+serialized on the tenant row. Racing the call against itself — including
+through different control-plane instances behind one load balancer — produces
+one winner and `409 already_initialized` for everyone else, and a failure
+part-way leaves the tenant retryable rather than half-initialized. The token
+itself is a static shared secret, valid while bootstrap is enabled — the full
+threat model, replay rules, rotation procedure, and recovery steps are in
+[`docs/security/bootstrap.md`](https://github.com/gabloe/felix/blob/main/docs/security/bootstrap.md).
 
 After bootstrap, admin actions require explicit Felix permissions:
 - IdP issuer admin: `tenant.manage:tenant:{tenant_id}`

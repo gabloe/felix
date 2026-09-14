@@ -251,6 +251,35 @@ pub trait AuthStore: Send + Sync {
         policies: Vec<PolicyRule>,
         groupings: Vec<GroupingRule>,
     ) -> StoreResult<()>;
+
+    /// Perform the whole tenant auth bootstrap — signing keys, issuers, RBAC
+    /// seed, and the bootstrapped flag — as one atomic, exactly-once operation.
+    ///
+    /// Any number of control-plane instances may receive the same bootstrap
+    /// request concurrently; exactly one wins and returns the signing keys the
+    /// tenant ends up with, and every other caller gets
+    /// [`StoreError::Conflict`]. Written as a single store operation because
+    /// the pieces are only correct together: a winner decided by a check
+    /// outside the transaction can interleave with another instance's writes —
+    /// two racing initializes each generating keys leaves one caller holding a
+    /// `kid` the other overwrote.
+    ///
+    /// A failure part-way must leave the tenant *not* bootstrapped, so the
+    /// operator can simply retry.
+    async fn bootstrap_tenant_auth(
+        &self,
+        tenant_id: &str,
+        seed: TenantAuthSeed,
+    ) -> StoreResult<TenantSigningKeys>;
+}
+
+/// Everything [`AuthStore::bootstrap_tenant_auth`] writes besides the keys it
+/// generates.
+#[derive(Debug, Clone)]
+pub struct TenantAuthSeed {
+    pub issuers: Vec<IdpIssuerConfig>,
+    pub policies: Vec<PolicyRule>,
+    pub groupings: Vec<GroupingRule>,
 }
 
 pub trait ControlPlaneAuthStore: ControlPlaneStore + AuthStore {}
