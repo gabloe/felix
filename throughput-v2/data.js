@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789405523574,
+  "lastUpdate": 1789408516053,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7228,6 +7228,58 @@ window.BENCHMARK_DATA = {
             "range": "4825.74",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 679040.93\nmean: 677391.21\nstdev: 4825.74\ncv: 0.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff2e8593c689242465ec3b133d2401addcb715b7",
+          "message": "Decide metadata Raft, and answer the SWIM question (#343)\n\nTwo decisions M7 left open, both now recorded the way replication-design.md\nrecorded shard replication: with the alternatives and what would overturn\nthem.\n\ndocs/metadata-raft-design.md decides #333: an openraft group embedded in the\ncontrol-plane instances (0.9 line, behind a seam), with InMemoryStore as the\nstate machine — API-shaped deterministic commands, timestamps stamped at\npropose time, snapshots serializing the whole state. The broker contract is\nfrozen behind the existing store traits; writes forward to the leader,\nreads serve locally because the watch contract is already pull-based and\neventually consistent; the sweep and placement run only on the leader, whose\nlease grants keep the existing safety-margin arithmetic with the Raft term\nas a second epoch underneath assignment generations. Migration from Postgres\nis an offline import with sequence continuity, because dual-write is the\nclass of bug this design exists to remove. The document also answers the\nobjection its own repo raises: the never-rewritten invariant that rejected\nper-shard Raft does not apply, because the metadata Raft log never touches\nfelix-storage.\n\nThe SWIM evaluation lands in control-plane.md next to the liveness rules it\nwould have replaced, and the answer is no, for now: the heartbeat is also\nthe lease renewal, so liveness and serving authority deliberately share one\nchannel to one authority; failover is lease-bound (~1s), not\nliveness-bound (15s), so faster detection accelerates nothing safety uses;\nand SWIM's constant-load advantage prices in at hundreds of nodes, not\ntens. The one real gap it would cover — asymmetric reachability — has a\ncheaper remedy (advisory peer-reachability reports) named as the first\nthing to build if it bites. Reopening triggers recorded.\n\nTracker: milestone M13 (#337–#342, umbrella #333) mirrors the design's\nsequencing. Docs-site gains a dedicated Metadata Raft page under\nArchitecture, clearly marked designed-not-implemented, and the status\ntable row moves from 'not started' to 'designed', which is the honest\nmiddle.",
+          "timestamp": "2026-09-14T10:52:22-07:00",
+          "tree_id": "fafaad6c1eb18230f27db41ff5f094d045c1ffc4",
+          "url": "https://github.com/gabloe/felix/commit/ff2e8593c689242465ec3b133d2401addcb715b7"
+        },
+        "date": 1789408514662,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235829.09,
+            "range": "2443.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235829.09\nmean: 236582.53\nstdev: 2443.23\ncv: 1.03%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235829.09,
+            "range": "2443.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235829.09\nmean: 236582.53\nstdev: 2443.23\ncv: 1.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57284.2,
+            "range": "673.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57284.20\nmean: 57505.25\nstdev: 673.04\ncv: 1.17%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 572842,
+            "range": "6730.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 572842.00\nmean: 575052.45\nstdev: 6730.44\ncv: 1.17%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
