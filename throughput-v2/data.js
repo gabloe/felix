@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789425877288,
+  "lastUpdate": 1789426078718,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7384,6 +7384,58 @@ window.BENCHMARK_DATA = {
             "range": "15565.21",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 597166.29\nmean: 599114.93\nstdev: 15565.21\ncv: 2.60%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0dd96c4c61ef9fa36096de00321497af525e9cd3",
+          "message": "Migrate from Postgres: export through the traits, import as one command (#340) (#351)\n\nThe cutover and the disaster-recovery story, sharing one mechanism, because\nthey are the same problem: put a known-good state in front of a group.\n\nThe read side is export_state_from — generic over the store traits, so it\nreads exactly what the API serves and works against any backend. It reuses\nthe snapshot endpoints, whose contract (records and feed position as one\nvalue) is precisely what sequence continuity needs: every change feed's\nhigh-water mark travels with an empty retained window. A broker whose\ncheckpoint is at the head continues without noticing; one behind gets the\nordinary 'checkpoint predates the window' signal and resnapshots exactly\nonce. Dragging Postgres's change rows along to avoid even that single\nresnapshot was considered and skipped — the signal path is a contract\nbrokers already honour, and exercising it beats carrying migration-only\ncode to dodge it.\n\nThe write side is one ImportState command proposed through the group:\natomic on every member because it is one log entry, forwarded to the\nleader from whichever address the operator gave, and guarded — a store\nwith any history refuses it, because history means consumers whose\ncheckpoints an accidental import would silently invalidate. --overwrite\nis the restore ceremony's loud warning made mechanical, and the boxed\nvariant keeps one store-sized command from taxing every other.\n\nThe tool rides the control-plane binary (felix-controlplane migrate\nexport-postgres | import), so every image that runs a control plane\ncarries its own migration and restore path; the export file doubles as\nthe DR artifact, and the printed entity summary is the before/after\nsanity check the ceremony calls for. The step-by-step, with an abort\npath at every step before the repoint, is in\ndocs/metadata-raft-design.md#migration-from-postgres and on the docs-site\nMetadata Raft page.\n\nProof: the pg-tests E2E seeds a real Postgres (with churn, so heads are\nnot trivially zero), exports, imports over the real HTTP propose route,\nand verifies records, feed heads, assignment generations, signing keys,\nand the bootstrapped flag — plus the at-the-head broker continuing with\nno resnapshot. The unit tests cover the guard, the overwrite path, and\nthat an import leaves nothing of what it replaced. The CLI export runs as\nthe real binary against the real database and produces a file the import\nside parses.",
+          "timestamp": "2026-09-14T15:45:24-07:00",
+          "tree_id": "1ea5c50a19f6ea57aca69350c8bd56f0a8e4b8b4",
+          "url": "https://github.com/gabloe/felix/commit/0dd96c4c61ef9fa36096de00321497af525e9cd3"
+        },
+        "date": 1789426078275,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 248845.12,
+            "range": "4478.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 248845.12\nmean: 249377.60\nstdev: 4478.46\ncv: 1.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 248845.12,
+            "range": "4478.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 248845.12\nmean: 249377.60\nstdev: 4478.46\ncv: 1.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59972.65,
+            "range": "1618.02",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59972.65\nmean: 59428.82\nstdev: 1618.02\ncv: 2.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 599726.49,
+            "range": "16180.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 599726.49\nmean: 594288.16\nstdev: 16180.18\ncv: 2.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
