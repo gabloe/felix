@@ -783,6 +783,56 @@ Consumer groups need **durable storage**. A broker started without
 — a group that forgot its position on restart would redeliver everything it had
 already finished, which is worse than not offering queues at all.
 
+## Cluster Operations
+
+A broker in a cluster answers three requests that a standalone one does not, and
+each is gated by a feature bit the broker advertises during the handshake. A
+client must not send one to a broker that did not advertise it: an unrecognised
+message type ends the broker's control loop, so probing costs the connection.
+
+### Topology
+
+```json
+{ "type": "topology" }
+{ "type": "topology_view", "brokers": [{ "node_id": "broker-1", "addr": "..." }] }
+```
+
+Which brokers a client may connect to. Gated by `FEATURE_TOPOLOGY`. An empty
+list is not an error — it means the cluster has told this broker of no
+client-reachable address, which is the normal answer on a single node.
+
+### Redirects
+
+```json
+{ "type": "not_leader", "node_id": "broker-2", "addr": "...", "generation": 7 }
+```
+
+A **subscribe** sent to a broker that does not own the shard is answered with
+this, naming the one that does. Gated by `FEATURE_REDIRECT`, and sent only to a
+client that offered the bit — everyone else gets an ordinary `error`, because a
+client that cannot decode `not_leader` must not be sent one.
+
+It is an instruction, not a failure. A **publish** to the wrong broker is
+*forwarded* instead and needs nothing from the client.
+
+### Stream Shards
+
+```json
+{ "type": "stream_shards", "tenant_id": "acme", "namespace": "prod",
+  "stream": "orders", "request_id": 1 }
+{ "type": "stream_shards_view", "shards": 4, "request_id": 1 }
+```
+
+How many shards a stream was placed with. Gated by `FEATURE_STREAM_SHARDS`.
+
+A subscription reads **one shard**, so a client consuming a whole stream needs
+this to know how many to open; nothing else on the wire says. `0` means the
+broker knows nothing of that stream, which is **not** the same as one shard — a
+client that rounded it up would read shard 0 and call it the stream.
+
+`ClusterClient::subscribe_sharded` does all of this for you: it asks, opens one
+subscription per shard, and follows each shard's own redirect.
+
 ## Error Handling
 
 ### Error Response Format

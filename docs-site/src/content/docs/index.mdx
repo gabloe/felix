@@ -40,8 +40,8 @@ is kept current per capability, and it is the page to trust when another
 disagrees with it.
 </Aside>
 
-Felix is a **low-latency** distributed data backend that unifies event streaming,
-message-oriented middleware, and distributed caching over a single QUIC-based
+Felix is a **low-latency** distributed data backend that serves **streams,
+caches and work queues** from one replicated log, over a single QUIC-based
 transport layer.
 
 ## Why Felix?
@@ -112,6 +112,12 @@ rule and one replication path.
     3. The broker processes request frames in a read loop and replies on the same stream.
     4. This avoids per-request stream setup cost and improves tail latency under concurrency.
   </Card>
+  <Card title="Queue data flow" icon="right-arrow">
+    1. A consumer **polls** a group rather than being pushed to, because only it knows when it has capacity.
+    2. The broker claims records against a visibility timeout and hands them over with their attempt counts.
+    3. An acknowledgement settles one record; the group's durable cursor advances over a contiguous run of them.
+    4. Anything unanswered is redelivered, and dead-lettered once it has been attempted too many times.
+  </Card>
 </CardGrid>
 
 ## Key Features
@@ -123,6 +129,7 @@ rule and one replication path.
 | **Connection pooling** | Reusable connections and streams, so hot paths skip setup cost |
 | **Batch processing** | Time- and count-bounded batching for throughput |
 | **TTL support** | Time-to-live on cache entries with lazy expiration |
+| **Work queues** | Consumer groups with acknowledgements, redelivery and dead letters |
 | **Backpressure** | Explicit flow control at six checkpoints to prevent cascade failures |
 | **Metrics** | Prometheus-compatible metrics endpoint |
 | **Observability** | Structured logging with optional per-stage telemetry |
@@ -134,6 +141,8 @@ Felix is a good fit today for:
 - **Real-time streaming** with high fanout and tunable latency/throughput trade-offs
 - **Event pipelines** with batch publishing and batch delivery
 - **Low-latency caching** over QUIC with predictable tail latency under load
+- **Work distribution** across consumers, where each job goes to one of them and
+  is retried if nobody says it was handled
 - **Microservice communication** with unified stream, cache and queue semantics
 
 See [What Felix Is For](/felix/getting-started/what-felix-is-for/) for the honest

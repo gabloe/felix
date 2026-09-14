@@ -81,6 +81,14 @@ receive — and the last of those has to live in the application regardless,
 because the application is the only thing that knows what makes two records the
 same. Deduplicate there, keyed on something the record carries.
 
+:::caution[Three fields on a stream are declared and not enforced]
+`kind` is the one most likely to mislead: creating a stream with `kind: Queue`
+does not make it a queue, and does not stop it being subscribed to normally.
+Consumer groups work over any durable stream. `retention` is decided by the
+broker-wide `FELIX_DURABLE_RETENTION_*` settings instead, and `delivery` by how
+a client chooses to read.
+:::
+
 :::caution[A stream's `delivery` field is not enforced]
 The control plane accepts `AtMostOnce` and `AtLeastOnce` on a stream and stores
 the value, but no broker code reads it. What a consumer gets is decided by how
