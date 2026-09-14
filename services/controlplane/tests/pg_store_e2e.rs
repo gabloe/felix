@@ -1879,6 +1879,7 @@ async fn pg_bootstrap_tenant_auth_is_atomic_and_exactly_once() -> Result<()> {
                 issuers: Vec::new(),
                 policies: Vec::new(),
                 groupings: Vec::new(),
+                signing_keys: generate_signing_keys()?,
             },
         )
         .await;
@@ -1892,6 +1893,7 @@ async fn pg_bootstrap_tenant_auth_is_atomic_and_exactly_once() -> Result<()> {
         .await?;
 
     let seed = || store::TenantAuthSeed {
+        signing_keys: generate_signing_keys().expect("candidate keys"),
         issuers: vec![IdpIssuerConfig {
             issuer: "https://issuer.example.com".to_string(),
             audiences: vec!["felix-controlplane".to_string()],

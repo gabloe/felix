@@ -322,7 +322,7 @@ is the umbrella.
 | Piece | Issue | State |
 | --- | --- | --- |
 | Raft core: seam, redb log/vote/snapshot store, HTTP transport, group lifecycle | [#337](https://github.com/gabloe/felix/issues/337) | **Landed** — `services/controlplane/src/raft/`. The store passes openraft's own storage conformance suite; group tests cover election, replication, restart-as-rejoin, wiped-volume rebuild by snapshot, and learner-first growth. Nothing serves metadata from it yet. |
-| Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | Not started |
+| Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | **Landed** — `store/command.rs` (the versioned, API-shaped command set) and `store/state_machine.rs` (`MetadataStateMachine`, the in-memory store behind the seam). The determinism harness applies a full-coverage script to two machines and requires byte-identical snapshots; a real three-node group settles eight concurrent bootstraps by log order alone with byte-identical replicas. Landing it surfaced and fixed real iteration-order leaks: multi-node expiry and cascading deletes published change events in HashMap order. Nothing serves API traffic from it yet. |
 | Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | Not started |
 | Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | Not started |
 | Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | Not started |
@@ -334,3 +334,18 @@ rather than hand-rolled files. Consensus durability plumbing — votes and
 entries that must never be acknowledged and then lost — is the last place
 Felix should be inventive, and openraft's storage suite now enforces the
 semantics against the real store on every test run.
+
+Two findings from landing #338, recorded because they are the design's
+predictions coming true:
+
+- **The iteration-order leak was real.** Multi-node expiry and the
+  tenant/namespace cascade deletes published their change events in HashMap
+  iteration order — harmless on one instance, state-forking on replicas,
+  because each event takes a sequence number as it publishes. They now
+  publish in sorted order, and the determinism harness is what holds that
+  door shut.
+- **Key generation moved to propose time for every backend.**
+  `TenantAuthSeed` now carries the candidate signing keys; the API layer
+  generates them, and both the Postgres transaction and the state machine
+  install them only when the tenant has none. The store layer is now free of
+  randomness end to end, not just under Raft.

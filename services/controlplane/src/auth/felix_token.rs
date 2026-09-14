@@ -118,7 +118,7 @@ pub struct FelixClaims {
 /// - `alg` must remain EdDSA to avoid RSA fallback.
 ///
 /// - Copying this struct is cheap (fixed-size arrays).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SigningKey {
     pub kid: String,
     pub alg: Algorithm,
@@ -156,7 +156,7 @@ pub struct SigningKey {
 /// - Previous keys are still valid for verification; rotate carefully.
 ///
 /// - Cloning scales with the number of previous keys.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TenantSigningKeys {
     pub current: SigningKey,
     pub previous: Vec<SigningKey>,
