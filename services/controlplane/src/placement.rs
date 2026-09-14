@@ -645,6 +645,7 @@ pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
     positions: std::sync::Arc<crate::replica_positions::ReplicaPositions>,
     interval: std::time::Duration,
+    gate: crate::raft::LeadershipGate,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -655,6 +656,12 @@ pub fn spawn_reconciler(
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {
+                    // Placement decides from what it reads; under Raft the
+                    // gate's linearizable check also guarantees those reads
+                    // are current before any assignment is proposed.
+                    if !gate.holds().await {
+                        continue;
+                    }
                     reconcile_once(store.as_ref(), positions.as_ref()).await;
                 }
             }

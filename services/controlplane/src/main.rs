@@ -8,6 +8,9 @@ use anyhow::Context;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router, build_router};
 use controlplane::auth::oidc::UpstreamOidcValidator;
+use controlplane::raft::{LeadershipGate, RaftHandle, RaftSettings};
+use controlplane::store::raft_backend::RaftStore;
+use controlplane::store::state_machine::MetadataStateMachine;
 use controlplane::{config, membership, observability, placement, store};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use std::future::{Future, IntoFuture};
@@ -40,8 +43,15 @@ where
     // below stay separate because the metrics endpoint has to outlive the API
     // drain — that is how an operator watches the drain happen.
     let readiness = Readiness::ready();
-    let state = build_state(config.clone(), readiness.clone()).await?;
+    let (state, raft_handle) = build_state(config.clone(), readiness.clone()).await?;
     let _backend_name = state.store.backend_name();
+    // Under Raft, singleton background work runs only on the (freshly
+    // confirmed) leader; the other backends keep every instance sweeping,
+    // which their stores make safe.
+    let leadership = match &raft_handle {
+        Some(handle) => LeadershipGate::Leader(handle.clone()),
+        None => LeadershipGate::Always,
+    };
     let api_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
 
@@ -60,6 +70,7 @@ where
     let expiry_task = membership::spawn_expiry_sweep(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         state.node_liveness.clone(),
+        leadership.clone(),
         api_shutdown.clone(),
     );
 
@@ -69,10 +80,17 @@ where
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         Arc::clone(&state.replica_positions),
         Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
+        leadership,
         api_shutdown.clone(),
     );
 
     let app = build_router(state.clone());
+    // The Raft RPC routes ride the main listener — the design's "no new
+    // port": one less listener to secure in M8.
+    let app = match &raft_handle {
+        Some(handle) => app.merge(handle.rpc_router()),
+        None => app,
+    };
 
     let bootstrap_task = if config.bootstrap.enabled {
         let bootstrap_addr = config.bootstrap.bind_addr;
@@ -213,6 +231,20 @@ where
         task.abort();
     }
 
+    if let Some(handle) = &raft_handle {
+        // After the API stops (no new proposals), before metrics: a member
+        // that leaves without shutting down looks like a failure to the
+        // group and costs it an election timeout.
+        if !budget
+            .drain("raft_node", async {
+                let _ = handle.shutdown().await;
+            })
+            .await
+        {
+            tracing::warn!("raft node did not shut down within the drain budget");
+        }
+    }
+
     // Step 3: metrics last, so `/ready` keeps reporting "draining" and `/metrics`
     // stays scrapeable for the whole drain.
     metrics_shutdown.cancel();
@@ -234,11 +266,12 @@ where
 async fn build_state(
     config: config::ControlPlaneConfig,
     lifecycle_readiness: Readiness,
-) -> anyhow::Result<AppState> {
+) -> anyhow::Result<(AppState, Option<RaftHandle>)> {
     let store_config = StoreConfig {
         changes_limit: config.changes_limit,
         change_retention_max_rows: config.change_retention_max_rows,
     };
+    let mut raft_handle = None;
     let store: Arc<dyn ControlPlaneAuthStore + Send + Sync> = match config.storage {
         config::StorageBackend::Memory => Arc::new(InMemoryStore::new(store_config)),
         config::StorageBackend::Postgres => {
@@ -247,6 +280,25 @@ async fn build_state(
                 .as_ref()
                 .context("postgres configuration missing")?;
             Arc::new(PostgresStore::connect(pg, store_config).await?)
+        }
+        config::StorageBackend::Raft => {
+            let raft_cfg = config.raft.as_ref().context("raft configuration missing")?;
+            let inner = Arc::new(InMemoryStore::new(store_config));
+            let machine = Arc::new(MetadataStateMachine::new(inner));
+            let handle = RaftHandle::start(
+                RaftSettings::new(raft_cfg.node_id, raft_cfg.data_dir.clone()),
+                Arc::clone(&machine) as Arc<dyn controlplane::raft::AppStateMachine>,
+            )
+            .await?;
+            // Every member initializes with the same configured group, which
+            // openraft documents as safe; a member with prior state, or one
+            // beaten to it by a peer, is told so and simply resumes. A real
+            // failure surfaces as no leader, which readiness reports.
+            if let Err(err) = handle.initialize(raft_cfg.peers.clone()).await {
+                tracing::info!(error = %err, "raft group not initialized here (already formed, or resuming)");
+            }
+            raft_handle = Some(handle.clone());
+            Arc::new(RaftStore::new(handle, machine))
         }
     };
 
@@ -260,33 +312,36 @@ async fn build_state(
         std::time::Duration::from_millis(config.readiness_cache_ttl_ms),
     ));
 
-    Ok(AppState {
-        region: Region {
-            region_id: config.region_id,
-            display_name: "Local Region".to_string(),
+    Ok((
+        AppState {
+            region: Region {
+                region_id: config.region_id,
+                display_name: "Local Region".to_string(),
+            },
+            api_version: "v1".to_string(),
+            features: FeatureFlags {
+                durable_storage: store.is_durable(),
+                tiered_storage: false,
+                bridges: false,
+            },
+            store,
+            readiness,
+            in_flight: Default::default(),
+            oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
+                std::time::Duration::from_secs(3600),
+                std::time::Duration::from_secs(3600),
+                60,
+                config.oidc_allowed_algorithms,
+            ),
+            bootstrap_enabled: config.bootstrap.enabled,
+            bootstrap_tokens: config.bootstrap.accepted_tokens(),
+            replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
+                &config.node_liveness,
+            )),
+            node_liveness: config.node_liveness,
         },
-        api_version: "v1".to_string(),
-        features: FeatureFlags {
-            durable_storage: store.is_durable(),
-            tiered_storage: false,
-            bridges: false,
-        },
-        store,
-        readiness,
-        in_flight: Default::default(),
-        oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
-            std::time::Duration::from_secs(3600),
-            std::time::Duration::from_secs(3600),
-            60,
-            config.oidc_allowed_algorithms,
-        ),
-        bootstrap_enabled: config.bootstrap.enabled,
-        bootstrap_tokens: config.bootstrap.accepted_tokens(),
-        replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-            &config.node_liveness,
-        )),
-        node_liveness: config.node_liveness,
-    })
+        raft_handle,
+    ))
 }
 
 #[cfg(test)]
@@ -302,6 +357,7 @@ mod tests {
             region_id: "local".to_string(),
             storage: config::StorageBackend::Memory,
             postgres: None,
+            raft: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
             oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
@@ -318,7 +374,7 @@ mod tests {
             readiness_timeout_ms: config::DEFAULT_READINESS_TIMEOUT_MS,
             readiness_cache_ttl_ms: config::DEFAULT_READINESS_CACHE_TTL_MS,
         };
-        let state = build_state(config, Readiness::ready())
+        let (state, _raft) = build_state(config, Readiness::ready())
             .await
             .expect("state");
         assert_eq!(state.region.region_id, "local");
@@ -333,6 +389,7 @@ mod tests {
             region_id: "local".to_string(),
             storage: config::StorageBackend::Postgres,
             postgres: None,
+            raft: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
             oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
@@ -369,6 +426,7 @@ mod tests {
                 connect_timeout_ms: 500,
                 acquire_timeout_ms: 500,
             }),
+            raft: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
             oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
@@ -402,6 +460,7 @@ mod tests {
             region_id: "local".to_string(),
             storage: config::StorageBackend::Memory,
             postgres: None,
+            raft: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
             oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],
@@ -434,6 +493,7 @@ mod tests {
             region_id: "local".to_string(),
             storage: config::StorageBackend::Memory,
             postgres: None,
+            raft: None,
             changes_limit: 10,
             change_retention_max_rows: Some(20),
             oidc_allowed_algorithms: vec![jsonwebtoken::Algorithm::ES256],

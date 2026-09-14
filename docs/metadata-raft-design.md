@@ -323,7 +323,7 @@ is the umbrella.
 | --- | --- | --- |
 | Raft core: seam, redb log/vote/snapshot store, HTTP transport, group lifecycle | [#337](https://github.com/gabloe/felix/issues/337) | **Landed** — `services/controlplane/src/raft/`. The store passes openraft's own storage conformance suite; group tests cover election, replication, restart-as-rejoin, wiped-volume rebuild by snapshot, and learner-first growth. Nothing serves metadata from it yet. |
 | Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | **Landed** — `store/command.rs` (the versioned, API-shaped command set) and `store/state_machine.rs` (`MetadataStateMachine`, the in-memory store behind the seam). The determinism harness applies a full-coverage script to two machines and requires byte-identical snapshots; a real three-node group settles eight concurrent bootstraps by log order alone with byte-identical replicas. Landing it surfaced and fixed real iteration-order leaks: multi-node expiry and cascading deletes published change events in HashMap order. Nothing serves API traffic from it yet. |
-| Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | Not started |
+| Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | **Landed** — `store/raft_backend.rs` (`RaftStore`), the third backend behind the store traits: reads from local applied state, writes proposed through the seam with follower→leader forwarding inside it, sweep and placement gated to the leader by a linearizable read-index check, and `StorageBackend::Raft` selectable via `FELIX_RAFT_NODE_ID` / `FELIX_RAFT_DATA_DIR` / `FELIX_RAFT_PEERS`. Passes the same node/shard contract suites as memory and Postgres; a binary-level test serves the HTTP API with no database and keeps its metadata across a restart. Finding recorded below. Probes are minimal (leader-known) until #341. |
 | Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | Not started |
 | Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | Not started |
 | Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | Not started |
@@ -334,6 +334,12 @@ rather than hand-rolled files. Consensus durability plumbing — votes and
 entries that must never be acknowledged and then lost — is the last place
 Felix should be inventive, and openraft's storage suite now enforces the
 semantics against the real store on every test run.
+
+One finding from landing #339: **openraft's write path waits indefinitely**
+— a leader that has lost quorum queues proposals forever rather than
+failing them. The seam now owns an overall write deadline (default 10s,
+elections and forwarding included), so "no quorum" reaches callers as an
+error rather than a hang; the quorum-loss test is what surfaced it.
 
 Two findings from landing #338, recorded because they are the design's
 predictions coming true:

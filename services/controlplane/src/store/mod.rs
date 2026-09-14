@@ -19,6 +19,7 @@ use thiserror::Error;
 pub mod command;
 pub mod memory;
 pub mod postgres;
+pub mod raft_backend;
 pub mod state_machine;
 
 #[cfg(test)]

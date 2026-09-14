@@ -21,12 +21,25 @@ pub(super) fn router(raft: Raft) -> Router {
         .route("/internal/raft/append-entries", post(append_entries))
         .route("/internal/raft/vote", post(vote))
         .route("/internal/raft/install-snapshot", post(install_snapshot))
+        .route("/internal/raft/propose", post(propose))
         // Axum's default body limit (2MB) is below openraft's default
         // snapshot chunk (3MB); a snapshot install crossing that line would
         // be refused with a 413 the sender reads as a network fault. Sized
         // to the chunk plus JSON's expansion of binary data.
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(raft)
+}
+
+/// A follower's forwarded proposal: opaque command bytes in, the state
+/// machine's response bytes out. 503 when this node cannot commit it —
+/// including "not the leader any more", which the forwarding side treats as
+/// a retryable answer, not a network fault.
+async fn propose(State(raft): State<Raft>, body: axum::body::Bytes) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match raft.client_write(body.to_vec()).await {
+        Ok(response) => (axum::http::StatusCode::OK, response.data).into_response(),
+        Err(err) => (axum::http::StatusCode::SERVICE_UNAVAILABLE, err.to_string()).into_response(),
+    }
 }
 
 async fn append_entries(

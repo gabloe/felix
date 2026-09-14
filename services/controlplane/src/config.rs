@@ -56,6 +56,9 @@ const DEFAULT_OIDC_ALLOWED_ALGORITHMS: [Algorithm; 1] = [Algorithm::ES256];
 pub enum StorageBackend {
     Memory,
     Postgres,
+    /// Metadata replicated by the control-plane instances themselves —
+    /// no external database. See `docs/metadata-raft-design.md`.
+    Raft,
 }
 
 impl FromStr for StorageBackend {
@@ -65,9 +68,25 @@ impl FromStr for StorageBackend {
         match value.to_lowercase().as_str() {
             "memory" => Ok(StorageBackend::Memory),
             "postgres" => Ok(StorageBackend::Postgres),
+            "raft" => Ok(StorageBackend::Raft),
             other => Err(anyhow!("invalid storage backend: {other}")),
         }
     }
+}
+
+/// The Raft backend's identity and group shape.
+#[derive(Debug, Clone)]
+pub struct RaftBackendConfig {
+    /// This instance's id within the group; must appear in `peers`.
+    pub node_id: u64,
+    /// Where the Raft log, vote, and snapshots live. Must survive restarts —
+    /// this is what makes a restart a rejoin instead of a fresh member.
+    pub data_dir: std::path::PathBuf,
+    /// The initial group, `id -> api-address` (host:port of each instance's
+    /// main listener, which also serves the Raft RPC routes). Every member
+    /// must be configured with the same map: initializing two disjoint
+    /// member sets is how split brain is manufactured.
+    pub peers: std::collections::BTreeMap<u64, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +167,7 @@ pub struct ControlPlaneConfig {
     pub region_id: String,
     pub storage: StorageBackend,
     pub postgres: Option<PostgresConfig>,
+    pub raft: Option<RaftBackendConfig>,
     pub changes_limit: u64,
     pub change_retention_max_rows: Option<i64>,
     pub oidc_allowed_algorithms: Vec<Algorithm>,
@@ -337,12 +357,18 @@ impl ControlPlaneConfig {
             }
         }
 
+        let raft = raft_from_env()?;
+        if raft.is_some() && matches!(storage, StorageBackend::Memory) {
+            storage = StorageBackend::Raft;
+        }
+
         let config = Self {
             bind_addr,
             metrics_bind,
             region_id,
             storage,
             postgres,
+            raft,
             changes_limit,
             change_retention_max_rows,
             oidc_allowed_algorithms: std::env::var("FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS")
@@ -484,6 +510,19 @@ impl ControlPlaneConfig {
                 "postgres backend requested but FELIX_CONTROLPLANE_POSTGRES_URL / postgres.url is not set"
             ));
         }
+        if matches!(self.storage, StorageBackend::Raft) {
+            let raft = self.raft.as_ref().ok_or_else(|| {
+                anyhow!(
+                    "raft backend requested but FELIX_RAFT_NODE_ID / FELIX_RAFT_DATA_DIR / FELIX_RAFT_PEERS are not set"
+                )
+            })?;
+            if !raft.peers.contains_key(&raft.node_id) {
+                return Err(anyhow!(
+                    "FELIX_RAFT_PEERS must include this instance's own FELIX_RAFT_NODE_ID ({})",
+                    raft.node_id
+                ));
+            }
+        }
         if self.bootstrap.enabled && self.bootstrap.token.is_none() {
             return Err(anyhow!(
                 "bootstrap enabled but FELIX_BOOTSTRAP_TOKEN / bootstrap.token is not set"
@@ -527,6 +566,60 @@ fn bootstrap_tls_from_env() -> Result<Option<BootstrapTlsConfig>> {
              FELIX_BOOTSTRAP_TLS_KEY, and FELIX_BOOTSTRAP_TLS_CLIENT_CA"
         )),
     }
+}
+
+/// The Raft backend from the environment: all three variables or none.
+///
+/// Partial configuration is an error for the same reason as bootstrap TLS:
+/// an operator who set two of the three believed they configured a group.
+fn raft_from_env() -> Result<Option<RaftBackendConfig>> {
+    let node_id = std::env::var("FELIX_RAFT_NODE_ID").ok();
+    let data_dir = std::env::var("FELIX_RAFT_DATA_DIR").ok();
+    let peers = std::env::var("FELIX_RAFT_PEERS").ok();
+    match (node_id, data_dir, peers) {
+        (None, None, None) => Ok(None),
+        (Some(node_id), Some(data_dir), Some(peers)) => {
+            let node_id: u64 = node_id
+                .parse()
+                .with_context(|| "parse FELIX_RAFT_NODE_ID")?;
+            Ok(Some(RaftBackendConfig {
+                node_id,
+                data_dir: data_dir.into(),
+                peers: parse_raft_peers(&peers)?,
+            }))
+        }
+        _ => Err(anyhow!(
+            "raft backend needs all of FELIX_RAFT_NODE_ID, FELIX_RAFT_DATA_DIR, and FELIX_RAFT_PEERS"
+        )),
+    }
+}
+
+/// `"1=host:port,2=host:port"` — the id the instance answers to, and the
+/// address its main listener (which serves the Raft routes) is reached on.
+fn parse_raft_peers(value: &str) -> Result<std::collections::BTreeMap<u64, String>> {
+    let mut peers = std::collections::BTreeMap::new();
+    for entry in value.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (id, addr) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("FELIX_RAFT_PEERS entry '{entry}' is not id=host:port"))?;
+        let id: u64 = id
+            .trim()
+            .parse()
+            .with_context(|| format!("parse peer id in '{entry}'"))?;
+        let addr = addr.trim();
+        if addr.is_empty() {
+            return Err(anyhow!(
+                "FELIX_RAFT_PEERS entry '{entry}' has an empty address"
+            ));
+        }
+        if peers.insert(id, addr.to_string()).is_some() {
+            return Err(anyhow!("FELIX_RAFT_PEERS lists id {id} twice"));
+        }
+    }
+    if peers.is_empty() {
+        return Err(anyhow!("FELIX_RAFT_PEERS is empty"));
+    }
+    Ok(peers)
 }
 
 /// Read a positive integer from the environment, ignoring absent, unparsable,

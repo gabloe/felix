@@ -118,6 +118,7 @@ impl ControlPlane {
         let expiry = controlplane::membership::spawn_expiry_sweep(
             Arc::clone(&store) as Arc<dyn controlplane::store::ControlPlaneStore + Send + Sync>,
             LIVENESS,
+            controlplane::raft::LeadershipGate::Always,
             shutdown.clone(),
         );
         // Owned by the same token; nothing waits on it separately.

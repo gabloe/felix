@@ -1353,6 +1353,9 @@ absent; they are listed in that script rather than here.
 | `FELIX_CONTROLPLANE_CHANGES_LIMIT` | `1000` | Maximum changes returned by one changefeed page. |
 | `FELIX_CONTROLPLANE_CHANGE_RETENTION_MAX_ROWS` | `10000` | Bounds the append-only change tables. Smaller means a watcher can fall behind sooner and need a fresh snapshot. |
 | `FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS` | — | Comma-separated JWS algorithms accepted from an upstream IdP. |
+| `FELIX_RAFT_NODE_ID` | — | This instance's id in the metadata Raft group (experimental backend; see [Metadata Raft](/felix/architecture/metadata-raft/)). All three raft variables together select the raft backend, or startup fails on a partial set. |
+| `FELIX_RAFT_DATA_DIR` | — | Where the Raft log, vote, and snapshots live. Must survive restarts: it is what makes a restart a rejoin rather than a fresh member. |
+| `FELIX_RAFT_PEERS` | — | The initial group as `id=host:port,...` of every member's main listener. Identical on every member. |
 | `FELIX_READINESS_TIMEOUT_MS` | `2000` | Longest a readiness check may take before it counts as a failure. Keep it below the prober's own timeout so the reason is reported rather than lost. |
 | `FELIX_READINESS_CACHE_TTL_MS` | `1000` | How long a readiness answer is reused. Bounds probe cost regardless of how many probers there are, and bounds how long recovery takes to become visible. |
 | `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` | `25000` | Budget for draining in-flight requests after SIGTERM before tasks are cancelled. |
