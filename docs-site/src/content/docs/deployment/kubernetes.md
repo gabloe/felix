@@ -18,6 +18,10 @@ Felix is designed as a Kubernetes-native system. This guide demonstrates:
 :::note[Kubernetes Version]
 Felix requires Kubernetes 1.24 or later. Tested on 1.27+.
 :::
+
+The control plane's availability story — how many instances to run, what the
+backing Postgres must provide, and what a database failover looks like — is
+its own page: [Control-plane HA](/felix/deployment/control-plane-ha/).
 ## Prerequisites
 
 - **Kubernetes cluster**: 1.24+ (Minikube, kind, GKE, EKS, AKS, etc.)
