@@ -401,6 +401,10 @@ Casbin is used with domains for tenant scoping. Policies and groupings are store
 - `stream.publish`, `stream.subscribe`
 - `cache.read`, `cache.write`
 
+Consumer-group operations have no action of their own: a group is a read
+position over a stream, so poll, acknowledge, hand-back and the dead-letter
+requests are all authorized as **`stream.subscribe`** on the stream being read.
+
 **Permission strings** embedded in Felix tokens:
 
 ```

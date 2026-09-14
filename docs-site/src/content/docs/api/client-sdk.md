@@ -406,6 +406,21 @@ client
     .await?;
 ```
 
+### Delete
+
+```rust
+// Answers with the value that was removed, or `None` if the key was not there —
+// so a caller can tell a delete that did something from one that did not.
+match client.cache_delete("acme", "prod", "sessions", "user-abc").await? {
+    Some(removed) => audit_log("session revoked", removed),
+    None => { /* already gone, or never there */ }
+}
+```
+
+Needs a broker advertising `FEATURE_CACHE_DELETE`; the client returns an error
+rather than probing, because an unrecognised message type ends the broker's
+control loop.
+
 ### Concurrent Cache Operations
 
 Pipeline multiple cache operations:
@@ -444,6 +459,100 @@ client
     .cache_put("acme", "prod", "temp", "user-123", data3, ttl)
     .await?;
 ```
+
+## Consumer Groups
+
+The other way to read a stream. `subscribe` pushes every record to every
+subscriber; a **consumer group** hands each record to one consumer and takes it
+back if nobody says it was handled.
+
+Records are **pulled**, because only the consumer knows when it has capacity:
+
+```rust
+loop {
+    // Waits up to five seconds for work rather than spinning on empty polls.
+    let records = client
+        .group_poll_wait("acme", "prod", "jobs", 0, "fulfilment", 32, Duration::from_secs(5))
+        .await?;
+
+    for record in records {
+        // `attempts` is 1 on a first delivery and higher on a redelivery, so a
+        // consumer can treat a retry differently. Absent means the broker did
+        // not report it, which is not the same as a first attempt.
+        match handle(&record.payload, record.attempts) {
+            Ok(()) => client.group_ack("acme", "prod", "jobs", 0, "fulfilment", record.offset).await?,
+            // Hand it back for immediate redelivery rather than waiting out the
+            // visibility timeout.
+            Err(_) => client.group_nack("acme", "prod", "jobs", 0, "fulfilment", record.offset).await?,
+        }
+    }
+}
+```
+
+An empty batch means nothing was available. **It is an answer, not an error.**
+
+### Dead letters
+
+Past `FELIX_GROUP_MAX_ATTEMPTS` a record is dead-lettered, so one poison record
+cannot stall the queue behind it. These need `FEATURE_GROUP_DEAD_LETTERS`, a
+separate bit from `FEATURE_CONSUMER_GROUP`:
+
+```rust
+let offsets = client.group_dead_letters("acme", "prod", "jobs", 0, "fulfilment").await?;
+for offset in offsets {
+    if worth_retrying(offset) {
+        client.group_redrive("acme", "prod", "jobs", 0, "fulfilment", offset).await?;
+    } else {
+        client.group_discard("acme", "prod", "jobs", 0, "fulfilment", offset).await?;
+    }
+}
+```
+
+A dead letter is a **pointer, not a copy**: the record is still in the stream's
+log at that offset, readable by an ordinary replay.
+
+### What a group needs
+
+- **Durable storage on the broker.** A group's position lives in a log, so a
+  broker without `FELIX_DURABLE_STORAGE_DIR` serves no groups and does not
+  advertise `FEATURE_CONSUMER_GROUP`.
+- **The shard's leader.** A poll is refused rather than forwarded, because
+  relaying would put the claim and the acknowledgement on different brokers.
+- **Idempotent handling.** This is at-least-once: a crash after handling and
+  before acknowledging is indistinguishable from a crash before handling, so the
+  record comes back.
+
+## Clusters
+
+`Client` talks to one broker. `ClusterClient` follows the cluster — it takes
+several addresses, learns the rest, reconnects when the broker it is using goes
+away, and follows a redirect to whichever broker owns a shard.
+
+```rust
+let client = Arc::new(ClusterClient::connect(&seeds, "localhost", config).await?);
+
+// Every shard of a multi-shard stream, merged into one channel.
+let mut subscription = client
+    .subscribe_sharded("acme", "prod", "orders", Some(StartPosition::Earliest))
+    .await?;
+
+while let Some(item) = subscription.next().await {
+    match item {
+        ShardEvent::Record { shard, event } => handle(shard, event),
+        ShardEvent::ShardLost { shard, error } => warn!(shard, %error, "shard down"),
+        ShardEvent::ShardRecovered { shard } => info!(shard, "shard back"),
+    }
+}
+```
+
+This needs a broker advertising `FEATURE_STREAM_SHARDS`, because the shard count
+comes from asking one, and `FEATURE_REDIRECT` to follow each shard to its owner.
+
+**Ordering is per shard and nothing more** — merging cannot restore an order
+that never existed. Resumption is a vector: `positions()` returns one offset per
+shard, and `resubscribe_sharded` takes it back. See
+[Multi-node client](https://github.com/gabloe/felix/blob/main/docs/multi-node-client.md)
+for the full contract.
 
 ## In-Process Client
 

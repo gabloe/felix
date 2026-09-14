@@ -26,6 +26,17 @@ Canonical actions:
 - `node.view` — cluster-scoped only; see [Cluster scope](#cluster-scope)
 - `node.manage` — over `node:{node_id}` or `cluster:*`
 
+There is no separate action for queues. **A consumer-group operation is
+authorized as `stream.subscribe` on the stream it reads** — poll, acknowledge,
+hand back, and the dead-letter requests alike. A group is a read position over a
+stream, so granting a consumer `stream.subscribe` is what lets it work the
+queue, and there is nothing finer to grant.
+
+Worth knowing in both directions: a principal with `stream.subscribe` can poll a
+group and acknowledge records, which advances a cursor other consumers share.
+That is a wider capability than a plain subscription, and the grammar does not
+currently let the two be separated.
+
 ## Object Grammar
 
 Valid canonical objects:

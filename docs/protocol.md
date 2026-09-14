@@ -108,6 +108,26 @@ still retained. `in_future` means the offset is past the end of the stream and
 `available` is the current tail. The two have opposite remedies, which is why
 they are distinguishable in code rather than only in prose.
 
+The `shard` field selects which shard of the stream to read, defaulting to 0. A
+subscription reads **one** shard, so consuming a whole multi-shard stream means
+one subscription per shard; `stream_shards` says how many there are.
+
+### Subscribed (server -> client)
+```
+{ "type": "subscribed", "subscription_id": <number> }
+```
+
+Confirms a subscription and carries the id the broker assigned it. The same id
+opens the event stream that carries its deliveries:
+
+```
+{ "type": "event_stream_hello", "subscription_id": <number> }
+```
+
+which is the first message on the unidirectional stream the broker opens back,
+and is how a client matches an event stream to the subscription that asked for
+it.
+
 ### Event (server -> client)
 ```
 { "type": "event", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>", "offset": <number|absent> }

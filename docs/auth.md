@@ -100,6 +100,10 @@ Actions:
 - `node.view` — cluster-scoped only
 - `node.manage` — over `node:{node_id}` or `cluster:*`
 
+Consumer-group operations have no action of their own: a group is a read
+position over a stream, so poll, acknowledge, hand-back and the dead-letter
+requests are all authorized as **`stream.subscribe`** on the stream being read.
+
 ### Cluster scope
 
 One object sits outside the tenant hierarchy:

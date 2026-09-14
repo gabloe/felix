@@ -169,10 +169,20 @@ than an optional field, and is not done.
   > `one_shard_failing_over_does_not_stop_the_others`,
   > `a_sharded_subscription_resumes_from_its_per_shard_offsets`.
 
-**`DeliveryGuarantee` is declared on a stream and not enforced.** The control
-plane accepts `AtMostOnce` and `AtLeastOnce`, and no broker code reads either.
-What a client gets is what the sections above describe, whichever value is set.
-Do not rely on it.
+**Three fields on a stream are declared and not enforced.** The control plane
+accepts them and stores them; the broker reads only `durable`, `shards` and
+`consistency`.
+
+| Field | What actually decides |
+| --- | --- |
+| `delivery` (`AtMostOnce` / `AtLeastOnce`) | How a client reads: a plain subscription, or a consumer group |
+| `retention` (`max_age_seconds`, `max_size_bytes`) | The broker-wide `FELIX_DURABLE_RETENTION_*` settings |
+| `kind` (`Stream` / `Queue` / `Cache`) | Nothing. A queue is a way of *reading* a stream, not a kind of stream |
+
+`kind` is the one most likely to mislead. Creating a stream with `kind: Queue`
+does not make it a queue and does not stop it being subscribed to normally —
+consumer groups work over any durable stream, and a stream created as `Stream`
+serves them just as well. Do not rely on any of the three.
 
 ## Clients
 
