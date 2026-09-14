@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789341269618,
+  "lastUpdate": 1789349146015,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -6968,6 +6968,58 @@ window.BENCHMARK_DATA = {
             "range": "11091.84",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 551574.54\nmean: 557860.99\nstdev: 11091.84\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5ca6cb695d3ac8327fd6488420d602a05bf34f41",
+          "message": "Length-prefix the publish handle cache key (#328)\n\n* fix(broker): length-prefix the publish handle cache key (#295)\n\nThe key was the three names joined with `\\0`, so tenant `\"a\\0b\"` namespace\n`\"c\"` produced the same key as tenant `\"a\"` namespace `\"b\\0c\"`. A cache hit\nhands a publish a resolved stream handle, so a collision means one stream's\npublish written to another stream's log. Nothing forbids a `\\0` in a tenant id,\nnamespace or stream name — and the comment above the key asserted the opposite,\nwhich is how it survived.\n\nEvery part is now length-prefixed, the shape `layout::shard_dir_name` already\nuses in the storage layer for the same reason. A length says where a part ends\nwhatever bytes are inside it.\n\nThe construction moved into `push_stream_cache_key`. The old test rebuilt the\nkey inline, so it could have passed while the real path did something else;\nboth now go through the same function.\n\nTwo tests: the pairs that actually collided, one per boundary the joined form\ncould move, and an exhaustive injectivity check over an alphabet containing\n`\\0`. The hand-picked list proves the cases someone thought of; the exhaustive\none proves there are no others in its space. Reverting to the joined key fails\nboth, naming the colliding tuples.\n\n**Cost.** The issue asked for this to be measured rather than assumed, since the\npath is deliberately hand-rolled to avoid allocation and `core::fmt`. Isolated,\nbest-of-7, 5M iterations on an M4 Max:\n\n| key shape | short names | long names |\n|---|---|---|\n| joined (broken) | 6.8 ns | 6.2 ns |\n| length-prefixed | 19.5 ns | 21.0 ns |\n| length-prefixed, faster `push_decimal` | 9.8 ns | 14.0 ns |\n\nMost of the cost was not the prefixing but `push_decimal` building a slice and\nvalidating it as UTF-8 for what is usually one character. Pushing ASCII digits\ndirectly, with a fast path for values under ten, gets it back — and makes the\nexisting shard suffix cheaper than it was.\n\nA layout using two length prefixes instead of three (the shard's digits are\nself-delimiting, and the last part can run to the end) measured 9.0/11.6 ns. I\ndid not take it: ~1-2 ns is not worth a key shape whose injectivity needs an\nargument rather than being visible.\n\nWhat remains is ~3 ns on a publish whose p50 is ~110,000 ns.\n\n* test(controlplane): wait until the API answers, not until the port accepts\n\n`readiness_fails_before_the_listener_closes` failed the coverage job on its very\nfirst assertion — the one checking the instance is serving *before* the signal:\n\n    assertion `left == right` failed: should be serving before the signal\n      left: None\n     right: Some(200)\n\n`wait_until_ready` waits for `wait_for_listener`, which returns as soon as a\nconnection is accepted. Accepting a connection and answering a request are\ndifferent milestones, and the gap between them is invisible on a fast machine\nand several hundred milliseconds wide under llvm-cov instrumentation.\n\nSo the test asserted once, at the earliest moment the process was reachable, and\nread \"not answering yet\" as \"not serving\". It polls now, the same shape it\nalready used for the 503 it is actually testing for.\n\nThe HTTP helper's timeouts go from 2s to 5s for the same reason: under coverage\nthe process is several times slower, and a timeout there is indistinguishable\nfrom a refused connection, which is the one answer this file must not get wrong.\n\nUnrelated to the cache key, and pre-existing — it came in with #322. It is here\nbecause it is what is failing this PR's coverage job.\n\nVerified under `cargo llvm-cov -p controlplane --test main_runtime`, the\nconfiguration that was failing.",
+          "timestamp": "2026-09-13T18:23:12-07:00",
+          "tree_id": "96ff516b4c1802a71d14531663fdf2f44279ef35",
+          "url": "https://github.com/gabloe/felix/commit/5ca6cb695d3ac8327fd6488420d602a05bf34f41"
+        },
+        "date": 1789349145125,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232006.57,
+            "range": "2904.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232006.57\nmean: 233525.09\nstdev: 2904.57\ncv: 1.24%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232006.57,
+            "range": "2904.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232006.57\nmean: 233525.09\nstdev: 2904.57\ncv: 1.24%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54638.02,
+            "range": "6742.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54638.02\nmean: 52443.42\nstdev: 6742.09\ncv: 12.86%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 546380.22,
+            "range": "67420.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 546380.22\nmean: 524434.20\nstdev: 67420.96\ncv: 12.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
