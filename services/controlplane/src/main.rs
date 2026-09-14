@@ -21,6 +21,14 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // The migration tool rides the same binary so an operator's image has
+    // it wherever the control plane runs; everything else stays env-driven.
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("migrate") {
+        args.remove(0);
+        return controlplane::migrate::run(args).await;
+    }
+
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
     // SIGTERM is what Kubernetes, systemd, and `docker stop` send; SIGINT only
     // covers an interactive Ctrl-C. Evaluated as an argument, so the handlers are

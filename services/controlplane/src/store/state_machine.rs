@@ -201,6 +201,21 @@ impl MetadataStateMachine {
                 .await
                 .map(|keys| MetaResponse::SigningKeys { keys })
                 .map_err(Into::into),
+            MetaCommand::ImportState { state, overwrite } => {
+                // A store with any history has consumers whose checkpoints
+                // this would silently invalidate; only an operator saying
+                // `overwrite` — the restore ceremony — may replace it.
+                if !overwrite && !store.is_unused().await {
+                    return Err(crate::store::command::MetaError::Conflict(
+                        "store already holds state; import requires overwrite".to_string(),
+                    ));
+                }
+                store
+                    .import_state(*state)
+                    .await
+                    .map(|()| MetaResponse::Unit)
+                    .map_err(Into::into)
+            }
         }
     }
 }

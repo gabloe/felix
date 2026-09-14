@@ -3,7 +3,7 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: under construction — the backend serves end to end; probes, migration, and chaos validation remain]
+:::caution[Status: under construction — the backend serves end to end and the Postgres migration is in; probes/packaging and chaos validation remain]
 Tracked as milestone M13 under
 [#333](https://github.com/gabloe/felix/issues/333). What exists today: the
 consensus core from [#337](https://github.com/gabloe/felix/issues/337) (the
@@ -16,10 +16,11 @@ byte-identical determinism by a harness), and the store backend from
 the whole HTTP API with **no external database**, proven by a binary-level
 test that creates metadata, restarts the process, and reads it back from
 the Raft log and snapshot alone. Not yet the recommended production path:
-Raft-aware probes and packaging (#341), the Postgres migration (#340), and
-the chaos pass (#342) are still open — until they land, production
-deployments stay on N stateless instances over one HA Postgres — see
-[Control-plane HA](/felix/deployment/control-plane-ha/).
+Raft-aware probes and packaging (#341) and the chaos pass (#342) are still
+open — until they land, production deployments stay on N stateless
+instances over one HA Postgres — see
+[Control-plane HA](/felix/deployment/control-plane-ha/). The migration
+path from Postgres (#340) is in: see below.
 The authoritative design record, with every alternative and the arguments, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
@@ -107,6 +108,36 @@ placement run only on the leader, confirmed by a linearizable check each
 tick. A proposal that cannot commit — no leader, quorum lost — fails with an
 error after a bounded deadline (10s) rather than hanging, and readiness
 reports an instance that knows no leader as unready.
+
+## Migrating from Postgres
+
+An offline cutover measured in minutes, which brokers tolerate by design
+(they keep serving on their catalogs and leases, as during any
+control-plane blip):
+
+```
+# 1. Stand up the fresh Raft group (its import guard refuses a used one).
+# 2. Freeze writes: take the Postgres-backed instances out of rotation.
+# 3. Export through the store traits — exactly what the API serves:
+FELIX_CONTROLPLANE_POSTGRES_URL=postgres://... \
+  felix-controlplane migrate export-postgres state.json
+
+# 4. One atomic command, proposed to any member (it forwards to the leader):
+felix-controlplane migrate import state.json http://cp-0:8443
+
+# 5. Compare the printed summaries, spot-check, repoint, retire Postgres.
+```
+
+Each step before the repoint has a clean abort: nothing is half-migrated,
+because the import is a single log entry applied atomically everywhere.
+Change feeds carry their sequence high-water marks, so a broker at the head
+continues without noticing and one behind the head resnapshots exactly once
+— the ordinary signal it already honours.
+
+**Disaster recovery** is the same mechanism: the export file is the DR
+artifact, and `migrate import … --overwrite` onto a fresh group is the
+restore. `--overwrite` discards whatever the target holds — checkpoints
+included — so it belongs in a runbook, run deliberately, and nowhere else.
 
 ## What exists today (#337–#339)
 

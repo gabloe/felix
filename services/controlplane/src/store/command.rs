@@ -146,6 +146,20 @@ pub enum MetaCommand {
         tenant_id: String,
         seed: TenantAuthSeed,
     },
+    /// Replace the entire store with an exported state — the migration
+    /// cutover from Postgres, and the beyond-quorum-loss restore.
+    ///
+    /// One command, so the whole import is one log entry applied atomically
+    /// on every member; sequence high-water marks inside the state are what
+    /// let broker watches resume with at most one resnapshot. Refused unless
+    /// the store has never held anything, or `overwrite` says the operator
+    /// really means to discard what is there.
+    ImportState {
+        // Boxed: this one variant is as big as the whole store, and every
+        // command would otherwise pay its size.
+        state: Box<crate::store::memory::ExportedState>,
+        overwrite: bool,
+    },
 }
 
 /// What a command returns, mirroring the store method it stands for.
