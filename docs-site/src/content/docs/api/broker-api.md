@@ -591,6 +591,38 @@ match client.cache_get("acme", "prod", "sessions", session_id).await? {
 }
 ```
 
+### Cache Delete
+
+Remove a key, and find out whether it was there.
+
+**Request**:
+
+```json
+{
+  "type": "cache_delete",
+  "request_id": "unique-id",
+  "tenant_id": "acme",
+  "namespace": "prod",
+  "cache": "sessions",
+  "key": "string"
+}
+```
+
+**Response**: a `cache_value` carrying **the value that was removed**, or a null
+value if the key was not there — so a caller can tell a delete that did
+something from one that did not.
+
+Sent only to a broker that advertised `FEATURE_CACHE_DELETE`. A delete is an
+append like a put: it writes a tombstone record carrying the key, and compaction
+reclaims it along with the superseded values later.
+
+```rust
+match client.cache_delete("acme", "prod", "sessions", session_id).await? {
+    Some(removed) => audit_log(session_id, removed),
+    None => { /* already gone, or never there */ }
+}
+```
+
 ### Cache Request Pipelining
 
 Cache streams support pipelining multiple requests:
@@ -643,6 +675,114 @@ cache_stream_recv_window: 67108864   # 64 MiB per stream
 cache_send_window: 268435456         # 256 MiB send window
 ```
 
+## Consumer Group Operations
+
+The third way to read a stream. Where `subscribe` pushes every record to every
+subscriber, a **consumer group** hands each record to one consumer and takes it
+back if nobody says it was handled — see
+[Queues](/felix/features/queues/) for the semantics.
+
+Every request below goes **only to the broker that leads the shard**, and only
+to one that advertised `FEATURE_CONSUMER_GROUP`. A poll is refused rather than
+forwarded: relaying would put the claim and the acknowledgement on different
+brokers, and a queue's whole promise is that one consumer holds a record at a
+time.
+
+They travel on the **control stream**, not a stream of their own.
+
+### Group Poll
+
+Claim records to work on.
+
+**Request**:
+
+```json
+{
+  "type": "group_poll",
+  "tenant_id": "acme", "namespace": "prod", "stream": "jobs",
+  "shard": 0, "group": "fulfilment",
+  "max_records": 32, "wait_ms": 5000,
+  "request_id": 1
+}
+```
+
+**Response**:
+
+```json
+{
+  "type": "group_records",
+  "records": [{ "offset": 41, "payload": "base64-encoded-bytes", "attempts": 1 }],
+  "request_id": 1
+}
+```
+
+`wait_ms` is how long the broker may hold the request open waiting for work, so
+an idle consumer costs one open request rather than a round trip per attempt.
+The broker caps it at `FELIX_GROUP_MAX_WAIT_MS`. **An empty `records` after the
+wait means nothing was available — it is an answer, not an error.**
+
+`attempts` counts deliveries including this one, so `1` is a first attempt and
+anything higher is a redelivery. Absent means the broker did not report it,
+which is *not* the same as a first attempt.
+
+### Group Ack / Nack
+
+```json
+{ "type": "group_ack",  "tenant_id": "acme", "namespace": "prod", "stream": "jobs",
+  "shard": 0, "group": "fulfilment", "offset": 41, "request_id": 2 }
+{ "type": "group_nack", "...": "same shape" }
+```
+
+An **ack** finishes a record. A **nack** hands it back for immediate
+redelivery, rather than waiting out the visibility timeout.
+
+A record that is neither is redelivered once
+`FELIX_GROUP_VISIBILITY_TIMEOUT_MS` (30s) lapses. The group's cursor advances
+only over a **contiguous run** of acks: acknowledging offset 42 while 41 is
+still in flight leaves the cursor at 41, which is what makes it safe to restart
+from.
+
+### Dead Letters
+
+Past `FELIX_GROUP_MAX_ATTEMPTS` (5) a record is dead-lettered, so one poison
+record cannot stall the queue behind it.
+
+```json
+{ "type": "group_dead_letters", "...": "scope", "request_id": 3 }
+{ "type": "group_dead_letter_list", "offsets": [37], "request_id": 3 }
+{ "type": "group_discard", "...": "scope", "offset": 37, "request_id": 4 }
+{ "type": "group_redrive", "...": "scope", "offset": 37, "request_id": 5 }
+```
+
+Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`, a separate
+bit from `FEATURE_CONSUMER_GROUP`.
+
+A dead letter is a **pointer, not a copy**: the record is still in the stream's
+log at that offset, readable by an ordinary replay. `group_discard` drops it
+from the list; `group_redrive` puts it back in play.
+
+**Example**:
+
+```rust
+let records = client
+    .group_poll_wait("acme", "prod", "jobs", 0, "fulfilment", 32, Duration::from_secs(5))
+    .await?;
+
+for record in records {
+    match handle(&record.payload) {
+        Ok(()) => client.group_ack("acme", "prod", "jobs", 0, "fulfilment", record.offset).await?,
+        Err(_) => client.group_nack("acme", "prod", "jobs", 0, "fulfilment", record.offset).await?,
+    }
+}
+```
+
+### Requirements
+
+Consumer groups need **durable storage**. A broker started without
+`FELIX_DURABLE_STORAGE_DIR` serves no groups and does not advertise the feature
+— a group that forgot its position on restart would redeliver everything it had
+already finished, which is worse than not offering queues at all.
+
 ## Error Handling
 
 ### Error Response Format
@@ -690,7 +830,7 @@ cache_send_window: 268435456         # 256 MiB send window
 
 **Resolution**: Broker is overloaded. Reduce publish rate or increase `pub_workers_per_conn`.
 
-**Authorization failure** (future):
+**Authorization failure**:
 
 ```json
 {
@@ -698,6 +838,11 @@ cache_send_window: 268435456         # 256 MiB send window
   "message": "Unauthorized: insufficient permissions for stream 'events'"
 }
 ```
+
+Publish, subscribe and cache operations each check a permission against the
+tenant-scoped token. A **forwarded** publish is authorized twice — at the broker
+the client reached and again at the shard's owner — so routing does not launder
+a credential.
 
 ### Connection Errors
 

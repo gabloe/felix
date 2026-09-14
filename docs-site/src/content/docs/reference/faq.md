@@ -41,7 +41,7 @@ Felix is **not** a Kafka replacement but serves different use cases:
 **Use Felix when**:
 - You need ultra-low latency (sub-millisecond to low-millisecond p99)
 - High fanout with many concurrent subscribers
-- Combined pub/sub and caching requirements
+- Combined streaming, caching and work-queue requirements over one system
 - QUIC transport benefits (multiplexing, better loss recovery)
 
 **Use Kafka when**:
