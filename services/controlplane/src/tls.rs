@@ -15,6 +15,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::Router;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+// The PEM parsing that used to be rustls-pemfile's job; that crate is
+// unmaintained (RUSTSEC-2025-0134) and pki-types absorbed the functionality.
+use rustls::pki_types::pem::PemObject;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::BootstrapTlsConfig;
@@ -32,13 +35,8 @@ pub fn load_server_config(tls: &BootstrapTlsConfig) -> Result<Arc<rustls::Server
 
     let certs = load_pem_certs(&tls.cert_path)
         .with_context(|| format!("read bootstrap TLS certificate {}", tls.cert_path))?;
-    let key = {
-        let pem = std::fs::read(&tls.key_path)
-            .with_context(|| format!("read bootstrap TLS key {}", tls.key_path))?;
-        rustls_pemfile::private_key(&mut pem.as_slice())
-            .context("parse bootstrap TLS key")?
-            .context("bootstrap TLS key file holds no private key")?
-    };
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_file(&tls.key_path)
+        .with_context(|| format!("read bootstrap TLS key {}", tls.key_path))?;
 
     let mut roots = rustls::RootCertStore::empty();
     for cert in load_pem_certs(&tls.client_ca_path)
@@ -63,8 +61,8 @@ pub fn load_server_config(tls: &BootstrapTlsConfig) -> Result<Arc<rustls::Server
 }
 
 fn load_pem_certs(path: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    let pem = std::fs::read(path)?;
-    let certs = rustls_pemfile::certs(&mut pem.as_slice()).collect::<Result<Vec<_>, _>>()?;
+    let certs =
+        rustls::pki_types::CertificateDer::pem_file_iter(path)?.collect::<Result<Vec<_>, _>>()?;
     anyhow::ensure!(!certs.is_empty(), "no certificates in {path}");
     Ok(certs)
 }
