@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789401314162,
+  "lastUpdate": 1789401479442,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7124,6 +7124,58 @@ window.BENCHMARK_DATA = {
             "range": "5948.41",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 552991.00\nmean: 552144.90\nstdev: 5948.41\ncv: 1.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acd1168916cf76ce54980a6ea9ffad3f069536ed",
+          "message": "docs: cover queues where only two semantics were named, and check for it (#331)\n\nThe landing page had data-flow cards for pub/sub and cache and none for queues,\nwhich is the visible half of something that keeps happening: a capability ships,\nthe page its author was looking at gets updated, and the pages organised by\n*operation type* silently keep the old shape.\n\nRather than read for it a fifth time, I looked for pages naming cache and\nstreams but not queues. Fifteen matched; most legitimately (a demo about\nnotifications owes nothing to queues). These did not:\n\n- **The landing page.** No queue data-flow card, no queue row in Key Features,\n  no work-distribution use case, and an opening sentence naming \"event\n  streaming, message-oriented middleware, and distributed caching\".\n- **The client SDK reference.** Publishing, Subscribing, Cache Operations — and\n  no consumer groups at all, no `cache_delete`, and no `ClusterClient`, so the\n  sharded subscription shipped in #297 was documented nowhere a user would look.\n- **The broker API reference.** No cluster operations: `topology`, `not_leader`\n  redirects and `stream_shards` were all absent.\n- **RBAC.** A consumer-group operation is authorized as `stream.subscribe` on\n  the stream it reads, and there is no queue-specific action. An operator\n  granting a consumer access to a queue could not have learned that from the\n  docs. It also means `stream.subscribe` is wider than it looks — a holder can\n  advance a cursor other consumers share — which is now said out loud.\n\nAlso a fourth declared-but-unread field. The broker reads `durable`, `shards`\nand `consistency` from a stream; `delivery` and `retention` were already\ndocumented as ignored, and **`kind` is too**. Creating a stream with\n`kind: Queue` does nothing, and does not stop it being subscribed to normally —\na queue is a way of reading a stream, not a kind of stream. That one is the most\nlikely to mislead, so it is now a table rather than a sentence.\n\n**scripts/check_capability_docs.py** is the part meant to stop this recurring.\nTwo mechanical rules: every `FEATURE_*` bit is named somewhere in the docs, and\nevery `Message` variant is named in `docs/protocol.md`. Neither proves a page is\ngood; they prove nothing was forgotten wholesale, which is the failure that\nkeeps happening.\n\nIt found `Message::Subscribed` missing from the protocol spec on its first run —\nthe subscription confirmation, and with it `event_stream_hello`, which is how a\nclient matches an event stream to the subscription that asked for it. Both are\ndocumented now.\n\nControls: a new feature bit that no doc names fails it; a new message variant\nabsent from the spec fails it. It runs in `task docs:evidence`, with the other\ntwo checks that break on Rust changes.\n\nAlso removes a stale `#297` from the wire's own comment about shard\nsubscriptions, now that `subscribe_sharded` exists.",
+          "timestamp": "2026-09-14T08:55:05-07:00",
+          "tree_id": "be834b9218bd899bf320f055b185bb243f6a6bfd",
+          "url": "https://github.com/gabloe/felix/commit/acd1168916cf76ce54980a6ea9ffad3f069536ed"
+        },
+        "date": 1789401478357,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 225429.31,
+            "range": "5044.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225429.31\nmean: 225917.12\nstdev: 5044.36\ncv: 2.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 225429.31,
+            "range": "5044.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225429.31\nmean: 225917.12\nstdev: 5044.36\ncv: 2.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54088.31,
+            "range": "522.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54088.31\nmean: 54141.10\nstdev: 522.61\ncv: 0.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 540883.13,
+            "range": "5226.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 540883.13\nmean: 541411.02\nstdev: 5226.11\ncv: 0.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
