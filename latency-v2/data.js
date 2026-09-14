@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789413963474,
+  "lastUpdate": 1789425874265,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9306,6 +9306,72 @@ window.BENCHMARK_DATA = {
             "range": "149.47",
             "unit": "us",
             "extra": "trials: 5\nmedian: 616.00\nmean: 655.00\nstdev: 149.47\ncv: 22.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "595a8bc909c8de6c3313468b85cddcc92589d0d3",
+          "message": "The metadata state machine: API-shaped commands over the store (#338) (#346)\n\nThe second M13 slice, exactly as docs/metadata-raft-design.md sequences it:\nthe in-memory store — already implementing every store trait, already\ncontract-tested against Postgres — becomes the Raft state machine, fed a\nversioned command set with one API-shaped command per mutation.\n\nDeterminism is the whole game, and landing this surfaced the design's\npredictions as real bugs:\n\n- Multi-node expiry and the tenant/namespace cascade deletes published\n  their change events in HashMap iteration order. Harmless on one\n  instance; state-forking on replicas, because each event takes its\n  sequence number as it publishes. They now publish in sorted order, and\n  the determinism harness — one full-coverage script, two machines,\n  byte-identical snapshots required — is what keeps that door shut.\n- Key generation moved to propose time for every backend, not just Raft:\n  TenantAuthSeed carries the candidate signing keys, the API layer\n  generates them, and the Postgres transaction and the state machine alike\n  install them only when the tenant has none. The store layer is now free\n  of randomness end to end.\n\nThe command envelope is versioned, and an undecodable or newer-versioned\ncommand is answered with an identical Unsupported error on every replica —\nnever skipped, which would quietly fork state. Heartbeats keep their rule:\nliveness updates, the changefeed does not move, and the reason (a new\nleader's sweep must see recent times; per-heartbeat events would evict real\nmembership changes) rides in the command-set docs.\n\nSnapshots are the store's deterministic export: every map serialized as a\nsorted vector, change logs with their sequence positions, so a restored\nstore answers changes(since) exactly as the original — including the\nresnapshot signals for an evicted window, which a test drives across an\nexport/import cycle.\n\nProof at the group level (tests/meta_raft.rs): eight tenant bootstraps\nproposed concurrently against a real three-node group, each carrying its\nown candidate keys — the race M7's Postgres backend settles with a row\nlock — settled here by nothing but log order: one winner, seven conflicts,\nand three byte-identical replica exports.\n\nThe seam's AppStateMachine went async on the way (the metadata store's\nlocks are async); the raft module's state-machine adapter now holds its\napply/snapshot pairing lock across the app's async calls, unchanged in\nwhat it guarantees.",
+          "timestamp": "2026-09-14T15:42:02-07:00",
+          "tree_id": "cb37bdd0901b7ed286b4b23983c019b6508f90a9",
+          "url": "https://github.com/gabloe/felix/commit/595a8bc909c8de6c3313468b85cddcc92589d0d3"
+        },
+        "date": 1789425872019,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 122,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 121.80\nstdev: 0.84\ncv: 0.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 166,
+            "range": "1.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 166.00\nmean: 166.00\nstdev: 1.58\ncv: 0.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 212,
+            "range": "7.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 213.40\nstdev: 7.33\ncv: 3.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "7.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 167.60\nstdev: 7.50\ncv: 4.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 337,
+            "range": "476.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 337.00\nmean: 553.80\nstdev: 476.58\ncv: 86.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1272,
+            "range": "845.01",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1272.00\nmean: 1373.60\nstdev: 845.01\ncv: 61.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
