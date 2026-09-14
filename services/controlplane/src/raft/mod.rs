@@ -31,6 +31,23 @@ use anyhow::{Context, Result};
 /// This instance's identity within the Raft group.
 pub type NodeId = u64;
 
+/// Where a refused proposal should go instead, when the refusal says.
+fn forward_target(
+    err: &openraft::error::RaftError<
+        u64,
+        openraft::error::ClientWriteError<u64, openraft::BasicNode>,
+    >,
+) -> Option<String> {
+    if let openraft::error::RaftError::APIError(
+        openraft::error::ClientWriteError::ForwardToLeader(forward),
+    ) = err
+    {
+        forward.leader_node.as_ref().map(|node| node.addr.clone())
+    } else {
+        None
+    }
+}
+
 /// The application half of the state machine seam.
 ///
 /// The Raft core feeds every committed command to exactly one of these, in
@@ -76,6 +93,13 @@ pub struct RaftSettings {
     /// Log entries to keep behind the snapshot, so a briefly-lagging
     /// follower catches up from the log rather than a snapshot install.
     pub logs_kept_behind_snapshot: u64,
+    /// Overall budget for one proposal, elections and forwarding included.
+    ///
+    /// openraft's own write path waits indefinitely for a commit — a leader
+    /// that lost quorum queues proposals forever — so the bound has to live
+    /// here, where "no quorum" becomes an error a caller can surface
+    /// instead of a hang inside the seam.
+    pub write_timeout: Duration,
 }
 
 impl RaftSettings {
@@ -90,6 +114,7 @@ impl RaftSettings {
             election_timeout: (Duration::from_millis(600), Duration::from_millis(1200)),
             snapshot_logs_since_last: 500,
             logs_kept_behind_snapshot: 100,
+            write_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -114,6 +139,33 @@ pub struct RaftStatus {
 pub struct RaftHandle {
     raft: types::Raft,
     id: NodeId,
+    write_timeout: Duration,
+    /// For forwarding proposals to the leader; pooled per host underneath.
+    forward: reqwest::Client,
+}
+
+/// Whether a background task that must run on exactly one instance should
+/// run here, now.
+///
+/// `Always` is the non-Raft deployments' answer — M7's stores make duplicate
+/// sweeps safe, so every instance runs them. Under Raft the gate is a
+/// **linearizable leadership check** (openraft's read-index), which answers
+/// two questions at once: this instance is the leader, *and* its applied
+/// state is current enough to decide from — a deposed leader that has not
+/// heard the news yet fails the check rather than sweeping from stale state.
+#[derive(Clone)]
+pub enum LeadershipGate {
+    Always,
+    Leader(RaftHandle),
+}
+
+impl LeadershipGate {
+    pub async fn holds(&self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Leader(handle) => handle.confirm_leadership().await,
+        }
+    }
 }
 
 impl RaftHandle {
@@ -156,6 +208,11 @@ impl RaftHandle {
         Ok(Self {
             raft,
             id: settings.node_id,
+            write_timeout: settings.write_timeout,
+            forward: reqwest::Client::builder()
+                .timeout(settings.write_timeout)
+                .build()
+                .context("build forwarding client")?,
         })
     }
 
@@ -177,16 +234,75 @@ impl RaftHandle {
     }
 
     /// Propose one command and wait until it is committed and applied;
-    /// returns the state machine's response. Callers on a follower get an
-    /// error naming the leader — transparent forwarding is #339's job, at
-    /// the layer that knows what the bytes mean.
+    /// returns the state machine's response.
+    ///
+    /// Works from any member: a follower forwards the bytes to the leader it
+    /// knows, and an instance caught mid-election retries briefly before
+    /// giving up. The bound matters — a caller must get "no leader" as an
+    /// error it can surface, not an indefinite hang inside the seam.
     pub async fn write(&self, command: Vec<u8>) -> Result<Vec<u8>> {
+        const RETRY_DELAY: Duration = Duration::from_millis(250);
+        let deadline = tokio::time::Instant::now() + self.write_timeout;
+
+        let mut last_refusal = None;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(last_refusal
+                    .unwrap_or_else(|| anyhow::anyhow!("no quorum committed the proposal"))
+                    .context(format!(
+                        "raft write: not committed within {:?} — no leader, or quorum lost",
+                        self.write_timeout
+                    )));
+            }
+            // Bounded per attempt too: a leader that lost quorum queues
+            // proposals forever, and that must become this instance's error,
+            // not its hang.
+            match tokio::time::timeout(remaining, self.raft.client_write(command.clone())).await {
+                Err(_) => {
+                    last_refusal = Some(anyhow::anyhow!("proposal not committed in time"));
+                    continue;
+                }
+                Ok(Ok(response)) => return Ok(response.data),
+                Ok(Err(err)) => match forward_target(&err) {
+                    Some(addr) => match self.forward_to(&addr, &command).await {
+                        Ok(bytes) => return Ok(bytes),
+                        // The leader we were told about may itself have just
+                        // lost leadership; loop and re-ask.
+                        Err(fwd_err) => last_refusal = Some(fwd_err),
+                    },
+                    None => last_refusal = Some(anyhow::anyhow!(err.to_string())),
+                },
+            }
+            tokio::time::sleep(RETRY_DELAY.min(remaining)).await;
+        }
+    }
+
+    async fn forward_to(&self, addr: &str, command: &[u8]) -> Result<Vec<u8>> {
         let response = self
-            .raft
-            .client_write(command)
+            .forward
+            .post(format!("http://{addr}/internal/raft/propose"))
+            .body(command.to_vec())
+            .send()
             .await
-            .context("raft client write")?;
-        Ok(response.data)
+            .context("forward proposal")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            anyhow::bail!("leader refused forwarded proposal: {status} {detail}");
+        }
+        Ok(response
+            .bytes()
+            .await
+            .context("read forwarded response")?
+            .to_vec())
+    }
+
+    /// Linearizable leadership check: true only when this instance is the
+    /// leader *and* its applied state is current — openraft's read-index,
+    /// so a deposed leader that has not heard the news fails it.
+    pub async fn confirm_leadership(&self) -> bool {
+        self.raft.ensure_linearizable().await.is_ok()
     }
 
     /// Add a node as a non-voting learner and wait until it has caught up.

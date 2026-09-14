@@ -62,9 +62,16 @@ pub async fn expire_once(
 }
 
 /// Sweep for expired nodes until `shutdown` fires.
+///
+/// `gate` decides whether this instance sweeps at all this tick. For the
+/// memory/Postgres backends it is `Always` — duplicate sweeps are safe by
+/// store contract. Under Raft it holds only on the leader, freshly
+/// confirmed, replacing cross-instance claim coordination with something
+/// strictly simpler: one sweep because there is one leader.
 pub fn spawn_expiry_sweep(
     store: Arc<dyn ControlPlaneStore + Send + Sync>,
     liveness: NodeLivenessConfig,
+    gate: crate::raft::LeadershipGate,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -76,6 +83,9 @@ pub fn spawn_expiry_sweep(
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {
+                    if !gate.holds().await {
+                        continue;
+                    }
                     expire_once(store.as_ref(), &liveness, crate::api::nodes::now_millis()).await;
                 }
             }

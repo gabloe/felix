@@ -3,7 +3,7 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: under construction — core and state machine are merged, the API does not serve from it yet]
+:::caution[Status: under construction — the backend serves end to end; probes, migration, and chaos validation remain]
 Tracked as milestone M13 under
 [#333](https://github.com/gabloe/felix/issues/333). What exists today: the
 consensus core from [#337](https://github.com/gabloe/felix/issues/337) (the
@@ -11,11 +11,15 @@ openraft seam, a crash-safe log/vote/snapshot store that passes openraft's
 own storage conformance suite, HTTP transport, group lifecycle), and the
 metadata state machine from [#338](https://github.com/gabloe/felix/issues/338)
 (the versioned API-shaped command set over the in-memory store, held to
-byte-identical determinism by a harness, and proven on a real group where
-eight concurrent tenant bootstraps are settled by log order alone). **The
-control-plane API does not serve from it yet** — that is the store backend
-(#339); until then, availability comes from N stateless instances over one
-HA Postgres — see [Control-plane HA](/felix/deployment/control-plane-ha/).
+byte-identical determinism by a harness), and the store backend from
+[#339](https://github.com/gabloe/felix/issues/339): `backend = raft` serves
+the whole HTTP API with **no external database**, proven by a binary-level
+test that creates metadata, restarts the process, and reads it back from
+the Raft log and snapshot alone. Not yet the recommended production path:
+Raft-aware probes and packaging (#341), the Postgres migration (#340), and
+the chaos pass (#342) are still open — until they land, production
+deployments stay on N stateless instances over one HA Postgres — see
+[Control-plane HA](/felix/deployment/control-plane-ha/).
 The authoritative design record, with every alternative and the arguments, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
@@ -84,7 +88,27 @@ Library: [openraft](https://github.com/databendlabs/openraft), pinned to the
 stable 0.9 line, wrapped behind a seam so its pre-1.0 API churn stays
 contained.
 
-## What exists today (#337, #338)
+## Trying it (experimental)
+
+Three environment variables select the backend, the same way a Postgres URL
+selects Postgres:
+
+```
+FELIX_RAFT_NODE_ID=1
+FELIX_RAFT_DATA_DIR=/var/lib/felix/raft
+FELIX_RAFT_PEERS=1=cp-0:8443,2=cp-1:8443,3=cp-2:8443
+```
+
+Every member must carry the **same** peers map (initializing two disjoint
+member sets is how split brain is manufactured), and the data directory
+must survive restarts — it is what makes a restart a rejoin. Writes reaching
+a follower forward to the leader invisibly; the expiry sweep and shard
+placement run only on the leader, confirmed by a linearizable check each
+tick. A proposal that cannot commit — no leader, quorum lost — fails with an
+error after a bounded deadline (10s) rather than hanging, and readiness
+reports an instance that knows no leader as unready.
+
+## What exists today (#337–#339)
 
 The state machine is real: `MetadataStateMachine` wraps the same in-memory
 store the control plane has always had, fed by a versioned command set with

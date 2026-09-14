@@ -121,6 +121,16 @@ pub enum MetaCommand {
         tenant_id: String,
         keys: TenantSigningKeys,
     },
+    /// Install `candidate` only if the tenant has no keys; existing keys win.
+    ///
+    /// Distinct from `SetTenantSigningKeys` (an unconditional rotation)
+    /// because the proposer decides from a possibly-stale local read: an
+    /// overwrite proposed off stale emptiness would clobber a rotation that
+    /// committed in between. Install-if-absent makes the race harmless.
+    EnsureSigningKeys {
+        tenant_id: String,
+        candidate: TenantSigningKeys,
+    },
     SetTenantAuthBootstrapped {
         tenant_id: String,
         bootstrapped: bool,

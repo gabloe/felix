@@ -167,6 +167,18 @@ impl MetadataStateMachine {
                 .await
                 .map(|()| MetaResponse::Unit)
                 .map_err(Into::into),
+            MetaCommand::EnsureSigningKeys {
+                tenant_id,
+                candidate,
+            } => match store.get_tenant_signing_keys(&tenant_id).await {
+                Ok(existing) => Ok(MetaResponse::SigningKeys { keys: existing }),
+                Err(crate::store::StoreError::NotFound(_)) => store
+                    .set_tenant_signing_keys(&tenant_id, candidate.clone())
+                    .await
+                    .map(|()| MetaResponse::SigningKeys { keys: candidate })
+                    .map_err(Into::into),
+                Err(err) => Err(err.into()),
+            },
             MetaCommand::SetTenantAuthBootstrapped {
                 tenant_id,
                 bootstrapped,
