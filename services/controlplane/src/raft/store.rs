@@ -24,7 +24,9 @@
 use std::io::Cursor;
 use std::ops::RangeBounds;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use anyhow::{Context, Result};
 use openraft::storage::{
@@ -260,7 +262,8 @@ struct SmInner {
     app: Arc<dyn AppStateMachine>,
     /// One lock over the bookkeeping *and* every app mutation: a snapshot
     /// built under it pairs `(last_applied, membership)` with exactly the
-    /// app state those describe, never half a batch later.
+    /// app state those describe, never half a batch later. Async because it
+    /// is held across the app's own async calls.
     applied: Mutex<Applied>,
 }
 
@@ -274,7 +277,7 @@ impl StateMachineStore {
     /// Rebuild the app state from the last persisted snapshot, if any. Log
     /// entries after it are replayed by openraft on startup — that pairing
     /// is what makes a volatile state machine safe.
-    pub(super) fn open(db: Arc<Database>, app: Arc<dyn AppStateMachine>) -> Result<Self> {
+    pub(super) async fn open(db: Arc<Database>, app: Arc<dyn AppStateMachine>) -> Result<Self> {
         let mut applied = Applied {
             last_applied: None,
             membership: StoredMembership::default(),
@@ -285,7 +288,7 @@ impl StateMachineStore {
             let data: Option<Vec<u8>> =
                 read_meta(&db, KEY_SNAPSHOT_DATA).map_err(|err| anyhow::anyhow!("{err}"))?;
             let data = data.context("snapshot meta without snapshot data")?;
-            app.restore(&data);
+            app.restore(&data).await;
             applied.last_applied = meta.last_log_id;
             applied.membership = meta.last_membership;
         }
@@ -325,8 +328,8 @@ pub(super) struct SnapshotBuilder {
 impl RaftSnapshotBuilder<TypeConfig> for SnapshotBuilder {
     async fn build_snapshot(&mut self) -> Result<Snapshot, StorageError> {
         let (data, meta) = {
-            let applied = self.inner.applied.lock().expect("applied lock");
-            let data = self.inner.app.snapshot();
+            let applied = self.inner.applied.lock().await;
+            let data = self.inner.app.snapshot().await;
             let snapshot_id = format!(
                 "{}-{}",
                 applied.last_applied.map(|id| id.index).unwrap_or(0),
@@ -359,7 +362,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     type SnapshotBuilder = SnapshotBuilder;
 
     async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership), StorageError> {
-        let applied = self.inner.applied.lock().expect("applied lock");
+        let applied = self.inner.applied.lock().await;
         Ok((applied.last_applied, applied.membership.clone()))
     }
 
@@ -369,11 +372,11 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         I::IntoIter: Send,
     {
         let mut responses = Vec::new();
-        let mut applied = self.inner.applied.lock().expect("applied lock");
+        let mut applied = self.inner.applied.lock().await;
         for entry in entries {
             let response = match entry.payload {
                 openraft::EntryPayload::Blank => Vec::new(),
-                openraft::EntryPayload::Normal(ref command) => self.inner.app.apply(command),
+                openraft::EntryPayload::Normal(ref command) => self.inner.app.apply(command).await,
                 openraft::EntryPayload::Membership(ref membership) => {
                     applied.membership =
                         StoredMembership::new(Some(entry.log_id), membership.clone());
@@ -406,8 +409,8 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         // leaves either the old state (snapshot re-sent) or the new
         // (rebuilt on open) — never neither.
         self.persist_snapshot(meta, &data)?;
-        let mut applied = self.inner.applied.lock().expect("applied lock");
-        self.inner.app.restore(&data);
+        let mut applied = self.inner.applied.lock().await;
+        self.inner.app.restore(&data).await;
         applied.last_applied = meta.last_log_id;
         applied.membership = meta.last_membership.clone();
         Ok(())
@@ -439,14 +442,15 @@ mod tests {
     /// exercises logs, votes, membership, and snapshots.
     struct NullApp;
 
+    #[async_trait::async_trait]
     impl AppStateMachine for NullApp {
-        fn apply(&self, _command: &[u8]) -> Vec<u8> {
+        async fn apply(&self, _command: &[u8]) -> Vec<u8> {
             Vec::new()
         }
-        fn snapshot(&self) -> Vec<u8> {
+        async fn snapshot(&self) -> Vec<u8> {
             Vec::new()
         }
-        fn restore(&self, _snapshot: &[u8]) {}
+        async fn restore(&self, _snapshot: &[u8]) {}
     }
 
     struct Builder;
@@ -459,8 +463,9 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let db = open(&dir.path().join("raft.redb")).expect("open store");
             let log_store = LogStore::new(Arc::clone(&db));
-            let state_machine =
-                StateMachineStore::open(db, Arc::new(NullApp)).expect("open state machine");
+            let state_machine = StateMachineStore::open(db, Arc::new(NullApp))
+                .await
+                .expect("open state machine");
             Ok((Guard(dir), log_store, state_machine))
         }
     }

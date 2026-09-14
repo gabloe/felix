@@ -28,19 +28,20 @@ impl KvApp {
     }
 }
 
+#[async_trait::async_trait]
 impl AppStateMachine for KvApp {
-    fn apply(&self, command: &[u8]) -> Vec<u8> {
+    async fn apply(&self, command: &[u8]) -> Vec<u8> {
         let (key, value): (String, String) =
             serde_json::from_slice(command).expect("decode command");
         let previous = self.state.write().expect("state lock").insert(key, value);
         previous.map(String::into_bytes).unwrap_or_default()
     }
 
-    fn snapshot(&self) -> Vec<u8> {
+    async fn snapshot(&self) -> Vec<u8> {
         serde_json::to_vec(&*self.state.read().expect("state lock")).expect("encode snapshot")
     }
 
-    fn restore(&self, snapshot: &[u8]) {
+    async fn restore(&self, snapshot: &[u8]) {
         let restored: BTreeMap<String, String> =
             serde_json::from_slice(snapshot).expect("decode snapshot");
         *self.state.write().expect("state lock") = restored;

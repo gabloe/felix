@@ -3,15 +3,18 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: under construction — the consensus core is merged, metadata does not ride it yet]
+:::caution[Status: under construction — core and state machine are merged, the API does not serve from it yet]
 Tracked as milestone M13 under
-[#333](https://github.com/gabloe/felix/issues/333). What exists today is the
-core from [#337](https://github.com/gabloe/felix/issues/337): the openraft
-seam, a crash-safe log/vote/snapshot store that passes openraft's own storage
-conformance suite, the HTTP transport, and group lifecycle — proven by tests
-covering election, replication, restart-as-rejoin, wiped-volume rebuild by
-snapshot, and learner-first growth. **No metadata is served from it yet**;
-control-plane availability still comes from N stateless instances over one
+[#333](https://github.com/gabloe/felix/issues/333). What exists today: the
+consensus core from [#337](https://github.com/gabloe/felix/issues/337) (the
+openraft seam, a crash-safe log/vote/snapshot store that passes openraft's
+own storage conformance suite, HTTP transport, group lifecycle), and the
+metadata state machine from [#338](https://github.com/gabloe/felix/issues/338)
+(the versioned API-shaped command set over the in-memory store, held to
+byte-identical determinism by a harness, and proven on a real group where
+eight concurrent tenant bootstraps are settled by log order alone). **The
+control-plane API does not serve from it yet** — that is the store backend
+(#339); until then, availability comes from N stateless instances over one
 HA Postgres — see [Control-plane HA](/felix/deployment/control-plane-ha/).
 The authoritative design record, with every alternative and the arguments, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
@@ -81,7 +84,21 @@ Library: [openraft](https://github.com/databendlabs/openraft), pinned to the
 stable 0.9 line, wrapped behind a seam so its pre-1.0 API churn stays
 contained.
 
-## What exists today (#337)
+## What exists today (#337, #338)
+
+The state machine is real: `MetadataStateMachine` wraps the same in-memory
+store the control plane has always had, fed by a versioned command set with
+one API-shaped command per mutation — heartbeat and expiry carry their
+timestamps, bootstrap carries its candidate signing keys, so nothing inside
+apply reads a clock or generates a value. The determinism harness applies a
+full-coverage command script to two machines and requires **byte-identical
+snapshots** — which promptly caught two real leaks (multi-node expiry and
+cascade deletes publishing change events in HashMap order) before any
+replica could disagree in production. On a real three-node group, eight
+concurrent tenant bootstraps come out with exactly one winner and three
+byte-identical replicas, settled by nothing but the order the log assigned.
+
+### The consensus core underneath (#337)
 
 `services/controlplane/src/raft/` is the whole openraft surface — no
 consensus type escapes it. Outside the seam there are exactly two things: a

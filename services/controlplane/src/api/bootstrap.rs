@@ -152,6 +152,13 @@ pub async fn initialize(
         }
     }
 
+    // Key material is generated here, at the API layer, and carried in the
+    // seed: the store applies it only if the tenant has none, and stays free
+    // of randomness — which is what lets the Raft state machine (#338) apply
+    // the same operation identically on every replica.
+    let candidate_keys = crate::auth::keys::generate_signing_keys()
+        .map_err(|err| api_internal("failed to generate signing keys", &err.into()))?;
+
     // One store operation, so N instances racing on the same tenant produce
     // exactly one winner and everyone else a clean conflict — never two key
     // sets where the reported `kid` belongs to the overwritten one.
@@ -163,6 +170,7 @@ pub async fn initialize(
                 issuers: body.idp_issuers.clone(),
                 policies,
                 groupings,
+                signing_keys: candidate_keys,
             },
         )
         .await

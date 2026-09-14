@@ -2722,9 +2722,15 @@ impl AuthStore for PostgresStore {
         let keys = match Self::load_signing_keys_on(&mut tx, tenant_id).await? {
             Some(keys) => keys,
             None => {
-                let keys = crate::auth::keys::generate_signing_keys()?;
-                Self::insert_signing_keys_on(&mut tx, tenant_id, &keys).await?;
-                keys
+                // The seed carries the keys (generated at the API layer):
+                // the store must stay free of randomness so the Raft state
+                // machine can apply the same operation identically on every
+                // replica. Existing keys always win over the seed's.
+                seed.signing_keys
+                    .validate()
+                    .map_err(|err| StoreError::Unexpected(anyhow!(err)))?;
+                Self::insert_signing_keys_on(&mut tx, tenant_id, &seed.signing_keys).await?;
+                seed.signing_keys.clone()
             }
         };
 

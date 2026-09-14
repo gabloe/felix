@@ -47,10 +47,14 @@ pub type NodeId = u64;
 ///   holds for serving reads is the right shape (the metadata store's
 ///   `RwLock`s, in #338).
 /// - `restore` replaces the whole state with a previously produced snapshot.
+///
+/// Async because the metadata store's interior locks are async; the
+/// determinism rule is about *what* apply computes, not how it schedules.
+#[async_trait::async_trait]
 pub trait AppStateMachine: Send + Sync + 'static {
-    fn apply(&self, command: &[u8]) -> Vec<u8>;
-    fn snapshot(&self) -> Vec<u8>;
-    fn restore(&self, snapshot: &[u8]);
+    async fn apply(&self, command: &[u8]) -> Vec<u8>;
+    async fn snapshot(&self) -> Vec<u8>;
+    async fn restore(&self, snapshot: &[u8]);
 }
 
 /// Everything needed to start this instance's member of the group.
@@ -137,7 +141,7 @@ impl RaftHandle {
         std::fs::create_dir_all(&settings.data_dir).context("create raft data dir")?;
         let db = store::open(&settings.data_dir.join("raft.redb"))?;
         let log_store = store::LogStore::new(Arc::clone(&db));
-        let state_machine = store::StateMachineStore::open(db, app)?;
+        let state_machine = store::StateMachineStore::open(db, app).await?;
 
         let raft = types::Raft::new(
             settings.node_id,
