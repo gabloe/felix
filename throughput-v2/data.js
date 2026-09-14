@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789349146015,
+  "lastUpdate": 1789351265318,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7020,6 +7020,58 @@ window.BENCHMARK_DATA = {
             "range": "67420.96",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 546380.22\nmean: 524434.20\nstdev: 67420.96\ncv: 12.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7405b53066cdd9155e5c190e0988af7bbe162daa",
+          "message": "feat(client): subscribe to every shard of a stream as one thing (#297) (#329)\n\nA subscription reads one shard. A stream's shards can have different owners and\na subscription is bound to one connection, so an application wanting every\nrecord of a four-shard stream had to open four subscriptions, discover each\nowner, follow each redirect and merge the results itself.\n\n`ClusterClient::subscribe_sharded` does that. Four choices in it are the reason\nthe issue held this back from #240 rather than treating it as plumbing:\n\n**Ordering is per shard, and the type says so.** Merging cannot restore an order\nthat never existed — Felix orders per key, and a key resolves to one shard. The\ndocs on `ShardedSubscription` say it, `ShardEvent::Record` carries the shard it\ncame from, and no method suggests stream-wide order.\n\n**Resumption is a vector.** `positions()` returns one offset per shard;\n`resubscribe_sharded` takes it back and resumes each listed shard at offset + 1.\nA shard that delivered nothing is absent and starts where the call asks.\n\n**An unreachable shard refuses the whole subscription.** Opening covers every\nshard or fails naming the ones it could not reach. Three shards of four looks\nexactly like four to everything downstream, which makes quiet incompleteness the\nworst available answer.\n\n**Losing one shard does not tear down the others.** Each shard has its own task,\nreconnects on its own after the last offset it forwarded, and reports\n`ShardLost` and `ShardRecovered` as items in the stream — not as an error, and\nnot as silence.\n\nGetting there needed a way to ask how many shards a stream has, which nothing on\nthe wire offered: `topology` names brokers, not streams. So\n`FEATURE_STREAM_SHARDS` and a `stream_shards` request, scoped to the caller's\ntenant and answered from the broker's routing snapshot. Zero means \"I do not\nknow this stream\" and fails the call rather than being rounded up to one, which\nwould read shard 0 and call it the stream.\n\nTwo things the tests found:\n\n- `subscribe_sharded` asked its own broker for the shard count without\n  reconnecting, so a client whose broker had just died reported that death as an\n  answer about the stream. It reconnects and asks again now — which is the\n  entire reason `ClusterClient` exists.\n- The completeness test raced its own fanout: subscribing with `Latest` and\n  publishing immediately can legitimately miss a record written before all four\n  shards finish registering. It publishes first and reads from `Earliest`, which\n  removes the race without weakening the claim.\n\nControls: with the client reading only shard 0 while still reporting four, the\ncompleteness test fails naming 28 undelivered records. Four cluster tests, run\nthree times in a row clean.",
+          "timestamp": "2026-09-13T18:58:53-07:00",
+          "tree_id": "b66dec9da43260268a04274c6b7bb0e6694fbbb3",
+          "url": "https://github.com/gabloe/felix/commit/7405b53066cdd9155e5c190e0988af7bbe162daa"
+        },
+        "date": 1789351264574,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 319871.54,
+            "range": "1833.59",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 319871.54\nmean: 319219.61\nstdev: 1833.59\ncv: 0.57%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 319871.54,
+            "range": "1833.59",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 319871.54\nmean: 319219.61\nstdev: 1833.59\ncv: 0.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75112.42,
+            "range": "2049.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75112.42\nmean: 74991.01\nstdev: 2049.11\ncv: 2.73%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 751124.23,
+            "range": "20491.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 751124.23\nmean: 749910.06\nstdev: 20491.11\ncv: 2.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
