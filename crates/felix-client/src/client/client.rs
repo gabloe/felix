@@ -1107,6 +1107,79 @@ impl Client {
             None => Err(anyhow::anyhow!("topology response missing")),
         }
     }
+
+    /// Whether this broker answers [`Client::stream_shards`].
+    pub fn supports_stream_shards(&self) -> bool {
+        felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_STREAM_SHARDS)
+    }
+
+    /// How many shards a stream was placed with.
+    ///
+    /// A subscription reads one shard, so this is what a client needs before it
+    /// can consume a whole stream. The answer comes from the broker's routing
+    /// snapshot and can be stale in the way any routing answer can.
+    ///
+    /// `0` means this broker knows nothing of the stream — which is *not* the
+    /// same as one shard, and is why it is not silently rounded up.
+    ///
+    /// Fails rather than guessing when the broker predates the request, for the
+    /// same reason [`Client::topology`] does: sending it anyway is a protocol
+    /// error the broker's control loop treats as fatal.
+    pub async fn stream_shards(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<u32> {
+        if !self.supports_stream_shards() {
+            anyhow::bail!("broker does not report stream shard counts");
+        }
+        if tenant_id != self.auth_tenant_id {
+            return Err(anyhow::anyhow!(
+                "tenant mismatch: client auth is scoped to {}",
+                self.auth_tenant_id
+            ));
+        }
+        let connection = &self.event_connections[0];
+        let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        let request_id = self
+            .cache_request_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write_message(
+            &mut send,
+            Message::StreamShards {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+                request_id,
+            },
+        )
+        .await
+        .context("send stream shards request")?;
+        let mut scratch = BytesMut::with_capacity(4 * 1024);
+        let answer =
+            read_message_with_limit(&mut recv, &mut scratch, self.runtime_config.max_frame_bytes)
+                .await?;
+        let _ = send.finish();
+        match answer {
+            Some(Message::StreamShardsView { shards, .. }) => Ok(shards),
+            Some(Message::Error { message }) => {
+                Err(anyhow::anyhow!("stream shards rejected: {message}"))
+            }
+            Some(other) => Err(anyhow::anyhow!(
+                "unexpected stream shards response: {other:?}"
+            )),
+            None => Err(anyhow::anyhow!("stream shards response missing")),
+        }
+    }
 }
 
 /// What one authenticated stream agreed with the broker.

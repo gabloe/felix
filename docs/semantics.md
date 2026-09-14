@@ -156,7 +156,18 @@ than an optional field, and is not done.
   owners and a subscription is bound to one connection, so reading a whole
   multi-shard stream means one subscription per shard. Offsets are per shard,
   so resuming a multi-shard consumer means carrying one offset per shard.
-  Doing that for the caller is #297.
+
+  `ClusterClient::subscribe_sharded` opens one per shard and merges them,
+  following each shard's own redirect. It promises **per-shard ordering and
+  nothing more**: merging cannot restore an order that never existed. An
+  unreachable shard refuses the whole subscription rather than covering three
+  shards of four, and a shard whose owner is lost is re-established on its own
+  while the others keep delivering.
+
+  > `a_sharded_subscription_receives_every_record`,
+  > `an_unreachable_shard_refuses_the_subscription`,
+  > `one_shard_failing_over_does_not_stop_the_others`,
+  > `a_sharded_subscription_resumes_from_its_per_shard_offsets`.
 
 **`DeliveryGuarantee` is declared on a stream and not enforced.** The control
 plane accepts `AtMostOnce` and `AtLeastOnce`, and no broker code reads either.

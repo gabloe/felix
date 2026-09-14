@@ -185,6 +185,28 @@ Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
 
 Sent only to a broker that advertised `FEATURE_CACHE_DELETE`.
 
+### StreamShards
+```
+{ "type": "stream_shards", "tenant_id": "<string>", "namespace": "<string>",
+  "stream": "<string>", "request_id": <u64> }
+```
+
+Sent only to a broker that advertised `FEATURE_STREAM_SHARDS`.
+
+A subscription reads one shard, so a client consuming a whole stream needs to
+know how many there are; nothing else on the wire says. Scoped to the client's
+own tenant, and answered from the broker's routing snapshot — so it can be stale
+in exactly the way any routing answer can.
+
+### StreamShardsView (server -> client)
+```
+{ "type": "stream_shards_view", "shards": <u32>, "request_id": <u64> }
+```
+
+`0` means this broker knows nothing of that stream, which is **not** the same as
+one shard. A client that rounded it up would read shard 0 and call it the
+stream.
+
 ### CacheValue (server -> client)
 ```
 { "type": "cache_value", "key": "<string>", "value": "<base64|null>" }
@@ -399,6 +421,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0004` | `FEATURE_CACHE_DELETE` | The broker accepts `cache_delete` |
 | `0x0008` | `FEATURE_CONSUMER_GROUP` | The broker serves `group_poll`, `group_ack`, `group_nack` |
 | `0x0010` | `FEATURE_GROUP_DEAD_LETTERS` | The broker serves `group_dead_letters`, `group_discard`, `group_redrive` |
+| `0x0020` | `FEATURE_STREAM_SHARDS` | The broker answers `stream_shards` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -420,7 +443,8 @@ the broker's control loop, so probing costs the connection.
 Note which features depend on what. `FEATURE_TOPOLOGY` and `FEATURE_REDIRECT`
 describe a cluster, so a standalone broker advertises neither.
 `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
-advertised by both. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
+advertised by both, as is `FEATURE_STREAM_SHARDS` — a standalone broker has one
+shard per stream and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
 storage rather than on clustering: without it a group's position is lost on
 every restart, so a broker with none offers neither.
 

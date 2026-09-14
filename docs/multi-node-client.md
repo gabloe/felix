@@ -94,10 +94,65 @@ There is no third option that is both. A publish that fails after the broker
 wrote it and before the acknowledgement arrived is genuinely ambiguous, and the
 choice of what to do about it is the application's.
 
-**Subscriptions do not survive a failover.** A subscription is bound to the
+**A single-shard subscription does not survive a failover.** It is bound to the
 connection it was created on. Record `Event.offset` as you go and resubscribe
 from `offset + 1`; that is what offsets are for, and it is the only way to
 resume without a gap.
+
+**A sharded subscription reconnects each shard on its own** — see below.
+
+## Consuming a whole multi-shard stream
+
+A subscription reads **one shard**. A stream's shards can have different owners
+and a subscription is bound to one connection, so reading a four-shard stream
+means four subscriptions, each following its own redirect.
+
+`ClusterClient::subscribe_sharded` does that for you:
+
+```rust
+let client = Arc::new(ClusterClient::connect(&seeds, "localhost", config).await?);
+let mut subscription = client
+    .subscribe_sharded("t1", "default", "orders", Some(StartPosition::Earliest))
+    .await?;
+
+while let Some(item) = subscription.next().await {
+    match item {
+        ShardEvent::Record { shard, event } => handle(shard, event),
+        // Not an error and not silence: this shard is down and being
+        // re-established, and the others are still delivering.
+        ShardEvent::ShardLost { shard, error } => warn!(shard, %error, "shard down"),
+        ShardEvent::ShardRecovered { shard } => info!(shard, "shard back"),
+    }
+}
+```
+
+Four things about it are deliberate, and each is a choice you would otherwise
+have to make yourself:
+
+- **Ordering is per shard, and nothing more.** Two records from one shard arrive
+  in the order they were written. Two records from different shards arrive in an
+  arbitrary order. Merging cannot restore an order that never existed — Felix
+  orders per key, and a key always resolves to one shard. Do not infer
+  stream-wide ordering from the fact that these arrive on one channel.
+
+- **Resumption is a vector, not a number.** `Event.offset` is per shard, so one
+  number cannot say where a sharded consumer got to.
+  `ShardedSubscription::positions` hands back one offset per shard; pass it to
+  `resubscribe_sharded` to carry on. Each listed shard resumes at `offset + 1`.
+
+- **An unreachable shard refuses the whole subscription.** Opening covers every
+  shard or it fails, naming the shards it could not reach. A subscription
+  quietly covering three shards of four looks exactly like a complete one to
+  everything downstream, which makes it the worst available answer.
+
+- **Losing one shard's owner does not tear down the others.** That shard is
+  re-established on its own, resuming after the last offset it delivered, and
+  you are told with `ShardLost` and `ShardRecovered` rather than left to infer
+  it from a gap.
+
+It needs a broker advertising `FEATURE_STREAM_SHARDS`, because the shard count
+comes from asking one. A broker that has never heard of the stream reports zero
+shards and the call fails rather than reading shard 0 and calling it the stream.
 
 ## Redirects
 

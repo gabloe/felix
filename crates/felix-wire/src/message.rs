@@ -114,6 +114,28 @@ pub enum Message {
     TopologyView {
         brokers: Vec<BrokerEndpoint>,
     },
+    /// Ask how many shards a stream was placed with.
+    ///
+    /// A subscription reads one shard, so consuming a whole stream means one
+    /// subscription per shard, and a client cannot know how many to open
+    /// without asking. Only ever sent to a broker that advertised
+    /// `FEATURE_STREAM_SHARDS`.
+    StreamShards {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        request_id: u64,
+    },
+    /// How many shards that stream has, as this broker's routing snapshot sees
+    /// it.
+    ///
+    /// The answer can be stale in exactly the way any routing answer can: a
+    /// stream whose shard count changed is described by whichever snapshot this
+    /// broker last received. `0` means the broker knows nothing of the stream.
+    StreamShardsView {
+        shards: u32,
+        request_id: u64,
+    },
     // Publish a single payload to a stream.
     Publish {
         tenant_id: String,
