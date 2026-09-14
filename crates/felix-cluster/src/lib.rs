@@ -922,6 +922,45 @@ impl Cluster {
             .with_context(|| format!("publish to {stream} key {key:?} via {node_id}"))
     }
 
+    /// Publish with a routing key, waiting out the window where two brokers
+    /// disagree about who owns a shard.
+    ///
+    /// A broker that has the placement forwards to the shard's owner. If that
+    /// owner has not applied the assignment yet it refuses — *"owner broker-2
+    /// redirected to generation 0, not ahead of 0"* — and the publish fails.
+    /// The window is real, it closes on its own as the shard feed catches up,
+    /// and nothing in the client retries it (#269).
+    ///
+    /// So a test that needs every record to land has to wait the window out
+    /// rather than treat the first attempt as the answer. In practice only the
+    /// first publish after a cluster starts or a shard moves pays anything.
+    ///
+    /// Bounded on purpose: routing that never converges is a bug, and the
+    /// caller should still see a failure rather than hang.
+    pub async fn publish_keyed_via_settled(
+        &self,
+        node_id: &str,
+        stream: &str,
+        key: &[u8],
+        payload: Vec<u8>,
+        within: Duration,
+    ) -> Result<()> {
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            match self
+                .publish_keyed_via(node_id, stream, key, payload.clone())
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(err) if std::time::Instant::now() >= deadline => {
+                    return Err(err.context(format!("routing did not settle within {within:?}")));
+                }
+                Err(_) => {}
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     /// Replay one shard of a stream from the broker that owns it.
     pub async fn replay_shard(
         &self,

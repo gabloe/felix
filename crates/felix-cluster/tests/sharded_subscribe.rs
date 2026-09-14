@@ -100,12 +100,16 @@ async fn a_sharded_subscription_receives_every_record() {
 
     let published = keys(40);
     for key in &published {
+        // `_settled`: at startup a broker can hold the placement before the
+        // owner has applied it, and a forwarded publish then fails with
+        // "redirected to generation 0". Only the first publish pays anything.
         cluster
-            .publish_keyed_via(
+            .publish_keyed_via_settled(
                 owners.values().next().expect("an owner"),
                 STREAM,
                 key.as_bytes(),
                 key.clone().into_bytes(),
+                Duration::from_secs(30),
             )
             .await
             .expect("publish");
@@ -359,7 +363,13 @@ async fn a_sharded_subscription_resumes_from_its_per_shard_offsets() {
     let first = keys(20);
     for key in &first {
         cluster
-            .publish_keyed_via(&alive, STREAM, key.as_bytes(), key.clone().into_bytes())
+            .publish_keyed_via_settled(
+                &alive,
+                STREAM,
+                key.as_bytes(),
+                key.clone().into_bytes(),
+                Duration::from_secs(30),
+            )
             .await
             .expect("publish");
     }
@@ -392,7 +402,13 @@ async fn a_sharded_subscription_resumes_from_its_per_shard_offsets() {
         .collect::<Vec<_>>();
     for key in &second {
         cluster
-            .publish_keyed_via(&alive, STREAM, key.as_bytes(), key.clone().into_bytes())
+            .publish_keyed_via_settled(
+                &alive,
+                STREAM,
+                key.as_bytes(),
+                key.clone().into_bytes(),
+                Duration::from_secs(30),
+            )
             .await
             .expect("publish");
     }
