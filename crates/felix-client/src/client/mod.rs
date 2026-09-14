@@ -7,5 +7,6 @@ pub mod event_router;
 #[cfg(feature = "in-process")]
 pub mod inprocess;
 pub mod publisher;
+pub mod sharded;
 pub mod sharding;
 pub mod subscription;

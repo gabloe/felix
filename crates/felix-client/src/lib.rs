@@ -82,6 +82,7 @@ pub use client::cluster::{ClusterClient, ReconnectPolicy};
 #[cfg(feature = "in-process")]
 pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
+pub use client::sharded::{ShardEvent, ShardOffsets, ShardedSubscription};
 pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
 pub use config::{ClientConfig, ClientSubQueuePolicy};

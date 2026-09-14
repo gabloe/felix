@@ -107,12 +107,25 @@ pub const FEATURE_CONSUMER_GROUP: u32 = 0x0000_0008;
 /// promises is the one thing that cannot be done safely.
 pub const FEATURE_GROUP_DEAD_LETTERS: u32 = 0x0000_0010;
 
+/// The broker answers `stream_shards`: how many shards a stream was placed with.
+///
+/// A subscription reads one shard, so a client that wants a whole multi-shard
+/// stream has to know how many there are. Nothing else on the wire tells it:
+/// `topology` names brokers, not streams.
+///
+/// Advertised by a *broker*, and a separate bit rather than folded into
+/// `FEATURE_TOPOLOGY` for the usual reason — that bit already means "names the
+/// brokers" to every broker that advertises it, and a broker built before this
+/// request existed has no arm for it.
+pub const FEATURE_STREAM_SHARDS: u32 = 0x0000_0020;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
     | FEATURE_CACHE_DELETE
     | FEATURE_CONSUMER_GROUP
-    | FEATURE_GROUP_DEAD_LETTERS;
+    | FEATURE_GROUP_DEAD_LETTERS
+    | FEATURE_STREAM_SHARDS;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

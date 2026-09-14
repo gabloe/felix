@@ -311,7 +311,12 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                                     | felix_wire::FEATURE_GROUP_DEAD_LETTERS
                                             }
                                             None => 0,
-                                        },
+                                        }
+                                        // Advertised unconditionally. A broker
+                                        // with no routing snapshot answers 1,
+                                        // which is the truth for a single-node
+                                        // deployment rather than a guess.
+                                        | felix_wire::FEATURE_STREAM_SHARDS,
                                 ),
                             },
                             None => Message::Ok,
@@ -470,6 +475,70 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         "felix_broker_out_ack_depth",
                         &ack_throttle_tx,
                         Outgoing::Message(Message::TopologyView { brokers }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            Message::StreamShards {
+                tenant_id,
+                namespace,
+                stream,
+                request_id,
+            } => {
+                // Authenticated, and scoped: a client may ask about the shape
+                // of streams in its own tenant, not another's.
+                let Some(ctx) = auth_ctx.as_ref() else {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "not authenticated",
+                    )
+                    .await?;
+                    return Ok(false);
+                };
+                if ctx.tenant_id != tenant_id {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "tenant mismatch",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+                // Read from the routing snapshot, which is an `ArcSwap` load.
+                // A broker that has never heard of the stream answers 0 rather
+                // than guessing 1: "I do not know" and "exactly one shard" are
+                // different answers, and a client that assumed the latter would
+                // silently read a fraction of a stream.
+                let shards = publish_ctx
+                    .ingress
+                    .as_deref()
+                    .map(|ingress| {
+                        ingress.shards_for(
+                            crate::shard_watch::ShardKind::Stream,
+                            &tenant_id,
+                            &namespace,
+                            &stream,
+                        )
+                    })
+                    .unwrap_or(1);
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::StreamShardsView { shards, request_id }),
                     )
                     .await,
                     &ack_timeout_state,
@@ -1376,6 +1445,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::PublishError { .. }
             | Message::AuthOk { .. }
             | Message::TopologyView { .. }
+            | Message::StreamShardsView { .. }
             | Message::NotLeader { .. }
             | Message::Ok => {
                 // Protocol hygiene: these message types should never arrive on the control stream
