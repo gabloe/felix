@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789351262756,
+  "lastUpdate": 1789401311538,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -8976,6 +8976,72 @@ window.BENCHMARK_DATA = {
             "range": "297.01",
             "unit": "us",
             "extra": "trials: 5\nmedian: 404.00\nmean: 534.40\nstdev: 297.01\ncv: 55.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4da9b7e2ecee2461cc2bcecb2b42f7d10d51b9a8",
+          "message": "test(cluster): wait out routing convergence before keyed publishes (#332)\n\nCI failed a_sharded_subscription_receives_every_record on its very first\npublish:\n\n    publish failed: could not forward to the owner of orders:\n    owner broker-2 redirected to generation 0, not ahead of 0\n\nAt startup, the broker taken as ingress can hold the shard placement before the\nowner has applied it. The forward then reaches a broker that says \"not mine at\ngeneration 0\", and the publish fails. The window is real, transient, and closes\nas the shard feed catches up — and nothing in the client retries it, which is\nhalf of #269.\n\nThe tests published the instant shard_owners_for returned, but that reads the\ncontrol plane; the brokers apply assignments asynchronously, so the strongest\nconvergence signal available to a test is a publish actually succeeding.\n\nCluster::publish_keyed_via_settled retries within a bound, surfacing the last\nerror if routing never converges — a cluster that cannot settle in 30s is a bug\nthe test should still fail on. In practice only the first publish after startup\npays anything. It lives in the harness rather than a test file because\ntests/sharding.rs has the same latent race at all three of its publish sites,\nproven reachable by this CI failure; all of them now use it.\n\nNot reproducible locally on demand — this machine converges before the first\npublish — which is exactly why it survived three consecutive local runs and\nthen failed in CI.",
+          "timestamp": "2026-09-14T08:52:44-07:00",
+          "tree_id": "31fc6a1998840e2cae6c1a2e1eb607f140bcb4e3",
+          "url": "https://github.com/gabloe/felix/commit/4da9b7e2ecee2461cc2bcecb2b42f7d10d51b9a8"
+        },
+        "date": 1789401310535,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "3.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.00\nstdev: 3.39\ncv: 2.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "5.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 209.40\nstdev: 5.68\ncv: 2.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 262,
+            "range": "59.99",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 262.00\nmean: 282.60\nstdev: 59.99\ncv: 21.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 199.40\nstdev: 1.14\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "11.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 410.80\nstdev: 11.34\ncv: 2.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1143,
+            "range": "365.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1143.00\nmean: 963.00\nstdev: 365.82\ncv: 37.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
