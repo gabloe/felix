@@ -114,6 +114,27 @@ fn binary_starts_and_stops_on_sigint_with_bootstrap() {
     assert!(status.success(), "controlplane exited with {status}");
 }
 
+/// Wait until the API actually answers, not merely until the port accepts.
+///
+/// `wait_for_listener` returns as soon as a connection is accepted, which
+/// happens before the router is answering. That gap is invisible on a fast
+/// machine and several hundred milliseconds wide under coverage
+/// instrumentation, where it made the readiness test fail on its very first
+/// assertion.
+fn wait_until_serving(addr: SocketAddr, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if get(addr, "/v1/system/ready") == Some(200) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "controlplane did not answer /v1/system/ready with 200 on {addr} within {timeout:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Send SIGTERM, which is what Kubernetes, systemd and `docker stop` use. The
 /// tests above use SIGINT; the drain path is the same, but a rolling deploy
 /// sends this one and it is worth exercising the signal that will actually
@@ -134,8 +155,11 @@ fn signal_terminate(child: &std::process::Child) {
 fn get(addr: SocketAddr, path: &str) -> Option<u16> {
     use std::io::{Read, Write};
 
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    // Generous, because this also runs under coverage instrumentation where the
+    // process is several times slower. A timeout here reads as "refused", which
+    // is the one answer this file must not get wrong.
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     stream
         .write_all(
             format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
@@ -164,11 +188,9 @@ fn readiness_fails_before_the_listener_closes() {
     wait_until_ready(&mut controlplane);
     let addr = controlplane.main_addr;
 
-    assert_eq!(
-        get(addr, "/v1/system/ready"),
-        Some(200),
-        "should be serving before the signal",
-    );
+    // The premise of everything below: it is serving, and reporting itself
+    // ready, before the signal arrives.
+    wait_until_serving(addr, Duration::from_secs(20));
 
     signal_terminate(&controlplane.child);
 
@@ -234,6 +256,7 @@ fn a_second_signal_cuts_the_hold_off_short() {
     // only be the escape hatch and not the timer elapsing.
     let mut controlplane = spawn_controlplane_with_predrain(false, 60_000);
     wait_until_ready(&mut controlplane);
+    wait_until_serving(controlplane.main_addr, Duration::from_secs(20));
 
     signal_terminate(&controlplane.child);
     // The first signal must be observed before the second arrives, or there is
