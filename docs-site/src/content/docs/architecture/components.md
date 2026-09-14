@@ -6,7 +6,10 @@ Felix is built as a modular, composable system with clear separation of concerns
 
 ## Overview
 
-The Felix system is composed of six core components that work together to deliver low-latency pub/sub and caching capabilities:
+The Felix system is composed of six core components that work together to serve
+**streams, caches and queues** — three readings of one append-only log rather
+than three subsystems, as [Projections](/felix/architecture/projections/)
+explains.
 
 ```mermaid
 graph TB
@@ -177,7 +180,7 @@ The transport layer enforces encryption by default:
 
 ## felix-broker: Core Logic
 
-The broker is the heart of Felix, implementing pub/sub fanout, cache operations, stream routing, and backpressure management.
+The broker is the heart of Felix, implementing pub/sub fanout, cache operations, consumer groups, stream routing, and backpressure management.
 
 ### Architecture Layers
 
@@ -188,12 +191,14 @@ graph TB
         Publish[Publish Pipeline]
         Subscribe[Subscription Registry]
         Cache[Cache Engine]
+        Groups[Consumer Groups]
         Fanout[Fanout Coordinator]
     end
     
     Ingress --> Publish
     Ingress --> Subscribe
     Ingress --> Cache
+    Ingress --> Groups
     Publish --> Fanout
     Fanout --> Subscribe
     
@@ -201,6 +206,7 @@ graph TB
     style Publish fill:#fff9c4,stroke:#334155,color:#111827
     style Subscribe fill:#f3e5f5,stroke:#334155,color:#111827
     style Cache fill:#e0f2f1,stroke:#334155,color:#111827
+    style Groups fill:#ede7f6,stroke:#334155,color:#111827
     style Fanout fill:#fce4ec,stroke:#334155,color:#111827
 ```
 
@@ -211,6 +217,10 @@ When a client opens a stream to the broker, the first message determines stream 
 1. **Control stream** (bidirectional): Publish, subscribe setup, acknowledgements
 2. **Event stream** (unidirectional): Server-opened for event delivery
 3. **Cache stream** (bidirectional): Cache request/response multiplexing
+
+Consumer-group requests share the control stream rather than having one of their
+own: a poll is a request/response exchange, and it has to be ordered against the
+acknowledgements that settle what it handed out.
 
 ### Publish Pipeline
 
@@ -306,7 +316,9 @@ The cache provides low-latency key-value operations with TTL:
 **Operations**:
 - `cache_put(tenant, namespace, cache, key, value, ttl_ms)`: Store with optional expiration
 - `cache_get(tenant, namespace, cache, key)`: Retrieve value or null if missing/expired
-- `cache_delete(key)`: Explicit deletion (future)
+- `cache_delete(tenant, namespace, cache, key)`: Explicit deletion, answering
+  with the value it removed — or `null` if the key was not there, so a caller
+  can tell a delete that did something from one that did not
 
 **Implementation characteristics**:
 
@@ -326,6 +338,53 @@ The cache provides low-latency key-value operations with TTL:
 | 0 B          | 158 µs  | 164 µs      | 162 µs       |
 | 256 B        | 179 µs  | 177 µs      | 165 µs       |
 | 4096 B       | 260 µs  | 238 µs      | 165 µs       |
+
+### Consumer Groups
+
+A queue is the same log read through a cursor a group of consumers shares.
+Records are **pulled** rather than pushed, because only a consumer knows when it
+has capacity for more work.
+
+**Operations**:
+
+- `group_poll(tenant, namespace, stream, shard, group, max_records, wait_ms)`:
+  claim up to `max_records`, optionally waiting for work rather than spinning on
+  empty polls
+- `group_ack(…, offset)`: finish a record
+- `group_nack(…, offset)`: hand one back for immediate redelivery, rather than
+  waiting out the visibility timeout
+- `group_dead_letters(…)` / `group_discard(…, offset)` / `group_redrive(…, offset)`:
+  list what the group gave up on, drop one, or put one back in play
+
+They travel on the **control stream**, like publish and subscribe setup.
+
+**Implementation characteristics**:
+
+- **Durable storage is required.** A group's position lives in a log, so a
+  broker started without `FELIX_DURABLE_STORAGE_DIR` serves no groups and does
+  not advertise `FEATURE_CONSUMER_GROUP` — a group that forgot its position on
+  restart would redeliver everything it had already finished
+- The cursor is a key → latest-value projection over its own log under
+  `<root>/groups`, monotonic, so a late acknowledgement cannot rewind it
+- It advances only over a **contiguous run** of acknowledgements: offset 4 being
+  finished while 3 is still in flight leaves the cursor at 3, which is what
+  makes it safe to restart from
+- In-flight claims are held in memory with a visibility timeout
+  (`FELIX_GROUP_VISIBILITY_TIMEOUT_MS`, 30s). A consumer that stops answering
+  does not hold a record for ever
+- Past `FELIX_GROUP_MAX_ATTEMPTS` (5) a record is **dead-lettered** to a log
+  under `<root>/dead-letters`, so one poison record cannot stall the queue
+  behind it. A dead letter is a **pointer** — the record stays in the stream's
+  log at that offset, readable by an ordinary replay
+- **Only the shard's leader serves its group**, and a poll is refused rather
+  than forwarded. Relaying would put the claim and the acknowledgement on
+  different brokers, and a queue's whole promise is that one consumer holds a
+  record at a time
+- The cursor is replicated with its shard, so a promoted replica resumes where
+  the group had reached. The dead-letter list is **not** replicated yet
+
+See [Queues](/felix/features/queues/) for the API and
+[the demo](/felix/demos/queue-semantics/) for it running.
 
 ## felix-storage: Storage Abstraction
 
@@ -501,6 +560,30 @@ sequenceDiagram
     T->>W: Receive response frame
     W->>C: Decode cache_value
 ```
+
+### End-to-End Queue Flow
+
+```mermaid
+sequenceDiagram
+    participant C as felix-client
+    participant B as felix-broker
+    participant G as Consumer Groups
+    participant S as felix-storage
+
+    C->>B: group_poll(stream, shard, group, max, wait)
+    B->>G: claim, against the visibility timeout
+    G->>S: read from the cursor, forward
+    S-->>G: records
+    G-->>B: claimed offsets, with attempt counts
+    B-->>C: group_records
+    Note over C: work happens here
+    C->>B: group_ack(offset)
+    B->>G: settle
+    G->>S: advance the cursor over the contiguous run
+```
+
+A record neither acknowledged nor handed back is claimed again once its
+visibility timeout lapses, by whichever consumer polls next.
 
 ## Component Configuration
 

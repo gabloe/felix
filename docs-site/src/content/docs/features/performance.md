@@ -109,7 +109,7 @@ drift; the benchmarks page is regenerated from `latency-demo` and is the
 source of truth.
 
 **Best for**:
-- Mixed pub/sub and cache workloads
+- Mixed pub/sub, cache and consumer-group workloads
 - Moderate fanout (1-20 subscribers)
 - General application development
 - Starting point for tuning

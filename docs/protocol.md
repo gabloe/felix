@@ -180,10 +180,15 @@ Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
 
 ### CacheDelete
 ```
-{ "type": "cache_delete", "key": "<string>" }
+{ "type": "cache_delete", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "key": "<string>", "request_id": <u64|absent> }
 ```
 
 Sent only to a broker that advertised `FEATURE_CACHE_DELETE`.
+
+Answered with `cache_value` carrying the value that was removed, or a null value
+if the key was not there — so a caller can tell a delete that did something from
+one that did not.
 
 ### StreamShards
 ```

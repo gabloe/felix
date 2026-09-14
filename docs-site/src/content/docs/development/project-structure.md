@@ -46,12 +46,13 @@ crates/
 
 #### felix-broker
 
-**Purpose**: Broker core logic for pub/sub and cache.
+**Purpose**: Broker core logic for pub/sub, cache and consumer groups.
 
 **Responsibilities**:
 - Stream registry and subscription management
 - Event fanout and batching
 - Cache storage with TTL
+- Consumer groups: claims, redelivery, dead letters
 - Backpressure and flow control
 - Connection lifecycle management
 
@@ -61,6 +62,13 @@ crates/
 - `stream_state.rs`: Per-stream subscriber registry, publish snapshot, and replay log
 - `subscription.rs`: Subscriber-facing receive handles and the unregister guard
 - `delivery.rs`: Shared delivery batches and subscriber queue-depth accounting
+- `commit_order.rs`: `CommitSequencer`, which holds a publish behind the ones that took their offsets before it
+- `durable.rs`: The `DurableStorage` / `StreamLog` seam between the broker and a shard's log
+- `replication.rs`: Leader-side shipping and follower-side acceptance of committed records
+- `consumer_groups.rs`: A group's durable cursor, a key → latest-value projection over its own log
+- `group_delivery.rs`: `GroupTracker` — in-flight claims, the visibility timeout, attempt counts, and the contiguous-run advance
+- `group_reader.rs`: Joins the stream's log, the cursor and the tracker into poll / ack / nack
+- `dead_letters.rs`: Offsets a group gave up on, stored as pointers into the stream's log rather than copies
 - `keys.rs`: Map keys plus their borrowed lookup twins
 - `config.rs` / `error.rs` / `telemetry.rs`: Capacity defaults and queue policy, `BrokerError`, cfg-gated metrics shims
 
