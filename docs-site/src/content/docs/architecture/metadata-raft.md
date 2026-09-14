@@ -3,11 +3,16 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: designed, not implemented]
-This page describes a **decided design**, tracked as milestone M13 under
-[#333](https://github.com/gabloe/felix/issues/333). Nothing here is running
-yet. Today, control-plane availability comes from N stateless instances over
-one HA Postgres — see [Control-plane HA](/felix/deployment/control-plane-ha/).
+:::caution[Status: under construction — the consensus core is merged, metadata does not ride it yet]
+Tracked as milestone M13 under
+[#333](https://github.com/gabloe/felix/issues/333). What exists today is the
+core from [#337](https://github.com/gabloe/felix/issues/337): the openraft
+seam, a crash-safe log/vote/snapshot store that passes openraft's own storage
+conformance suite, the HTTP transport, and group lifecycle — proven by tests
+covering election, replication, restart-as-rejoin, wiped-volume rebuild by
+snapshot, and learner-first growth. **No metadata is served from it yet**;
+control-plane availability still comes from N stateless instances over one
+HA Postgres — see [Control-plane HA](/felix/deployment/control-plane-ha/).
 The authoritative design record, with every alternative and the arguments, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
@@ -75,6 +80,21 @@ flowchart LR
 Library: [openraft](https://github.com/databendlabs/openraft), pinned to the
 stable 0.9 line, wrapped behind a seam so its pre-1.0 API churn stays
 contained.
+
+## What exists today (#337)
+
+`services/controlplane/src/raft/` is the whole openraft surface — no
+consensus type escapes it. Outside the seam there are exactly two things: a
+`RaftHandle` (start, initialize, write, add-learner, promote, snapshot,
+status, shutdown) and an `AppStateMachine` trait whose contract is the
+determinism rule above. Consensus state — log, vote, current snapshot —
+lives in one crash-safe [redb](https://github.com/cberner/redb) file per
+instance: an embedded ACID store was chosen over hand-rolled files because
+votes and entries that get acknowledged and then lost are how one term
+elects two leaders, and that plumbing is the last place to be inventive.
+The store passes **openraft's own storage conformance suite** on every test
+run, the same discipline as running the node/shard contract suites against
+every metadata backend.
 
 ## The SWIM question, answered
 

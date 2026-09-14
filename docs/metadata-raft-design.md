@@ -316,3 +316,21 @@ sections — Raft core and storage, state machine and command set, the store
 backend and forwarding, migration tooling, probes and packaging, and the
 chaos/conformance pass. [#333](https://github.com/gabloe/felix/issues/333)
 is the umbrella.
+
+### Implementation status
+
+| Piece | Issue | State |
+| --- | --- | --- |
+| Raft core: seam, redb log/vote/snapshot store, HTTP transport, group lifecycle | [#337](https://github.com/gabloe/felix/issues/337) | **Landed** — `services/controlplane/src/raft/`. The store passes openraft's own storage conformance suite; group tests cover election, replication, restart-as-rejoin, wiped-volume rebuild by snapshot, and learner-first growth. Nothing serves metadata from it yet. |
+| Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | Not started |
+| Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | Not started |
+| Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | Not started |
+| Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | Not started |
+| Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | Not started |
+
+One deliberate deviation from the sketch above, made while landing #337: the
+Raft log lives in **redb** (an embedded, crash-safe, single-file ACID store)
+rather than hand-rolled files. Consensus durability plumbing — votes and
+entries that must never be acknowledged and then lost — is the last place
+Felix should be inventive, and openraft's storage suite now enforces the
+semantics against the real store on every test run.

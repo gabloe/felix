@@ -219,11 +219,12 @@ that choice in full, including why per-shard Raft was rejected.
 That rejection is about replicating *records*. Making the control plane's own
 metadata highly available is a separate problem, and Raft is the decided
 answer there — designed in
-[`metadata-raft-design.md`](metadata-raft-design.md), tracked as milestone
-M13 under [#333](https://github.com/gabloe/felix/issues/333), not yet
-implemented. Until it lands, control-plane availability rests on Postgres:
-any number of stateless instances over one HA database, whose required
-properties are spelled out in [`ha-postgres.md`](ha-postgres.md).
+[`metadata-raft-design.md`](metadata-raft-design.md) and tracked as milestone
+M13 under [#333](https://github.com/gabloe/felix/issues/333). The consensus
+core is in place (`services/controlplane/src/raft/`), but no metadata rides
+it yet; until the rest of M13 lands, control-plane availability rests on
+Postgres: any number of stateless instances over one HA database, whose
+required properties are spelled out in [`ha-postgres.md`](ha-postgres.md).
 
 The control plane is not on the data path. Resolving an owner is an atomic load
 of a routing snapshot the broker already holds — no lock and no network call,

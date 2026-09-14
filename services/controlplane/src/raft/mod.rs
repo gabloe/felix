@@ -1,0 +1,248 @@
+//! The metadata Raft core: group lifecycle, persistent log, and the seam.
+//!
+//! This module is the **entire** openraft surface of the control plane — no
+//! openraft type escapes it. Everything outside talks to [`RaftHandle`] and
+//! implements [`AppStateMachine`], which is what lets the consensus library
+//! be upgraded (openraft is pre-1.0) or replaced without touching the store
+//! traits or handlers. The design, including why openraft and why the log
+//! lives outside `felix-storage`, is `docs/metadata-raft-design.md`.
+//!
+//! What lives where:
+//! - [`store`] — the Raft log, vote, and current snapshot, in one crash-safe
+//!   redb file per instance. Consensus state is the one thing here that must
+//!   never lie about being on disk.
+//! - [`network`] / [`http`] — Raft RPCs as JSON over HTTP between instances,
+//!   riding the same listener the control plane already runs.
+//! - [`types`] — the openraft type configuration. Commands and responses are
+//!   opaque bytes at this layer; their meaning belongs to the application
+//!   state machine (#338 gives them theirs).
+mod http;
+mod network;
+mod store;
+mod types;
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+
+/// This instance's identity within the Raft group.
+pub type NodeId = u64;
+
+/// The application half of the state machine seam.
+///
+/// The Raft core feeds every committed command to exactly one of these, in
+/// log order, on every member. The contract that makes that meaningful:
+///
+/// - **`apply` must be deterministic.** Same command sequence, same state,
+///   byte-identical `snapshot()` — on every instance, every time. No clocks,
+///   no randomness, nothing read from outside the command and prior state.
+///   Anything nondeterministic (timestamps, generated keys) is decided
+///   *before* the command is proposed and carried inside it.
+/// - The implementation owns its interior mutability; calls arrive
+///   serialized from a single apply loop, but snapshot building may read
+///   concurrently with nothing else, so a lock the implementation already
+///   holds for serving reads is the right shape (the metadata store's
+///   `RwLock`s, in #338).
+/// - `restore` replaces the whole state with a previously produced snapshot.
+pub trait AppStateMachine: Send + Sync + 'static {
+    fn apply(&self, command: &[u8]) -> Vec<u8>;
+    fn snapshot(&self) -> Vec<u8>;
+    fn restore(&self, snapshot: &[u8]);
+}
+
+/// Everything needed to start this instance's member of the group.
+#[derive(Debug, Clone)]
+pub struct RaftSettings {
+    pub node_id: NodeId,
+    /// Where the log, vote, and snapshots live. One directory per instance,
+    /// surviving restarts — this is the state that makes a restart a rejoin
+    /// rather than a fresh member.
+    pub data_dir: PathBuf,
+    /// How often the leader heartbeats followers.
+    pub heartbeat_interval: Duration,
+    /// Election timeout range; the minimum must comfortably exceed the
+    /// heartbeat interval or healthy followers call elections.
+    pub election_timeout: (Duration, Duration),
+    /// Snapshot after this many log entries since the last one. Metadata
+    /// state is small, so snapshots are cheap and the log stays short.
+    pub snapshot_logs_since_last: u64,
+    /// Log entries to keep behind the snapshot, so a briefly-lagging
+    /// follower catches up from the log rather than a snapshot install.
+    pub logs_kept_behind_snapshot: u64,
+}
+
+impl RaftSettings {
+    /// Defaults sized for a three-instance metadata group: elections settle
+    /// in about a second, and the log is compacted often because state is
+    /// kilobytes.
+    pub fn new(node_id: NodeId, data_dir: PathBuf) -> Self {
+        Self {
+            node_id,
+            data_dir,
+            heartbeat_interval: Duration::from_millis(150),
+            election_timeout: (Duration::from_millis(600), Duration::from_millis(1200)),
+            snapshot_logs_since_last: 500,
+            logs_kept_behind_snapshot: 100,
+        }
+    }
+}
+
+/// A snapshot of where this member stands, in the seam's own vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RaftStatus {
+    pub id: NodeId,
+    /// The leader as this member currently believes; `None` during an
+    /// election or before the group is initialized.
+    pub leader: Option<NodeId>,
+    pub term: u64,
+    pub last_applied_index: Option<u64>,
+    /// Voting members of the current membership config.
+    pub voters: Vec<NodeId>,
+}
+
+/// One running member of the metadata Raft group.
+///
+/// Cheap to clone; all clones drive the same underlying node.
+#[derive(Clone)]
+pub struct RaftHandle {
+    raft: types::Raft,
+    id: NodeId,
+}
+
+impl RaftHandle {
+    /// Open (or create) this instance's Raft state under
+    /// `settings.data_dir` and start the node.
+    ///
+    /// Starting is not joining: a fresh node idles until either
+    /// [`RaftHandle::initialize`] forms a new group or an existing leader
+    /// adds it as a learner. A node with prior state on disk resumes its
+    /// membership without ceremony — that is the point of the data dir.
+    pub async fn start(settings: RaftSettings, app: Arc<dyn AppStateMachine>) -> Result<Self> {
+        let config = openraft::Config {
+            cluster_name: "felix-metadata".to_string(),
+            heartbeat_interval: settings.heartbeat_interval.as_millis() as u64,
+            election_timeout_min: settings.election_timeout.0.as_millis() as u64,
+            election_timeout_max: settings.election_timeout.1.as_millis() as u64,
+            snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(
+                settings.snapshot_logs_since_last,
+            ),
+            max_in_snapshot_log_to_keep: settings.logs_kept_behind_snapshot,
+            ..Default::default()
+        };
+        let config = Arc::new(config.validate().context("raft config")?);
+
+        std::fs::create_dir_all(&settings.data_dir).context("create raft data dir")?;
+        let db = store::open(&settings.data_dir.join("raft.redb"))?;
+        let log_store = store::LogStore::new(Arc::clone(&db));
+        let state_machine = store::StateMachineStore::open(db, app)?;
+
+        let raft = types::Raft::new(
+            settings.node_id,
+            config,
+            network::HttpNetworkFactory::new(),
+            log_store,
+            state_machine,
+        )
+        .await
+        .context("start raft node")?;
+
+        Ok(Self {
+            raft,
+            id: settings.node_id,
+        })
+    }
+
+    /// Form a brand-new group from `members` (`node_id -> reachable addr`,
+    /// this node included). Exactly once per cluster, ever; a restart
+    /// resumes from disk instead. Initializing two disjoint member sets is
+    /// how split brain is manufactured, so this fails on a node that
+    /// already has state.
+    pub async fn initialize(&self, members: BTreeMap<NodeId, String>) -> Result<()> {
+        let nodes: BTreeMap<NodeId, openraft::BasicNode> = members
+            .into_iter()
+            .map(|(id, addr)| (id, openraft::BasicNode { addr }))
+            .collect();
+        self.raft
+            .initialize(nodes)
+            .await
+            .context("initialize raft group")?;
+        Ok(())
+    }
+
+    /// Propose one command and wait until it is committed and applied;
+    /// returns the state machine's response. Callers on a follower get an
+    /// error naming the leader — transparent forwarding is #339's job, at
+    /// the layer that knows what the bytes mean.
+    pub async fn write(&self, command: Vec<u8>) -> Result<Vec<u8>> {
+        let response = self
+            .raft
+            .client_write(command)
+            .await
+            .context("raft client write")?;
+        Ok(response.data)
+    }
+
+    /// Add a node as a non-voting learner and wait until it has caught up.
+    /// Learner-first is what keeps a join from costing quorum: the group's
+    /// vote arithmetic only changes at [`RaftHandle::change_membership`],
+    /// after the newcomer already holds the data.
+    pub async fn add_learner(&self, id: NodeId, addr: String) -> Result<()> {
+        self.raft
+            .add_learner(id, openraft::BasicNode { addr }, true)
+            .await
+            .context("add learner")?;
+        Ok(())
+    }
+
+    /// Replace the set of voting members. Nodes being added must already be
+    /// learners; removed nodes are retained as learners rather than
+    /// abandoned, so a scale-down mistake is reversible.
+    pub async fn change_membership(&self, voters: impl IntoIterator<Item = NodeId>) -> Result<()> {
+        let ids: std::collections::BTreeSet<NodeId> = voters.into_iter().collect();
+        self.raft
+            .change_membership(ids, true)
+            .await
+            .context("change membership")?;
+        Ok(())
+    }
+
+    /// Ask for a snapshot now rather than at the log-size policy point.
+    pub async fn trigger_snapshot(&self) -> Result<()> {
+        self.raft
+            .trigger()
+            .snapshot()
+            .await
+            .context("trigger snapshot")?;
+        Ok(())
+    }
+
+    pub fn status(&self) -> RaftStatus {
+        let metrics = self.raft.metrics().borrow().clone();
+        RaftStatus {
+            id: self.id,
+            leader: metrics.current_leader,
+            term: metrics.current_term,
+            last_applied_index: metrics.last_applied.map(|log_id| log_id.index),
+            voters: metrics.membership_config.membership().voter_ids().collect(),
+        }
+    }
+
+    /// Router serving this node's Raft RPCs, to be merged into the internal
+    /// HTTP listener.
+    pub fn rpc_router(&self) -> axum::Router {
+        http::router(self.raft.clone())
+    }
+
+    /// Stop participating. In-flight proposals fail; disk state remains, so
+    /// the next [`RaftHandle::start`] with the same data dir resumes.
+    pub async fn shutdown(&self) -> Result<()> {
+        self.raft
+            .shutdown()
+            .await
+            .map_err(|err| anyhow::anyhow!("raft shutdown: {err}"))?;
+        Ok(())
+    }
+}
