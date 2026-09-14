@@ -361,17 +361,15 @@ impl ControlPlaneStore for RaftStore {
         self.local().namespace_exists(key).await
     }
 
-    /// Ready when this member can serve: it knows a leader. A member
-    /// partitioned from the group, or one caught in an election, is not a
-    /// place to send traffic — the same answer readiness gives when the
-    /// Postgres backend loses its database.
+    /// Ready when this member can serve — the same question readiness asks
+    /// the Postgres backend, answered from consensus state: a leader is
+    /// known, this member is applying what its log holds, and a leader
+    /// answers only while a quorum has recently acknowledged it. All from
+    /// local metrics; a probe must never cost a consensus round trip.
     async fn health_check(&self) -> StoreResult<()> {
-        match self.handle.status().leader {
-            Some(_) => Ok(()),
-            None => Err(StoreError::Unexpected(anyhow::anyhow!(
-                "no raft leader is known to this instance"
-            ))),
-        }
+        self.handle
+            .readiness()
+            .map_err(|reason| StoreError::Unexpected(anyhow::anyhow!(reason)))
     }
 
     fn is_durable(&self) -> bool {

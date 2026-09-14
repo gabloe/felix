@@ -87,6 +87,36 @@ pub struct RaftBackendConfig {
     /// must be configured with the same map: initializing two disjoint
     /// member sets is how split brain is manufactured.
     pub peers: std::collections::BTreeMap<u64, String>,
+    /// Timing overrides; `None` keeps the seam's defaults, which are sized
+    /// for a three-instance group on one network.
+    pub heartbeat_ms: Option<u64>,
+    pub election_timeout_min_ms: Option<u64>,
+    pub election_timeout_max_ms: Option<u64>,
+    pub snapshot_logs_since_last: Option<u64>,
+    pub logs_kept_behind_snapshot: Option<u64>,
+    pub write_timeout_ms: Option<u64>,
+}
+
+impl RaftBackendConfig {
+    fn validate(&self) -> Result<()> {
+        let heartbeat = self.heartbeat_ms.unwrap_or(150);
+        let min = self.election_timeout_min_ms.unwrap_or(600);
+        let max = self.election_timeout_max_ms.unwrap_or(1200);
+        // An election timeout at or below the heartbeat elects against
+        // healthy leaders — the same class of self-harm as a node expiry
+        // timeout below the heartbeat interval, and refused the same way.
+        if min <= heartbeat {
+            return Err(anyhow!(
+                "FELIX_RAFT_ELECTION_TIMEOUT_MIN_MS ({min}) must exceed FELIX_RAFT_HEARTBEAT_MS ({heartbeat})"
+            ));
+        }
+        if max <= min {
+            return Err(anyhow!(
+                "FELIX_RAFT_ELECTION_TIMEOUT_MAX_MS ({max}) must exceed the minimum ({min})"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -522,6 +552,7 @@ impl ControlPlaneConfig {
                     raft.node_id
                 ));
             }
+            raft.validate()?;
         }
         if self.bootstrap.enabled && self.bootstrap.token.is_none() {
             return Err(anyhow!(
@@ -586,6 +617,14 @@ fn raft_from_env() -> Result<Option<RaftBackendConfig>> {
                 node_id,
                 data_dir: data_dir.into(),
                 peers: parse_raft_peers(&peers)?,
+                heartbeat_ms: parse_positive_env("FELIX_RAFT_HEARTBEAT_MS"),
+                election_timeout_min_ms: parse_positive_env("FELIX_RAFT_ELECTION_TIMEOUT_MIN_MS"),
+                election_timeout_max_ms: parse_positive_env("FELIX_RAFT_ELECTION_TIMEOUT_MAX_MS"),
+                snapshot_logs_since_last: parse_positive_env("FELIX_RAFT_SNAPSHOT_LOGS_SINCE_LAST"),
+                logs_kept_behind_snapshot: std::env::var("FELIX_RAFT_LOGS_KEPT_BEHIND_SNAPSHOT")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok()),
+                write_timeout_ms: parse_positive_env("FELIX_RAFT_WRITE_TIMEOUT_MS"),
             }))
         }
         _ => Err(anyhow!(

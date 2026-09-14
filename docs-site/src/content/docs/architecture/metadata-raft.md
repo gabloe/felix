@@ -3,7 +3,7 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: under construction — the backend serves end to end and the Postgres migration is in; probes/packaging and chaos validation remain]
+:::caution[Status: nearly complete — serving, migration, probes, and configuration are in; the chaos validation pass (#342) is what remains]
 Tracked as milestone M13 under
 [#333](https://github.com/gabloe/felix/issues/333). What exists today: the
 consensus core from [#337](https://github.com/gabloe/felix/issues/337) (the
@@ -16,11 +16,11 @@ byte-identical determinism by a harness), and the store backend from
 the whole HTTP API with **no external database**, proven by a binary-level
 test that creates metadata, restarts the process, and reads it back from
 the Raft log and snapshot alone. Not yet the recommended production path:
-Raft-aware probes and packaging (#341) and the chaos pass (#342) are still
-open — until they land, production deployments stay on N stateless
-instances over one HA Postgres — see
+The chaos pass (#342) is still open — until it lands, production
+deployments stay on N stateless instances over one HA Postgres — see
 [Control-plane HA](/felix/deployment/control-plane-ha/). The migration
-path from Postgres (#340) is in: see below.
+path from Postgres (#340) and the Raft-aware probes/configuration (#341)
+are in: see below.
 The authoritative design record, with every alternative and the arguments, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
@@ -106,8 +106,89 @@ must survive restarts — it is what makes a restart a rejoin. Writes reaching
 a follower forward to the leader invisibly; the expiry sweep and shard
 placement run only on the leader, confirmed by a linearizable check each
 tick. A proposal that cannot commit — no leader, quorum lost — fails with an
-error after a bounded deadline (10s) rather than hanging, and readiness
-reports an instance that knows no leader as unready.
+error after a bounded deadline (default 10s) rather than hanging.
+
+Timings are tunable when the defaults (150ms heartbeat, 600–1200ms election
+window, snapshot every 500 entries) don't fit: `FELIX_RAFT_HEARTBEAT_MS`,
+`FELIX_RAFT_ELECTION_TIMEOUT_MIN_MS` / `_MAX_MS`,
+`FELIX_RAFT_SNAPSHOT_LOGS_SINCE_LAST`, `FELIX_RAFT_LOGS_KEPT_BEHIND_SNAPSHOT`,
+`FELIX_RAFT_WRITE_TIMEOUT_MS`. An election window at or below the heartbeat
+is refused at startup — it would elect against healthy leaders.
+
+### Probes under raft
+
+`/v1/system/ready` answers from consensus state, all read locally (a probe
+never costs a consensus round trip): the member knows a leader, its applied
+state trails its own log by no more than a bound, and — when it *is* the
+leader — a quorum has acknowledged it within the last 5s. That last clause
+is what takes a partitioned, quorumless leader out of rotation before it
+serves stale reads, and it is proven by test. `/v1/system/live` stays
+process-local, exactly as before: losing quorum is not fixed by a restart.
+The M7 probe settings (intervals, thresholds) carry over unchanged.
+
+Consensus position ships as metrics: `felix_meta_raft_term`,
+`_is_leader`, `_leader_known`, `_last_log_index`, `_last_applied_index`,
+`_snapshot_index` (gauges), plus `felix_meta_raft_forwarded_proposals_total`
+(informational — the LB is handing writes to followers) and
+`felix_meta_raft_write_timeouts_total` — the counter to alert on, because it
+means no leader or no quorum.
+
+### Known fact: leader deploys pause writes for one election (pre-0.10 openraft)
+
+openraft 0.9 has no leadership-transfer API, so a rolling deploy that
+restarts the current **leader** pauses metadata writes for one election
+timeout (~1.2s at defaults) while a successor elects itself. Reads keep
+serving, followers restart with no pause, and brokers are unaffected by
+construction — they retry heartbeats and keep their catalogs through far
+longer outages than this. `transfer_leader` arrives with openraft 0.10, and
+the seam owns the shutdown path, so adopting it is a contained change. Until
+then: a bounded, documented fact, not a bug.
+
+### Deploying on Kubernetes
+
+The shape the design assumed from the start — a StatefulSet with one PVC
+per member and a headless service for stable peer names:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: felix-controlplane
+spec:
+  serviceName: felix-controlplane      # headless: stable per-pod DNS
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: controlplane
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            # Ordinal → node id (an initContainer or entrypoint derives
+            # FELIX_RAFT_NODE_ID = ordinal + 1 from POD_NAME).
+            - name: FELIX_RAFT_DATA_DIR
+              value: /var/lib/felix/raft
+            - name: FELIX_RAFT_PEERS
+              value: "1=felix-controlplane-0.felix-controlplane:8443,2=felix-controlplane-1.felix-controlplane:8443,3=felix-controlplane-2.felix-controlplane:8443"
+          volumeMounts:
+            - name: raft
+              mountPath: /var/lib/felix/raft
+          readinessProbe:
+            httpGet: { path: /v1/system/ready, port: 8443 }
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /v1/system/live, port: 8443 }
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata: { name: raft }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }
+```
+
+The PVC is what makes a pod restart a rejoin; a member whose volume is lost
+rejoins empty and is rebuilt by snapshot install. Packaged charts are M9's
+job (#131) — this is the reference shape they will encode.
 
 ## Migrating from Postgres
 

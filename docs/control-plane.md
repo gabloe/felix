@@ -15,18 +15,16 @@ the data plane and does not carry user payloads.
 
 ## RAFT Scope (Control Plane Only)
 
-> **Design intent, not current behaviour.** The control plane is a stateless
-> REST service over Postgres; there is no Raft group, no Raft log, and no
-> leader election among control-plane instances. Availability comes from running
-> several instances against a highly available Postgres — what that Postgres
-> must provide, and what a failover looks like, is
-> [ha-postgres.md](ha-postgres.md); the readiness section below is the Felix
-> half. Raft remains the intended answer for making metadata highly available
-> without depending on Postgres for it, and is not started (when to revisit
-> that is also in [ha-postgres.md](ha-postgres.md#when-to-reconsider-felix-owned-raft)).
-> The end state now has a decided design —
-> [metadata-raft-design.md](metadata-raft-design.md), tracked as milestone
-> M13 — and this section remains only as the original sketch it grew from.
+> **This section is the original sketch; the real thing now exists.** The
+> control plane runs one of two production-shaped backends: a stateless REST
+> service over a highly available Postgres (what that database must provide
+> is [ha-postgres.md](ha-postgres.md)), or — experimentally, pending the
+> M13 chaos pass — a Raft group embedded in the instances themselves, with
+> no external database. The implemented design, which differs from the
+> sketch below in the ways that mattered, is
+> [metadata-raft-design.md](metadata-raft-design.md); operator-facing usage
+> is on the docs-site Metadata Raft page. This sketch is kept only as the
+> record of where the design started.
 
 The RAFT log would store authoritative metadata:
 - Node membership and health state (up/down, drains).
@@ -627,15 +625,17 @@ advisory reports cannot deliver.
 - Object store access is configured per broker (later), not in the control plane.
 
 ### Storage
-- Control plane pods are stateless today: all metadata is in Postgres, and an
-  instance holds nothing worth a volume. The PVC below belongs to the Raft end
-  state described above.
-- (Intended) Control plane uses a PVC per pod for RAFT logs and snapshots.
+- Under the Postgres backend, control-plane pods are stateless: all metadata
+  is in the database, and an instance holds nothing worth a volume.
+- Under the raft backend, each pod carries a PVC for the Raft log and
+  snapshots — that volume is what makes a pod restart a rejoin. The
+  reference StatefulSet shape is on the docs-site Metadata Raft page.
 - Dataplane brokers use PVCs for durable log segments (when enabled).
 
 ### Services
-- (Intended) Headless Service for control plane peer discovery (RAFT). Not
-  needed today: instances do not know about each other.
+- Headless Service for control-plane peer discovery — required by the raft
+  backend (stable per-pod names feed `FELIX_RAFT_PEERS`), unused by the
+  Postgres backend, whose instances do not know about each other.
 - ClusterIP Service for control plane client API (watch/snapshot/health).
 - Separate Service for broker QUIC ingress.
 
