@@ -102,6 +102,13 @@ pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Insta
 /// On the publish path, where the difference between this and `write!` is the
 /// whole formatting machinery for a number that is almost always one digit.
 fn push_decimal(buf: &mut String, mut value: u32) {
+    // Almost every value here is one digit — a shard number, or the length of a
+    // short identifier — and going straight to a byte push skips building a
+    // slice and validating it as UTF-8 for a single character.
+    if value < 10 {
+        buf.push((b'0' + value as u8) as char);
+        return;
+    }
     let mut digits = [0u8; 10];
     let mut at = digits.len();
     loop {
@@ -112,8 +119,50 @@ fn push_decimal(buf: &mut String, mut value: u32) {
             break;
         }
     }
-    // Only ASCII digits were written, so the slice is valid UTF-8.
-    buf.push_str(std::str::from_utf8(&digits[at..]).expect("ascii digits"));
+    // Pushed one at a time rather than as a validated `&str`: these are ASCII
+    // digits, so each is one byte, and `from_utf8` would rescan them.
+    for &digit in &digits[at..] {
+        buf.push(digit as char);
+    }
+}
+
+/// Build the stream-handle cache key for one `(tenant, namespace, stream, shard)`.
+///
+/// **Every part is length-prefixed**, because nothing forbids a `\0` inside a
+/// tenant id, namespace or stream name. Joining the parts with a separator
+/// alone made tenant `"a\0b"` namespace `"c"` produce the same key as tenant
+/// `"a"` namespace `"b\0c"`, and a cache hit would then hand a publish the
+/// handle of a *different stream* (#295). A length says where a part ends
+/// whatever bytes are inside it, so no two distinct tuples can collide.
+///
+/// Same reasoning, and the same shape, as `layout::shard_dir_name` in the
+/// storage layer.
+///
+/// Written by hand rather than through `write!`: this key is rebuilt on every
+/// publish, and `core::fmt` is heavy next to the `push_str` calls the rest of
+/// it is deliberately made of.
+fn push_stream_cache_key(
+    buf: &mut String,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+) {
+    buf.clear();
+    // Three lengths, three separators, and the shard: a handful of bytes beyond
+    // the parts themselves.
+    let needed = tenant_id.len() + namespace.len() + stream.len() + 32;
+    if buf.capacity() < needed {
+        buf.reserve(needed - buf.capacity());
+    }
+    for part in [tenant_id, namespace, stream] {
+        push_decimal(buf, part.len() as u32);
+        buf.push('\0');
+        buf.push_str(part);
+    }
+    // No separator needed: the part before it has a declared length, so the
+    // digits that follow can only be the shard.
+    push_decimal(buf, shard);
 }
 
 /// Work item consumed by publish workers.
@@ -426,30 +475,7 @@ pub(crate) async fn resolve_route(
     // Keyed by shard as well as stream: a broker can own several shards of one
     // stream, they are separate logs, and a cache that ignored the shard would
     // hand a publish for one of them the handle of another.
-    key_scratch.clear();
-    let needed = tenant_id.len() + namespace.len() + stream.len() + 13;
-    if key_scratch.capacity() < needed {
-        key_scratch.reserve(needed - key_scratch.capacity());
-    }
-    key_scratch.push_str(tenant_id);
-    key_scratch.push('\0');
-    key_scratch.push_str(namespace);
-    key_scratch.push('\0');
-    key_scratch.push_str(stream);
-    // Shard 0 adds nothing to the key.
-    //
-    // Every stream has a shard 0 and most have only that one, so the common
-    // publish builds exactly the bytes it did before shards existed. Keys stay
-    // distinct because a suffix is only ever present for a non-zero shard, and
-    // `\0` cannot appear in the parts above it.
-    //
-    // Written by hand rather than through `write!`: this key is rebuilt on
-    // every publish, and `core::fmt` is heavy next to the `push_str` calls the
-    // rest of it is deliberately made of.
-    if shard != 0 {
-        key_scratch.push('\0');
-        push_decimal(key_scratch, shard);
-    }
+    push_stream_cache_key(key_scratch, tenant_id, namespace, stream, shard);
     if let Some((handle, expires)) = cache.get(key_scratch.as_str())
         && *expires > Instant::now()
         && handle.as_ref().is_none_or(StreamHandle::is_active)
