@@ -1634,6 +1634,12 @@ impl InMemoryStore {
         *self.rbac_policies.write().await = state.rbac_policies.into_iter().collect();
         *self.rbac_groupings.write().await = state.rbac_groupings.into_iter().collect();
         *self.auth_bootstrapped.write().await = state.auth_bootstrapped.into_iter().collect();
+        // The derived-key cache may hold keys the imported state replaced —
+        // an --overwrite restore in a live process would otherwise keep
+        // verifying tokens against a world that no longer exists.
+        for tenant_id in self.tenant_signing_keys.read().await.keys() {
+            crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
+        }
         Ok(())
     }
 

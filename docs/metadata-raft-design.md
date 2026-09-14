@@ -358,7 +358,7 @@ is the umbrella.
 | Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | **Landed** — `store/raft_backend.rs` (`RaftStore`), the third backend behind the store traits: reads from local applied state, writes proposed through the seam with follower→leader forwarding inside it, sweep and placement gated to the leader by a linearizable read-index check, and `StorageBackend::Raft` selectable via `FELIX_RAFT_NODE_ID` / `FELIX_RAFT_DATA_DIR` / `FELIX_RAFT_PEERS`. Passes the same node/shard contract suites as memory and Postgres; a binary-level test serves the HTTP API with no database and keeps its metadata across a restart. Finding recorded below. Probes are minimal (leader-known) until #341. |
 | Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | **Landed** — `felix-controlplane migrate export-postgres/import`, the generic trait-level export (works against any backend, doubling as the DR artifact), the `ImportState` command with its used-store guard and `--overwrite` restore path, and the ceremony above. The pg-tests E2E migrates a populated Postgres into a Raft group over the real propose route and verifies records, sequence heads, generations, and auth state; a broker at the head continues without a resnapshot. |
 | Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | **Landed** — readiness answers from consensus state (leader known, apply-lag bounded, and a leader counts only while a quorum has acknowledged it within 5s — a quorumless leader leaves rotation, proven by test); liveness stays process-local. Timings are tunable (`FELIX_RAFT_HEARTBEAT_MS`, `FELIX_RAFT_ELECTION_TIMEOUT_MIN/MAX_MS`, snapshot/write knobs) with unworkable combinations refused at startup. Consensus position ships as `felix_meta_raft_*` gauges plus forwarded-proposal and write-timeout counters. Kubernetes shape documented on the docs-site page. Known fact below. |
-| Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | Not started |
+| Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | **Landed** — `tests/raft_chaos.rs`: three real binaries, no database, broker-shaped traffic and metadata writes flowing while every member is SIGTERM-restarted, the leader is SIGKILLed, the leader is frozen (SIGSTOP) past several elections and thawed, and a follower's volume is wiped. Verdict per run: zero failed calls, election gaps bounded, and **every acknowledged write present on every member** — the milestone's completion signal, met. It caught four real bugs before landing (below). |
 
 One deliberate deviation from the sketch above, made while landing #337: the
 Raft log lives in **redb** (an embedded, crash-safe, single-file ACID store)
@@ -366,6 +366,32 @@ rather than hand-rolled files. Consensus durability plumbing — votes and
 entries that must never be acknowledged and then lost — is the last place
 Felix should be inventive, and openraft's storage suite now enforces the
 semantics against the real store on every test run.
+
+Four findings from landing #342 — each one a bug the chaos suite caught
+that no earlier test could see:
+
+- **`loosen-follower-log-revert` is not optional.** A member rejoining with
+  a wiped volume reports a log that went backwards; without that openraft
+  feature the *leader* trips a debug assertion in its replication-progress
+  tracking when the member returns — and a release build would carry the
+  inconsistent progress state silently. The feature is now on, with the
+  reasoning at the dependency declaration.
+- **A restart is not done until the state machine is.** A restarted member
+  learned the leader within a heartbeat and reported ready while its
+  volatile state machine was still replaying the log — serving a world
+  missing entries it had itself committed. Startup now blocks until the
+  replay reaches the committed index persisted on its own disk.
+- **A wiped member's apply-lag reads zero.** Lag is measured against the
+  member's *own* log, which is exactly the blind spot for a member that has
+  none of the group's state yet. Readiness now refuses a follower that
+  knows a leader but holds an empty log — it has joined an established
+  group and nothing has replicated into it yet. (A leader is exempt; a
+  genuinely new cluster is leaderless, so formation is never blocked.)
+- **One hung hop must not eat the whole write budget.** A leader that is
+  frozen — not dead — accepts the forwarded connection and stalls, and a
+  single forward could consume the entire proposal budget, leaving nothing
+  for the retry after the group elected a successor. Every attempt is now
+  individually capped well below the budget.
 
 One known fact recorded while landing #341, inherent to **pre-0.10
 openraft**: there is no leadership-transfer API, so a rolling deploy that
