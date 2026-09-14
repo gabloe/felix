@@ -18,10 +18,13 @@ the data plane and does not carry user payloads.
 > **Design intent, not current behaviour.** The control plane is a stateless
 > REST service over Postgres; there is no Raft group, no Raft log, and no
 > leader election among control-plane instances. Availability comes from running
-> several instances against a highly available Postgres, which is what the
-> readiness section below is for. Raft remains the intended answer for making
-> metadata highly available without depending on Postgres for it, and is not
-> started. Everything in this section describes that end state.
+> several instances against a highly available Postgres — what that Postgres
+> must provide, and what a failover looks like, is
+> [ha-postgres.md](ha-postgres.md); the readiness section below is the Felix
+> half. Raft remains the intended answer for making metadata highly available
+> without depending on Postgres for it, and is not started (when to revisit
+> that is also in [ha-postgres.md](ha-postgres.md#when-to-reconsider-felix-owned-raft)).
+> Everything in this section describes that end state.
 
 The RAFT log would store authoritative metadata:
 - Node membership and health state (up/down, drains).
@@ -576,7 +579,8 @@ a query and produce no duplicate events.
 ### Scheduling + Ops
 - Control plane replicas: two or more. An odd count matters only for the Raft
   end state; instances share nothing today, so any number works and two is
-  enough to survive losing one.
+  enough to survive losing one. The database is the half that actually holds
+  state — run it HA per [ha-postgres.md](ha-postgres.md).
 - Use PodDisruptionBudgets so a rolling deploy cannot take every instance at
   once.
 - Prefer anti-affinity for control plane pods to avoid single-node failure.
@@ -646,6 +650,25 @@ After the hold-off, in-flight requests are given
 `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` to finish against one shared deadline covering
 every subsystem. Anything still running when it expires is aborted, and that is
 reported rather than logged as a clean drain.
+
+No control-plane handler long-polls: the `changes` feeds return immediately
+with whatever is committed past `since`, and waiting is the caller's loop. That
+is a shutdown property as much as an API one — a drain only has to outlast
+requests in service, never a watcher parked on a hanging poll.
+
+What a drain looks like on the metrics endpoint, which outlives it:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_ready_state` | 1 in rotation, 0 draining — the flag both `/ready` endpoints read |
+| `felix_inflight_requests` | requests currently being served, so "waiting on what?" has an answer |
+| `felix_drain_duration_ms` | how long the last drain took |
+| `felix_drain_forced_total{subsystem}` | subsystems cut off by the deadline; non-zero means work was dropped, and it is the counter to alert on because the warning log dies with the pod |
+
+The rolling-restart guarantee — two instances over one Postgres, every broker
+heartbeat and watch served across a restart of each — is exercised end to end
+by `tests/rolling_restart.rs` (`cargo test -p controlplane --features pg-tests
+--test rolling_restart`).
 
 ## Open Questions
 - Snapshot cadence and maximum delta size.
