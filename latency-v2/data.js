@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789401311538,
+  "lastUpdate": 1789401476396,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9042,6 +9042,72 @@ window.BENCHMARK_DATA = {
             "range": "365.82",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1143.00\nmean: 963.00\nstdev: 365.82\ncv: 37.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acd1168916cf76ce54980a6ea9ffad3f069536ed",
+          "message": "docs: cover queues where only two semantics were named, and check for it (#331)\n\nThe landing page had data-flow cards for pub/sub and cache and none for queues,\nwhich is the visible half of something that keeps happening: a capability ships,\nthe page its author was looking at gets updated, and the pages organised by\n*operation type* silently keep the old shape.\n\nRather than read for it a fifth time, I looked for pages naming cache and\nstreams but not queues. Fifteen matched; most legitimately (a demo about\nnotifications owes nothing to queues). These did not:\n\n- **The landing page.** No queue data-flow card, no queue row in Key Features,\n  no work-distribution use case, and an opening sentence naming \"event\n  streaming, message-oriented middleware, and distributed caching\".\n- **The client SDK reference.** Publishing, Subscribing, Cache Operations — and\n  no consumer groups at all, no `cache_delete`, and no `ClusterClient`, so the\n  sharded subscription shipped in #297 was documented nowhere a user would look.\n- **The broker API reference.** No cluster operations: `topology`, `not_leader`\n  redirects and `stream_shards` were all absent.\n- **RBAC.** A consumer-group operation is authorized as `stream.subscribe` on\n  the stream it reads, and there is no queue-specific action. An operator\n  granting a consumer access to a queue could not have learned that from the\n  docs. It also means `stream.subscribe` is wider than it looks — a holder can\n  advance a cursor other consumers share — which is now said out loud.\n\nAlso a fourth declared-but-unread field. The broker reads `durable`, `shards`\nand `consistency` from a stream; `delivery` and `retention` were already\ndocumented as ignored, and **`kind` is too**. Creating a stream with\n`kind: Queue` does nothing, and does not stop it being subscribed to normally —\na queue is a way of reading a stream, not a kind of stream. That one is the most\nlikely to mislead, so it is now a table rather than a sentence.\n\n**scripts/check_capability_docs.py** is the part meant to stop this recurring.\nTwo mechanical rules: every `FEATURE_*` bit is named somewhere in the docs, and\nevery `Message` variant is named in `docs/protocol.md`. Neither proves a page is\ngood; they prove nothing was forgotten wholesale, which is the failure that\nkeeps happening.\n\nIt found `Message::Subscribed` missing from the protocol spec on its first run —\nthe subscription confirmation, and with it `event_stream_hello`, which is how a\nclient matches an event stream to the subscription that asked for it. Both are\ndocumented now.\n\nControls: a new feature bit that no doc names fails it; a new message variant\nabsent from the spec fails it. It runs in `task docs:evidence`, with the other\ntwo checks that break on Rust changes.\n\nAlso removes a stale `#297` from the wire's own comment about shard\nsubscriptions, now that `subscribe_sharded` exists.",
+          "timestamp": "2026-09-14T08:55:05-07:00",
+          "tree_id": "be834b9218bd899bf320f055b185bb243f6a6bfd",
+          "url": "https://github.com/gabloe/felix/commit/acd1168916cf76ce54980a6ea9ffad3f069536ed"
+        },
+        "date": 1789401473981,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "3.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 163.80\nstdev: 3.83\ncv: 2.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 217,
+            "range": "5.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 217.00\nmean: 217.80\nstdev: 5.76\ncv: 2.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 259,
+            "range": "30.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 259.00\nmean: 268.40\nstdev: 30.88\ncv: 11.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 204,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 203.80\nstdev: 0.84\ncv: 0.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 414,
+            "range": "9.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 414.00\nmean: 413.00\nstdev: 9.59\ncv: 2.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 573,
+            "range": "343.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 573.00\nmean: 760.60\nstdev: 343.12\ncv: 45.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
