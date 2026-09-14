@@ -140,12 +140,17 @@ migrations rerun, which they do on the next restart.
 
 ## When to reconsider Felix-owned Raft
 
+**Reconsidered: the "should Felix run without a database platform" trigger
+below fired, and the alternative now has a decided design —
+[metadata-raft-design.md](metadata-raft-design.md) (milestone M13). Postgres
+HA remains a supported backend and everything on this page stays true for
+it; Raft is the option that removes the external dependency.**
+
 The deferred alternative — control-plane instances forming their own Raft
 group and owning metadata directly ([the design sketch in
 control-plane.md](control-plane.md#raft-scope-control-plane-only)) — removes
 the external dependency at the cost of Felix implementing consensus, snapshot
-transfer, and its own backup story. Revisit it when one of these stops being
-true:
+transfer, and its own backup story. The triggers, kept for the record:
 
 - Operating an HA Postgres (or paying for a managed one) is acceptable for
   every environment Felix targets. The moment Felix needs to run well where no

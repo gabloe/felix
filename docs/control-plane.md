@@ -24,7 +24,9 @@ the data plane and does not carry user payloads.
 > half. Raft remains the intended answer for making metadata highly available
 > without depending on Postgres for it, and is not started (when to revisit
 > that is also in [ha-postgres.md](ha-postgres.md#when-to-reconsider-felix-owned-raft)).
-> Everything in this section describes that end state.
+> The end state now has a decided design —
+> [metadata-raft-design.md](metadata-raft-design.md), tracked as milestone
+> M13 — and this section remains only as the original sketch it grew from.
 
 The RAFT log would store authoritative metadata:
 - Node membership and health state (up/down, drains).
@@ -550,6 +552,67 @@ that are heartbeating exactly as told to.
 Running several control-plane instances is safe. Each node is claimed by exactly
 one sweep and only that instance publishes the change, so duplicate sweeps cost
 a query and produce no duplicate events.
+
+### Why liveness stays centralized (SWIM, considered)
+
+**Decision: Felix keeps hub-and-spoke liveness — brokers heartbeat the control
+plane, a sweep evicts on silence — and does not adopt SWIM-style gossip
+membership. Recorded here so the question is answered once, with the triggers
+that would reopen it.**
+
+SWIM decentralizes failure detection: every node probes a few random peers per
+period, a suspect is probed indirectly through other peers before being
+declared dead, and membership spreads by gossip. Its two wins are constant
+per-node network load regardless of cluster size, and detection latency that
+does not degrade as the cluster grows. Mature Rust implementations exist
+(`memberlist`, `foca`), so the cost being weighed is architectural, not
+implementation effort.
+
+Four reasons it is the wrong trade for Felix today:
+
+- **Detection is not the authority, and splitting them creates two clocks.**
+  Eviction only matters when placement acts on it, and placement is
+  centralized — rendezvous hashing over control-plane metadata, with shard
+  ownership fenced by leases the control plane grants. More than that: **the
+  heartbeat is also the lease renewal.** A leader's authority to serve and its
+  liveness signal deliberately travel on one channel to one authority, which
+  is what makes "the recorded time is the control plane's own clock" a safety
+  property. Gossip membership would put a second, eventually-consistent view
+  of "alive" next to the one that grants leases, and every disagreement
+  window between them is a place to hide the split-brain that the lease
+  arithmetic exists to close.
+- **Safety already does not rest on detection speed.** Data-plane failover is
+  lease-driven: a lost leader is replaced in about a second, bounded by lease
+  expiry plus the safety margin — not by the 15s liveness timeout, which only
+  gates *placement eligibility*. SWIM's sub-second detection would accelerate
+  a decision Felix deliberately does not take quickly, on a signal that
+  fencing renders non-load-bearing.
+- **The scale that justifies SWIM is not this scale.** SWIM pays off in the
+  hundreds-to-thousands of nodes, where heartbeat fan-in to a hub becomes the
+  bottleneck. A Felix cluster is tens of brokers; the fan-in is one tiny
+  request per broker per 5s. Under metadata Raft that traffic becomes log
+  writes, and even at hundreds of brokers it is tens of kilobyte-scale
+  commands per second.
+- **False positives are already handled where it matters.** The timeout is
+  three missed intervals, eviction is non-destructive (a broker re-registers
+  and is placeable again), and a wrongly-expired *leader* cannot corrupt
+  anything — its lease, not its liveness row, is what lets it write.
+
+What SWIM would genuinely add is evidence about **asymmetric reachability**: a
+broker the control plane can see but its peers cannot reads `live` in the
+catalog while every forward to it fails. Leases keep that safe, and
+`felix_broker_shard_watch_failures_total` plus the forwarding metrics make it
+visible, but placement today cannot act on it. The cheap version of SWIM's
+insight — brokers reporting peer reachability to the control plane as an
+advisory placement input, alongside the replica-status reports they already
+send — covers that gap without a second membership protocol, and is the
+first thing to build if it starts biting in practice.
+
+Reopen this decision when any of these becomes true: broker counts reach the
+hundreds and heartbeat fan-in (or its Raft log traffic) shows up in
+measurements; a deployment shape appears with no control plane to heartbeat;
+or placement starts needing peer-observed reachability at a fidelity the
+advisory reports cannot deliver.
 
 ## Evolution Plan
 1) Control plane RAFT for membership + placement only.
