@@ -115,7 +115,7 @@ mod tests {
             store: Arc::new(store),
             oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
             bootstrap_enabled: false,
-            bootstrap_token: None,
+            bootstrap_tokens: Vec::new(),
             node_liveness: Default::default(),
             readiness: std::sync::Arc::new(crate::readiness::Readiness::new(std::sync::Arc::new(
                 crate::readiness::AlwaysReady,

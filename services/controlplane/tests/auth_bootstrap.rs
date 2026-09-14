@@ -14,7 +14,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>, AppState) {
+fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, AppState) {
     let store = Arc::new(InMemoryStore::new(StoreConfig {
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
@@ -34,7 +34,7 @@ fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>,
         store: state_store,
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: enabled,
-        bootstrap_token: token,
+        bootstrap_tokens: tokens,
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -49,7 +49,7 @@ fn bootstrap_state(enabled: bool, token: Option<String>) -> (Arc<InMemoryStore>,
 
 #[tokio::test]
 async fn bootstrap_disabled_returns_404() {
-    let (_store, state) = bootstrap_state(false, None);
+    let (_store, state) = bootstrap_state(false, Vec::new());
     let app = build_bootstrap_router(state).into_service();
     let request = Request::builder()
         .method("POST")
@@ -74,7 +74,7 @@ async fn bootstrap_disabled_returns_404() {
 
 #[tokio::test]
 async fn bootstrap_requires_token() {
-    let (_store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let (_store, state) = bootstrap_state(true, vec!["secret".to_string()]);
     let app = build_bootstrap_router(state).into_service();
     let request = Request::builder()
         .method("POST")
@@ -97,7 +97,7 @@ async fn bootstrap_requires_token() {
 
 #[tokio::test]
 async fn bootstrap_initializes_tenant_and_auth() {
-    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let (store, state) = bootstrap_state(true, vec!["secret".to_string()]);
     let app = build_bootstrap_router(state).into_service();
 
     let request = Request::builder()
@@ -173,7 +173,7 @@ async fn bootstrap_initializes_tenant_and_auth() {
 
 #[tokio::test]
 async fn bootstrap_rejects_invalid_token_and_validation_errors() {
-    let (_store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let (_store, state) = bootstrap_state(true, vec!["secret".to_string()]);
     let app = build_bootstrap_router(state).into_service();
 
     let invalid_token = Request::builder()
@@ -254,9 +254,102 @@ async fn bootstrap_rejects_invalid_token_and_validation_errors() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// Rotation is two rolling deploys, and this is the state between them: the
+/// new token is `token`, the old one demoted to `previous_token`, and both
+/// must work or some caller is locked out mid-rotation.
+#[tokio::test]
+async fn bootstrap_accepts_current_and_previous_token_during_rotation() {
+    let (_store, state) = bootstrap_state(
+        true,
+        vec!["new-secret".to_string(), "old-secret".to_string()],
+    );
+    let app = build_bootstrap_router(state).into_service();
+
+    let body = json!({
+        "display_name": "Tenant One",
+        "idp_issuers": [],
+        "initial_admin_principals": ["p:admin"]
+    });
+
+    for (token, expected) in [
+        ("old-secret", StatusCode::OK),
+        // The tenant is initialized now, so the new token proves itself by
+        // reaching the handler and being told 409 rather than 401.
+        ("new-secret", StatusCode::CONFLICT),
+        ("neither", StatusCode::UNAUTHORIZED),
+    ] {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/internal/bootstrap/tenants/t1/initialize")
+            .header("content-type", "application/json")
+            .header("X-Felix-Bootstrap-Token", token)
+            .body(Body::from(body.to_string()))
+            .expect("request");
+        let response = app.clone().oneshot(request).await.expect("response");
+        assert_eq!(response.status(), expected, "token {token:?}");
+    }
+}
+
+/// Two instances receiving the same initialize concurrently is the normal case
+/// behind a load balancer, not an edge case. Exactly one may win; both callers
+/// must end up agreeing on one set of signing keys.
+#[tokio::test]
+async fn concurrent_initializes_produce_one_winner_and_one_key_set() {
+    let (store, state) = bootstrap_state(true, vec!["secret".to_string()]);
+    let app = build_bootstrap_router(state).into_service();
+
+    let request = |_: usize| {
+        Request::builder()
+            .method("POST")
+            .uri("/internal/bootstrap/tenants/t1/initialize")
+            .header("content-type", "application/json")
+            .header("X-Felix-Bootstrap-Token", "secret")
+            .body(Body::from(
+                json!({
+                    "display_name": "Tenant One",
+                    "idp_issuers": [],
+                    "initial_admin_principals": ["p:admin"]
+                })
+                .to_string(),
+            ))
+            .expect("request")
+    };
+
+    let mut handles = Vec::new();
+    for i in 0..8 {
+        let app = app.clone();
+        let request = request(i);
+        handles.push(tokio::spawn(async move {
+            let response = app.oneshot(request).await.expect("response");
+            let status = response.status();
+            let payload = read_json(response).await;
+            (status, payload)
+        }));
+    }
+
+    let mut winners = Vec::new();
+    let mut conflicts = 0;
+    for handle in handles {
+        let (status, payload) = handle.await.expect("join");
+        match status {
+            StatusCode::OK => winners.push(payload),
+            StatusCode::CONFLICT => conflicts += 1,
+            other => panic!("unexpected status {other}: {payload}"),
+        }
+    }
+    assert_eq!(winners.len(), 1, "exactly one initialize may win");
+    assert_eq!(conflicts, 7);
+
+    // The winner's reported kid is the kid the tenant actually holds — the
+    // failure mode this guards against is a second racer regenerating keys
+    // after the winner read them.
+    let keys = store.get_tenant_signing_keys("t1").await.expect("keys");
+    assert_eq!(winners[0]["kid"], keys.current.kid.as_str());
+}
+
 #[tokio::test]
 async fn bootstrap_missing_configured_token_returns_internal_error() {
-    let (_store, state) = bootstrap_state(true, None);
+    let (_store, state) = bootstrap_state(true, Vec::new());
     let app = build_bootstrap_router(state).into_service();
 
     let request = Request::builder()
@@ -279,7 +372,7 @@ async fn bootstrap_missing_configured_token_returns_internal_error() {
 
 #[tokio::test]
 async fn bootstrap_existing_unbootstrapped_tenant_initializes_without_conflict() {
-    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let (store, state) = bootstrap_state(true, vec!["secret".to_string()]);
     store
         .create_tenant(controlplane::model::Tenant {
             tenant_id: "t-existing".to_string(),
@@ -309,7 +402,7 @@ async fn bootstrap_existing_unbootstrapped_tenant_initializes_without_conflict()
 
 #[tokio::test]
 async fn bootstrap_respects_preseeded_admin_policies_matching_required_scopes() {
-    let (store, state) = bootstrap_state(true, Some("secret".to_string()));
+    let (store, state) = bootstrap_state(true, vec!["secret".to_string()]);
     let app = build_bootstrap_router(state).into_service();
     let request = Request::builder()
         .method("POST")

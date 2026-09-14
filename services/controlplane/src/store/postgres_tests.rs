@@ -110,7 +110,12 @@ async fn pg_url() -> Option<String> {
         .get_or_try_init(|| async {
             // Use a single long-lived container to keep tests deterministic and fast.
             let docker = Box::leak(Box::new(Cli::default()));
-            let container = docker.run(Postgres::default());
+            // The module's default tag is Postgres 11, which predates the
+            // generated columns migration 0009 uses; pin the version the
+            // supported deployment path (`task pg:up`) runs.
+            let container = docker.run(
+                testcontainers::RunnableImage::from(Postgres::default()).with_tag("16-alpine"),
+            );
             let port = container.get_host_port_ipv4(5432);
             let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
             wait_for_postgres(&url, Duration::from_secs(30)).await?;

@@ -217,6 +217,38 @@ pub struct BootstrapConfig {
     pub enabled: bool,
     pub bind_addr: SocketAddr,
     pub token: Option<String>,
+    /// The token being rotated out. Still accepted, so a rotation is two
+    /// rolling deploys (add the new token, then drop this) with no window in
+    /// which some instances refuse a token others require.
+    pub previous_token: Option<String>,
+    /// When set, the bootstrap listener terminates TLS and refuses any client
+    /// that does not present a certificate signed by `client_ca_path`.
+    pub tls: Option<BootstrapTlsConfig>,
+}
+
+impl BootstrapConfig {
+    /// Tokens the bootstrap endpoint accepts, current first.
+    pub fn accepted_tokens(&self) -> Vec<String> {
+        self.token
+            .iter()
+            .chain(self.previous_token.iter())
+            .cloned()
+            .collect()
+    }
+}
+
+/// mTLS for the bootstrap listener: all three or nothing, because a TLS
+/// bootstrap endpoint that skips client verification would look secured while
+/// still letting anyone on the network present the token.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BootstrapTlsConfig {
+    /// PEM certificate chain the listener presents.
+    pub cert_path: String,
+    /// PEM private key for `cert_path`.
+    pub key_path: String,
+    /// PEM CA bundle; only clients holding a certificate signed by it may
+    /// reach the bootstrap API at all.
+    pub client_ca_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +256,8 @@ struct BootstrapOverride {
     enabled: Option<bool>,
     bind_addr: Option<String>,
     token: Option<String>,
+    previous_token: Option<String>,
+    tls: Option<BootstrapTlsConfig>,
 }
 
 impl ControlPlaneConfig {
@@ -326,6 +360,8 @@ impl ControlPlaneConfig {
                     .parse()
                     .with_context(|| "parse FELIX_BOOTSTRAP_BIND_ADDR")?,
                 token: std::env::var("FELIX_BOOTSTRAP_TOKEN").ok(),
+                previous_token: std::env::var("FELIX_BOOTSTRAP_TOKEN_PREVIOUS").ok(),
+                tls: bootstrap_tls_from_env()?,
             },
             node_liveness,
             shutdown_drain_timeout_ms,
@@ -419,6 +455,12 @@ impl ControlPlaneConfig {
             if let Some(token) = bootstrap_override.token {
                 config.bootstrap.token = Some(token);
             }
+            if let Some(token) = bootstrap_override.previous_token {
+                config.bootstrap.previous_token = Some(token);
+            }
+            if let Some(tls) = bootstrap_override.tls {
+                config.bootstrap.tls = Some(tls);
+            }
         }
         Ok(())
     }
@@ -447,6 +489,14 @@ impl ControlPlaneConfig {
                 "bootstrap enabled but FELIX_BOOTSTRAP_TOKEN / bootstrap.token is not set"
             ));
         }
+        // A previous token with no current one means the rotation removed the
+        // wrong half; refusing beats quietly running on the token being retired.
+        if self.bootstrap.previous_token.is_some() && self.bootstrap.token.is_none() {
+            return Err(anyhow!(
+                "bootstrap.previous_token is set without bootstrap.token; \
+                 the rotation should replace token and demote the old one"
+            ));
+        }
         if self.oidc_allowed_algorithms.is_empty() {
             return Err(anyhow!(
                 "oidc_allowed_algorithms cannot be empty; include at least ES256"
@@ -454,6 +504,28 @@ impl ControlPlaneConfig {
         }
         self.node_liveness.validate()?;
         Ok(())
+    }
+}
+
+/// Bootstrap mTLS from the environment: all three variables or none.
+///
+/// A partial set is an error rather than "TLS off", because an operator who set
+/// two of the three believed the listener was secured.
+fn bootstrap_tls_from_env() -> Result<Option<BootstrapTlsConfig>> {
+    let cert = std::env::var("FELIX_BOOTSTRAP_TLS_CERT").ok();
+    let key = std::env::var("FELIX_BOOTSTRAP_TLS_KEY").ok();
+    let client_ca = std::env::var("FELIX_BOOTSTRAP_TLS_CLIENT_CA").ok();
+    match (cert, key, client_ca) {
+        (None, None, None) => Ok(None),
+        (Some(cert_path), Some(key_path), Some(client_ca_path)) => Ok(Some(BootstrapTlsConfig {
+            cert_path,
+            key_path,
+            client_ca_path,
+        })),
+        _ => Err(anyhow!(
+            "bootstrap TLS needs all of FELIX_BOOTSTRAP_TLS_CERT, \
+             FELIX_BOOTSTRAP_TLS_KEY, and FELIX_BOOTSTRAP_TLS_CLIENT_CA"
+        )),
     }
 }
 

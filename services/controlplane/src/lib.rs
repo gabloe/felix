@@ -16,3 +16,4 @@ pub mod placement;
 pub mod readiness;
 pub mod replica_positions;
 pub mod store;
+pub mod tls;

@@ -220,7 +220,7 @@ async fn exchange_returns_tenant_scoped_token() {
             vec![Algorithm::ES256, Algorithm::RS256],
         ),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -336,7 +336,7 @@ async fn exchange_forbidden_without_policies() {
             vec![Algorithm::ES256, Algorithm::RS256],
         ),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -462,7 +462,7 @@ async fn exchange_supports_group_claim_based_rbac() {
             vec![Algorithm::ES256, Algorithm::RS256],
         ),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -605,7 +605,7 @@ async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
             vec![Algorithm::ES256, Algorithm::RS256],
         ),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -728,7 +728,7 @@ async fn exchange_supports_group_claim_values_with_group_prefix() {
             vec![Algorithm::ES256, Algorithm::RS256],
         ),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),

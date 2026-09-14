@@ -77,20 +77,34 @@ where
     let bootstrap_task = if config.bootstrap.enabled {
         let bootstrap_addr = config.bootstrap.bind_addr;
         let bootstrap_app = build_bootstrap_router(state.clone());
-        let bootstrap_enabled = state.bootstrap_enabled;
         let api_shutdown = api_shutdown.clone();
+        // Loaded before the task spawns: unreadable key material is a
+        // misconfiguration that must fail startup, not a log line inside a
+        // task nothing checks.
+        let bootstrap_tls = config
+            .bootstrap
+            .tls
+            .as_ref()
+            .map(controlplane::tls::load_server_config)
+            .transpose()?;
         Some(tokio::spawn(async move {
             tracing::info!(
                 %bootstrap_addr,
-                enabled = bootstrap_enabled,
+                mtls = bootstrap_tls.is_some(),
                 "bootstrap control plane listening"
             );
             match tokio::net::TcpListener::bind(bootstrap_addr).await {
-                Ok(listener) => {
-                    let _ = axum::serve(listener, bootstrap_app.into_make_service())
-                        .with_graceful_shutdown(async move { api_shutdown.cancelled().await })
-                        .await;
-                }
+                Ok(listener) => match bootstrap_tls {
+                    Some(tls) => {
+                        controlplane::tls::serve_mtls(listener, bootstrap_app, tls, api_shutdown)
+                            .await;
+                    }
+                    None => {
+                        let _ = axum::serve(listener, bootstrap_app.into_make_service())
+                            .with_graceful_shutdown(async move { api_shutdown.cancelled().await })
+                            .await;
+                    }
+                },
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to bind bootstrap listener");
                 }
@@ -267,7 +281,7 @@ async fn build_state(
             config.oidc_allowed_algorithms,
         ),
         bootstrap_enabled: config.bootstrap.enabled,
-        bootstrap_token: config.bootstrap.token,
+        bootstrap_tokens: config.bootstrap.accepted_tokens(),
         replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
             &config.node_liveness,
         )),
@@ -295,6 +309,8 @@ mod tests {
                 enabled: false,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
+                previous_token: None,
+                tls: None,
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
@@ -324,6 +340,8 @@ mod tests {
                 enabled: false,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
+                previous_token: None,
+                tls: None,
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
@@ -358,6 +376,8 @@ mod tests {
                 enabled: true,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
+                previous_token: None,
+                tls: None,
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
@@ -389,6 +409,8 @@ mod tests {
                 enabled: false,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: None,
+                previous_token: None,
+                tls: None,
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,
@@ -419,6 +441,8 @@ mod tests {
                 enabled: true,
                 bind_addr: "127.0.0.1:0".parse().expect("bootstrap"),
                 token: Some("bootstrap-token".to_string()),
+                previous_token: None,
+                tls: None,
             },
             node_liveness: config::NodeLivenessConfig::default(),
             shutdown_drain_timeout_ms: 25_000,

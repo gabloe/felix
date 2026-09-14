@@ -26,7 +26,10 @@ pub struct AppState {
     pub store: Arc<dyn ControlPlaneAuthStore + Send + Sync>,
     pub oidc_validator: UpstreamOidcValidator,
     pub bootstrap_enabled: bool,
-    pub bootstrap_token: Option<String>,
+    /// Accepted bootstrap tokens, current first. More than one only during a
+    /// rotation, so replacing the token is a rolling deploy rather than an
+    /// outage — see [`crate::api::bootstrap::initialize`].
+    pub bootstrap_tokens: Vec<String>,
     pub node_liveness: NodeLivenessConfig,
     /// Which replicas their leaders last reported as holding each shard's log.
     ///

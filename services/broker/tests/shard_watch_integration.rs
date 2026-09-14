@@ -65,7 +65,7 @@ impl Cluster {
             store: Arc::clone(&store) as Arc<dyn ControlPlaneAuthStore + Send + Sync>,
             oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
             bootstrap_enabled: false,
-            bootstrap_token: None,
+            bootstrap_tokens: Vec::new(),
             node_liveness: LIVENESS,
             readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
                 std::sync::Arc::new(controlplane::readiness::AlwaysReady),

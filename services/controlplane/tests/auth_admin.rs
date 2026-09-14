@@ -33,7 +33,7 @@ fn build_state(store: Arc<InMemoryStore>) -> AppState {
         store: state_store,
         oidc_validator: UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),

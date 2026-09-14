@@ -41,7 +41,7 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
         store: Arc::new(store),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -1128,6 +1128,14 @@ impl AuthStore for FailingStore {
     ) -> StoreResult<()> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
+
+    async fn bootstrap_tenant_auth(
+        &self,
+        _tenant_id: &str,
+        _seed: controlplane::store::TenantAuthSeed,
+    ) -> StoreResult<TenantSigningKeys> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
 }
 
 /// Health answers 503 when the store does not, and it must probe the *real*
@@ -1151,7 +1159,7 @@ async fn system_health_reports_unavailable_on_store_failure() {
         store: Arc::clone(&failing),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&failing))),
@@ -1199,7 +1207,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
         store: Arc::new(FailingStore::default()),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -1269,7 +1277,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         store: Arc::new(FailingStore::with_namespace_checks_succeeding()),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -1392,7 +1400,7 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         store: Arc::new(FailingStore::with_create_not_found()),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
-        bootstrap_token: None,
+        bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
@@ -1461,7 +1469,7 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
         }),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
-        bootstrap_token: Some("secret".to_string()),
+        bootstrap_tokens: vec!["secret".to_string()],
         node_liveness: Default::default(),
         readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
