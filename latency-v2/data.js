@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789408511417,
+  "lastUpdate": 1789413963474,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9240,6 +9240,72 @@ window.BENCHMARK_DATA = {
             "range": "268.55",
             "unit": "us",
             "extra": "trials: 5\nmedian: 574.00\nmean: 679.00\nstdev: 268.55\ncv: 39.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4fdd7f4f3fa706b516f6e895881c0dded41af281",
+          "message": "Land the metadata Raft core behind its seam (#337) (#345)\n\nThe consensus substrate from docs/metadata-raft-design.md, first slice of\nM13. services/controlplane/src/raft/ is the entire openraft surface of the\ncontrol plane — no consensus type escapes it. Outside the seam there are\ntwo things: RaftHandle (start, initialize, write, add-learner, promote,\nsnapshot, status, shutdown) and the AppStateMachine trait, whose contract\nis the design's determinism rule; #338 implements it over the metadata\nstore, and nothing in this module will change when it does.\n\nConsensus state — log, vote, current snapshot — lives in one crash-safe\nredb file per instance. An embedded ACID store rather than hand-rolled\nfiles, deliberately: a vote or entry acknowledged and then lost is how one\nterm elects two leaders, and that plumbing is the last place Felix should\nbe inventive. The store passes openraft's own storage conformance suite on\nevery test run — the same discipline as running the node/shard contract\nsuites against every metadata backend — plus a reopen test for the one\nproperty a single-process suite cannot see. This log is deliberately not\nfelix-storage: Raft truncates divergent uncommitted suffixes, and the\nsegment store's never-rewritten invariant exists precisely to forbid that.\n\nTransport is openraft's RPC types as JSON over HTTP, the server's whole\nResult shipped back so a remote refusal stays distinguishable from an\nunreachable peer — they drive opposite reactions. The routes carry a body\nlimit above openraft's 3MB default snapshot chunk, because axum's 2MB\ndefault would refuse an install with a 413 the sender reads as a network\nfault. The router mounts on the existing internal listener; no new port.\n\nGroup lifecycle is proven by tests as a group, each node the real thing\nover real HTTP: a three-member cluster elects and replicates; a member\nrestarting on its own disk rejoins and catches up; a member whose volume\nis wiped is rebuilt by snapshot install, with the log behind the snapshot\npurged so there is no quieter way back; growth is learner-first, the data\nheld before the vote is.\n\nThe state machine stays volatile and rebuilds from persisted snapshot plus\nlog replay; snapshot meta and data commit in one transaction, and the\npurge marker commits with its deletions, so no crash point leaves the\nstore claiming a hole it does not have.\n\nNothing serves metadata from this yet — that is #339 — and the docs say so\nat every altitude: the design doc gains an implementation-status table,\nthe docs-site Metadata Raft page moves from designed to under-construction\nwith what-exists-today spelled out, and the status table row moves to\nPartial with the 'no metadata rides it yet' caveat carried in the first\nsentence.",
+          "timestamp": "2026-09-14T12:23:29-07:00",
+          "tree_id": "8e39201498da4a0e9590c2f89223072acfe6d62f",
+          "url": "https://github.com/gabloe/felix/commit/4fdd7f4f3fa706b516f6e895881c0dded41af281"
+        },
+        "date": 1789413961410,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 157.40\nstdev: 0.89\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 202.80\nstdev: 2.77\ncv: 1.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 231,
+            "range": "14.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 231.00\nmean: 235.60\nstdev: 14.88\ncv: 6.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 197.00\nstdev: 1.22\ncv: 0.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 399,
+            "range": "13.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 400.80\nstdev: 13.65\ncv: 3.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 616,
+            "range": "149.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 616.00\nmean: 655.00\nstdev: 149.47\ncv: 22.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
