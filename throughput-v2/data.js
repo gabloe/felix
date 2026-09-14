@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789351265318,
+  "lastUpdate": 1789401314162,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7072,6 +7072,58 @@ window.BENCHMARK_DATA = {
             "range": "20491.11",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 751124.23\nmean: 749910.06\nstdev: 20491.11\ncv: 2.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4da9b7e2ecee2461cc2bcecb2b42f7d10d51b9a8",
+          "message": "test(cluster): wait out routing convergence before keyed publishes (#332)\n\nCI failed a_sharded_subscription_receives_every_record on its very first\npublish:\n\n    publish failed: could not forward to the owner of orders:\n    owner broker-2 redirected to generation 0, not ahead of 0\n\nAt startup, the broker taken as ingress can hold the shard placement before the\nowner has applied it. The forward then reaches a broker that says \"not mine at\ngeneration 0\", and the publish fails. The window is real, transient, and closes\nas the shard feed catches up — and nothing in the client retries it, which is\nhalf of #269.\n\nThe tests published the instant shard_owners_for returned, but that reads the\ncontrol plane; the brokers apply assignments asynchronously, so the strongest\nconvergence signal available to a test is a publish actually succeeding.\n\nCluster::publish_keyed_via_settled retries within a bound, surfacing the last\nerror if routing never converges — a cluster that cannot settle in 30s is a bug\nthe test should still fail on. In practice only the first publish after startup\npays anything. It lives in the harness rather than a test file because\ntests/sharding.rs has the same latent race at all three of its publish sites,\nproven reachable by this CI failure; all of them now use it.\n\nNot reproducible locally on demand — this machine converges before the first\npublish — which is exactly why it survived three consecutive local runs and\nthen failed in CI.",
+          "timestamp": "2026-09-14T08:52:44-07:00",
+          "tree_id": "31fc6a1998840e2cae6c1a2e1eb607f140bcb4e3",
+          "url": "https://github.com/gabloe/felix/commit/4da9b7e2ecee2461cc2bcecb2b42f7d10d51b9a8"
+        },
+        "date": 1789401313775,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 229945.68,
+            "range": "2051.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229945.68\nmean: 230240.86\nstdev: 2051.84\ncv: 0.89%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 229945.68,
+            "range": "2051.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229945.68\nmean: 230240.86\nstdev: 2051.84\ncv: 0.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55299.1,
+            "range": "594.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55299.10\nmean: 55214.49\nstdev: 594.84\ncv: 1.08%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 552991,
+            "range": "5948.41",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 552991.00\nmean: 552144.90\nstdev: 5948.41\ncv: 1.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
