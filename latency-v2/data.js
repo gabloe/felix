@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789405520917,
+  "lastUpdate": 1789408511417,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9174,6 +9174,72 @@ window.BENCHMARK_DATA = {
             "range": "399.82",
             "unit": "us",
             "extra": "trials: 5\nmedian: 468.00\nmean: 652.60\nstdev: 399.82\ncv: 61.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff2e8593c689242465ec3b133d2401addcb715b7",
+          "message": "Decide metadata Raft, and answer the SWIM question (#343)\n\nTwo decisions M7 left open, both now recorded the way replication-design.md\nrecorded shard replication: with the alternatives and what would overturn\nthem.\n\ndocs/metadata-raft-design.md decides #333: an openraft group embedded in the\ncontrol-plane instances (0.9 line, behind a seam), with InMemoryStore as the\nstate machine — API-shaped deterministic commands, timestamps stamped at\npropose time, snapshots serializing the whole state. The broker contract is\nfrozen behind the existing store traits; writes forward to the leader,\nreads serve locally because the watch contract is already pull-based and\neventually consistent; the sweep and placement run only on the leader, whose\nlease grants keep the existing safety-margin arithmetic with the Raft term\nas a second epoch underneath assignment generations. Migration from Postgres\nis an offline import with sequence continuity, because dual-write is the\nclass of bug this design exists to remove. The document also answers the\nobjection its own repo raises: the never-rewritten invariant that rejected\nper-shard Raft does not apply, because the metadata Raft log never touches\nfelix-storage.\n\nThe SWIM evaluation lands in control-plane.md next to the liveness rules it\nwould have replaced, and the answer is no, for now: the heartbeat is also\nthe lease renewal, so liveness and serving authority deliberately share one\nchannel to one authority; failover is lease-bound (~1s), not\nliveness-bound (15s), so faster detection accelerates nothing safety uses;\nand SWIM's constant-load advantage prices in at hundreds of nodes, not\ntens. The one real gap it would cover — asymmetric reachability — has a\ncheaper remedy (advisory peer-reachability reports) named as the first\nthing to build if it bites. Reopening triggers recorded.\n\nTracker: milestone M13 (#337–#342, umbrella #333) mirrors the design's\nsequencing. Docs-site gains a dedicated Metadata Raft page under\nArchitecture, clearly marked designed-not-implemented, and the status\ntable row moves from 'not started' to 'designed', which is the honest\nmiddle.",
+          "timestamp": "2026-09-14T10:52:22-07:00",
+          "tree_id": "fafaad6c1eb18230f27db41ff5f094d045c1ffc4",
+          "url": "https://github.com/gabloe/felix/commit/ff2e8593c689242465ec3b133d2401addcb715b7"
+        },
+        "date": 1789408507862,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 148,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 148.00\nmean: 148.20\nstdev: 1.10\ncv: 0.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 191,
+            "range": "3.03",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 191.00\nmean: 192.20\nstdev: 3.03\ncv: 1.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 246,
+            "range": "59.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 246.00\nmean: 260.80\nstdev: 59.44\ncv: 22.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 192,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 192.00\nmean: 191.60\nstdev: 0.89\ncv: 0.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 389,
+            "range": "8.20",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 389.00\nmean: 386.40\nstdev: 8.20\ncv: 2.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 574,
+            "range": "268.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 574.00\nmean: 679.00\nstdev: 268.55\ncv: 39.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
