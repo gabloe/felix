@@ -217,12 +217,13 @@ comes from log shipping and leader leases instead; `replication-design.md` argue
 that choice in full, including why per-shard Raft was rejected.
 
 That rejection is about replicating *records*. Making the control plane's own
-metadata highly available is a separate problem, and Raft is still the intended
-answer there — unimplemented (tracked in
-[#333](https://github.com/gabloe/felix/issues/333)), so control-plane
-availability currently rests on Postgres: any number of stateless instances
-over one HA database, whose required properties are spelled out in
-[`ha-postgres.md`](ha-postgres.md).
+metadata highly available is a separate problem, and Raft is the decided
+answer there — designed in
+[`metadata-raft-design.md`](metadata-raft-design.md), tracked as milestone
+M13 under [#333](https://github.com/gabloe/felix/issues/333), not yet
+implemented. Until it lands, control-plane availability rests on Postgres:
+any number of stateless instances over one HA database, whose required
+properties are spelled out in [`ha-postgres.md`](ha-postgres.md).
 
 The control plane is not on the data path. Resolving an owner is an atomic load
 of a routing snapshot the broker already holds — no lock and no network call,
