@@ -86,12 +86,16 @@ async fn keys_spread_records_across_shards() {
     // Enough distinct keys that landing on one shard would be a routing bug
     // rather than luck.
     for index in 0..40u32 {
+        // `_settled`: at startup a broker can hold the placement before the
+        // owner has applied it, and a forwarded publish then fails with
+        // "redirected to generation 0". Only the first publish pays anything.
         cluster
-            .publish_keyed_via(
+            .publish_keyed_via_settled(
                 &ingress,
                 STREAM,
                 format!("customer-{index}").as_bytes(),
                 format!("record-{index}").into_bytes(),
+                Duration::from_secs(30),
             )
             .await
             .expect("keyed publish");
@@ -128,11 +132,12 @@ async fn one_key_always_lands_on_one_shard() {
 
     for index in 0..8u32 {
         cluster
-            .publish_keyed_via(
+            .publish_keyed_via_settled(
                 &ingress,
                 STREAM,
                 b"customer-stable",
                 format!("record-{index}").into_bytes(),
+                Duration::from_secs(30),
             )
             .await
             .expect("keyed publish");
@@ -176,11 +181,12 @@ async fn a_keyed_publish_is_forwarded_to_the_shards_owner() {
     let ingress = cluster.nodes[0].node_id.clone();
     for index in 0..20u32 {
         cluster
-            .publish_keyed_via(
+            .publish_keyed_via_settled(
                 &ingress,
                 STREAM,
                 format!("k{index}").as_bytes(),
                 format!("v{index}").into_bytes(),
+                Duration::from_secs(30),
             )
             .await
             .expect("keyed publish");
