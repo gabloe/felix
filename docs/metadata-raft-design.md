@@ -210,25 +210,57 @@ without its amnesia.
 
 ### Migration from Postgres
 
-Dual backends, then an offline cutover:
+Dual backends, then an offline cutover. The tool is `felix-controlplane
+migrate`, riding the same binary so every image that runs the control plane
+carries it; the interchange format is the state machine's own exported
+snapshot, produced **through the store traits** so it contains exactly what
+the API serves. The ceremony:
 
-1. Stand up the Raft group (fresh, empty).
-2. Freeze metadata writes (readiness on the old instances flips them out of
-   rotation; brokers keep serving on their catalogs, exactly as during a
-   control-plane blip today).
-3. Import: read a consistent Postgres snapshot, propose it as one
-   `ImportState` command (or install it as the group's first snapshot).
-   Change-feed sequence numbers are set at-or-above Postgres's high-water
-   marks so resumed broker watches see a normal "empty page, next_seq
-   advanced" and at worst resnapshot once.
-4. Point brokers/operators at the new instances; verify counts and seqs;
-   retire Postgres.
+1. **Stand up the Raft group**, fresh and empty, with the same peers map on
+   every member. Its import guard refuses a group that already holds state,
+   so pointing the tool at the wrong cluster is an error message, not a
+   catastrophe. *Abort here: tear the group down; nothing has changed.*
+2. **Freeze metadata writes** — flip the Postgres-backed instances out of
+   rotation (their readiness during a drain already does this). Brokers
+   keep serving on their catalogs and leases, exactly as during any
+   control-plane blip. *Abort here: put the old instances back in
+   rotation; nothing has changed.*
+3. **Export**: `felix-controlplane migrate export-postgres state.json`
+   (with `FELIX_CONTROLPLANE_POSTGRES_URL` pointing at the frozen
+   database). The tool prints a summary — counts per entity — for the
+   before/after comparison.
+4. **Import**: `felix-controlplane migrate import state.json
+   http://<any-member>` — one `ImportState` command proposed through the
+   group: atomic on every member, forwarded to the leader from whichever
+   address you gave. *Abort here: the group either applied all of it or
+   none; tear it down and put Postgres back.*
+5. **Verify and repoint**: compare the import summary against the export's,
+   spot-check snapshots and feed heads, then point brokers and operators at
+   the new instances and retire the database.
+
+Sequence continuity is the part brokers feel: the export carries every
+change feed's **high-water mark with an empty retained window**, so a
+broker whose checkpoint is at the head continues without noticing, and one
+behind the head gets the ordinary "checkpoint predates the window" signal
+and resnapshots exactly once. Dragging Postgres's change rows along to
+avoid even that single resnapshot was considered and skipped: the signal
+path is a contract brokers already honour, and exercising it beats
+carrying migration-only code to avoid it.
 
 The freeze window is minutes, and brokers tolerate it by design. Online
 dual-write migration was considered and rejected: two sources of truth
 during the window is precisely the class of bug this whole design exists to
 remove, and the workload (rare writes, pull-based readers) does not need
 zero-write-downtime cutover.
+
+**Disaster recovery beyond quorum loss** uses the same two commands, and
+this is deliberate: the export file *is* the DR artifact, and
+`migrate import ... --overwrite` onto a fresh group is the restore. The
+`--overwrite` flag is the loud warning made mechanical — it discards
+whatever the target group holds, and consumers' checkpoints with it, so it
+belongs in a runbook and nowhere else. Take exports on a schedule the way
+database backups are taken; any consistent export is a state the cluster
+has actually been in.
 
 ### Probes
 
@@ -324,7 +356,7 @@ is the umbrella.
 | Raft core: seam, redb log/vote/snapshot store, HTTP transport, group lifecycle | [#337](https://github.com/gabloe/felix/issues/337) | **Landed** — `services/controlplane/src/raft/`. The store passes openraft's own storage conformance suite; group tests cover election, replication, restart-as-rejoin, wiped-volume rebuild by snapshot, and learner-first growth. Nothing serves metadata from it yet. |
 | Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | **Landed** — `store/command.rs` (the versioned, API-shaped command set) and `store/state_machine.rs` (`MetadataStateMachine`, the in-memory store behind the seam). The determinism harness applies a full-coverage script to two machines and requires byte-identical snapshots; a real three-node group settles eight concurrent bootstraps by log order alone with byte-identical replicas. Landing it surfaced and fixed real iteration-order leaks: multi-node expiry and cascading deletes published change events in HashMap order. Nothing serves API traffic from it yet. |
 | Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | **Landed** — `store/raft_backend.rs` (`RaftStore`), the third backend behind the store traits: reads from local applied state, writes proposed through the seam with follower→leader forwarding inside it, sweep and placement gated to the leader by a linearizable read-index check, and `StorageBackend::Raft` selectable via `FELIX_RAFT_NODE_ID` / `FELIX_RAFT_DATA_DIR` / `FELIX_RAFT_PEERS`. Passes the same node/shard contract suites as memory and Postgres; a binary-level test serves the HTTP API with no database and keeps its metadata across a restart. Finding recorded below. Probes are minimal (leader-known) until #341. |
-| Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | Not started |
+| Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | **Landed** — `felix-controlplane migrate export-postgres/import`, the generic trait-level export (works against any backend, doubling as the DR artifact), the `ImportState` command with its used-store guard and `--overwrite` restore path, and the ceremony above. The pg-tests E2E migrates a populated Postgres into a Raft group over the real propose route and verifies records, sequence heads, generations, and auth state; a broker at the head continues without a resnapshot. |
 | Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | Not started |
 | Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | Not started |
 

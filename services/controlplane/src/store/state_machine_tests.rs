@@ -385,6 +385,109 @@ async fn a_newer_command_version_is_refused_not_skipped() {
     );
 }
 
+/// The import command is the migration cutover: refused against a store
+/// with any history unless the operator explicitly overwrites, and exact
+/// when it lands — including the sequence positions broker watches resume
+/// from.
+#[tokio::test]
+async fn an_import_replaces_everything_and_respects_the_guard() {
+    // A populated source, exported the way the migration tool exports
+    // Postgres: through the traits, sequence heads carried, windows empty.
+    let source = machine();
+    run_script(&source).await;
+    let exported = crate::store::memory::export_state_from(
+        source.store().as_ref() as &(dyn crate::store::ControlPlaneAuthStore + Send + Sync)
+    )
+    .await
+    .expect("export");
+    let source_head = source
+        .store()
+        .shard_assignment_changes(0)
+        .await
+        .expect("changes")
+        .next_seq;
+
+    // A fresh store accepts it without ceremony.
+    let fresh = machine();
+    fresh
+        .dispatch(MetaCommand::ImportState {
+            state: Box::new(exported.clone()),
+            overwrite: false,
+        })
+        .await
+        .expect("import into unused store");
+    assert_eq!(
+        serde_json::to_vec(
+            &fresh
+                .store()
+                .stream_snapshot()
+                .await
+                .expect("snap")
+                .items
+                .len()
+        )
+        .expect("len"),
+        serde_json::to_vec(
+            &source
+                .store()
+                .stream_snapshot()
+                .await
+                .expect("snap")
+                .items
+                .len()
+        )
+        .expect("len"),
+    );
+
+    // A broker checkpointed at the head continues with no resnapshot: an
+    // empty page whose next_seq equals its checkpoint is "nothing new".
+    let at_head = fresh
+        .store()
+        .shard_assignment_changes(source_head)
+        .await
+        .expect("changes");
+    assert!(at_head.items.is_empty());
+    assert_eq!(at_head.next_seq, source_head);
+
+    // A broker behind the head gets the ordinary eviction signal — empty
+    // page, next_seq ahead — and resnapshots exactly once.
+    let behind = fresh.store().tenant_changes(0).await.expect("changes");
+    assert!(behind.items.is_empty());
+    assert!(behind.next_seq > 0, "the head must survive the migration");
+
+    // A store with history refuses the import without overwrite...
+    let used = machine();
+    used.dispatch(MetaCommand::CreateTenant {
+        tenant: tenant("t-existing"),
+    })
+    .await
+    .expect("create");
+    let refused = used
+        .dispatch(MetaCommand::ImportState {
+            state: Box::new(exported.clone()),
+            overwrite: false,
+        })
+        .await;
+    assert!(matches!(refused, Err(MetaError::Conflict(_))));
+
+    // ...and replaces everything when the operator says so — the restore
+    // ceremony.
+    used.dispatch(MetaCommand::ImportState {
+        state: Box::new(exported),
+        overwrite: true,
+    })
+    .await
+    .expect("overwrite import");
+    assert!(
+        used.store()
+            .tenant_exists("t-existing")
+            .await
+            .map(|exists| !exists)
+            .expect("exists"),
+        "an overwrite import leaves nothing of the old state"
+    );
+}
+
 /// The round trip every command takes: encode → decode is identity, so the
 /// leader and its followers apply the same value.
 #[tokio::test]

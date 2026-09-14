@@ -10,6 +10,7 @@ pub mod auth;
 pub mod config;
 pub mod membership;
 pub mod membership_metrics;
+pub mod migrate;
 pub mod model;
 pub mod observability;
 pub mod placement;
