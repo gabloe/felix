@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789445291849,
+  "lastUpdate": 1789445449065,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7644,6 +7644,58 @@ window.BENCHMARK_DATA = {
             "range": "6265.75",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 783509.76\nmean: 781453.11\nstdev: 6265.75\ncv: 0.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6c3f157256bf1730ce55deef6cda2891ac22800",
+          "message": "test(broker): assert backoff by error variant, not wall clock (#359)\n\nan_unreachable_peer_backs_off failed on stalled CI runners: it asserted the\nin-window refusal returned within 50ms of wall clock, which a busy runner\ncan miss with the backoff working exactly as designed.\n\nThe mechanism is already observable without a clock: a request inside the\nwindow is refused as PeerError::Unavailable without dialling, while a real\ndial to the dead address fails as a connect error. Assert the variant and\nthe backoff detail instead, and widen the window to 60s so no plausible\nscheduler stall can outlive it. Verified the test still fails with the\nwindow zeroed (the second request dials and the variant assertion fires).",
+          "timestamp": "2026-09-14T21:06:19-07:00",
+          "tree_id": "5898883c2c55b33ac5ecdc1dcb95b5448a3e8df1",
+          "url": "https://github.com/gabloe/felix/commit/c6c3f157256bf1730ce55deef6cda2891ac22800"
+        },
+        "date": 1789445448239,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231803.99,
+            "range": "4157.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231803.99\nmean: 233741.11\nstdev: 4157.80\ncv: 1.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231803.99,
+            "range": "4157.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231803.99\nmean: 233741.11\nstdev: 4157.80\ncv: 1.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54742.57,
+            "range": "891.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54742.57\nmean: 54959.51\nstdev: 891.30\ncv: 1.62%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 547425.68,
+            "range": "8913.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 547425.68\nmean: 549595.11\nstdev: 8913.03\ncv: 1.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
