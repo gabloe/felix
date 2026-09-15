@@ -49,6 +49,11 @@ impl PeerRequestHandler for BrokerPeerHandler {
                     .apply(batch, felix_broker::LogKind::GroupCursors)
                     .await
             }
+            InternalMessage::ReplicateDeadLetterRecords(batch) => {
+                self.replica
+                    .apply(batch, felix_broker::LogKind::GroupDeadLetters)
+                    .await
+            }
             InternalMessage::ReplicateBootstrap(request) => {
                 self.replica
                     .bootstrap(request, felix_broker::LogKind::Stream)
@@ -62,6 +67,11 @@ impl PeerRequestHandler for BrokerPeerHandler {
             InternalMessage::ReplicateGroupBootstrap(request) => {
                 self.replica
                     .bootstrap(request, felix_broker::LogKind::GroupCursors)
+                    .await
+            }
+            InternalMessage::ReplicateDeadLetterBootstrap(request) => {
+                self.replica
+                    .bootstrap(request, felix_broker::LogKind::GroupDeadLetters)
                     .await
             }
             // Responses have no business arriving as requests, and a broker that

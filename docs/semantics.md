@@ -339,12 +339,6 @@ Stated because a guarantee without its failure model is a slogan.
   choice rather than a proof, and it is the one clock-shaped assumption left.
 - **No exactly-once delivery**, and no transactions.
 - **No cross-region ordering or routing guarantees.**
-- **A consumer group's dead-letter list does not survive a failover.** The
-  group's *position* is replicated with its shard, so a promoted replica resumes
-  where the group had reached rather than at zero. The list of offsets the group
-  gave up on is durable on the broker that recorded it and is not shipped, so a
-  promotion loses it: those records stay in the log, and nothing on the new
-  leader says the group already stopped trying them.
 - **A group is bound to the shard the caller names.** Consuming a whole
   multi-shard stream through a group means polling each shard's group
   separately, for the same reason a subscription reads one shard.
@@ -375,5 +369,15 @@ Stated because a guarantee without its failure model is a slogan.
   time. That is at-least-once, which is what a queue offers regardless;
   persisting it would narrow the redelivery window at the cost of a write per
   delivery and still would not make delivery exactly-once.
+
+  **Group state survives failover whole** (#314, and now the dead letters too).
+  Both of a shard's group logs — the cursors and the offsets its groups gave up
+  on — replicate beside the shard's records, on the same replica set at the
+  same generation. A promoted replica resumes each group where it had reached,
+  lists what it had abandoned, and serves an operator's redrive.
+
+  > `crates/felix-cluster/tests/consumer_groups.rs`, including
+  > `a_group_position_survives_a_leader_failover` and
+  > `a_dead_letter_survives_a_leader_failover`.
 - **Retention is per stream and unbounded by default.** A stream with no
   retention policy grows until the disk does not.

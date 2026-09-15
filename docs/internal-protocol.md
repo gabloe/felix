@@ -158,6 +158,23 @@ restarted numbering on compaction would make its offset 0 a different record
 from every follower's. Cache compaction appends the live set at the tail for
 that reason.
 
+### Replicating group state
+
+A stream shard carries two more logs beside its records: the positions its
+consumer groups have reached, and the offsets those groups gave up on. Each is
+shipped by the same exchange with a kind of its own —
+`ReplicateGroupRecords`/`ReplicateGroupBootstrap` (kinds 16 and 17) for the
+cursors, `ReplicateDeadLetterRecords`/`ReplicateDeadLetterBootstrap` (kinds 18
+and 19) for the dead letters — same bodies, for the reason the cache pair
+exists: the kind is the only thing stopping a follower from appending the
+offsets a group abandoned into the cursor log that says where it resumes.
+
+Both ride the shard's own replica set at the shard's generation, and neither
+gates the records: no publish waits on group state, and group state lagging
+never holds up the log it describes. What this buys is a promotion that keeps
+the whole group, not half of it — the promoted leader resumes each group where
+it had reached *and* can list and redrive what it had given up on.
+
 ### Forwarded cache operation
 
 A cache key hashes to a shard, and that shard has one owner. A broker that

@@ -40,6 +40,12 @@ pub enum LogKind {
     Cache,
     /// The consumer-group cursors belonging to a stream shard.
     GroupCursors,
+    /// The dead-letter list belonging to a stream shard: the offsets its
+    /// groups gave up on. Beside the cursors for the same reason the cursors
+    /// are beside the records — a promoted leader that serves the stream but
+    /// has lost which records its groups abandoned would silently redrive
+    /// nothing and list nothing.
+    GroupDeadLetters,
 }
 pub mod dead_letters;
 mod delivery;

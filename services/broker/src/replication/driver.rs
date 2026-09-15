@@ -33,6 +33,9 @@ const MAX_BATCH_BYTES: usize = 1024 * 1024;
 /// Ship for every shard this broker leads, once.
 ///
 /// Returns the largest lag seen, so a caller can report it without recomputing.
+// One cursor map per log kind the pass ships, plus the shared context: folding
+// the maps into a struct would move the argument list rather than shorten it.
+#[allow(clippy::too_many_arguments)]
 pub async fn replicate_once<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
@@ -41,6 +44,7 @@ pub async fn replicate_once<R: PeerRequester>(
     report_to: Option<&ReportTo>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
     group_cursors: &mut HashMap<ShardKey, ShardCursors>,
+    dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
     if broker.durable_storage().is_none() {
         // Nothing to replicate from. Without durable storage a broker's streams
@@ -190,17 +194,34 @@ pub async fn replicate_once<R: PeerRequester>(
             quorum_offset(tail, &entry.followers),
         );
 
-        // A stream shard has a second log beside it: the positions its consumer
-        // groups have reached. It rides the same replica set and the same
-        // generation, so it is shipped here rather than placed separately —
-        // group state has to be wherever the shard's leader is, and move when
-        // the shard moves.
+        // A stream shard has two logs beside it: the positions its consumer
+        // groups have reached, and the offsets those groups gave up on. Both
+        // ride the same replica set and the same generation, so they are
+        // shipped here rather than placed separately — group state has to be
+        // wherever the shard's leader is, and move when the shard moves.
         //
         // Deliberately after the report and the quorum mark, and never gating
-        // either: no publish waits on a cursor, and a cursor lagging must not
-        // hold up the records it describes.
+        // either: no publish waits on group state, and group state lagging
+        // must not hold up the records it describes.
         if key.kind == felix_router::ShardKind::Stream {
-            ship_group_cursors(requester, broker, key, route, group_cursors).await;
+            ship_aux_log(
+                requester,
+                broker,
+                key,
+                route,
+                felix_broker::LogKind::GroupCursors,
+                group_cursors,
+            )
+            .await;
+            ship_aux_log(
+                requester,
+                broker,
+                key,
+                route,
+                felix_broker::LogKind::GroupDeadLetters,
+                dead_letter_cursors,
+            )
+            .await;
         }
 
         halted += entry
@@ -217,6 +238,7 @@ pub async fn replicate_once<R: PeerRequester>(
     // belief about a follower under a leadership that has ended.
     cursors.retain(|key, _| live_shards.contains(key));
     group_cursors.retain(|key, _| live_shards.contains(key));
+    dead_letter_cursors.retain(|key, _| live_shards.contains(key));
     // A shard this broker no longer leads stops promising a quorum. Dropping
     // the mark ends any publish still waiting on it, rather than leaving it to
     // run out its timeout for an answer that can no longer come.
@@ -229,23 +251,25 @@ pub async fn replicate_once<R: PeerRequester>(
     Pass { worst_lag, reports }
 }
 
-/// Ship a stream shard's consumer-group cursors to the same replicas.
+/// Ship one of a stream shard's group-state logs — cursors or dead letters —
+/// to the same replicas.
 ///
 /// Separate from the shard's own shipping because it must not affect it: no
 /// report is sent for it, no quorum mark is published, and a failure here is
-/// logged rather than allowed to stall the records. The cursors are small and
-/// written only when a contiguous run of acknowledgements closes, so this is
-/// usually a no-op pass.
-async fn ship_group_cursors<R: PeerRequester>(
+/// logged rather than allowed to stall the records. Both logs are small and
+/// written only when group state actually changes, so this is usually a no-op
+/// pass.
+async fn ship_aux_log<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
     key: &ShardKey,
     route: &felix_router::Route,
+    log_kind: felix_broker::LogKind,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) {
     let Some(log) = broker
         .shard_log(
-            felix_broker::LogKind::GroupCursors,
+            log_kind,
             &key.tenant_id,
             &key.namespace,
             &key.stream,
@@ -253,7 +277,7 @@ async fn ship_group_cursors<R: PeerRequester>(
         )
         .await
     else {
-        // No consumer-group state on this broker, so there is nothing to ship.
+        // No such state on this broker, so there is nothing to ship.
         return;
     };
 
@@ -281,7 +305,7 @@ async fn ship_group_cursors<R: PeerRequester>(
             requester,
             &log,
             &shard,
-            felix_broker::LogKind::GroupCursors,
+            log_kind,
             cursor,
             MAX_BATCH_BYTES,
         )
@@ -440,6 +464,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursors = HashMap::new();
         let mut group_cursors = HashMap::new();
+        let mut dead_letter_cursors = HashMap::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
@@ -453,6 +478,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 report_to.as_ref(),
                 &mut cursors,
                 &mut group_cursors,
+                &mut dead_letter_cursors,
             )
             .await;
         }

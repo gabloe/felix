@@ -202,6 +202,9 @@ pub async fn ship_once<R: PeerRequester>(
     let request = match log_kind {
         felix_broker::LogKind::Cache => InternalMessage::ReplicateCacheRecords(batch),
         felix_broker::LogKind::GroupCursors => InternalMessage::ReplicateGroupRecords(batch),
+        felix_broker::LogKind::GroupDeadLetters => {
+            InternalMessage::ReplicateDeadLetterRecords(batch)
+        }
         felix_broker::LogKind::Stream => InternalMessage::ReplicateRecords(batch),
     };
 
@@ -273,6 +276,9 @@ async fn offer_bootstrap<R: PeerRequester>(
     let request = match log_kind {
         felix_broker::LogKind::Cache => InternalMessage::ReplicateCacheBootstrap(offer),
         felix_broker::LogKind::GroupCursors => InternalMessage::ReplicateGroupBootstrap(offer),
+        felix_broker::LogKind::GroupDeadLetters => {
+            InternalMessage::ReplicateDeadLetterBootstrap(offer)
+        }
         felix_broker::LogKind::Stream => InternalMessage::ReplicateBootstrap(offer),
     };
     let answer = match requester

@@ -121,12 +121,13 @@ nothing assigns shards across a group's consumers. Running one consumer per
 shard is the application's job today; there is no coordinator handing shards
 out.
 
-**A complete picture after a leader failover.** The group's position travels
-with its shard, so a promoted leader resumes where the group had got to rather
-than at the beginning. What does not travel is the **dead-letter list**: the
-promoted leader keeps the position and forgets which records were set aside.
-Those records were already skipped by the cursor, so what is lost is the record
-that they were skipped at all.
+**A complete picture after a leader failover.** Group state travels with its
+shard, whole: the position *and* the dead-letter list replicate beside the
+shard's records, so a promoted leader resumes where the group had got to,
+lists which records were set aside, and serves a redrive — proven by killing
+the leader after a record was given up on and redriving it on the replacement.
+This used to stop at the position; the dead-letter list stayed behind, and a
+promotion forgot exactly the records an operator had been told to look at.
 
 ## Configuration
 

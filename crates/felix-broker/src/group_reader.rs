@@ -80,6 +80,12 @@ impl GroupReader {
         }
     }
 
+    /// The dead-letter store, for replication: its logs ship beside the
+    /// cursors', and both have to reach whichever replica may lead next.
+    pub fn dead_letters(&self) -> &Arc<DeadLetters> {
+        &self.dead_letters
+    }
+
     /// How many times a record is handed out before the group gives up on it.
     pub fn max_attempts(&self) -> u32 {
         self.max_attempts

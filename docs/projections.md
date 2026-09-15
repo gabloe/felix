@@ -138,8 +138,16 @@ here has to be read as covering them:
 - **A cache declares no consistency level.** A stream chooses `Leader` or
   `Quorum`; a cache write is acknowledged by its leader, so losing that leader
   between the acknowledgement and the ship loses the write.
-- **Dead letters are not replicated.** The committed position now travels with
-  its shard, but the list of offsets a group gave up on does not: a promoted
-  leader keeps the position and forgets which records were set aside. Those
-  records were already skipped by the cursor, so what is lost is the record that
-  they were skipped at all.
+What used to be listed here and no longer applies: **dead letters are now
+replicated.** The list of offsets a group gave up on is one log per stream
+shard — the group folded into the entry key, exactly as the cursors are shaped
+— and it ships beside the cursors on the same replica set at the same
+generation (`replicate_dead_letter_records` in the internal protocol). A
+promoted leader lists what its groups abandoned and an operator's redrive
+works there. The per-shard shape is what made this possible: the earlier
+layout kept one log per `(stream, group)`, a set the shipping driver cannot
+enumerate — groups appear whenever a consumer names one — where a log per
+shard is exactly the unit the driver already walks. Entries recorded under
+that earlier layout are still read and can still be discarded, but they were
+never shipped, so only what is recorded under the per-shard layout survives a
+failover.

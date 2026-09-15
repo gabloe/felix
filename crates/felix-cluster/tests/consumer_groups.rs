@@ -193,3 +193,110 @@ async fn a_group_position_survives_a_leader_failover() {
         redelivered.len(),
     );
 }
+
+/// **The dead-letter list survives losing the broker that led its shard.** The
+/// gap the status table named for as long as queues have existed: the cursors
+/// replicated but the list of what a group gave up on did not, so a promotion
+/// silently forgot exactly the records an operator was told to look at — and a
+/// redrive after failover had nothing to redrive.
+#[tokio::test]
+#[serial]
+async fn a_dead_letter_survives_a_leader_failover() {
+    let mut cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::quorum(STREAM, 1, 3)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    cluster
+        .publish_via(&owner, STREAM, b"poison".to_vec())
+        .await
+        .expect("publish");
+
+    // Hand the record back until the broker gives up on it. The default
+    // attempt bound is generous, so this loops rather than assuming a number;
+    // the guard bounds a broker that never gives up.
+    let mut rounds = 0;
+    let offset = loop {
+        rounds += 1;
+        assert!(rounds <= 20, "the record was never dead-lettered");
+        let claimed = cluster
+            .group_poll_records_via(&owner, STREAM, 0, GROUP, 10)
+            .await
+            .expect("poll");
+        let Some(record) = claimed.first() else {
+            let dead = cluster
+                .group_dead_letters_via(&owner, STREAM, 0, GROUP)
+                .await
+                .expect("dead letters");
+            assert_eq!(dead.len(), 1, "given up, but not listed");
+            break dead[0];
+        };
+        cluster
+            .group_nack_via(&owner, STREAM, 0, GROUP, record.offset)
+            .await
+            .expect("nack");
+    };
+
+    // A pass for the group state to reach the replicas, then take the leader
+    // out.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    cluster.kill_node(&owner).expect("kill the owner");
+
+    let promoted = felix_cluster::wait::until(
+        std::time::Duration::from_secs(30),
+        "a new leader for the stream",
+        || async {
+            cluster.place_shards().await;
+            matches!(cluster.owner(STREAM).await, Ok(next) if next != owner)
+        },
+    )
+    .await;
+    assert!(promoted.is_ok(), "no replica was promoted");
+    let leader = cluster.owner(STREAM).await.expect("new owner");
+
+    // Being named owner and serving groups are different moments.
+    let listed = felix_cluster::wait::until(
+        std::time::Duration::from_secs(30),
+        "the promoted leader to list the dead letter",
+        || async {
+            cluster
+                .group_dead_letters_via(&leader, STREAM, 0, GROUP)
+                .await
+                .is_ok_and(|dead| dead == vec![offset])
+        },
+    )
+    .await;
+    assert!(
+        listed.is_ok(),
+        "the promoted leader lost the dead-letter list",
+    );
+
+    // And the list is live state there, not a read-only relic: the operator's
+    // redrive works on the promoted leader, and the record comes back with its
+    // attempts reset.
+    cluster
+        .group_redrive_via(&leader, STREAM, 0, GROUP, offset)
+        .await
+        .expect("redrive on the promoted leader");
+    let redriven = cluster
+        .group_poll_records_via(&leader, STREAM, 0, GROUP, 10)
+        .await
+        .expect("poll after redrive");
+    assert_eq!(
+        redriven.first().map(|record| record.offset),
+        Some(offset),
+        "the redriven record was not delivered",
+    );
+    assert!(
+        cluster
+            .group_dead_letters_via(&leader, STREAM, 0, GROUP)
+            .await
+            .expect("dead letters after redrive")
+            .is_empty(),
+        "a redriven record is still listed as given up on",
+    );
+}
