@@ -11,6 +11,84 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-15
+
+The composed-semantics release. A cache stopped being something you can only
+poll: you can subscribe to a key, join with current state already in hand, and
+fold deltas into durable sums — three semantics that compose because each one
+is a reading of the same log. And a consumer group now survives failover
+*whole*: the dead-letter list travels with the shard, not just the cursor.
+
+**No wire-protocol break.** `felix-wire` `VERSION` remains `1`. Every new
+capability is a negotiated feature bit (`FEATURE_CACHE_WATCH`,
+`FEATURE_CACHE_WATCH_RETAINED`, `FEATURE_COUNTERS`) — a 0.2.0 client and a
+0.3.0 broker interoperate byte-for-byte on everything they both know, and a
+client never sends a request the broker did not advertise. The internal
+broker-to-broker protocol grew six message kinds (16–21), which is how that
+protocol evolves; an older peer answers an unknown kind with a typed refusal
+rather than a misparse.
+
+### Added
+
+- **Keyed cache watch** (#348). `cache_watch` subscribes to one key or key
+  prefix; every applied write is delivered in the shard's write order with its
+  log offset, deletes included as tombstoned changes. Resume by offset replays
+  from the cache's log and joins live delivery with no gap and no duplicate —
+  proven under concurrent writes at join time. An offset compaction has
+  collapsed is answered with a marked snapshot of current values
+  (`resnapshot`), never a silent gap. A watch that falls behind is **ended
+  loudly** with `cache_watch_lagged` naming the first missed offset — filtered
+  offsets are sparse, so a drop could never be read from an offset jump — and
+  re-watching from that offset is gapless.
+- **Retained delivery on a watch** (#349). Ask for `retained` and receive each
+  matching key's current value first — at the offset of the write that
+  produced it — then live changes: join a presence roster and hold it
+  immediately, no polling. `retained_count` makes "your state is now complete"
+  an explicit moment, and joining an empty key a definite zero rather than a
+  silence. Survives failover: a promoted replica serves the retained value
+  from its rebuilt index, at the original offset.
+- **Counters** (#350). `counter_add` appends a signed delta and answers with
+  the sum *including it* — one round trip to increment and know where you
+  stand. Scoped and routed exactly like cache keys, stored beside the cache
+  (a counter and a cache value sharing a key are unrelated). The sum survives
+  restart, compaction — which collapses applied deltas into a checkpoint
+  without renumbering the log — and leader failover, where the promoted
+  replica folds the true sum from its shipped log and keeps counting.
+  **At-least-once, stated honestly**: a retried add after a lost
+  acknowledgement double-counts; the decision and its failure mode are
+  recorded in `docs/projections.md`.
+- **The dead-letter list replicates with its shard** (#362). Group state now
+  fails over whole: a promoted leader resumes each group where it had reached
+  *and* lists what it had given up on, and an operator's redrive works there —
+  previously the promotion silently forgot exactly the records an operator had
+  been told to look at. Entries recorded under the earlier on-disk layout are
+  still listed and discardable.
+- **Client API**: `watch_cache` / `watch_cache_retained` (typed `Lagged` and
+  `resnapshot` surfaces), `counter_add` / `counter_get` — each feature-gated on
+  the broker's advertisement before anything is sent.
+
+### Fixed
+
+- A publish forwarded between brokers now lands on the shard it was routed
+  for (#356).
+- Control-plane readiness is proven against a database that can fail (#358),
+  and the rolling-restart and Raft-chaos test harnesses retry a dead
+  connection against a re-probed rotation instead of a stale snapshot
+  (#359, #364) — the load-balancer behaviour they model.
+
+### Known limitations
+
+- A prefix watch reads one shard; watching a whole multi-shard cache means one
+  watch per shard, with no client helper yet.
+- Counters carry no dedupe identity — retried adds can double-count — and a
+  cache watch does not see counter changes.
+- A cache still declares no consistency level: its writes carry the `Leader`
+  guarantee, not `Quorum`.
+
+The status table
+(https://gabloe.github.io/felix/getting-started/what-felix-is-for/) remains
+the per-capability source of truth.
+
 ## [0.2.0] - 2026-09-07
 
 Durable streams. A stream registered with `durable: true` now persists every
@@ -230,7 +308,8 @@ isolation, ephemeral cache, tenant/namespace/stream registries, RBAC and Felix
 token authorization, a control plane with a Postgres-backed store, a Rust client
 SDK, and a protocol conformance runner.
 
-[Unreleased]: https://github.com/gabloe/felix/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/gabloe/felix/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/gabloe/felix/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gabloe/felix/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/gabloe/felix/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gabloe/felix/releases/tag/v0.1.0
