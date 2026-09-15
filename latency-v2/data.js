@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789447194337,
+  "lastUpdate": 1789477575821,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9834,6 +9834,72 @@ window.BENCHMARK_DATA = {
             "range": "620.80",
             "unit": "us",
             "extra": "trials: 5\nmedian: 571.00\nmean: 821.60\nstdev: 620.80\ncv: 75.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07893f453d898dd852cf4e0d712e45a0639b9edd",
+          "message": "test(controlplane): retry a dead connection against a re-probed rotation (#364)\n\na_rolling_restart_serves_every_watch_and_heartbeat failed in CI (one\nfailure, zero failovers): the harness's load balancer samples readiness\nonce per iteration, makes both calls against that snapshot, and retries\nonly through the other instance *in the snapshot*. Across the SIGKILL\nstep the snapshot is stale in both directions — a kill flips no\nreadiness before landing, so the doomed instance was sampled ready, and\nthe survivor's probe can blip right after its own restart — leaving a\none-instance rotation whose only member was already dead, with nowhere\nto retry.\n\nA real load balancer re-probes and re-sends through whatever is ready\nnow, so the harness does the same on a connection-level failure. The\nmilestone's substance is untouched: a served error status is still a\nfailure, a retry with nothing ready is still a failure, and a window\nwith no ready instance is still an outage.",
+          "timestamp": "2026-09-15T06:03:34-07:00",
+          "tree_id": "2cb1c56bf8de288d9326a90fe00963c432a25d6c",
+          "url": "https://github.com/gabloe/felix/commit/07893f453d898dd852cf4e0d712e45a0639b9edd"
+        },
+        "date": 1789477573060,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.40\nstdev: 3.71\ncv: 2.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "8.20",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 210.60\nstdev: 8.20\ncv: 3.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 265,
+            "range": "43.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 265.00\nmean: 278.20\nstdev: 43.18\ncv: 15.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 199.00\nstdev: 1.22\ncv: 0.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 401,
+            "range": "4.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 401.00\nmean: 400.80\nstdev: 4.49\ncv: 1.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 718,
+            "range": "377.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 718.00\nmean: 831.80\nstdev: 377.76\ncv: 45.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
