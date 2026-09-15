@@ -268,9 +268,34 @@ fn traffic_loop(
         let call = |method: &str, path: &str, body: Option<&[u8]>, expect: &[u16]| -> Option<u16> {
             stats.calls.fetch_add(1, Ordering::Relaxed);
             let mut outcome = http(ready[0], method, path, Some(&bearer), body);
-            if outcome.is_none() && ready.len() > 1 {
-                stats.failovers.fetch_add(1, Ordering::Relaxed);
-                outcome = http(ready[1], method, path, Some(&bearer), body);
+            if outcome.is_none() {
+                // The connection died before an answer. As in the rolling
+                // restart's harness: retry against what is ready *now*, not
+                // the rotation sampled before the call — a kill flips no
+                // readiness before landing, so that snapshot can name a
+                // corpse as the only member. A served error status is still
+                // a failure below, and nothing-ready-now stays a failure.
+                let retry = apis
+                    .iter()
+                    .copied()
+                    .filter(|addr| *addr != ready[0])
+                    .find(|addr| {
+                        matches!(
+                            http_with_timeout(
+                                *addr,
+                                "GET",
+                                "/v1/system/ready",
+                                None,
+                                None,
+                                Duration::from_secs(1),
+                            ),
+                            Some((200, _))
+                        )
+                    });
+                if let Some(addr) = retry {
+                    stats.failovers.fetch_add(1, Ordering::Relaxed);
+                    outcome = http(addr, method, path, Some(&bearer), body);
+                }
             }
             match outcome {
                 Some((status, _)) if expect.contains(&status) => Some(status),
