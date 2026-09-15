@@ -11,6 +11,7 @@ The Felix cache is:
 - **Key-value store** with optional TTL (time-to-live)
 - **Scoped** to `(tenant_id, namespace, cache_name, key)`
 - **In-memory** for lowest latency, when the broker has no durable storage configured. With `FELIX_DURABLE_STORAGE_DIR` the cache is backed by a log and survives a restart.
+- **Watchable** when log-backed: subscribe to changes for one key or key prefix, resume by offset, with loss made loud rather than silent
 - **Multiplexed** over pooled QUIC streams
 - **Highly concurrent** with request pipelining
 
@@ -260,7 +261,79 @@ sequenceDiagram
     B-->>C1: value=A or B (undefined)
 ```
 
-### 7. Eviction (in-memory only: best-effort)
+### 7. Keyed Watch
+
+A log-backed cache is not just readable — it is *subscribable*. `watch_cache`
+delivers every applied write for one key or key prefix, in the shard's write
+order, each change carrying the cache-log offset that makes it resumable:
+
+```rust
+use felix_client::{CacheWatchFilter, CacheWatchItem};
+
+// Current changes only, from now on
+let mut watch = client
+    .watch_cache("acme", "prod", "config", CacheWatchFilter::Key("app-settings".into()), None)
+    .await?;
+
+while let Some(item) = watch.recv().await {
+    match item {
+        CacheWatchItem::Change(change) => match change.value {
+            Some(value) => reload_config(&value),           // put
+            None => clear_config(),                          // delete
+        },
+        CacheWatchItem::Lagged { resume_from } => {
+            // The watch fell behind and was ended. Re-watching from
+            // `resume_from` replays everything missed — gapless.
+            break;
+        }
+    }
+}
+```
+
+A prefix watch works the same way — `CacheWatchFilter::Prefix("user:".into())`
+sees every key under `user:` — and an empty prefix is every key in the shard.
+
+![An animated walkthrough of a keyed cache watch. Writes for several keys are applied to one cache shard's log in order, each taking the next offset. A watch on the prefix user: receives a copy of each matching change the moment it is applied — puts with their values, a delete as a tombstone — while writes to other keys pass it by. The delivered copies keep their log offsets, so the watch's offsets are sparse by construction, which is why a gap between them is not a drop signal and falling behind is reported explicitly instead.](/felix/diagrams/cache-watch.svg)
+
+**Resume by offset.** Pass `Some(offset)` to resume at the first change not yet
+seen; the broker replays `[offset, tail)` from the cache's log before live
+delivery, joined with no gap and no duplicate. An application checkpoints
+`change.offset + 1` exactly as a stream subscriber does.
+
+**Compaction is never a silent gap.** The cache's log compacts, so a
+long-disconnected watcher can name an offset that no longer exists. The broker
+answers with `resnapshot() == true` and each matching key's *current* value,
+then live changes — the same snapshot-plus-changes contract etcd answers a
+compacted watch revision with.
+
+**Loss is loud.** A filtered watch cannot detect a drop from an offset jump
+(other keys' writes make offsets sparse), so a watch that falls behind is ended
+with `Lagged { resume_from }` rather than quietly thinned. Re-watching from
+`resume_from` is gapless.
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant B as Broker
+    participant L as Cache log
+    App->>B: watch_cache(key "app-settings", from_offset 41)
+    Note over B: Registers the watcher before reading the tail,<br/>so no write can land between the two unseen
+    B->>L: read tail (= 57) and [41, 57)
+    B-->>App: changes 41..57 that match (replay)
+    B-->>App: change 57, 58, ... (live)
+    Note over App: checkpoint offset + 1 after each change
+```
+
+TTL expiry delivers no event — expiry is lazy and appends nothing to the log —
+but every put carries its `expires_at_millis`, so a watcher that mirrors the
+cache can expire entries itself.
+
+The feature is negotiated (`FEATURE_CACHE_WATCH`) and advertised only by
+brokers whose cache is log-backed: an in-memory cache has no offsets to anchor
+resume, duplicate detection, or the lag signal to. See the
+[wire protocol](/felix/architecture/wire-protocol/) for the message shapes.
+
+### 8. Eviction (in-memory only: best-effort)
 
 **Current eviction policy**: Best-effort under memory pressure.
 
@@ -377,6 +450,52 @@ match client.cache_get("acme", "prod", "sessions", "session-xyz").await? {
 }
 ```
 
+### cache_delete
+
+Remove a key, reporting the value it held.
+
+**Signature**:
+
+```rust
+async fn cache_delete(
+    &self,
+    tenant_id: &str,
+    namespace: &str,
+    cache: &str,
+    key: &str
+) -> Result<Option<Bytes>>
+```
+
+**Returns**:
+
+- `Ok(Some(value))`: The key was there; this is what was removed
+- `Ok(None)`: The key was not there — an answer, not an error
+- `Err(e)`: Operation failed, or the broker predates `FEATURE_CACHE_DELETE`
+
+### watch_cache
+
+Subscribe to changes for one key or key prefix. See [Keyed Watch](#7-keyed-watch).
+
+**Signature**:
+
+```rust
+async fn watch_cache(
+    &self,
+    tenant_id: &str,
+    namespace: &str,
+    cache: &str,
+    filter: CacheWatchFilter,   // Key(String) or Prefix(String)
+    from_offset: Option<u64>    // None = from now; Some(n) = resume at n
+) -> Result<CacheWatch>
+```
+
+**Returns**: a `CacheWatch` whose `recv()` yields `CacheWatchItem::Change`
+(key, optional value, offset, expiry) and, if the watch falls behind,
+`CacheWatchItem::Lagged { resume_from }` before ending. `resnapshot()` reports
+whether a resume began from current values because compaction collapsed the
+requested history. Fails without sending anything when the broker did not
+advertise `FEATURE_CACHE_WATCH`.
+
 ## Use Cases
 
 ### 1. Session Management
@@ -486,8 +605,9 @@ impl ConfigCache {
     async fn update_config(&self, key: &str, config: &Config) -> Result<()> {
         // Update database
         self.save_to_db(key, config).await?;
-        
-        // Invalidate cache (put with 0 TTL or delete when available)
+
+        // Write through to the cache. Every watcher of this key is notified
+        // with the new value — no separate invalidation channel needed.
         use bytes::Bytes;
         self.client
             .cache_put(
@@ -496,10 +616,10 @@ impl ConfigCache {
                 "config",
                 key,
                 Bytes::from(serialize(config)?),
-                Some(0), // Immediate expiration
+                Some(3600_000),
             )
             .await?;
-        
+
         Ok(())
     }
 }
@@ -641,13 +761,14 @@ cache_max_bytes: 10737418240         # 10 GB
 1. **No atomic operations**: no compare-and-swap, no increment
 2. **No multi-key operations**: no transactions
 3. **Best-effort eviction** in the in-memory backend: no guaranteed LRU or LFU. The log-backed cache does not evict at all — it compacts.
-4. **No cache invalidation broadcast**: coordination is the application's
+4. **A prefix watch reads one shard**: keys sharing a prefix hash to different shards, so watching a whole multi-shard cache means one `watch_cache_shard` per shard, and nothing opens them for you yet the way `subscribe_sharded` does for streams
 5. **No declared consistency level**: a write is acknowledged by the shard's leader, so losing that leader between the acknowledgement and replication loses the write. A stream can ask for `Quorum`; a cache cannot.
 
 What used to be listed here and no longer applies: the cache persists across a
 restart when the broker has durable storage, it is routed to a single owner per
-key so two brokers cannot hold different values, its shards are replicated, and
-`cache_delete` is on the wire.
+key so two brokers cannot hold different values, its shards are replicated,
+`cache_delete` is on the wire, and "no cache invalidation broadcast" — a keyed
+watch is exactly that notification, with offsets instead of best effort.
 
 ### Planned Features
 
@@ -666,16 +787,6 @@ client.cache_cas(
 ).await?;
 ```
 
-**Watch and notify**:
-
-```rust
-// Watch for changes
-let mut watch = client.cache_watch("config", "app-settings").await?;
-while let Some(update) = watch.next().await {
-    reload_config(update.value);
-}
-```
-
 **Multi-key operations**:
 
 ```rust
@@ -691,11 +802,8 @@ client.cache_transaction()
     .await?;
 ```
 
-**Explicit delete**:
-
-```rust
-client.cache_delete("sessions", "expired-session").await?;
-```
+Watch-and-notify and explicit delete used to be listed here; both shipped —
+see [Keyed Watch](#7-keyed-watch) and [cache_delete](#cache_delete).
 
 ## Best Practices
 

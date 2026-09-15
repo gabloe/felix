@@ -792,6 +792,10 @@ pub(crate) async fn handle_subscribe_message(
 /// the redirect still names the owner and omits the address: "not here, and
 /// here is who has it" is more use than "not here", and a client that already
 /// knows that broker from discovery can act on the name alone.
+// An ownership question is seven fields plus the peer's capabilities; bundling
+// them would move the argument list rather than shorten it, as the publish
+// handlers' allows already note.
+#[allow(clippy::too_many_arguments)]
 pub fn redirect_for(
     ingress: Option<&crate::shard_routing::IngressRouter>,
     client_endpoints: Option<&crate::client_endpoints::ClientEndpoints>,
@@ -799,6 +803,10 @@ pub fn redirect_for(
     namespace: &str,
     stream: &str,
     shard: u32,
+    // The kind travels with every ownership question. A cache and a stream may
+    // share a name, and answering for the wrong one redirects a watch to a
+    // broker that does not own the key.
+    kind: crate::shard_watch::ShardKind,
     peer_features: u32,
 ) -> Option<Message> {
     use crate::shard_routing::{Dispatch, dispatch};
@@ -808,7 +816,7 @@ pub fn redirect_for(
         namespace: namespace.to_string(),
         stream: stream.to_string(),
         shard,
-        kind: crate::shard_watch::ShardKind::Stream,
+        kind,
     };
 
     match dispatch(ingress, &key) {

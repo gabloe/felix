@@ -155,6 +155,63 @@ The feature is advertised by a standalone broker as well as a clustered one.
 Only the cluster-shaped features — topology and redirect — depend on there being
 a cluster to describe.
 
+## Watch
+
+A key or key prefix can be subscribed to — etcd's watch, over the cache's own
+log. `cache_watch` is negotiated (`FEATURE_CACHE_WATCH`) and delivers each
+applied write in the shard's write order: a put with its value, a delete as a
+change with no value, each carrying the log offset the write was appended at.
+It is pure composition of what already existed: the log gives every change an
+offset, the index gives current state, and the per-subscriber
+bounded-queue-with-`try_send` discipline gives fanout that never blocks a
+writer. `docs/protocol.md` specifies the messages; what follows is the
+reasoning.
+
+**The write order is observed under the shard's write lock.** The store reports
+each applied write to an observer while still holding the lock that serialised
+it, which is what makes the order watchers see *the* order rather than a race.
+The observer must not block there, so fanout is `try_send` against bounded
+queues — the same publisher-never-blocks rule stream fanout follows.
+
+**The join is register-before-read.** A watch resuming from an offset registers
+its queue first, then reads the log's tail, then serves `[from_offset, tail)`
+from the log. Registration pins the live edge: every change below the tail is
+on disk and every change at or past it is queued, so the two halves cannot leak
+a write landing in between — the same discipline, for the same past defect,
+as the stream resume path. The registration race is closed by offsets: a change
+applied just before the tail was read can arrive both in the replay and on the
+queue, and the queued copy is dropped because its offset is below the tail.
+
+**Falling behind ends the watch, loudly.** A stream subscriber reads a queue
+drop out of a jump in delivered offsets. A *filtered* watch cannot — other
+keys' writes make its offsets sparse, so any gap looks like traffic it was not
+watching. A watcher whose queue overflows is therefore ended rather than
+thinned: everything already queued is delivered, then `cache_watch_lagged`
+names the offset of the first missed change, and re-watching from it is
+gapless. Silent loss is the one outcome the contract rules out.
+
+**Compaction interplay is the resnapshot rule.** A watch resuming from an
+offset older than the log's base — compaction collapsed that history — cannot
+be replayed, and pretending otherwise would silently skip it. Instead the
+broker answers `resnapshot: true` and delivers each matching key's *current*
+value at its offset, then live changes: the snapshot-plus-changes shape the
+control plane's assignment watch already uses. Compaction itself is silent to
+watchers — it moves where live records sit without changing what the cache
+holds, so notifying would report phantom writes.
+
+**TTL expiry is not a change.** Expiry is lazy and appends nothing, so no event
+is delivered when an entry lapses; the put's `expires_at_millis` travels with
+the event for watchers that care. A watch replaying history also replays writes
+whose TTL has since lapsed — they are the history.
+
+**Watches are served where writes are applied.** A watch belongs to the shard's
+owner, and a broker that does not own the shard redirects (`not_leader`) rather
+than proxies, exactly as a subscribe does. Records replicated to a follower
+bypass `put` and fire no observer, which is correct: the follower serves no
+watches, and a client whose broker fails re-establishes against the promoted
+owner by offset — the rebuilt index and continued offset space are what make
+that resume land exactly where the old watch left off.
+
 ## Replication
 
 A cache's shards are replicated by the machinery that replicates a stream's: the

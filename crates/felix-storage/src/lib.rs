@@ -17,6 +17,47 @@ pub use ephemeral_cache::EphemeralCache;
 pub use log_cache::LogCache;
 pub use segment::{Corruption, CorruptionKind, CorruptionSite};
 
+/// One applied cache write, as an observer sees it.
+#[derive(Debug, Clone)]
+pub struct CacheChange {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub cache: String,
+    pub shard: u32,
+    pub key: String,
+    /// The value the key now holds; `None` means the key was deleted.
+    pub value: Option<Bytes>,
+    /// The log offset the write was appended at.
+    pub offset: u64,
+    /// Absolute Unix milliseconds; zero means it never expires.
+    pub expires_at_millis: u64,
+}
+
+/// Sees every write a cache store applies locally, in the order the shard's
+/// log applied them.
+///
+/// Called with the shard's write lock held — that hold is what makes the
+/// per-shard order a guarantee rather than a race — so an implementation must
+/// not block: hand the change to a queue and return.
+///
+/// Replication is deliberately outside this seam: records shipped to a
+/// follower reach its log without passing through `put`, so a follower's
+/// observer stays silent. Watches are served where writes are applied.
+pub trait CacheObserver: Debug + Send + Sync {
+    fn cache_changed(&self, change: CacheChange);
+}
+
+/// One key's current state, as a watch snapshot reports it.
+#[derive(Debug, Clone)]
+pub struct CacheSnapshotEntry {
+    pub key: String,
+    pub value: Bytes,
+    /// The log offset of the record that currently defines the key.
+    pub offset: u64,
+    /// Absolute Unix milliseconds; zero means it never expires.
+    pub expires_at_millis: u64,
+}
+
 // A cache entry is identified by tenant, namespace, cache, shard, and key --
 // five fields before the value and its TTL. Bundling them into a struct would
 // move the argument list rather than shorten it, and every caller has the parts
@@ -86,6 +127,30 @@ pub trait StorageApi: Debug + Send + Sync {
         _base_offset: u64,
     ) -> Option<crate::disk_log::DiskLog> {
         None
+    }
+
+    /// Install the observer every applied write is reported to.
+    ///
+    /// `false` means this store cannot observe writes, and the caller must not
+    /// offer watches over it. The default is exactly that: a watch's contract
+    /// is built on log offsets, and a store with no log has none to report.
+    fn set_change_observer(&self, _observer: std::sync::Arc<dyn CacheObserver>) -> bool {
+        false
+    }
+
+    /// Every live key in one shard with its current value and offset, for a
+    /// watch that must begin from current state.
+    ///
+    /// An error, never an empty answer, when the store cannot serve it: a
+    /// watcher told a shard is empty would trust a snapshot it never got.
+    async fn live_entries(
+        &self,
+        _tenant_id: &str,
+        _namespace: &str,
+        _cache: &str,
+        _shard: u32,
+    ) -> Result<Vec<CacheSnapshotEntry>> {
+        Err(StorageError::Unsupported("cache watch snapshot"))
     }
 
     async fn len(&self) -> usize;

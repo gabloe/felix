@@ -126,6 +126,10 @@ Not free, and these are the reasons to revisit it:
 - **Nothing falls back to proxying.** An unroutable shard is a typed error, and
   the absence of a silent fallback is the point: a proxy that appeared under load
   would move the failure from visible to invisible.
+- **Cache watches follow the same decision.** A `cache_watch` for a shard this
+  broker does not own is redirected, not proxied, through the same dispatch the
+  subscribe path uses — a watch served off the owner would go quiet on writes it
+  cannot see, which is the served-locally failure in a different costume.
 
 ## What this requires
 

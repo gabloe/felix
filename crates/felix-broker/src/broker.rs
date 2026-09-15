@@ -92,6 +92,12 @@ pub struct Broker {
     /// group whose position is lost on restart redelivers everything it had
     /// already processed, which is worse than refusing to run a queue at all.
     pub(crate) consumer_groups: Option<Arc<crate::consumer_groups::ConsumerGroups>>,
+    /// Fanout for cache watches, when the cache store can observe its writes.
+    ///
+    /// `None` for a store with no log: a watch's contract is built on log
+    /// offsets, so offering one over an ephemeral cache would promise a resume
+    /// anchor that does not exist.
+    pub(crate) cache_watches: Option<Arc<crate::cache_watch::CacheWatchHub>>,
 }
 
 // `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
@@ -236,6 +242,12 @@ pub struct ResumedSubscription {
 impl Broker {
     // Start with an empty topic table and default capacity.
     pub fn new(cache: Box<dyn StorageApi + Send>) -> Self {
+        // Offered to the store unconditionally; the store's answer is the
+        // truth about whether watches can be served over it.
+        let hub = crate::cache_watch::CacheWatchHub::new();
+        let cache_watches = cache
+            .set_change_observer(Arc::clone(&hub) as Arc<dyn felix_storage::CacheObserver>)
+            .then_some(hub);
         Self {
             topics: RwLock::new(HashMap::with_hasher(RandomState::new())),
             streams: RwLock::new(HashMap::with_hasher(RandomState::new())),
@@ -250,7 +262,13 @@ impl Broker {
             durable_storage: None,
             consumer_groups: None,
             group_reader: None,
+            cache_watches,
         }
+    }
+
+    /// Fanout for cache watches, if this broker's cache store can serve them.
+    pub fn cache_watches(&self) -> Option<&Arc<crate::cache_watch::CacheWatchHub>> {
+        self.cache_watches.as_ref()
     }
 
     /// Attach disk-backed storage, enabling streams registered as durable.

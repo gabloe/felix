@@ -705,6 +705,152 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("cache delete response dropped"))?
     }
 
+    /// Watch a cache key or key prefix for changes.
+    ///
+    /// The watch delivers each applied write — a put with its value, a delete
+    /// as a change with none — in the cache shard's write order, each carrying
+    /// the cache-log offset that is its resume anchor. `from_offset: None`
+    /// watches from now; `Some(n)` resumes at the first change not yet seen,
+    /// replaying `[n, tail)` from the log first. A resume whose history
+    /// compaction has collapsed begins with each matching key's current value
+    /// instead, and says so via [`CacheWatch::resnapshot`] — defined and loud,
+    /// never a silent gap. A watch that falls behind is ended with
+    /// [`CacheWatchItem::Lagged`] naming the offset to re-watch from.
+    ///
+    /// A watch reads one shard. A key names its shard by hashing, exactly as a
+    /// get does; a prefix watch reads shard 0 — use [`Client::watch_cache_shard`]
+    /// per shard for a multi-shard cache, since keys sharing a prefix hash
+    /// apart.
+    ///
+    /// Fails without sending anything when the broker did not advertise
+    /// [`felix_wire::FEATURE_CACHE_WATCH`]: an unrecognised message type is
+    /// fatal to a broker's control loop, so probing an older broker would cost
+    /// the connection.
+    ///
+    /// [`CacheWatchItem::Lagged`]: crate::CacheWatchItem::Lagged
+    pub async fn watch_cache(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::client::cache_watch::CacheWatchFilter,
+        from_offset: Option<u64>,
+    ) -> Result<crate::client::cache_watch::CacheWatch> {
+        self.watch_cache_shard(tenant_id, namespace, cache, filter, None, from_offset)
+            .await
+    }
+
+    /// [`Client::watch_cache`] against an explicit shard of the cache.
+    ///
+    /// The shard applies to a prefix watch; a key watch resolves its own shard
+    /// by hashing and ignores this.
+    pub async fn watch_cache_shard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::client::cache_watch::CacheWatchFilter,
+        shard: Option<u32>,
+        from_offset: Option<u64>,
+    ) -> Result<crate::client::cache_watch::CacheWatch> {
+        if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CACHE_WATCH) {
+            return Err(anyhow::anyhow!("this broker does not support cache watch"));
+        }
+        if tenant_id != self.auth_tenant_id {
+            return Err(anyhow::anyhow!(
+                "tenant mismatch: client auth is scoped to {}",
+                self.auth_tenant_id
+            ));
+        }
+        // A watch is a long-lived read, so it lives on the event connection
+        // pool beside subscriptions, round-robined the same way.
+        let rr = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
+        let connection_index = rr as usize % self.event_pool_size;
+        let connection = &self.event_connections[connection_index];
+        let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+
+        let (key, prefix) = crate::client::cache_watch::filter_fields(&filter);
+        let mut frame_scratch = BytesMut::with_capacity(16 * 1024);
+        write_message(
+            &mut send,
+            Message::CacheWatch {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                cache: cache.to_string(),
+                key,
+                prefix,
+                shard,
+                from_offset,
+                subscription_id: None,
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = read_message_with_limit(
+            &mut recv,
+            &mut frame_scratch,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        let (subscription_id, resume_offset, resnapshot) = match response {
+            Some(Message::CacheWatchStarted {
+                subscription_id,
+                resume_offset,
+                resnapshot,
+            }) => (subscription_id, resume_offset, resnapshot),
+            Some(Message::SubscribeCursorError {
+                reason,
+                requested,
+                available,
+            }) => {
+                return Err(SubscribeCursorError {
+                    reason,
+                    requested,
+                    available,
+                }
+                .into());
+            }
+            Some(Message::NotLeader {
+                node_id,
+                addr,
+                generation,
+            }) => {
+                return Err(NotLeaderError {
+                    node_id,
+                    addr,
+                    generation,
+                }
+                .into());
+            }
+            other => return Err(anyhow::anyhow!("cache watch failed: {other:?}")),
+        };
+
+        let (stream_tx, stream_rx) = oneshot::channel();
+        self.event_stream_routers[connection_index]
+            .send(EventRouterCommand::Register {
+                subscription_id,
+                response: stream_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("event stream router closed"))?;
+        let recv = stream_rx.await.context("event stream response dropped")??;
+        Ok(crate::client::cache_watch::CacheWatch::spawn_pump(
+            recv,
+            resume_offset,
+            resnapshot,
+            self.runtime_config.client_sub_queue_capacity.max(1),
+            self.runtime_config.max_frame_bytes,
+        ))
+    }
+
     /// Take up to `max_records` for a consumer group on one shard.
     ///
     /// An empty answer means nothing was available, not an error. Each record

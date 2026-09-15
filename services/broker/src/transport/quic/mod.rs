@@ -9,6 +9,7 @@ mod streams;
 mod telemetry;
 
 pub mod handlers {
+    pub mod cache_watch;
     pub mod publish;
     pub mod subscribe;
 }

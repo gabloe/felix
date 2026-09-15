@@ -119,13 +119,26 @@ pub const FEATURE_GROUP_DEAD_LETTERS: u32 = 0x0000_0010;
 /// request existed has no arm for it.
 pub const FEATURE_STREAM_SHARDS: u32 = 0x0000_0020;
 
+/// The broker serves `cache_watch`: a subscription to changes for one cache
+/// key or key prefix.
+///
+/// Advertised by a *broker*, like `FEATURE_CACHE_DELETE` and for the same
+/// reason: this is a request, and sending it to a broker that has no arm for
+/// it ends that broker's control loop rather than returning an error.
+///
+/// Only a broker whose cache is log-backed advertises it. A watch's contract is
+/// built on log offsets — resume, duplicate detection, and the lag signal all
+/// name them — and a cache with no log has none to offer.
+pub const FEATURE_CACHE_WATCH: u32 = 0x0000_0040;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
     | FEATURE_CACHE_DELETE
     | FEATURE_CONSUMER_GROUP
     | FEATURE_GROUP_DEAD_LETTERS
-    | FEATURE_STREAM_SHARDS;
+    | FEATURE_STREAM_SHARDS
+    | FEATURE_CACHE_WATCH;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

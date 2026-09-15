@@ -109,7 +109,8 @@ Bit field for optional features:
 | 2   | 0x0004 | Shared binary event batch |
 | 3   | 0x0008 | Acked binary publish batch (modifier on bit 0) |
 | 4   | 0x0010 | Binary publish acknowledgement (broker → client) |
-| 5-15| -      | Reserved (must be 0) |
+| 5   | 0x0020 | Event batch carries a `base_offset` (modifier on bits 1/2) |
+| 6-15| -      | Reserved (must be 0) |
 
 Receivers must **reject** a frame carrying a flag bit they do not recognise, rather
 than ignoring the bit. These bits select how the payload is parsed, so ignoring an
@@ -250,6 +251,34 @@ Retrieve a value from the cache.
 - Broker responds with `cache_value` containing the same `request_id`
 - Value is `null` if key is missing or expired
 
+#### CacheWatch
+
+Subscribe to changes for one cache key or key prefix.
+
+```json
+{
+  "type": "cache_watch",
+  "tenant_id": "string",
+  "namespace": "string",
+  "cache": "string",
+  "key": "string | absent",
+  "prefix": "string | absent",
+  "shard": "number | absent",
+  "from_offset": "number | absent"
+}
+```
+
+**Semantics**:
+- Sent only to a broker that advertised `FEATURE_CACHE_WATCH` — only brokers
+  whose cache is log-backed do
+- Exactly one of `key` / `prefix`; both or neither is refused
+- `from_offset` resumes at the first change not yet seen; absent watches from
+  now. An offset past the tail is refused with `subscribe_cursor_error`
+- Confirmed with `cache_watch_started`; changes arrive as `cache_event` on a
+  unidirectional stream bound by `event_stream_hello`, exactly like a
+  subscription's
+- Served by the shard's owner; elsewhere answered with `not_leader`
+
 ### Server → Client Messages
 
 #### Event
@@ -323,6 +352,61 @@ Cache lookup response.
 - `request_id`: Matches the request
 - `key`: Requested key
 - `value`: Retrieved value or `null` if missing/expired
+
+#### CacheWatchStarted
+
+Watch confirmation.
+
+```json
+{
+  "type": "cache_watch_started",
+  "subscription_id": "number",
+  "resume_offset": "number",
+  "resnapshot": "bool | absent"
+}
+```
+
+**Semantics**:
+- `resume_offset` is where live delivery begins; everything below it was
+  covered by the replay or the snapshot
+- `resnapshot: true` means the requested history was collapsed by compaction,
+  so the watch begins with each matching key's current value instead — a
+  defined signal, never a silent gap
+
+#### CacheEvent
+
+One cache change on a watch's event stream.
+
+```json
+{
+  "type": "cache_event",
+  "key": "string",
+  "value": "base64-encoded-bytes | absent",
+  "offset": "number",
+  "expires_at_millis": "number | absent"
+}
+```
+
+**Semantics**:
+- Absent `value` means the key was deleted
+- `offset` is the change's cache-log offset — checkpoint `offset + 1` to resume
+- Offsets are sparse on a filtered watch, so a gap between them is not a drop
+  signal; `cache_watch_lagged` is
+
+#### CacheWatchLagged
+
+The watch fell behind; the broker ends the stream after this.
+
+```json
+{
+  "type": "cache_watch_lagged",
+  "resume_from": "number"
+}
+```
+
+**Semantics**:
+- Everything already queued was delivered first
+- Re-watching with `from_offset = resume_from` is gapless
 
 #### Ok
 
@@ -650,6 +734,25 @@ sequenceDiagram
 :::note[Request Multiplexing]
 Cache streams support request pipelining. Clients can send multiple requests without waiting for responses. The broker may respond out of order; use `request_id` to correlate requests and responses.
 :::
+
+### Cache Watch
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: cache_watch (key or prefix, from_offset?)
+    Note over S: registers the watcher, then reads the log tail
+    S->>C: event_stream_hello (uni stream)
+    S->>C: cache_watch_started (resume_offset, resnapshot?)
+    S->>C: cache_event × n (replay or snapshot, offsets ascending)
+    S->>C: cache_event (live changes)
+    opt watch falls behind
+        S->>C: cache_watch_lagged (resume_from)
+        Note over C: re-watch with from_offset = resume_from
+    end
+```
+
 ## Stream Types and Lifecycle
 
 Felix uses different QUIC stream patterns for different workload characteristics:
@@ -835,8 +938,11 @@ Planned protocol enhancements (not in v1):
 - **Quotas**: per-tenant and per-namespace limits
 
 Since delivered, and no longer on this list: consumer acknowledgements for
-at-least-once delivery (consumer groups), historical replay from an offset, and
-tenant isolation. Sequence numbers for exactly-once are **not** on this list —
+at-least-once delivery (consumer groups), historical replay from an offset,
+tenant isolation, and — for the cache — server-side filtering, which is what a
+keyed watch is (`cache_watch` delivers one key or prefix, filtered at the
+broker's fanout boundary). Stream filtering above refers to streams, where it
+remains future. Sequence numbers for exactly-once are **not** on this list —
 exactly-once is not planned.
 
 These extensions will be added the same way every capability has been: an
