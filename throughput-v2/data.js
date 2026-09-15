@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789481858613,
+  "lastUpdate": 1789482474307,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7956,6 +7956,58 @@ window.BENCHMARK_DATA = {
             "range": "3586.87",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 667408.17\nmean: 667346.43\nstdev: 3586.87\ncv: 0.54%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02aa1ef0b8895f1537fab3dace6a99492ee9e252",
+          "message": "Release v0.3.0: the composed-semantics release (#367)\n\n* release: bump the workspace to 0.3.0\n\nThe composed-semantics release: keyed cache watch (#348), retained\ndelivery (#349), counters (#350), and group state replicated whole —\nthe dead-letter list beside the cursors. Tag v0.3.0 once #365 is in;\nrelease.yml builds the artifacts the real-network perf suite consumes.\n\n* release: demo lockfiles follow the workspace to 0.3.0",
+          "timestamp": "2026-09-15T07:25:39-07:00",
+          "tree_id": "3f5fbe2c609f7066d212d6a0b3d8c31c21fa6ecc",
+          "url": "https://github.com/gabloe/felix/commit/02aa1ef0b8895f1537fab3dace6a99492ee9e252"
+        },
+        "date": 1789482472928,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 321182.2,
+            "range": "3908.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 321182.20\nmean: 319740.19\nstdev: 3908.16\ncv: 1.22%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 321182.2,
+            "range": "3908.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 321182.20\nmean: 319740.19\nstdev: 3908.16\ncv: 1.22%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75949.68,
+            "range": "1053.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75949.68\nmean: 76089.65\nstdev: 1053.46\ncv: 1.38%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 759496.76,
+            "range": "10534.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 759496.76\nmean: 760896.51\nstdev: 10534.57\ncv: 1.38%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
