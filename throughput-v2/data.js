@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789438332727,
+  "lastUpdate": 1789439720171,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7488,6 +7488,58 @@ window.BENCHMARK_DATA = {
             "range": "21047.98",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 760961.34\nmean: 756305.70\nstdev: 21047.98\ncv: 2.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7055b8513aab9befd54e6b9981a89725c269be65",
+          "message": "The chaos pass: restart, kill, freeze, and wipe, losing nothing (#342) (#354)\n\nThe M13 completion signal, run against three real binaries with no database\nanywhere: broker-shaped traffic and metadata writes flow while every member\nis SIGTERM-restarted, the leader is SIGKILLed, the leader is frozen with\nSIGSTOP past several elections and thawed (the single-machine stand-in for\na partition, the same discipline the broker leader-failover suite uses),\nand a follower's volume is wiped outright. The verdict each run: zero\nfailed calls, election gaps bounded and measured rather than failed, and\nevery write acknowledged with a 201 present on every member afterward —\nincluding the member rebuilt from nothing.\n\nSeeding rides #340's own path — an ImportState command proposed over the\nreal propose route — which is also what lets the test mint operator tokens\nlocally.\n\nThe suite caught four real bugs before it ever went green, which is the\nargument for its existence:\n\n- openraft's loosen-follower-log-revert feature is not optional for us: a\n  member rejoining with a wiped volume reports a log that went backwards,\n  and without the feature the *leader* trips a debug assertion in its\n  replication-progress tracking when that member returns — a release build\n  would instead carry the inconsistent progress state silently.\n- A restart is not done until the state machine is: a restarted member\n  learned the leader within a heartbeat and reported ready while still\n  replaying its log, serving a world missing entries it had itself\n  committed. Startup now blocks until replay reaches the committed index\n  persisted on its own disk.\n- A wiped member's apply-lag reads zero, because lag is measured against\n  its own (empty) log — the exact blind spot for a member that holds none\n  of the group's state. Readiness now refuses a follower that knows a\n  leader but holds an empty log; a leader is exempt, and a new cluster is\n  leaderless, so formation is never blocked.\n- One hung hop must not eat the whole write budget: a frozen leader\n  accepts a forwarded connection and stalls, and a single forward could\n  consume every retry the budget was meant to fund. Attempts are now\n  individually capped well below the budget.\n\nAll four are recorded in docs/metadata-raft-design.md's findings, the\ndocs-site page moves to M13-complete with the fault scope stated honestly\n(what a single machine can produce), and the status-table row keeps the\nsame Partial-for-fault-scope honesty the leader-failover row set the\nprecedent for.",
+          "timestamp": "2026-09-14T19:32:47-07:00",
+          "tree_id": "d5558c062b91a457faccbbf6f8a56829ddd441db",
+          "url": "https://github.com/gabloe/felix/commit/7055b8513aab9befd54e6b9981a89725c269be65"
+        },
+        "date": 1789439719244,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230607.06,
+            "range": "4082.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230607.06\nmean: 230931.34\nstdev: 4082.08\ncv: 1.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230607.06,
+            "range": "4082.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230607.06\nmean: 230931.34\nstdev: 4082.08\ncv: 1.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55405.74,
+            "range": "1343.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55405.74\nmean: 54854.71\nstdev: 1343.29\ncv: 2.45%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 554057.36,
+            "range": "13432.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 554057.36\nmean: 548547.10\nstdev: 13432.89\ncv: 2.45%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
