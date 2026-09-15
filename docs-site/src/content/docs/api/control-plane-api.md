@@ -193,11 +193,13 @@ Fetch tenant signing keys (public JWKS) used by brokers to verify Felix tokens.
 The control plane is a separate service holding the metadata brokers read:
 tenants, namespaces, streams, caches, the node catalog, and shard assignments.
 
-It is a **stateless REST service over Postgres**, and consistency comes from
-there rather than from a consensus protocol between instances — instances do not
-know about each other. Run several against one highly available database; each
-answers `/v1/system/ready` only when it can reach a database whose schema
-matches its build.
+It is a **REST service**, and where its consistency comes from depends on the
+backend. On Postgres the instances are stateless and do not know about each
+other: consistency comes from the shared database, and you run several against
+one highly available one — each answering `/v1/system/ready` only when it can
+reach a database whose schema matches its build. On the Raft backend the
+instances hold the metadata themselves and consistency comes from the consensus
+between them. The API below is identical either way.
 
 A Raft backend makes this metadata highly available without depending on
 Postgres for it: the instances replicate it between themselves and survive
