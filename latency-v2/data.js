@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789481693954,
+  "lastUpdate": 1789481855099,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10032,6 +10032,72 @@ window.BENCHMARK_DATA = {
             "range": "3623.62",
             "unit": "us",
             "extra": "trials: 5\nmedian: 354.00\nmean: 2929.40\nstdev: 3623.62\ncv: 123.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3504602d9a5d76babdbff20719f3495dd16a960e",
+          "message": "feat(counters): delta records folded into a durable running sum (#350) (#365)\n\nThe last rung of the composed-semantics ladder. counter_add appends a\nsigned delta record; the broker folds the running sum and answers with\nthe sum including the delta — one round trip to increment and know\nwhere you stand. counter_get reads the current sum, with never-written\ndistinct from zero. Negotiated as FEATURE_COUNTERS, durable brokers\nonly: a sum any restart resets is worse than refusing to count.\n\nThe three decisions #350 asked for, recorded in docs/projections.md:\n\n- Scope: addressed (tenant, namespace, cache, key) — the registered\n  cache scope, the same key-to-shard hash, the same owner and\n  forwarding — but stored beside the cache, not in it. A counter record\n  is a new durable shape; in the cache's own logs it would make every\n  one unreadable to a build that predates counters, promoted replicas\n  included. Corollary, proven by test: a counter and a cache value may\n  share a key and are unrelated.\n- Watch interplay: a cache watch does not see counter changes (they are\n  different logs). A watch over counters is future work, not a silent\n  half-feature.\n- Idempotency: documented at-least-once. A retried add after a lost\n  acknowledgement double-counts — deltas carry no dedupe identity — and\n  the failure mode is stated wherever the semantics are.\n\nThe projection model does the rest: the sum is a fold rebuilt from the\nlog on recovery and never trusted from memory; compaction collapses\napplied deltas into one checkpoint record per key, appended at the tail\nso neither the sum nor the offset space moves (regression-tested across\n4,000 deltas and several compactions); and the counter log rides its\ncache shard's replica set through the same aux-log pass that ships\ngroup state — a promoted replica folds the true sum and keeps counting,\nproven in the cluster harness with the reverted-fix ritual.\n\nOn the wire: counter_add/counter_get/counter_value client messages;\nforwarded ops CounterAdd/CounterGet (4/5) riding the cache-forward\nenvelope's value bytes as eight big-endian bytes, body layout\nuntouched; replicate kinds 20/21.\n\nDocs are scenario-driven per request: the landing page gains a\nComposed data flow card beside the pub/sub, cache, and queue cards\nsaying when each composition is the right tool; the cache page gains a\nCounters section and a which-flow-for-which-problem table; and the\nstale atomic-increment-(planned) notes now point at the shipped thing.",
+          "timestamp": "2026-09-15T07:14:18-07:00",
+          "tree_id": "5b65a6300b8237f397b45c4ea5462a5f11a04cf9",
+          "url": "https://github.com/gabloe/felix/commit/3504602d9a5d76babdbff20719f3495dd16a960e"
+        },
+        "date": 1789481853036,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 86,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 86.00\nmean: 85.40\nstdev: 0.89\ncv: 1.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 118,
+            "range": "3.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 118.00\nmean: 119.00\nstdev: 3.00\ncv: 2.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 143,
+            "range": "8.20",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 143.00\nmean: 144.60\nstdev: 8.20\ncv: 5.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 119,
+            "range": "7.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 119.00\nmean: 121.40\nstdev: 7.09\ncv: 5.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 258,
+            "range": "104.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 307.20\nstdev: 104.61\ncv: 34.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 574,
+            "range": "578.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 574.00\nmean: 858.80\nstdev: 578.36\ncv: 67.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
