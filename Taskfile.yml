@@ -127,6 +127,22 @@ tasks:
       # Belongs here for the same reason: a feature bit or a message variant is
       # added in Rust, and that is the moment the docs fall behind.
       - "python3 scripts/check_capability_docs.py"
+      # A milestone label in a published page is wrong the day it is written —
+      # it names a project-board row the reader has never seen — so unlike the
+      # status-claim report this one can fail.
+      - "python3 scripts/check_public_docs_refs.py"
+  docs:status:
+    desc: "List the docs' claims that something is not built — read these when closing a milestone"
+    # Not in docs:evidence, because it cannot fail on its own: a claim that
+    # something is unbuilt is correct until the day it ships, and no check can
+    # see that day from the prose alone. It is a report to read at the moment
+    # those claims go stale, which is a milestone closing. Metadata Raft shipped
+    # and five pages went on saying it "is not started"; this is what finds that.
+    cmds:
+      - "python3 scripts/check_status_claims.py --report"
+      # Automatic where it can be: a claim citing an issue that is now closed is
+      # drift with no judgement required. Skips without `gh`.
+      - "python3 scripts/check_status_claims.py --check-issues"
   deny:rsa:default:
     cmds:
       - |

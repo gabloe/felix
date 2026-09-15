@@ -33,7 +33,7 @@ Felix assumes Kubernetes for process lifecycle, identity (ServiceAccounts), netw
 
 ## System Architecture
 
-![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
 Three things carry most of the design.
 
@@ -49,7 +49,8 @@ The control plane is not on the data path. A publish, a subscribe, or a cache op
 
 ### Control plane
 
-Serves metadata over REST, backed by Postgres or an in-memory store. It owns tenants, namespaces, streams, caches, the node catalog, and shard assignments, and it runs placement on a timer. Brokers seed from it at startup and gate readiness on that seeding, so a broker does not accept traffic for streams it does not yet know about.
+Serves metadata over REST, backed by a Raft group across the instances, by
+Postgres, or by an in-memory store. It owns tenants, namespaces, streams, caches, the node catalog, and shard assignments, and it runs placement on a timer. Brokers seed from it at startup and gate readiness on that seeding, so a broker does not accept traffic for streams it does not yet know about.
 
 ### Data plane
 
@@ -315,9 +316,10 @@ regulatory or compliance purposes until it ships.
 
 - **Sharding:** Partition streams across brokers
 - **Connection pooling:** Reuse connections across shards
-- **Control plane:** stateless REST over Postgres; scale by adding instances,
-  since placement is a pure function of the catalog and needs no agreement
-  between them
+- **Control plane:** REST over Raft, Postgres, or memory; scale by adding
+  instances, since placement is a pure function of the catalog and needs no
+  agreement between them. On the Postgres backend the instances are stateless;
+  on the Raft backend they hold the metadata themselves
 - **Data plane:** many broker nodes for capacity
 
 No cluster-level throughput figure is claimed here: the published benchmarks are

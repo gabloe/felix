@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 660" width="900" height="660" role="img" aria-label="Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 660" width="900" height="660" role="img" aria-label="Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.">
 
   <style>
     .band   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
@@ -100,7 +100,7 @@
 
   <rect class="cp" x="190" y="474" width="520" height="88" rx="8"/>
   <text class="title" x="214" y="500">Metadata &amp; placement</text>
-  <text class="sub" x="214" y="521">REST · Postgres or in-memory · not on the data path</text>
+  <text class="sub" x="214" y="521">REST · Raft, Postgres or in-memory · not on the data path</text>
   <text class="sub" x="214" y="539">owns tenants, namespaces, streams, caches, nodes, shard assignments</text>
   <text class="sub" x="214" y="555">places every shard by rendezvous hashing</text>
 

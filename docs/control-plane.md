@@ -18,9 +18,11 @@ the data plane and does not carry user payloads.
 > **This section is the original sketch; the real thing now exists.** The
 > control plane runs one of two production-shaped backends: a stateless REST
 > service over a highly available Postgres (what that database must provide
-> is [ha-postgres.md](ha-postgres.md)), or — experimentally, pending the
-> M13 chaos pass — a Raft group embedded in the instances themselves, with
-> no external database. The implemented design, which differs from the
+> is [ha-postgres.md](ha-postgres.md)), or a Raft group embedded in the
+> instances themselves, with no external database. M13 is complete, chaos
+> pass included: three instances survive rolling restarts, a SIGKILLed
+> leader, a frozen leader, and a wiped volume without losing an
+> acknowledged write. The implemented design, which differs from the
 > sketch below in the ways that mattered, is
 > [metadata-raft-design.md](metadata-raft-design.md); operator-facing usage
 > is on the docs-site Metadata Raft page. This sketch is kept only as the

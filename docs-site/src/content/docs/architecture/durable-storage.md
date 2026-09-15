@@ -335,5 +335,6 @@ makes it fail rather than print the wrong numbers.
   every read comes from local segments. Sealed segments are immutable and carry
   a whole-file checksum, and reads already route per segment — so a cold tier
   slots in at that seam when it is built.
-- **Single node.** Replication is M5; `seal`'s checksum and `read_range`'s
-  bounded paging exist to serve it.
+- **Single node.** This page describes one broker's storage; replication
+  across brokers is layered on top of it, and `seal`'s checksum and
+  `read_range`'s bounded paging exist to serve that.

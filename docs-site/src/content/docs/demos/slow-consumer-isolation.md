@@ -63,7 +63,14 @@ and this demo runs both so the trade-off is visible instead of theoretical.
   cannot tell it missed anything.
 - Numbers are single-node over loopback at fanout 3. They say nothing about
   behaviour at thousands of subscribers or across a real network.
-- **Lost events are gone.** Felix is at-most-once today: no replay, no redelivery.
+- **Lost events are gone — in this configuration.** The demo publishes to an
+  ephemeral stream and drops on overflow, which is at-most-once by choice: there
+  is no offset to rewind to and nothing redelivers. That is the point, because
+  it is what makes the drops observable. Felix itself offers stronger options —
+  a durable stream replays by offset, and a queue redelivers on visibility
+  timeout with bounded attempts and a dead-letter destination. Picking one of
+  those is what the [state divergence](/felix/demos/state-divergence/) demo
+  measures the cost of.
 
 ## Architecture
 

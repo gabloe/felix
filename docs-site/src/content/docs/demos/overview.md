@@ -19,12 +19,14 @@ QUIC server on a random local port, runs the scenario, and exits.
 
 ### Local State Divergence (`demo-state-divergence`)
 
-- The counterpart to the isolation demo: what at-most-once delivery costs a
-  consumer that holds a local copy of state.
+- The counterpart to the isolation demo: what an at-most-once *configuration*
+  costs a consumer that holds a local copy of state. Both demos run an ephemeral
+  stream that drops on overflow; a durable stream replays by offset and a queue
+  redelivers, so this is a cost you opt into, not Felix's delivery model.
 - A stalled consumer recovers, everything settles, and it is still permanently
   wrong about most of the keyspace — with no signal that it is.
-- Demonstrates a gap rather than a feature, and becomes the acceptance test for
-  gap-free subscribe when that lands.
+- Demonstrates what dropping costs, which is the case for choosing a durable
+  stream or a queue when a consumer keeps derived state.
 - See [Local State Divergence](/felix/demos/state-divergence/).
 
 ```bash

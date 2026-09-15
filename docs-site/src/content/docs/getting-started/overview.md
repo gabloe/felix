@@ -143,16 +143,19 @@ Metadata and coordination layer (in progress). Current capabilities include:
 - Tenant, namespace, stream, and cache management endpoints
 - Snapshot + changes feeds for metadata consumers
 - Auth bootstrap endpoints (JWKS + token exchange)
-- In-memory or Postgres-backed metadata storage
+- Metadata storage in memory, in Postgres, or replicated between the
+  control-plane instances themselves by Raft
 
 Placement and multi-node coordination are implemented: the control plane assigns
 every shard of every stream and cache to a leader by rendezvous hashing, and
 brokers follow its assignment feed.
 
+Raft-based consensus for cluster metadata has shipped: control-plane instances
+replicate metadata between themselves, so availability need not depend on
+Postgres. See [Metadata Raft](/felix/architecture/metadata-raft/).
+
 Planned next steps:
 
-- Raft-based consensus for cluster metadata, so availability does not depend on
-  Postgres
 - Quota enforcement
 - Fleet-wide health aggregation
 
@@ -219,13 +222,24 @@ flowchart TB
 
 ### Multi-broker cluster
 
-![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
-The control plane is **REST over Postgres**, not a Raft quorum. It is not on the
-data path: brokers read its assignment feed in the background and resolve an
-owner from a snapshot they already hold. Raft remains the intended way to make
-control-plane metadata highly available without depending on Postgres for it,
-and is not started.
+The control plane is **REST over a choice of backend**, and either way it is not
+on the data path: brokers read its assignment feed in the background and resolve
+an owner from a snapshot they already hold.
+
+| Backend | What holds the metadata | When to pick it |
+| --- | --- | --- |
+| `memory` | This process, nothing else. The default. | Development, and the harness |
+| `postgres` | One external database the instances share | A platform that already runs an HA Postgres |
+| `raft` | The control-plane instances themselves, replicated between them | No external database to operate — edge sites, appliances, or anywhere Postgres is a burden rather than a convenience |
+
+Raft **has shipped**: the instances form a quorum, hold metadata in their own
+replicated log, and survive losing one without losing an acknowledged write.
+Postgres remains fully supported rather than deprecated — the trade between the
+two is in [Metadata Raft](/felix/architecture/metadata-raft/) and
+[Control-plane HA](/felix/deployment/control-plane-ha/), and there is a
+documented migration from an existing Postgres deployment.
 
 See [Deployment Guides](/felix/deployment/local/) for detailed instructions.
 

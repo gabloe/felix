@@ -3,22 +3,19 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::note[Status: M13 complete — the milestone signal is met]
-All six slices are in ([#333](https://github.com/gabloe/felix/issues/333)):
-the consensus core with its crash-safe store passing openraft's own storage
-suite (#337), the deterministic metadata state machine (#338), the store
-backend serving the whole HTTP API with no external database (#339), the
-Postgres migration and DR path (#340), Raft-aware probes and configuration
-(#341), and the chaos pass (#342): three real binaries under continuous
-broker traffic survive rolling restarts, a SIGKILLed leader, a frozen
-(SIGSTOP) leader thawed past several elections, and a wiped volume — with
-**zero failed calls and every acknowledged write present on every member**.
-The fault set is what a single machine can produce, the same honest scope
-as the broker leader-failover suite. Postgres remains a fully supported
-backend; pick per deployment ([Control-plane
-HA](/felix/deployment/control-plane-ha/) covers that trade). The
-authoritative design record, with every alternative, finding, and argument,
-is
+:::note[Available, and proven against faults]
+Every control-plane instance can hold metadata itself, with no external
+database. What that survives has been tested rather than asserted: three
+instances under continuous broker traffic come through rolling restarts, a
+leader killed with SIGKILL, a leader frozen past several elections and then
+thawed, and a member whose volume is wiped — with **zero failed calls and
+every acknowledged write present on every member afterwards**.
+
+The faults injected are the ones a single machine can produce; multi-machine
+fault injection is not covered here. Postgres remains a fully supported
+backend, and [Control-plane HA](/felix/deployment/control-plane-ha/) covers
+how to choose. The design record, with the alternatives considered and the
+problems found while building it, is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
 
@@ -77,7 +74,7 @@ flowchart LR
 
 | Event | Behaviour |
 | --- | --- |
-| One instance of three dies | Writes pause for one election timeout; reads keep serving; the M7 zero-failed-calls signal holds |
+| One instance of three dies | Writes pause for one election timeout; reads keep serving; no broker call fails |
 | An instance loses its volume | Rejoins empty, is caught up by snapshot install; no data surgery |
 | Quorum lost | Survivors fail readiness rather than serve writes that cannot commit; brokers keep serving on their catalogs and leases, as during any control-plane outage |
 | Migration from Postgres | A minutes-long metadata write freeze: import a consistent snapshot as the group's first state, repoint, verify, retire the database. Brokers tolerate the freeze by design |
@@ -121,7 +118,8 @@ leader — a quorum has acknowledged it within the last 5s. That last clause
 is what takes a partitioned, quorumless leader out of rotation before it
 serves stale reads, and it is proven by test. `/v1/system/live` stays
 process-local, exactly as before: losing quorum is not fixed by a restart.
-The M7 probe settings (intervals, thresholds) carry over unchanged.
+The probe settings on [Control-plane HA](/felix/deployment/control-plane-ha/)
+(intervals, thresholds) carry over unchanged.
 
 Consensus position ships as metrics: `felix_meta_raft_term`,
 `_is_leader`, `_leader_known`, `_last_log_index`, `_last_applied_index`,
@@ -184,8 +182,8 @@ spec:
 ```
 
 The PVC is what makes a pod restart a rejoin; a member whose volume is lost
-rejoins empty and is rebuilt by snapshot install. Packaged charts are M9's
-job (#131) — this is the reference shape they will encode.
+rejoins empty and is rebuilt by snapshot install. Packaged Helm charts are not
+published yet; this is the reference shape they will encode.
 
 ## Migrating from Postgres
 
@@ -217,7 +215,7 @@ artifact, and `migrate import … --overwrite` onto a fresh group is the
 restore. `--overwrite` discards whatever the target holds — checkpoints
 included — so it belongs in a runbook, run deliberately, and nowhere else.
 
-## What exists today (#337–#339)
+## How it is built
 
 The state machine is real: `MetadataStateMachine` wraps the same in-memory
 store the control plane has always had, fed by a versioned command set with
@@ -231,7 +229,7 @@ replica could disagree in production. On a real three-node group, eight
 concurrent tenant bootstraps come out with exactly one winner and three
 byte-identical replicas, settled by nothing but the order the log assigned.
 
-### The consensus core underneath (#337)
+### The consensus core underneath
 
 `services/controlplane/src/raft/` is the whole openraft surface — no
 consensus type escapes it. Outside the seam there are exactly two things: a
