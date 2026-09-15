@@ -41,3 +41,6 @@ docs-site/.astro/
 data/soak/
 /crates/felix-storage/fuzz/target
 .venv-perf
+
+# Perf session inventories carry the bootstrap token and derived state.
+scripts/perf/azure/sessions/

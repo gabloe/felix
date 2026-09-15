@@ -22,7 +22,24 @@ release_url="https://github.com/gabloe/felix/releases/download/${RELEASE_TAG}/fe
 bootstrap_token="$(openssl rand -hex 24)"
 my_ip="$(curl -fsS https://api.ipify.org)"
 
+# The IdP flow. Two ways in: paste IDP_TOKEN + the issuer/JWKS/audience
+# yourself, or (the easy path) give the three app-registration secrets and let
+# the suite derive the rest and mint the token. The seed and the token-exchange
+# scenario both run against whatever this resolves to — the real flow, not demo
+# auth.
+if [ -z "${IDP_TOKEN:-}" ] && [ -n "${IDP_TENANT_ID:-}" ]; then
+  : "${IDP_CLIENT_ID:?set IDP_CLIENT_ID with IDP_TENANT_ID}"
+  : "${IDP_CLIENT_SECRET:?set IDP_CLIENT_SECRET with IDP_TENANT_ID}"
+  : "${IDP_AUDIENCE:?set IDP_AUDIENCE (the app Application ID URI)}"
+  export IDP_ISSUER="${IDP_ISSUER:-https://login.microsoftonline.com/${IDP_TENANT_ID}/v2.0}"
+  export IDP_JWKS_URL="${IDP_JWKS_URL:-https://login.microsoftonline.com/${IDP_TENANT_ID}/discovery/v2.0/keys}"
+  export IDP_TOKEN="$("${here}/idp-token.sh")"
+  echo ">> minted an IdP token for audience ${IDP_AUDIENCE}"
+fi
+
 echo ">> session ${SESSION}: tier ${TIER}, ${LOCATION}, release ${RELEASE_TAG}"
+# Land in the right subscription when the login has more than one.
+[ -n "${AZ_SUBSCRIPTION:-}" ] && az account set --subscription "${AZ_SUBSCRIPTION}"
 az group create --name "${group}" --location "${LOCATION}" --output none
 
 deployment=$(az deployment group create \
