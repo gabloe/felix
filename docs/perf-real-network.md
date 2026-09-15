@@ -20,6 +20,16 @@ This document is the design for closing that gap. The budget is an MSDN
 subscription's $200/month of Azure credit, which shapes several decisions
 below — this suite provisions, runs, and **tears down**; nothing idles.
 
+**The deliverable is a comprehensive performance-analysis page on the docs
+site**, of publication quality: every scenario's aggregates *and* spread,
+each row stamped with the environment that produced it (tier, VM SKUs, zones,
+release tag, measured RTT baselines), fed through the existing
+charts-and-snippets pipeline so page assembly is mechanical — with a written
+analysis on top that says what the numbers mean, where they beat or trail a
+coordination store, and where the design's costs show up. The `LOADGEN_JSON`
+rows and the per-session `session.json` are shaped for exactly that: the
+analysis reads structured data, never scraped prose.
+
 ## What a run must hold constant
 
 Three disciplines carry over from the local suite, and two are new:
@@ -143,14 +153,20 @@ benchmarks page in the same shape with an environment column (`loopback` |
    client-credential parameters and does the exchange itself), a scenario
    spec, emits the standard JSONL. Ships *in* the release tarball so the
    load-gen VM downloads the same artifact as the brokers.
-2. **`scripts/perf/azure/`** — `provision.sh` (one resource group per
-   session: VNet, PPG or zones per tier, VMs from `az vm create` with
-   cloud-init), `deploy.sh` (fetch release tarball, systemd units for
-   broker/control-plane, seed tenant + RBAC, register streams/caches),
-   `run.sh` (drive the matrix from the load-gen VM, pull artifacts back),
-   `teardown.sh` (`az group delete --yes`). No Terraform state to babysit for
-   a create-run-destroy lifecycle; plain `az` + cloud-init is auditable and
-   has no standing cost.
+2. **`scripts/perf/azure/`** — reproducible IaC in **Bicep**
+   (`main.bicep`: one resource group per session — VNet + NSG, a proximity
+   placement group for T1 or per-zone pinning for T2, broker/control-plane/
+   load-gen VMs with cloud-init) plus the session lifecycle scripts
+   (`session.sh` deploys and seeds, `run.sh` drives the matrix from the
+   load-gen VM and pulls artifacts back, `teardown.sh` deletes the group).
+   Bicep over Terraform because there is no long-lived state to manage in a
+   create-run-destroy session, and over raw `az create` calls because a
+   declarative template is what makes a session *reproducible* — the same
+   parameters yield the same cluster, which is the whole point of a
+   published benchmark. cloud-init installs the release artifacts on the
+   brokers and control plane and builds `felix-loadgen` on the generator; the
+   IdP bootstrap, tenant seeding, and stream/cache registration run through
+   the real REST + token-exchange flow in `seed.sh`.
 3. **A release to point at** — see below.
 
 ## Budget

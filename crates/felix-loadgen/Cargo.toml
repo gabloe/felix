@@ -1,0 +1,24 @@
+[package]
+name = "felix-loadgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The measuring instrument for the real-network perf suite
+# (docs/perf-real-network.md). Drives a *remote* Felix cluster — every other
+# load driver in the repo is loopback-bound — and emits both the stdout shape
+# scripts/perf expects and one machine-readable JSON line per case.
+
+[[bin]]
+name = "felix-loadgen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+felix-client = { path = "../felix-client", version = "0.3.0" }
+felix-wire = { path = "../felix-wire", version = "0.3.0" }
+quinn = "0.11"
+rustls = "0.23"
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

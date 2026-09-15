@@ -13,6 +13,7 @@ members = [
   "crates/felix-client",
   "crates/felix-conformance",
   "crates/felix-cluster",
+  "crates/felix-loadgen",
   "services/controlplane",
   "services/agent",
   "services/broker",

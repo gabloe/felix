@@ -1,0 +1,19 @@
+#cloud-config
+# The load generator — the measuring instrument, not the measured system.
+# {0} is the git ref felix-loadgen builds from, substituted by main.bicep.
+#
+# Built here, once, during provisioning: the instrument's build does not
+# contaminate a measurement, and building it before any run is what keeps the
+# machines quiet while one is underway. The brokers never build anything.
+package_update: true
+packages:
+  - build-essential
+  - pkg-config
+  - jq
+runcmd:
+  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo -u felix sh -s -- -y --profile minimal
+  - sudo -u felix git clone --depth 1 --branch "{0}" https://github.com/gabloe/felix /home/felix/felix || sudo -u felix git clone --depth 1 https://github.com/gabloe/felix /home/felix/felix
+  # Fail the whole step loudly if the ref does not contain felix-loadgen,
+  # rather than continuing and leaving the marker unwritten (which strands the
+  # session waiter). LOADGEN_REF must be a ref that has the crate.
+  - cd /home/felix/felix && sudo -u felix /home/felix/.cargo/bin/cargo build --release -p felix-loadgen && install -m 0755 /home/felix/felix/target/release/felix-loadgen /usr/local/bin/felix-loadgen && touch /var/lib/cloud/instance/felix-provisioned
