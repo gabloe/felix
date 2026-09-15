@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789439717179,
+  "lastUpdate": 1789443401944,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9570,6 +9570,72 @@ window.BENCHMARK_DATA = {
             "range": "708.93",
             "unit": "us",
             "extra": "trials: 5\nmedian: 855.00\nmean: 1065.00\nstdev: 708.93\ncv: 66.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "44f78c07230c6aba859e56660113273fb46c9406",
+          "message": "Correct docs claims that outlived the features shipping (#357)\n\n* docs: correct claims that outlived the features shipping\n\nThree sets of claims had gone stale, all in the way `what-felix-is-for.md`\nwarns about — the docs describing a system Felix stopped being.\n\n**Metadata Raft shipped and eight places said it had not.** \"Raft remains the\nintended way ... and is not started\", \"Raft clustering is planned and not\nstarted\", \"REST over Postgres, not a Raft quorum\", plus three pages still\ncalling it \"deferred\" and one calling it experimental \"pending the M13 chaos\npass\" that had already run. The architecture SVG carried it in its visible\nlabel *and* in the `aria-label` a screen reader reads — and that file exists\nin two copies reused across four pages, so the wrong sentence was served from\nsix places.\n\nCorrected to what is true: metadata is held in memory, in Postgres, or\nreplicated between the control-plane instances by Raft. Postgres is **not**\ndeprecated by this — it stays a fully supported backend, and implying\notherwise would be the same error pointing the other way.\n\n**At-most-once was described as Felix's delivery model rather than one\nconfiguration.** Durable streams replay by offset and queues redeliver with\nvisibility timeouts, bounded attempts, and dead letters. The demos that\nobserve drops do so because they publish to an ephemeral stream that drops on\noverflow — which is what makes the drops visible, and is a property of the\ndemo. Rescoped in both demo pages, the landing page, `docs/demos.md`, and the\ndemo's own source, including the line `render.rs` prints on every run.\n\n**Internal milestone labels were leaking into the published docs.** \"Status:\nM13 complete — the milestone signal is met\" opens a page written for someone\ndeciding how to deploy Felix, who has never seen that board. Rewritten as what\nthe reader can rely on and what it is proven to survive; the same for \"the M7\nzero-failed-calls signal\", \"Replication is M5\", and \"charts are M9's job\".\n\n**Two checkers**, because this drift is invisible to the ones that exist.\n`check_doc_evidence.py` proves a cited test exists, not that the prose matches\nit, and the claims that rot worst cite nothing: shipping a feature does not\nmake anyone grep for sentences saying it was missing.\n\nNormative-language checking does not find them either. Measured across the\ndocs site: \"always / never / guarantees / cannot / must\" matches 321 sentences\nand would have caught *none* of the Raft drift; widening it to \"is\" matches\n1709, a report nobody reads. Claims that something is unbuilt match 27, and\nevery stale Raft sentence was among them.\n\n- `check_status_claims.py` cannot be a CI gate — \"not built\" is correct until\n  the day it ships, and no check sees that day from prose alone — so it is\n  `task docs:status`, read when closing a milestone, which is when these go\n  wrong. Claims citing an issue are checked automatically: a closed issue\n  under a \"not built\" sentence is drift needing no judgement. Its phrase list\n  missed \"deferred\" on the first pass of this very cleanup, which is why that\n  phrase is in it now.\n- `check_public_docs_refs.py` *is* a gate, in `task docs:evidence`: a\n  milestone label in a published page is wrong the day it is written. It flags\n  all five pre-existing instances and passes on the corrected text.\n\n* docs: two more places Postgres was named as the only metadata store\n\nThe landing page's 'working today' card and the control-plane API page both\nstill described the control plane as REST over Postgres specifically. The API\npage's framing needed more than a word swap: where its consistency comes from\ngenuinely differs by backend — the shared database on Postgres, the consensus\nbetween instances on Raft — and the API is identical either way, which is the\npart a reader of that page needs.",
+          "timestamp": "2026-09-14T20:34:11-07:00",
+          "tree_id": "d14f982d2968cb91747cd4ec016cc5e08f6992d2",
+          "url": "https://github.com/gabloe/felix/commit/44f78c07230c6aba859e56660113273fb46c9406"
+        },
+        "date": 1789443399140,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 158.00\nstdev: 1.00\ncv: 0.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 200,
+            "range": "3.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 201.20\nstdev: 3.11\ncv: 1.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 231,
+            "range": "4.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 231.00\nmean: 233.00\nstdev: 4.30\ncv: 1.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "3.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 197.40\nstdev: 3.78\ncv: 1.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 400,
+            "range": "96.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 400.00\nmean: 443.80\nstdev: 96.80\ncv: 21.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 890,
+            "range": "512.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 890.00\nmean: 1122.60\nstdev: 512.98\ncv: 45.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
