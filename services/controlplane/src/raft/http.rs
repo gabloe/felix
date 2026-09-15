@@ -14,9 +14,9 @@ use openraft::raft::{
     VoteRequest, VoteResponse,
 };
 
-use super::types::{Raft, TypeConfig};
+use super::types::TypeConfig;
 
-pub(super) fn router(raft: Raft) -> Router {
+pub(super) fn router(handle: super::RaftHandle) -> Router {
     Router::new()
         .route("/internal/raft/append-entries", post(append_entries))
         .route("/internal/raft/vote", post(vote))
@@ -27,38 +27,46 @@ pub(super) fn router(raft: Raft) -> Router {
         // be refused with a 413 the sender reads as a network fault. Sized
         // to the chunk plus JSON's expansion of binary data.
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
-        .with_state(raft)
+        .with_state(handle)
 }
 
-/// A follower's forwarded proposal: opaque command bytes in, the state
-/// machine's response bytes out. 503 when this node cannot commit it —
-/// including "not the leader any more", which the forwarding side treats as
-/// a retryable answer, not a network fault.
-async fn propose(State(raft): State<Raft>, body: axum::body::Bytes) -> axum::response::Response {
+/// A proposal over HTTP: opaque command bytes in, the state machine's
+/// response bytes out. Goes through the seam's `write`, so a proposal
+/// landing on a follower forwards to the leader and a caller may point at
+/// **any** member — the promise the migration tool leans on. 503 only when
+/// the bounded write budget runs out: no leader, or no quorum.
+async fn propose(
+    State(handle): State<super::RaftHandle>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match raft.client_write(body.to_vec()).await {
-        Ok(response) => (axum::http::StatusCode::OK, response.data).into_response(),
-        Err(err) => (axum::http::StatusCode::SERVICE_UNAVAILABLE, err.to_string()).into_response(),
+    match handle.write(body.to_vec()).await {
+        Ok(bytes) => (axum::http::StatusCode::OK, bytes).into_response(),
+        Err(err) => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            format!("{err:#}"),
+        )
+            .into_response(),
     }
 }
 
 async fn append_entries(
-    State(raft): State<Raft>,
+    State(handle): State<super::RaftHandle>,
     Json(rpc): Json<AppendEntriesRequest<TypeConfig>>,
 ) -> Json<Result<AppendEntriesResponse<u64>, RaftError<u64>>> {
-    Json(raft.append_entries(rpc).await)
+    Json(handle.raft.append_entries(rpc).await)
 }
 
 async fn vote(
-    State(raft): State<Raft>,
+    State(handle): State<super::RaftHandle>,
     Json(rpc): Json<VoteRequest<u64>>,
 ) -> Json<Result<VoteResponse<u64>, RaftError<u64>>> {
-    Json(raft.vote(rpc).await)
+    Json(handle.raft.vote(rpc).await)
 }
 
 async fn install_snapshot(
-    State(raft): State<Raft>,
+    State(handle): State<super::RaftHandle>,
     Json(rpc): Json<InstallSnapshotRequest<TypeConfig>>,
 ) -> Json<Result<InstallSnapshotResponse<u64>, RaftError<u64, InstallSnapshotError>>> {
-    Json(raft.install_snapshot(rpc).await)
+    Json(handle.raft.install_snapshot(rpc).await)
 }

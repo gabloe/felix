@@ -49,6 +49,16 @@ const KEY_LAST_PURGED: &str = "last_purged";
 const KEY_SNAPSHOT_META: &str = "snapshot_meta";
 const KEY_SNAPSHOT_DATA: &str = "snapshot_data";
 
+/// The committed index this store had persisted when it last ran — what a
+/// restarting node must re-apply before it is fit to serve.
+pub(super) fn persisted_committed_index(db: &Database) -> Option<u64> {
+    read_meta::<Option<LogId>>(db, KEY_COMMITTED)
+        .ok()
+        .flatten()
+        .flatten()
+        .map(|log_id| log_id.index)
+}
+
 /// Open (or create) the store file and make sure both tables exist, so
 /// every later read can assume them.
 pub(super) fn open(path: &Path) -> Result<Arc<Database>> {

@@ -3,25 +3,22 @@ title: "Metadata Raft"
 description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
 ---
 
-:::caution[Status: nearly complete — serving, migration, probes, and configuration are in; the chaos validation pass (#342) is what remains]
-Tracked as milestone M13 under
-[#333](https://github.com/gabloe/felix/issues/333). What exists today: the
-consensus core from [#337](https://github.com/gabloe/felix/issues/337) (the
-openraft seam, a crash-safe log/vote/snapshot store that passes openraft's
-own storage conformance suite, HTTP transport, group lifecycle), and the
-metadata state machine from [#338](https://github.com/gabloe/felix/issues/338)
-(the versioned API-shaped command set over the in-memory store, held to
-byte-identical determinism by a harness), and the store backend from
-[#339](https://github.com/gabloe/felix/issues/339): `backend = raft` serves
-the whole HTTP API with **no external database**, proven by a binary-level
-test that creates metadata, restarts the process, and reads it back from
-the Raft log and snapshot alone. Not yet the recommended production path:
-The chaos pass (#342) is still open — until it lands, production
-deployments stay on N stateless instances over one HA Postgres — see
-[Control-plane HA](/felix/deployment/control-plane-ha/). The migration
-path from Postgres (#340) and the Raft-aware probes/configuration (#341)
-are in: see below.
-The authoritative design record, with every alternative and the arguments, is
+:::note[Status: M13 complete — the milestone signal is met]
+All six slices are in ([#333](https://github.com/gabloe/felix/issues/333)):
+the consensus core with its crash-safe store passing openraft's own storage
+suite (#337), the deterministic metadata state machine (#338), the store
+backend serving the whole HTTP API with no external database (#339), the
+Postgres migration and DR path (#340), Raft-aware probes and configuration
+(#341), and the chaos pass (#342): three real binaries under continuous
+broker traffic survive rolling restarts, a SIGKILLed leader, a frozen
+(SIGSTOP) leader thawed past several elections, and a wiped volume — with
+**zero failed calls and every acknowledged write present on every member**.
+The fault set is what a single machine can produce, the same honest scope
+as the broker leader-failover suite. Postgres remains a fully supported
+backend; pick per deployment ([Control-plane
+HA](/felix/deployment/control-plane-ha/) covers that trade). The
+authoritative design record, with every alternative, finding, and argument,
+is
 [`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 :::
 

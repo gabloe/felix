@@ -137,7 +137,7 @@ pub struct RaftStatus {
 /// Cheap to clone; all clones drive the same underlying node.
 #[derive(Clone)]
 pub struct RaftHandle {
-    raft: types::Raft,
+    pub(super) raft: types::Raft,
     id: NodeId,
     write_timeout: Duration,
     /// For forwarding proposals to the leader; pooled per host underneath.
@@ -192,6 +192,10 @@ impl RaftHandle {
 
         std::fs::create_dir_all(&settings.data_dir).context("create raft data dir")?;
         let db = store::open(&settings.data_dir.join("raft.redb"))?;
+        // What this node had committed before it stopped: the floor its
+        // state machine must be replayed back to before anything serves
+        // from it. Read before the node starts, because the node moves it.
+        let committed_floor = store::persisted_committed_index(&db);
         let log_store = store::LogStore::new(Arc::clone(&db));
         let state_machine = store::StateMachineStore::open(db, app).await?;
 
@@ -204,6 +208,34 @@ impl RaftHandle {
         )
         .await
         .context("start raft node")?;
+
+        // A restart is a rejoin, and a rejoin is not done until the state
+        // machine holds everything this node had already acknowledged as
+        // committed. Without this wait, a restarted member reports ready —
+        // it knows a leader within a heartbeat — while its store is still
+        // missing entries it committed in its previous life, and requests
+        // routed to it read a world that never existed. The chaos suite
+        // caught exactly that.
+        if let Some(floor) = committed_floor {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let applied = raft
+                    .metrics()
+                    .borrow()
+                    .last_applied
+                    .map(|log_id| log_id.index)
+                    .unwrap_or(0);
+                if applied >= floor {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "state machine replay stalled: applied {applied} of committed {floor}"
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
 
         Ok(Self {
             raft,
@@ -242,6 +274,12 @@ impl RaftHandle {
     /// error it can surface, not an indefinite hang inside the seam.
     pub async fn write(&self, command: Vec<u8>) -> Result<Vec<u8>> {
         const RETRY_DELAY: Duration = Duration::from_millis(250);
+        // Each attempt is capped well below the whole budget: a single hung
+        // hop — a forward to a leader that is frozen, not dead, so its
+        // socket accepts and then stalls — must not consume every retry the
+        // budget was meant to fund. The chaos suite's freeze fault found
+        // exactly that.
+        const ATTEMPT_CAP: Duration = Duration::from_secs(2);
         let deadline = tokio::time::Instant::now() + self.write_timeout;
 
         let mut last_refusal = None;
@@ -258,17 +296,18 @@ impl RaftHandle {
                         self.write_timeout
                     )));
             }
+            let attempt = remaining.min(ATTEMPT_CAP);
             // Bounded per attempt too: a leader that lost quorum queues
             // proposals forever, and that must become this instance's error,
             // not its hang.
-            match tokio::time::timeout(remaining, self.raft.client_write(command.clone())).await {
+            match tokio::time::timeout(attempt, self.raft.client_write(command.clone())).await {
                 Err(_) => {
                     last_refusal = Some(anyhow::anyhow!("proposal not committed in time"));
                     continue;
                 }
                 Ok(Ok(response)) => return Ok(response.data),
                 Ok(Err(err)) => match forward_target(&err) {
-                    Some(addr) => match self.forward_to(&addr, &command).await {
+                    Some(addr) => match self.forward_to(&addr, &command, attempt).await {
                         Ok(bytes) => {
                             // The counter that says the load balancer keeps
                             // handing writes to followers — informational,
@@ -288,10 +327,11 @@ impl RaftHandle {
         }
     }
 
-    async fn forward_to(&self, addr: &str, command: &[u8]) -> Result<Vec<u8>> {
+    async fn forward_to(&self, addr: &str, command: &[u8], budget: Duration) -> Result<Vec<u8>> {
         let response = self
             .forward
             .post(format!("http://{addr}/internal/raft/propose"))
+            .timeout(budget)
             .body(command.to_vec())
             .send()
             .await
@@ -316,10 +356,13 @@ impl RaftHandle {
     }
 
     /// Entries this member may trail its own log by before readiness calls
-    /// it unfit to serve. Metadata writes are rare; a member hundreds of
-    /// entries behind its own log is not applying, and traffic sent there
-    /// reads arbitrarily stale state without knowing it.
-    const READY_APPLY_LAG_MAX: u64 = 512;
+    /// it unfit to serve. Small on purpose: metadata writes are rare, the
+    /// only healthy lag is the handful of entries in flight between append
+    /// and apply, and a member further behind is serving a past that
+    /// callers cannot detect. (Startup replay is handled separately — a
+    /// node does not finish starting until it has re-applied everything it
+    /// had committed.)
+    const READY_APPLY_LAG_MAX: u64 = 32;
     /// How stale a leader's last quorum acknowledgement may be before
     /// readiness stops trusting it. A leader that has not heard a quorum in
     /// this long is a leader in name only — likely partitioned with the
@@ -342,6 +385,19 @@ impl RaftHandle {
         };
         let last_log = metrics.last_log_index.unwrap_or(0);
         let applied = metrics.last_applied.map(|id| id.index).unwrap_or(0);
+        // A follower with a leader and an *empty* log has just joined an
+        // established group — a wiped volume, a brand-new member — and
+        // holds none of the group's state. Its apply-lag reads zero because
+        // the lag is measured against its own log, which is exactly the
+        // blind spot: until the first replication batch lands, it would
+        // serve an empty world as ready. (A leader is exempt — it holds the
+        // head by definition — and a genuinely new cluster is leaderless,
+        // so this clause never blocks group formation.)
+        if leader != self.id && last_log == 0 {
+            return Err(
+                "joined an established group; nothing replicated into this member yet".to_string(),
+            );
+        }
         let lag = last_log.saturating_sub(applied);
         if lag > Self::READY_APPLY_LAG_MAX {
             return Err(format!(
@@ -444,7 +500,7 @@ impl RaftHandle {
     /// Router serving this node's Raft RPCs, to be merged into the internal
     /// HTTP listener.
     pub fn rpc_router(&self) -> axum::Router {
-        http::router(self.raft.clone())
+        http::router(self.clone())
     }
 
     /// Stop participating. In-flight proposals fail; disk state remains, so
