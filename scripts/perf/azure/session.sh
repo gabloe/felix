@@ -42,9 +42,20 @@ echo ">> session ${SESSION}: tier ${TIER}, ${LOCATION}, release ${RELEASE_TAG}"
 [ -n "${AZ_SUBSCRIPTION:-}" ] && az account set --subscription "${AZ_SUBSCRIPTION}"
 az group create --name "${group}" --location "${LOCATION}" --output none
 
+# Compile to plain ARM JSON and deploy THAT, so the deployment never touches
+# az's bundled bicep — which ships the wrong architecture on Apple Silicon
+# (an ELF binary in a macOS install). Prefer a real `bicep` on PATH; fall back
+# to az's, which works once check_version is off and a good binary is in place.
+compiled="${here}/main.json"
+if command -v bicep >/dev/null 2>&1; then
+  bicep build "${here}/main.bicep" --outfile "${compiled}"
+else
+  az bicep build --file "${here}/main.bicep" --outfile "${compiled}"
+fi
+
 deployment=$(az deployment group create \
   --resource-group "${group}" \
-  --template-file "${here}/main.bicep" \
+  --template-file "${compiled}" \
   --parameters \
     tier="${TIER}" \
     releaseUrl="${release_url}" \

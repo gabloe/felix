@@ -46,3 +46,4 @@ data/soak/
 scripts/perf/azure/sessions/
 scripts/perf/azure/*.env
 !scripts/perf/azure/session.env.example
+scripts/perf/azure/main.json
