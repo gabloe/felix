@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789445449065,
+  "lastUpdate": 1789447197034,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7696,6 +7696,58 @@ window.BENCHMARK_DATA = {
             "range": "8913.03",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 547425.68\nmean: 549595.11\nstdev: 8913.03\ncv: 1.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "113c549261b2b246cd1497efad29a902b804407b",
+          "message": "feat(cache): keyed watch — subscribe to a cache key or prefix (#348) (#360)\n\nA cache you can only poll is much weaker than one you can subscribe to.\ncache_watch, negotiated as FEATURE_CACHE_WATCH, subscribes to changes for\none key or key prefix and delivers each applied write in the shard's\nwrite order with its log offset — puts with their values, deletes as\ntombstones. Pure composition of what existed: the log gives every change\nan offset, the index gives current state, and bounded per-watcher queues\nwith try_send give fanout that never blocks a writer.\n\nThe pieces:\n\n- felix-wire: FEATURE_CACHE_WATCH and four messages (cache_watch,\n  cache_watch_started, cache_event, cache_watch_lagged), all additive\n  and negotiated; a pre-negotiation peer exchanges byte-identical frames.\n- felix-storage: LogCache reports each applied write to a CacheObserver\n  while still holding the shard's write lock — that hold is what makes\n  the order watchers see the shard's order — plus live_entries() for\n  snapshot reads. Compaction notifies nothing: it moves records without\n  changing what the cache holds. Only log-backed stores opt in, so the\n  feature is advertised exactly where offsets exist to anchor it.\n- felix-broker: CacheWatchHub fans out filtered changes. A watcher whose\n  queue overflows is ended, not thinned: filtering makes offsets sparse,\n  so a drop cannot be read from an offset jump the way a stream\n  subscriber's can — the hub records the first missed offset and the\n  delivery path reports it, and re-watching from it is gapless.\n  Watcher ids are monotonic u64s, never recycled (the Slab lesson, #256).\n- broker service: the handler joins resume to live with the\n  register-before-read discipline the stream resume path proved out;\n  an offset compaction has collapsed is answered with a marked snapshot\n  of current values (resnapshot), never a silent gap; ownership is\n  redirected, never proxied, through the same dispatch subscribes use,\n  and a shard the cache does not have is refused rather than served\n  quiet. Verified by reverting to the natural-but-wrong order (catch-up\n  read before registration) and watching the join test fail.\n- felix-client: watch_cache / watch_cache_shard with typed Lagged and\n  resnapshot surfaces, riding the existing event-router plumbing.\n\nDocs are part of the change: protocol.md (messages, feature bit, flow\ndiagram), cache-on-log.md (the watch contract and its reasoning),\nsemantics.md (claims with test citations), subscribe-routing.md, the\ndocs-site cache/wire-protocol/client-sdk pages, an animated diagram of\nfiltered delivery, and the status table gains a keyed-watch row.",
+          "timestamp": "2026-09-14T21:37:41-07:00",
+          "tree_id": "eb849a6d761754ab416b8462ef99c72c98a97db1",
+          "url": "https://github.com/gabloe/felix/commit/113c549261b2b246cd1497efad29a902b804407b"
+        },
+        "date": 1789447196042,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 316319.03,
+            "range": "2339.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316319.03\nmean: 315432.70\nstdev: 2339.12\ncv: 0.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 316319.03,
+            "range": "2339.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316319.03\nmean: 315432.70\nstdev: 2339.12\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 73445.25,
+            "range": "1023.72",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 73445.25\nmean: 73973.00\nstdev: 1023.72\ncv: 1.38%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 734452.5,
+            "range": "10237.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 734452.50\nmean: 739729.99\nstdev: 10237.22\ncv: 1.38%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
