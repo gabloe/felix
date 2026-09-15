@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789443404615,
+  "lastUpdate": 1789445291849,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7592,6 +7592,58 @@ window.BENCHMARK_DATA = {
             "range": "8528.45",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 568751.03\nmean: 569661.43\nstdev: 8528.45\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3c715213746e25729e16e4705a521d23a6f2349",
+          "message": "test(controlplane): prove readiness against a database that can fail (#122) (#358)\n\nThe readiness mechanism was built and documented: liveness split from\nreadiness, a bounded store check, a cache window, a draining short-circuit,\nand a Postgres probe that also compares the applied migration version with\nthe one this build expects. What was missing is evidence. The unit tests\ndrive a fake probe that returns `Err` on command, which proves the cache and\nthe timeout but says nothing about a database, and every acceptance\ncriterion on #122 is written about a database.\n\nSo these run the real router over a real `PostgresStore`, reached through a\nTCP proxy the test can cut, black-hole, and restore. Cutting it is a genuine\noutage from the pool's point of view — connections drop, new ones are\nrefused — and nothing in the process knows it was deliberate.\n\nProven:\n\n- an instance that cannot reach its database leaves rotation, and is *not*\n  restarted for it: `/v1/system/ready` turns 503 while `/v1/system/live`\n  stays 200. Both halves matter and they pull opposite ways.\n- a transient outage recovers with no intervention: connectivity returns and\n  readiness follows, with nothing restarted and no pool rebuilt.\n- a database older than this build stays out of rotation: the newest applied\n  migration row is hidden, readiness turns 503, and returns when it is put\n  back.\n- a probe still answers when the database accepts connections and then says\n  nothing — the case that matters most, because a prober with no answer keeps\n  sending traffic until its own timeout. With a single-connection pool that\n  one wedged connection is the whole pool.\n\nVerified to have teeth: swapping `StoreProbe` for `AlwaysReady` fails four of\nthe five, the baseline being the one that legitimately still passes.\n\nThey live behind `pg-tests` like the other database tests, so they run in the\ncoverage job, which provides `FELIX_TEST_DATABASE_URL`, and skip rather than\nfail where no database is reachable.",
+          "timestamp": "2026-09-14T21:06:02-07:00",
+          "tree_id": "ebe8d4d821ba36e7bac0a6269fe731594a7ea51a",
+          "url": "https://github.com/gabloe/felix/commit/f3c715213746e25729e16e4705a521d23a6f2349"
+        },
+        "date": 1789445291297,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 343752.62,
+            "range": "3204.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 343752.62\nmean: 343557.82\nstdev: 3204.38\ncv: 0.93%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 343752.62,
+            "range": "3204.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 343752.62\nmean: 343557.82\nstdev: 3204.38\ncv: 0.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 78350.98,
+            "range": "626.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 78350.98\nmean: 78145.31\nstdev: 626.57\ncv: 0.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 783509.76,
+            "range": "6265.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 783509.76\nmean: 781453.11\nstdev: 6265.75\ncv: 0.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
