@@ -83,6 +83,41 @@ impl BrokerNode {
         self.process.as_mut()?.try_wait().ok().flatten()
     }
 
+    /// The last log lines touching any of `topics`, for a failure to quote.
+    ///
+    /// Routing failures are diagnosed from what the brokers believed, and by
+    /// the time a test fails the harness's tempdir is about to take the logs
+    /// with it.
+    fn log_lines_matching(&self, topics: &[&str], take: usize) -> String {
+        let Ok(log) = std::fs::read_to_string(self.data_dir.join("broker.log")) else {
+            return String::new();
+        };
+        let matching = |filtered: bool| -> Vec<&str> {
+            let mut lines: Vec<&str> = log
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter(|line| {
+                    if !filtered {
+                        return true;
+                    }
+                    let lower = line.to_lowercase();
+                    topics.iter().any(|topic| lower.contains(topic))
+                })
+                .rev()
+                .take(take)
+                .collect();
+            lines.reverse();
+            lines
+        };
+        // A tail with none of the topics still beats silence: the absence of
+        // routing lines is itself evidence about what the broker was doing.
+        let lines = match matching(true) {
+            hits if !hits.is_empty() => hits,
+            _ => matching(false),
+        };
+        lines.join("\n")
+    }
+
     /// The tail of this broker's log, for a start-up failure to quote.
     ///
     /// An exit status alone cannot distinguish a lost port from a refused
@@ -428,7 +463,60 @@ impl Cluster {
             )
             .await?;
         }
+
+        // The probe above is unkeyed, so it lands on shard 0 the instant shard 0
+        // opens and says nothing about whether a broker knows how *wide* a
+        // stream is. That matters because a keyed publish resolves its shard
+        // from the width the broker's routing snapshot reports, and that width
+        // is inferred from the assignments it has applied so far — a broker
+        // holding only shard 0's assignment reports width 1 and routes *every*
+        // key to shard 0. The publish succeeds, so nothing retries and nothing
+        // reports an error; the records are simply all in one shard.
+        //
+        // So "usable" has to include "every broker routes keys at the stream's
+        // full width". `stream_shards` reads the very same snapshot the publish
+        // path does, which makes it the only honest check.
+        for spec in &config.streams {
+            let stream = spec.name.clone();
+            let expected = spec.shards;
+            wait::until(
+                READY_TIMEOUT,
+                &format!("every broker to route {stream} at {expected} shards"),
+                || {
+                    let stream = stream.clone();
+                    async move {
+                        for node in &self.nodes {
+                            if !node.is_running() {
+                                continue;
+                            }
+                            match self.stream_shards_via(&node.node_id, &stream).await {
+                                Ok(width) if width == expected => {}
+                                _ => return false,
+                            }
+                        }
+                        true
+                    }
+                },
+            )
+            .await?;
+        }
         Ok(())
+    }
+
+    /// How wide a named broker believes `stream` is.
+    ///
+    /// This is the width that broker will route a keyed publish with, read
+    /// through the same routing snapshot the publish path reads — so it is the
+    /// signal to wait on before publishing keys that are expected to spread.
+    pub async fn stream_shards_via(&self, node_id: &str, stream: &str) -> Result<u32> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        client
+            .stream_shards(&self.tenant_id, &self.namespace, stream)
+            .await
+            .with_context(|| format!("ask {node_id} how wide {stream} is"))
     }
 
     /// Publish one record through an arbitrary broker.
@@ -953,7 +1041,30 @@ impl Cluster {
             {
                 Ok(()) => return Ok(()),
                 Err(err) if std::time::Instant::now() >= deadline => {
-                    return Err(err.context(format!("routing did not settle within {within:?}")));
+                    // Routing that never converges is a bug somewhere, and the
+                    // brokers' own logs are the only place its shape survives —
+                    // the harness's tempdir takes them when the test ends.
+                    let mut evidence = String::new();
+                    for node in &self.nodes {
+                        let tail = node.log_lines_matching(
+                            &[
+                                "shard",
+                                "route",
+                                "assignment",
+                                "watch",
+                                "forward",
+                                "lease",
+                                "open",
+                            ],
+                            40,
+                        );
+                        if !tail.is_empty() {
+                            evidence.push_str(&format!("\n--- {} ---\n{tail}", node.node_id));
+                        }
+                    }
+                    return Err(err.context(format!(
+                        "routing did not settle within {within:?}{evidence}"
+                    )));
                 }
                 Err(_) => {}
             }

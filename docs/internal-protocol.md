@@ -127,6 +127,14 @@ assignment generation it resolved against; the owner compares it with its own.
 That asymmetry is the point. A generation mismatch in either direction is an
 explicit typed answer, and **never a successful ownership claim**.
 
+**The `shard` a forward names must be the shard the route was resolved for.**
+The owner appends to the shard the message names, so the routing decision and
+the batch have to agree: a record whose key resolved to shard 3, forwarded with
+shard 0, is written to the wrong log. Nothing downstream detects it — the owner
+legitimately owns shard 0 and the write succeeds — so a whole multi-shard
+stream's keys can silently collapse onto one shard while the router dispatched
+them correctly all along.
+
 ### Replicating a cache
 
 A cache shard is a log, so it is replicated by the same exchange as a stream's:
@@ -361,8 +369,16 @@ the retry can reissue and know that it did.
 
 Retries are bounded by an attempt budget, so a shard being reassigned converges
 or fails explicitly instead of chasing `NotLeader` around the cluster. A redirect
-that does not advance the generation is refused rather than followed: it would
-send the batch back where it came from.
+back to a `(broker, generation)` the batch has already been sent to is refused
+rather than followed: that is a loop, and following it would bounce the batch
+between two brokers that disagree.
+
+A redirect to a broker *not* yet tried is followed even when the generation has
+not advanced. On a freshly formed cluster every shard sits at generation 0, so a
+requester whose routing snapshot has not converged points at the wrong owner
+*there* — and the correct owner's redirect is also at generation 0. Refusing
+every same-generation redirect made that transient misroute fatal instead of
+self-correcting.
 
 ## Chains are refused, not relayed
 

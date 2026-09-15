@@ -121,6 +121,14 @@ pub async fn forward_publish(
 ) -> Result<Option<(u64, u64)>, ForwardError> {
     let mut target = target.clone();
     let mut last = String::new();
+    // Every (node, generation) this batch has already been sent to. A redirect
+    // back to one of them is a loop and is refused; a redirect to a new one is
+    // followed even when the generation has not advanced — on a freshly formed
+    // cluster the correct owner is at generation 0, and a forwarder whose
+    // routing snapshot has not yet converged legitimately points at the wrong
+    // node there. Refusing every same-generation redirect made that transient
+    // misroute fatal instead of self-correcting.
+    let mut tried: Vec<(String, u64)> = vec![(target.node_id.clone(), target.generation)];
 
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
@@ -164,18 +172,21 @@ pub async fn forward_publish(
                         ),
                     });
                 };
-                // A redirect that does not advance the generation would send the
-                // batch straight back where it came from.
-                if moved.generation <= target.generation {
+                // A redirect back to a node this batch has already been sent to
+                // at the same generation is a loop; following it would bounce
+                // between two brokers that disagree. A redirect to a node not
+                // yet tried is a correction, even at the same generation.
+                if tried.contains(&(moved.node_id.clone(), moved.generation)) {
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
                         detail: format!(
-                            "owner {} redirected to generation {}, not ahead of {}",
-                            moved.node_id, moved.generation, target.generation
+                            "owner {} redirected in a loop at generation {}",
+                            moved.node_id, moved.generation
                         ),
                     });
                 }
+                tried.push((moved.node_id.clone(), moved.generation));
                 target = ForwardTarget {
                     node_id: moved.node_id,
                     advertise_addr,
@@ -288,6 +299,10 @@ pub async fn forward_cache_op(
     let mut target = target.clone();
     let mut last = String::new();
     let (op, value, ttl_ms) = request.parts();
+    // See `forward_publish`: a redirect to a node not yet tried is followed even
+    // at the same generation, and only a loop back to a tried (node, generation)
+    // is refused.
+    let mut tried: Vec<(String, u64)> = vec![(target.node_id.clone(), target.generation)];
 
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
@@ -328,19 +343,20 @@ pub async fn forward_cache_op(
                         ),
                     });
                 };
-                // Same rule as a forwarded publish: a redirect that does not
-                // advance the generation would send this straight back where it
-                // came from.
-                if moved.generation <= target.generation {
+                // Same rule as a forwarded publish: refuse only a loop back to a
+                // (node, generation) already tried; follow a correction to a new
+                // node even at the same generation.
+                if tried.contains(&(moved.node_id.clone(), moved.generation)) {
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
                         detail: format!(
-                            "owner {} redirected to generation {}, not ahead of {}",
-                            moved.node_id, moved.generation, target.generation
+                            "owner {} redirected in a loop at generation {}",
+                            moved.node_id, moved.generation
                         ),
                     });
                 }
+                tried.push((moved.node_id.clone(), moved.generation));
                 target = ForwardTarget {
                     node_id: moved.node_id,
                     advertise_addr,

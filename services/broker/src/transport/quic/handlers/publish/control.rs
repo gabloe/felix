@@ -21,7 +21,8 @@ use crate::transport::quic::handlers::publish::ack::{
 };
 use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, internal_ack, publish_target, resolve_route,
+    PublishContext, PublishJob, StreamHandleCache, UNKEYED_SHARD, internal_ack, publish_target,
+    resolve_route,
 };
 use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
 
@@ -93,13 +94,14 @@ pub(crate) async fn handle_binary_publish_batch_control(
             // The binary frames carry no routing key: their layout is fixed and
             // adding one is a new flag, not an optional field. A caller that
             // needs a key uses the JSON encoding.
-            crate::shard_routing::shard_for(1, None),
+            UNKEYED_SHARD,
         )
         .await,
         publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
+        UNKEYED_SHARD,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
@@ -439,6 +441,10 @@ pub(crate) async fn handle_publish_message(
         .await?;
         return Ok(());
     }
+    // Resolved once and then carried: the route and the batch must name the
+    // same shard, or the owner appends to a different log than the one this
+    // broker dispatched on.
+    let shard = resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref());
     let target = publish_target(
         resolve_route(
             broker,
@@ -448,13 +454,14 @@ pub(crate) async fn handle_publish_message(
             &tenant_id,
             &namespace,
             &stream,
-            resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref()),
+            shard,
         )
         .await,
         publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
+        shard,
         internal_ack(ack),
     );
 
@@ -837,6 +844,10 @@ pub(crate) async fn handle_publish_batch_message(
         .await?;
         return Ok(());
     }
+    // Resolved once and then carried: the route and the batch must name the
+    // same shard, or the owner appends to a different log than the one this
+    // broker dispatched on.
+    let shard = resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref());
     let target = publish_target(
         resolve_route(
             broker,
@@ -846,13 +857,14 @@ pub(crate) async fn handle_publish_batch_message(
             &tenant_id,
             &namespace,
             &stream,
-            resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref()),
+            shard,
         )
         .await,
         publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
+        shard,
         internal_ack(ack),
     );
     // See the single-publish path: a forward is acknowledged only once the owner
