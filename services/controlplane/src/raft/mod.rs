@@ -248,6 +248,9 @@ impl RaftHandle {
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
+                // The counter to alert on: a proposal ran out its whole
+                // budget, which means no leader or no quorum.
+                metrics::counter!("felix_meta_raft_write_timeouts_total").increment(1);
                 return Err(last_refusal
                     .unwrap_or_else(|| anyhow::anyhow!("no quorum committed the proposal"))
                     .context(format!(
@@ -266,7 +269,14 @@ impl RaftHandle {
                 Ok(Ok(response)) => return Ok(response.data),
                 Ok(Err(err)) => match forward_target(&err) {
                     Some(addr) => match self.forward_to(&addr, &command).await {
-                        Ok(bytes) => return Ok(bytes),
+                        Ok(bytes) => {
+                            // The counter that says the load balancer keeps
+                            // handing writes to followers — informational,
+                            // since forwarding is correct, just one hop more.
+                            metrics::counter!("felix_meta_raft_forwarded_proposals_total")
+                                .increment(1);
+                            return Ok(bytes);
+                        }
                         // The leader we were told about may itself have just
                         // lost leadership; loop and re-ask.
                         Err(fwd_err) => last_refusal = Some(fwd_err),
@@ -303,6 +313,87 @@ impl RaftHandle {
     /// so a deposed leader that has not heard the news fails it.
     pub async fn confirm_leadership(&self) -> bool {
         self.raft.ensure_linearizable().await.is_ok()
+    }
+
+    /// Entries this member may trail its own log by before readiness calls
+    /// it unfit to serve. Metadata writes are rare; a member hundreds of
+    /// entries behind its own log is not applying, and traffic sent there
+    /// reads arbitrarily stale state without knowing it.
+    const READY_APPLY_LAG_MAX: u64 = 512;
+    /// How stale a leader's last quorum acknowledgement may be before
+    /// readiness stops trusting it. A leader that has not heard a quorum in
+    /// this long is a leader in name only — likely partitioned with the
+    /// minority — and must leave rotation before it serves stale reads or
+    /// queues writes that cannot commit.
+    const READY_QUORUM_ACK_MAX: Duration = Duration::from_secs(5);
+
+    /// Whether this member is fit to serve, and if not, why — the store's
+    /// readiness probe under the raft backend.
+    ///
+    /// Three questions, in order: does this member know a leader (an
+    /// instance mid-election or partitioned off does not); is it applying
+    /// what its log holds; and, when it *is* the leader, has a quorum
+    /// acknowledged it recently. All answered from local metrics — a
+    /// readiness probe must never cost a consensus round trip.
+    pub fn readiness(&self) -> Result<(), String> {
+        let metrics = self.raft.metrics().borrow().clone();
+        let Some(leader) = metrics.current_leader else {
+            return Err("no raft leader is known to this instance".to_string());
+        };
+        let last_log = metrics.last_log_index.unwrap_or(0);
+        let applied = metrics.last_applied.map(|id| id.index).unwrap_or(0);
+        let lag = last_log.saturating_sub(applied);
+        if lag > Self::READY_APPLY_LAG_MAX {
+            return Err(format!(
+                "applied state trails the log by {lag} entries (bound {})",
+                Self::READY_APPLY_LAG_MAX
+            ));
+        }
+        if leader == self.id
+            && let Some(millis) = metrics.millis_since_quorum_ack
+            && millis > Self::READY_QUORUM_ACK_MAX.as_millis() as u64
+        {
+            return Err(format!(
+                "leader without a quorum acknowledgement for {millis}ms (bound {}ms)",
+                Self::READY_QUORUM_ACK_MAX.as_millis()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Publish this member's consensus position as gauges, once a second,
+    /// until `shutdown`. The names an operator's dashboard needs to answer
+    /// "who leads, and is everyone keeping up" — per-instance series, no
+    /// unbounded labels.
+    pub fn spawn_metrics(
+        &self,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let raft = self.raft.clone();
+        let id = self.id;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = ticker.tick() => {
+                        let metrics = raft.metrics().borrow().clone();
+                        metrics::gauge!("felix_meta_raft_term").set(metrics.current_term as f64);
+                        metrics::gauge!("felix_meta_raft_leader_known")
+                            .set(if metrics.current_leader.is_some() { 1.0 } else { 0.0 });
+                        metrics::gauge!("felix_meta_raft_is_leader")
+                            .set(if metrics.current_leader == Some(id) { 1.0 } else { 0.0 });
+                        metrics::gauge!("felix_meta_raft_last_log_index")
+                            .set(metrics.last_log_index.unwrap_or(0) as f64);
+                        metrics::gauge!("felix_meta_raft_last_applied_index")
+                            .set(metrics.last_applied.map(|id| id.index).unwrap_or(0) as f64);
+                        metrics::gauge!("felix_meta_raft_snapshot_index")
+                            .set(metrics.snapshot.map(|id| id.index).unwrap_or(0) as f64);
+                    }
+                }
+            }
+        })
     }
 
     /// Add a node as a non-voting learner and wait until it has caught up.

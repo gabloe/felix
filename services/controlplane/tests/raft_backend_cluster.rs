@@ -176,6 +176,21 @@ async fn losing_quorum_fails_writes_loudly_not_silently() {
         "a write without quorum must fail, not hang or pretend"
     );
 
+    // And readiness follows: the survivor still calls itself leader, but a
+    // leader no quorum has acknowledged in the bound is a leader in name
+    // only, and the probe must take it out of rotation.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if nodes[survivor].store.health_check().await.is_err() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "readiness kept passing on a quorumless leader"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
     let _ = nodes[survivor].handle.shutdown().await;
     nodes[survivor].server.abort();
 }

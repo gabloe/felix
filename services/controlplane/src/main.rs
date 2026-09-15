@@ -75,6 +75,12 @@ where
 
     // Liveness expiry runs on the API token: it stops admitting work at the same
     // point the listener does, before anything drains.
+    // Consensus position as gauges, on the API token like the other
+    // background work.
+    let raft_metrics_task = raft_handle
+        .as_ref()
+        .map(|handle| handle.spawn_metrics(api_shutdown.clone()));
+
     let expiry_task = membership::spawn_expiry_sweep(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         state.node_liveness.clone(),
@@ -239,10 +245,18 @@ where
         task.abort();
     }
 
+    if let Some(task) = raft_metrics_task {
+        task.abort();
+    }
     if let Some(handle) = &raft_handle {
         // After the API stops (no new proposals), before metrics: a member
         // that leaves without shutting down looks like a failure to the
-        // group and costs it an election timeout.
+        // group and costs it an election timeout. Known fact, pre-0.10
+        // openraft: there is no leadership-transfer API, so when the member
+        // being deployed *is* the leader, the group pauses writes for one
+        // election timeout before a successor takes over. Bounded (~1s at
+        // defaults), recorded in docs/metadata-raft-design.md, and closed by
+        // the 0.10 upgrade the seam exists to contain.
         if !budget
             .drain("raft_node", async {
                 let _ = handle.shutdown().await;
@@ -293,8 +307,27 @@ async fn build_state(
             let raft_cfg = config.raft.as_ref().context("raft configuration missing")?;
             let inner = Arc::new(InMemoryStore::new(store_config));
             let machine = Arc::new(MetadataStateMachine::new(inner));
+            let mut settings = RaftSettings::new(raft_cfg.node_id, raft_cfg.data_dir.clone());
+            if let Some(ms) = raft_cfg.heartbeat_ms {
+                settings.heartbeat_interval = Duration::from_millis(ms);
+            }
+            if let Some(ms) = raft_cfg.election_timeout_min_ms {
+                settings.election_timeout.0 = Duration::from_millis(ms);
+            }
+            if let Some(ms) = raft_cfg.election_timeout_max_ms {
+                settings.election_timeout.1 = Duration::from_millis(ms);
+            }
+            if let Some(logs) = raft_cfg.snapshot_logs_since_last {
+                settings.snapshot_logs_since_last = logs;
+            }
+            if let Some(logs) = raft_cfg.logs_kept_behind_snapshot {
+                settings.logs_kept_behind_snapshot = logs;
+            }
+            if let Some(ms) = raft_cfg.write_timeout_ms {
+                settings.write_timeout = Duration::from_millis(ms);
+            }
             let handle = RaftHandle::start(
-                RaftSettings::new(raft_cfg.node_id, raft_cfg.data_dir.clone()),
+                settings,
                 Arc::clone(&machine) as Arc<dyn controlplane::raft::AppStateMachine>,
             )
             .await?;

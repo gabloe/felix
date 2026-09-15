@@ -357,7 +357,7 @@ is the umbrella.
 | Metadata state machine | [#338](https://github.com/gabloe/felix/issues/338) | **Landed** — `store/command.rs` (the versioned, API-shaped command set) and `store/state_machine.rs` (`MetadataStateMachine`, the in-memory store behind the seam). The determinism harness applies a full-coverage script to two machines and requires byte-identical snapshots; a real three-node group settles eight concurrent bootstraps by log order alone with byte-identical replicas. Landing it surfaced and fixed real iteration-order leaks: multi-node expiry and cascading deletes published change events in HashMap order. Nothing serves API traffic from it yet. |
 | Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | **Landed** — `store/raft_backend.rs` (`RaftStore`), the third backend behind the store traits: reads from local applied state, writes proposed through the seam with follower→leader forwarding inside it, sweep and placement gated to the leader by a linearizable read-index check, and `StorageBackend::Raft` selectable via `FELIX_RAFT_NODE_ID` / `FELIX_RAFT_DATA_DIR` / `FELIX_RAFT_PEERS`. Passes the same node/shard contract suites as memory and Postgres; a binary-level test serves the HTTP API with no database and keeps its metadata across a restart. Finding recorded below. Probes are minimal (leader-known) until #341. |
 | Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | **Landed** — `felix-controlplane migrate export-postgres/import`, the generic trait-level export (works against any backend, doubling as the DR artifact), the `ImportState` command with its used-store guard and `--overwrite` restore path, and the ceremony above. The pg-tests E2E migrates a populated Postgres into a Raft group over the real propose route and verifies records, sequence heads, generations, and auth state; a broker at the head continues without a resnapshot. |
-| Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | Not started |
+| Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | **Landed** — readiness answers from consensus state (leader known, apply-lag bounded, and a leader counts only while a quorum has acknowledged it within 5s — a quorumless leader leaves rotation, proven by test); liveness stays process-local. Timings are tunable (`FELIX_RAFT_HEARTBEAT_MS`, `FELIX_RAFT_ELECTION_TIMEOUT_MIN/MAX_MS`, snapshot/write knobs) with unworkable combinations refused at startup. Consensus position ships as `felix_meta_raft_*` gauges plus forwarded-proposal and write-timeout counters. Kubernetes shape documented on the docs-site page. Known fact below. |
 | Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | Not started |
 
 One deliberate deviation from the sketch above, made while landing #337: the
@@ -366,6 +366,15 @@ rather than hand-rolled files. Consensus durability plumbing — votes and
 entries that must never be acknowledged and then lost — is the last place
 Felix should be inventive, and openraft's storage suite now enforces the
 semantics against the real store on every test run.
+
+One known fact recorded while landing #341, inherent to **pre-0.10
+openraft**: there is no leadership-transfer API, so a rolling deploy that
+restarts the current *leader* pauses metadata writes for one election
+timeout (~1.2s at defaults) while a successor elects itself. Reads keep
+serving throughout, followers restart with no pause at all, and brokers are
+unaffected by construction. openraft 0.10 adds `transfer_leader`; adopting
+it is a contained change because the seam owns the shutdown path — until
+then this is a documented bound, not a bug.
 
 One finding from landing #339: **openraft's write path waits indefinitely**
 — a leader that has lost quorum queues proposals forever rather than
