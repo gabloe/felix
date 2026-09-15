@@ -64,6 +64,8 @@ pub enum Kind {
     ReplicateCacheBootstrap = 15,
     ReplicateGroupRecords = 16,
     ReplicateGroupBootstrap = 17,
+    ReplicateDeadLetterRecords = 18,
+    ReplicateDeadLetterBootstrap = 19,
 }
 
 impl Kind {
@@ -88,6 +90,8 @@ impl Kind {
             15 => Ok(Kind::ReplicateCacheBootstrap),
             16 => Ok(Kind::ReplicateGroupRecords),
             17 => Ok(Kind::ReplicateGroupBootstrap),
+            18 => Ok(Kind::ReplicateDeadLetterRecords),
+            19 => Ok(Kind::ReplicateDeadLetterBootstrap),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -431,6 +435,13 @@ pub enum InternalMessage {
     /// one shard's log into another's.
     ReplicateGroupRecords(ReplicateRecords),
     ReplicateGroupBootstrap(ReplicateBootstrap),
+    /// The same body once more, for a stream shard's dead-letter list.
+    ///
+    /// A fourth kind for the reason the group pair exists: the bodies are
+    /// identical, and the kind is what stops a follower writing the offsets a
+    /// group gave up on into the cursors that say where it resumes.
+    ReplicateDeadLetterRecords(ReplicateRecords),
+    ReplicateDeadLetterBootstrap(ReplicateBootstrap),
 }
 
 impl InternalMessage {
@@ -453,6 +464,8 @@ impl InternalMessage {
             Self::ReplicateCacheBootstrap(_) => Kind::ReplicateCacheBootstrap,
             Self::ReplicateGroupRecords(_) => Kind::ReplicateGroupRecords,
             Self::ReplicateGroupBootstrap(_) => Kind::ReplicateGroupBootstrap,
+            Self::ReplicateDeadLetterRecords(_) => Kind::ReplicateDeadLetterRecords,
+            Self::ReplicateDeadLetterBootstrap(_) => Kind::ReplicateDeadLetterBootstrap,
         }
     }
 
@@ -480,6 +493,8 @@ impl InternalMessage {
             Self::ReplicateCacheBootstrap(m) => m.correlation_id,
             Self::ReplicateGroupRecords(m) => m.correlation_id,
             Self::ReplicateGroupBootstrap(m) => m.correlation_id,
+            Self::ReplicateDeadLetterRecords(m) => m.correlation_id,
+            Self::ReplicateDeadLetterBootstrap(m) => m.correlation_id,
         }
     }
 
@@ -530,7 +545,8 @@ impl InternalMessage {
             }
             Self::ReplicateRecords(m)
             | Self::ReplicateCacheRecords(m)
-            | Self::ReplicateGroupRecords(m) => {
+            | Self::ReplicateGroupRecords(m)
+            | Self::ReplicateDeadLetterRecords(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.shard.tenant_id)?;
                 put_str(&mut body, &m.shard.namespace)?;
@@ -560,7 +576,8 @@ impl InternalMessage {
             }
             Self::ReplicateBootstrap(m)
             | Self::ReplicateCacheBootstrap(m)
-            | Self::ReplicateGroupBootstrap(m) => {
+            | Self::ReplicateGroupBootstrap(m)
+            | Self::ReplicateDeadLetterBootstrap(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.shard.tenant_id)?;
                 put_str(&mut body, &m.shard.namespace)?;
@@ -719,7 +736,10 @@ impl InternalMessage {
                 expect_empty(&body)?;
                 Ok(Self::HelloOk(message))
             }
-            Kind::ReplicateRecords | Kind::ReplicateCacheRecords | Kind::ReplicateGroupRecords => {
+            Kind::ReplicateRecords
+            | Kind::ReplicateCacheRecords
+            | Kind::ReplicateGroupRecords
+            | Kind::ReplicateDeadLetterRecords => {
                 let correlation_id = take_u64(&mut body)?;
                 let tenant_id = take_str(&mut body)?;
                 let namespace = take_str(&mut body)?;
@@ -761,6 +781,7 @@ impl InternalMessage {
                 Ok(match header.kind {
                     Kind::ReplicateCacheRecords => Self::ReplicateCacheRecords(message),
                     Kind::ReplicateGroupRecords => Self::ReplicateGroupRecords(message),
+                    Kind::ReplicateDeadLetterRecords => Self::ReplicateDeadLetterRecords(message),
                     _ => Self::ReplicateRecords(message),
                 })
             }
@@ -784,7 +805,8 @@ impl InternalMessage {
             }
             Kind::ReplicateBootstrap
             | Kind::ReplicateCacheBootstrap
-            | Kind::ReplicateGroupBootstrap => {
+            | Kind::ReplicateGroupBootstrap
+            | Kind::ReplicateDeadLetterBootstrap => {
                 let message = ReplicateBootstrap {
                     correlation_id: take_u64(&mut body)?,
                     shard: ShardRef {
@@ -800,6 +822,9 @@ impl InternalMessage {
                 Ok(match header.kind {
                     Kind::ReplicateCacheBootstrap => Self::ReplicateCacheBootstrap(message),
                     Kind::ReplicateGroupBootstrap => Self::ReplicateGroupBootstrap(message),
+                    Kind::ReplicateDeadLetterBootstrap => {
+                        Self::ReplicateDeadLetterBootstrap(message)
+                    }
                     _ => Self::ReplicateBootstrap(message),
                 })
             }

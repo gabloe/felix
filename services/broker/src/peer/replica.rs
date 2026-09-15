@@ -109,9 +109,9 @@ impl ReplicaHandler {
             // checked against that shard rather than a placement of their own.
             kind: match log_kind {
                 felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
-                felix_broker::LogKind::Stream | felix_broker::LogKind::GroupCursors => {
-                    felix_router::ShardKind::Stream
-                }
+                felix_broker::LogKind::Stream
+                | felix_broker::LogKind::GroupCursors
+                | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,
             },
         };
 
@@ -203,9 +203,9 @@ impl ReplicaHandler {
             // checked against that shard rather than a placement of their own.
             kind: match log_kind {
                 felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
-                felix_broker::LogKind::Stream | felix_broker::LogKind::GroupCursors => {
-                    felix_router::ShardKind::Stream
-                }
+                felix_broker::LogKind::Stream
+                | felix_broker::LogKind::GroupCursors
+                | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,
             },
         };
 

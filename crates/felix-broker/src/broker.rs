@@ -905,6 +905,14 @@ impl Broker {
                 .await
                 .ok()
                 .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::GroupDeadLetters => self
+                .group_reader
+                .as_ref()?
+                .dead_letters()
+                .shard_log(tenant_id, namespace, name, shard)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
             crate::LogKind::Stream => self
                 .durable_storage
                 .as_ref()?
@@ -933,6 +941,14 @@ impl Broker {
             crate::LogKind::GroupCursors => self
                 .consumer_groups
                 .as_ref()?
+                .shard_log_at(tenant_id, namespace, name, shard, base_offset)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::GroupDeadLetters => self
+                .group_reader
+                .as_ref()?
+                .dead_letters()
                 .shard_log_at(tenant_id, namespace, name, shard, base_offset)
                 .await
                 .ok()

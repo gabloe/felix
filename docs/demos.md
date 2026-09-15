@@ -90,7 +90,9 @@ task demo:queues
   every guarantee it narrates is an assertion.
 - Durable storage is required — a group's cursor is a projection over the
   stream's log, so a non-durable stream serves no groups.
-- One shard, one broker. The dead-letter list is not replicated yet.
+- One shard, one broker. Group state — cursor and dead-letter list alike — is
+  replicated with its shard in a cluster; showing that takes the cluster tests
+  rather than this single-broker demo.
 
 ### Leader vs Quorum (`felix-cluster consistency`)
 

@@ -120,3 +120,69 @@ async fn dead_letters_survive_a_restart() {
     let reopened = DeadLetters::open(dir.path(), config()).expect("open");
     assert_eq!(reopened.list(&key).await.expect("list"), vec![99]);
 }
+
+/// A discarded offset is gone from the list, and discarding what was never
+/// there is an answer.
+#[tokio::test]
+async fn a_discarded_offset_leaves_the_list() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dead = DeadLetters::open(dir.path(), config()).expect("open");
+    let key = key("jobs", "workers");
+
+    dead.record(&key, 5).await.expect("record");
+    assert!(dead.discard(&key, 5).await.expect("discard"));
+    assert_eq!(dead.list(&key).await.expect("list"), Vec::<u64>::new());
+    assert!(
+        !dead.discard(&key, 5).await.expect("discard again"),
+        "discarding what is not there is an answer, not a repeat",
+    );
+}
+
+/// Dead letters recorded under the earlier one-log-per-(stream, group) layout
+/// are still listed and can still be discarded. Losing them on upgrade would
+/// silently drop exactly the records an operator was told to look at.
+#[tokio::test]
+async fn a_legacy_layout_is_read_and_discarded_but_never_written() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key = key("jobs", "workers");
+
+    // What the old layout wrote: one log per (stream, group), the offset as
+    // the whole key. Written through a plain LogCache exactly as the old code
+    // did, so this is the bytes an upgraded broker actually finds.
+    {
+        let legacy = LogCache::open(dir.path(), config()).expect("open legacy");
+        for offset in [4u64, 9] {
+            legacy
+                .put_checked(
+                    &key.tenant_id,
+                    &key.namespace,
+                    &format!("{}\u{1f}{}", key.stream, key.group),
+                    key.shard,
+                    &offset.to_string(),
+                    bytes::Bytes::new(),
+                    None,
+                )
+                .await
+                .expect("legacy record");
+        }
+    }
+
+    let dead = DeadLetters::open(dir.path(), config()).expect("open");
+    // New entries land in the per-shard log; both layouts list as one.
+    dead.record(&key, 12).await.expect("record");
+    assert_eq!(dead.list(&key).await.expect("list"), vec![4, 9, 12]);
+
+    // A legacy entry can be discarded, and stays discarded.
+    assert!(dead.discard(&key, 9).await.expect("discard legacy"));
+    assert_eq!(dead.list(&key).await.expect("list"), vec![4, 12]);
+
+    // A group with no legacy directory costs a path check and creates
+    // nothing: the listing for a fresh group is clean, not littered with an
+    // empty legacy log.
+    assert_eq!(
+        dead.list(&super::tests::key("jobs", "fresh"))
+            .await
+            .expect("list"),
+        Vec::<u64>::new(),
+    );
+}

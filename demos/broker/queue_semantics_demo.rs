@@ -403,9 +403,9 @@ async fn main() -> Result<()> {
     step("What this does not show");
     println!("  • One shard. A group is bound to the shard the caller names, so");
     println!("    consuming a multi-shard stream means polling each shard's group.");
-    println!("  • One broker. A group's position is replicated with its shard and");
-    println!("    survives a failover — `task cluster:failover` is where that is shown");
-    println!("    — but the dead-letter list is not replicated yet.");
+    println!("  • One broker. A group's position and its dead-letter list are");
+    println!("    replicated with the shard and survive a failover — the cluster");
+    println!("    tests are where that is shown, not this single-broker demo.");
     println!("  • No competing brokers. Only the shard's leader serves its group,");
     println!("    which is what stops two brokers handing out the same record.");
 

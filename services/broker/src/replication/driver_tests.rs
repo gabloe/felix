@@ -188,6 +188,7 @@ async fn unreachable_followers_are_waited_on_at_the_same_time() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
 
@@ -214,6 +215,7 @@ async fn a_led_shard_is_shipped_to_each_follower() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -245,6 +247,7 @@ async fn a_shard_led_elsewhere_is_not_shipped() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
 
@@ -272,6 +275,7 @@ async fn a_shard_with_no_replicas_ships_nothing() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
 
@@ -295,6 +299,7 @@ async fn one_pass_ships_until_the_follower_is_level() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -320,6 +325,7 @@ async fn a_second_pass_with_nothing_new_ships_nothing() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
     let after_first = follower.batches().len();
@@ -330,6 +336,7 @@ async fn a_second_pass_with_nothing_new_ships_nothing() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -360,6 +367,7 @@ async fn a_new_generation_starts_the_cursors_again() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
     let after_first = follower.batches().len();
@@ -372,6 +380,7 @@ async fn a_new_generation_starts_the_cursors_again() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -406,6 +415,7 @@ async fn a_replica_added_later_starts_from_the_beginning() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
     publish(&router, LOCAL, &["broker-b", "broker-c"], 4);
@@ -416,6 +426,7 @@ async fn a_replica_added_later_starts_from_the_beginning() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -449,6 +460,7 @@ async fn a_replica_removed_from_the_set_is_dropped() {
         None,
         &mut cursors,
         &mut HashMap::new(),
+        &mut HashMap::new(),
     )
     .await;
     publish(&router, LOCAL, &["broker-b"], 4);
@@ -469,6 +481,7 @@ async fn a_replica_removed_from_the_set_is_dropped() {
         &marks,
         None,
         &mut cursors,
+        &mut HashMap::new(),
         &mut HashMap::new(),
     )
     .await;
@@ -503,7 +516,8 @@ async fn a_broker_without_durable_storage_ships_nothing() {
             &marks,
             None,
             &mut cursors,
-            &mut HashMap::new()
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .await
         .worst_lag,
@@ -530,7 +544,8 @@ async fn the_reported_lag_is_the_distance_from_the_tail() {
             &marks,
             None,
             &mut cursors,
-            &mut HashMap::new()
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .await
         .worst_lag,
@@ -558,6 +573,7 @@ mod reports {
             &marks,
             None,
             &mut cursors,
+            &mut HashMap::new(),
             &mut HashMap::new(),
         )
         .await;
@@ -589,6 +605,7 @@ mod reports {
             None,
             &mut cursors,
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .await;
 
@@ -617,6 +634,7 @@ mod reports {
             None,
             &mut cursors,
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .await;
 
@@ -639,6 +657,7 @@ mod reports {
             &marks,
             None,
             &mut cursors,
+            &mut HashMap::new(),
             &mut HashMap::new(),
         )
         .await;
