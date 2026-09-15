@@ -76,6 +76,7 @@ mod wire;
 
 pub mod timings;
 
+pub use client::cache_watch::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
 pub use client::client::Client;
 pub use client::client::{NotLeaderError, SubscribeCursorError};
 pub use client::cluster::{ClusterClient, ReconnectPolicy};

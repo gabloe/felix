@@ -261,6 +261,24 @@ its place.
 
 > `crates/felix-cluster/tests/cache_failover.rs::a_cache_value_survives_the_loss_of_its_owner`.
 
+**A key or prefix can be watched** (#348). `cache_watch` — negotiated as
+`FEATURE_CACHE_WATCH`, and offered only by a log-backed cache — delivers each
+applied write in the shard's write order with its log offset: a put with its
+value, a delete as a change with none. Resume by offset replays from the log
+and joins live delivery with no gap and no duplicate, by the same
+register-before-read discipline a stream resume uses. An offset compaction has
+collapsed is answered with a marked snapshot of current values, never a silent
+gap; a watch that falls behind is ended with `cache_watch_lagged` naming the
+first missed offset, because a filtered watch's offsets are sparse and a drop
+could not otherwise be seen. TTL expiry appends nothing and so delivers
+nothing. See `docs/cache-on-log.md` and `docs/protocol.md`.
+
+> `services/broker/tests/cache_watch.rs`, including
+> `a_key_watch_sees_its_key_and_no_others`,
+> `a_resumed_watch_is_gapless_under_concurrent_writes` and
+> `a_watch_from_a_compacted_offset_resnapshots`;
+> `crates/felix-broker/src/cache_watch_tests.rs::overflow_ends_the_watch_and_names_the_first_missed_offset`.
+
 What a cache still does not declare is a consistency level. A stream chooses
 `Leader` or `Quorum`; a cache write is acknowledged by its leader once the
 record is durable there, and replication follows. So losing a leader in the

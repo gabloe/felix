@@ -1256,3 +1256,109 @@ fn cache_delete_is_a_new_feature_bit_and_disturbs_nothing() {
     // Silence from a peer that predates negotiation must not be read as support.
     assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_DELETE));
 }
+
+/// The watch messages survive an encode/decode round trip, and the optional
+/// fields default the way an older peer's silence must be read.
+#[test]
+fn cache_watch_messages_round_trip() {
+    let watch = Message::CacheWatch {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "sessions".to_string(),
+        key: Some("user:42".to_string()),
+        prefix: None,
+        shard: None,
+        from_offset: Some(7),
+        subscription_id: None,
+    };
+    let decoded = Message::decode(watch.encode().expect("encode")).expect("decode");
+    assert_eq!(watch, decoded);
+
+    let prefix_watch = Message::CacheWatch {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "sessions".to_string(),
+        key: None,
+        prefix: Some("user:".to_string()),
+        shard: Some(3),
+        from_offset: None,
+        subscription_id: Some(9),
+    };
+    let decoded = Message::decode(prefix_watch.encode().expect("encode")).expect("decode");
+    assert_eq!(prefix_watch, decoded);
+
+    let started = Message::CacheWatchStarted {
+        subscription_id: 9,
+        resume_offset: 12,
+        resnapshot: true,
+    };
+    let decoded = Message::decode(started.encode().expect("encode")).expect("decode");
+    assert_eq!(started, decoded);
+
+    let put = Message::CacheEvent {
+        key: "user:42".to_string(),
+        value: Some(Bytes::from_static(b"online")),
+        offset: 12,
+        expires_at_millis: 1_700_000_000_000,
+    };
+    let decoded = Message::decode(put.encode().expect("encode")).expect("decode");
+    assert_eq!(put, decoded);
+
+    // A delete carries no value, and the absent field must not appear on the
+    // wire at all -- an old JSON reader sees exactly the fields it knows.
+    let delete = Message::CacheEvent {
+        key: "user:42".to_string(),
+        value: None,
+        offset: 13,
+        expires_at_millis: 0,
+    };
+    let frame = delete.encode().expect("encode");
+    let json = std::str::from_utf8(&frame.payload).expect("utf8");
+    assert!(
+        !json.contains("value"),
+        "absent value must be omitted: {json}"
+    );
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(delete, decoded);
+
+    let lagged = Message::CacheWatchLagged { resume_from: 40 };
+    let decoded = Message::decode(lagged.encode().expect("encode")).expect("decode");
+    assert_eq!(lagged, decoded);
+
+    // A `resnapshot` the sender omitted reads as false: a watch that did not
+    // ask to resume was never resnapshotted.
+    let legacy = r#"{"type":"cache_watch_started","subscription_id":1,"resume_offset":0}"#;
+    match serde_json::from_str::<Message>(legacy).expect("legacy started") {
+        Message::CacheWatchStarted { resnapshot, .. } => assert!(!resnapshot),
+        other => panic!("expected cache_watch_started, got {other:?}"),
+    }
+}
+
+/// The watch feature is a new bit: disjoint from every bit already handed out,
+/// absent from a silent peer, and never implied by the other cache features.
+#[test]
+fn cache_watch_is_a_new_feature_bit_and_disturbs_nothing() {
+    assert_eq!(
+        crate::FEATURE_CACHE_WATCH
+            & (crate::FEATURE_TOPOLOGY
+                | crate::FEATURE_REDIRECT
+                | crate::FEATURE_CACHE_DELETE
+                | crate::FEATURE_CONSUMER_GROUP
+                | crate::FEATURE_GROUP_DEAD_LETTERS
+                | crate::FEATURE_STREAM_SHARDS),
+        0,
+        "the watch bit overlaps one already in use",
+    );
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_CACHE_WATCH
+    ));
+    // Deleting does not imply watching: a broker built before watches exist
+    // advertises the delete bit and not this one.
+    assert!(!crate::supports_feature(
+        crate::FEATURE_CACHE_DELETE,
+        crate::FEATURE_CACHE_WATCH
+    ));
+    // Silence from a peer that predates negotiation must not be read as support.
+    assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_WATCH));
+}

@@ -210,6 +210,74 @@ Answered with `cache_value` carrying the value that was removed, or a null value
 if the key was not there — so a caller can tell a delete that did something from
 one that did not.
 
+### CacheWatch
+```
+{ "type": "cache_watch", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "key": "<string>|absent", "prefix": "<string>|absent",
+  "shard": <u32|absent>, "from_offset": <u64|absent>,
+  "subscription_id": <u64|absent> }
+```
+
+Sent only to a broker that advertised `FEATURE_CACHE_WATCH`. Subscribes to
+changes for one cache key (`key`) or key prefix (`prefix`) — exactly one of the
+two must be present; both or neither is refused rather than guessed at. An
+empty `prefix` is every key in the shard.
+
+A watch reads **one** shard, exactly as a stream subscription does. A `key`
+watch resolves its own shard by hashing — the same resolution a `cache_get`
+uses — and ignores `shard`. A `prefix` watch reads `shard` (absent means 0),
+because keys sharing a prefix hash to different shards; a whole multi-shard
+cache is one watch per shard.
+
+`from_offset` is where to resume: the first change the client has *not* seen,
+so a client checkpoints the offset it last handled plus one. Absent means from
+now — live changes only. An offset past the tail is refused with
+`subscribe_cursor_error` rather than silently reinterpreted. Watches are served
+by the shard's owner and redirected (`not_leader`) elsewhere, like subscribes.
+
+### CacheWatchStarted (server -> client)
+```
+{ "type": "cache_watch_started", "subscription_id": <u64>,
+  "resume_offset": <u64>, "resnapshot": <bool|absent> }
+```
+
+Confirms the watch. The same `subscription_id` arrives in the
+`event_stream_hello` that opens the unidirectional stream carrying the watch's
+changes — the binding is identical to a stream subscription's.
+
+`resume_offset` is the offset live delivery begins at: every change at or past
+it is delivered, and everything before it was covered by the replay or the
+snapshot. `resnapshot` (absent means false) is true when `from_offset` named
+history that compaction has already collapsed; the watch then begins with each
+matching key's **current value** instead of the collapsed history — the same
+snapshot-plus-changes contract the control plane's assignment watch uses, and
+never a silent gap.
+
+### CacheEvent (server -> client)
+```
+{ "type": "cache_event", "key": "<string>", "value": "<base64|absent>",
+  "offset": <u64>, "expires_at_millis": <u64|absent> }
+```
+
+One change on the watch's event stream. An absent `value` means the key was
+deleted. `offset` is the change's cache-log offset — the resume anchor.
+`expires_at_millis` is absolute Unix milliseconds, `0` or absent meaning never.
+
+Offsets on a filtered watch are naturally sparse — other keys' changes consume
+them — so a gap between consecutive offsets is **not** a drop signal here, the
+way it is for a stream subscription. `cache_watch_lagged` is.
+
+### CacheWatchLagged (server -> client)
+```
+{ "type": "cache_watch_lagged", "resume_from": <u64> }
+```
+
+The watch fell behind and its queue dropped changes; the broker delivers
+everything already queued, sends this, and finishes the event stream.
+`resume_from` is the offset of the first missed change: re-watching with
+`from_offset = resume_from` is gapless. Loss is loud by construction, because
+sparse offsets would otherwise hide it.
+
 ### StreamShards
 ```
 { "type": "stream_shards", "tenant_id": "<string>", "namespace": "<string>",
@@ -259,6 +327,16 @@ stream.
 - CacheDelete returns `cache_value` carrying whatever was removed, and `null`
   when the key was not there. Removing a key that does not exist is an answer,
   not an error.
+- CacheWatch delivers each applied write for its key or prefix — a put with its
+  value, a delete as a change with none — in the cache shard's write order,
+  each carrying its log offset. Resume by offset replays `[from_offset, tail)`
+  from the cache's log before live delivery, joined without a gap or a
+  duplicate by the same register-before-read discipline a stream resume uses. A
+  resume whose history compaction collapsed is answered with `resnapshot: true`
+  and current values; a watch that falls behind is ended with
+  `cache_watch_lagged` naming the offset to re-watch from. TTL expiry is not a
+  change: nothing is appended when an entry lapses, so no event is delivered —
+  a watcher that cares about expiry reads `expires_at_millis` off the put.
 - GroupPoll returns `group_records`, which may be empty: nothing was available
   is an answer, not an error. Each record is claimed until the broker's
   visibility timeout lapses, after which it is handed to whoever polls next.
@@ -327,6 +405,32 @@ sequenceDiagram
     B-->>C: ok (request_id)
     C->>B: cache_get (request_id)
     B-->>C: cache_value (request_id, value|null)
+```
+
+### 3) Client watches a cache key (establish + resume + live)
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Broker
+    participant L as Cache log
+    Note over C,B: Authenticated control stream with FEATURE_CACHE_WATCH negotiated
+    C->>B: cache_watch (key or prefix, from_offset?)
+    Note over B: Register watcher first — pins the live edge
+    B->>L: read tail
+    B-->>C: event_stream_hello (uni stream)
+    B-->>C: cache_watch_started (resume_offset = tail, resnapshot?)
+    alt from_offset retained
+        B->>L: read [from_offset, tail)
+        B-->>C: cache_event × n (replayed history, offsets ascending)
+    else from_offset compacted away
+        B-->>C: cache_event × n (current value per matching key)
+    end
+    Note over B,C: Live: queued changes below tail are duplicates and dropped by offset
+    B-->>C: cache_event (offset ≥ resume_offset)
+    opt watch falls behind
+        B-->>C: cache_watch_lagged (resume_from)
+        Note over C: Re-watch with from_offset = resume_from — gapless
+    end
 ```
 
 ## Binary PublishBatch
@@ -447,6 +551,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0008` | `FEATURE_CONSUMER_GROUP` | The broker serves `group_poll`, `group_ack`, `group_nack` |
 | `0x0010` | `FEATURE_GROUP_DEAD_LETTERS` | The broker serves `group_dead_letters`, `group_discard`, `group_redrive` |
 | `0x0020` | `FEATURE_STREAM_SHARDS` | The broker answers `stream_shards` |
+| `0x0040` | `FEATURE_CACHE_WATCH` | The broker accepts `cache_watch` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -471,7 +576,10 @@ describe a cluster, so a standalone broker advertises neither.
 advertised by both, as is `FEATURE_STREAM_SHARDS` — a standalone broker has one
 shard per stream and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
 storage rather than on clustering: without it a group's position is lost on
-every restart, so a broker with none offers neither.
+every restart, so a broker with none offers neither. `FEATURE_CACHE_WATCH`
+depends on the cache being log-backed, for the same shape of reason: a watch's
+contract — resume, duplicate detection, the lag signal — is built on log
+offsets, and a broker whose cache is the in-memory fallback has none to offer.
 
 They are two bits rather than one because a bit says which requests exist, and
 widening what an existing bit promises is the one change that cannot be made

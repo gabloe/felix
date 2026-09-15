@@ -292,6 +292,16 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                 // broker unable to offer a request it can serve.
                                 server_features: Some(
                                     felix_wire::FEATURE_CACHE_DELETE
+                                        // Only when the cache store can observe
+                                        // its writes. A watch's contract is
+                                        // built on log offsets, so a broker
+                                        // whose cache has no log has nothing to
+                                        // anchor a resume to and must not
+                                        // invite one.
+                                        | match broker.cache_watches() {
+                                            Some(_) => felix_wire::FEATURE_CACHE_WATCH,
+                                            None => 0,
+                                        }
                                         | match publish_ctx.client_endpoints {
                                             Some(_) => {
                                                 felix_wire::FEATURE_TOPOLOGY
@@ -585,6 +595,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     // shard being subscribed to: different shards of one stream
                     // can have different owners.
                     shard.unwrap_or(0),
+                    crate::shard_watch::ShardKind::Stream,
                     peer_features,
                 ) {
                     handle_ack_enqueue_result(
@@ -895,6 +906,55 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     // stream is closed after the single request/response completes.
                     return Ok(true);
                 }
+            }
+            Message::CacheWatch {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                prefix,
+                shard,
+                from_offset,
+                subscription_id,
+            } => {
+                // A watch is a read of the cache, and is authorized as one.
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheRead,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                crate::transport::quic::handlers::cache_watch::handle_cache_watch_message(
+                    Arc::clone(&broker),
+                    connection.clone(),
+                    config.clone(),
+                    &publish_ctx,
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    },
+                    crate::transport::quic::handlers::cache_watch::WatchRequest {
+                        tenant_id,
+                        namespace,
+                        cache,
+                        key,
+                        prefix,
+                        shard,
+                        from_offset,
+                        subscription_id,
+                    },
+                    peer_features,
+                )
+                .await?;
             }
             Message::GroupPoll {
                 tenant_id,
@@ -1437,6 +1497,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::GroupDeadLetterList { .. }
             | Message::CacheValue { .. }
             | Message::CacheOk { .. }
+            | Message::CacheWatchStarted { .. }
+            | Message::CacheEvent { .. }
+            | Message::CacheWatchLagged { .. }
             | Message::Event { .. }
             | Message::EventBatch { .. }
             | Message::Subscribed { .. }

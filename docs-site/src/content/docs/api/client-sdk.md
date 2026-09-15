@@ -421,6 +421,50 @@ Needs a broker advertising `FEATURE_CACHE_DELETE`; the client returns an error
 rather than probing, because an unrecognised message type ends the broker's
 control loop.
 
+### Watch
+
+Subscribe to changes for one key or key prefix. Each change carries its
+cache-log offset, so a watch can be resumed exactly where it left off:
+
+```rust
+use felix_client::{CacheWatchFilter, CacheWatchItem};
+
+let mut watch = client
+    .watch_cache(
+        "acme",
+        "prod",
+        "sessions",
+        CacheWatchFilter::Prefix("user:".into()),
+        None,          // from now; Some(offset) resumes gaplessly
+    )
+    .await?;
+
+let mut checkpoint = watch.resume_offset();
+while let Some(item) = watch.recv().await {
+    match item {
+        CacheWatchItem::Change(change) => {
+            match &change.value {
+                Some(value) => apply_update(&change.key, value),
+                None => remove(&change.key),   // a delete
+            }
+            checkpoint = change.offset + 1;
+        }
+        CacheWatchItem::Lagged { resume_from } => {
+            // The watch fell behind and was ended; re-watch from
+            // `resume_from` to replay everything missed.
+            checkpoint = resume_from;
+            break;
+        }
+    }
+}
+```
+
+A resume whose history compaction has collapsed begins with each matching
+key's current value instead, and `watch.resnapshot()` says so. Needs a broker
+advertising `FEATURE_CACHE_WATCH` — only brokers whose cache is log-backed do.
+See [Cache Features](/felix/features/cache/#7-keyed-watch) for the full
+contract.
+
 ### Concurrent Cache Operations
 
 Pipeline multiple cache operations:

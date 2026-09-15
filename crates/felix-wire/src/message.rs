@@ -393,6 +393,86 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
+    // Watch a cache key or key prefix for changes; answered with
+    // `CacheWatchStarted` and a uni event stream carrying `CacheEvent`s.
+    //
+    // Sent only to a broker that advertised `FEATURE_CACHE_WATCH`: an older one
+    // has no arm for this variant, and an unrecognised message type ends its
+    // control loop.
+    CacheWatch {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        /// Watch exactly this key. Exactly one of `key`/`prefix` must be set;
+        /// both or neither is refused rather than guessed at.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        /// Watch every key beginning with this prefix. `""` is every key in
+        /// the shard.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+        /// Which shard of the cache a *prefix* watch reads. A watch reads one
+        /// shard, exactly as a stream subscription does: keys sharing a prefix
+        /// hash to different shards, so a whole multi-shard cache is one watch
+        /// per shard. Ignored for a `key` watch — the key names its shard by
+        /// hashing, the same resolution a `cache_get` uses.
+        ///
+        /// Absent means shard 0, which is every key of a single-shard cache.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shard: Option<u32>,
+        /// Resume from this cache-log offset — the first change the client has
+        /// *not* seen, so a client checkpoints the offset it last handled plus
+        /// one. Absent means from now: live changes only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_offset: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<u64>,
+    },
+    /// Watch confirmation. The uni event stream is bound by an
+    /// `EventStreamHello` carrying the same `subscription_id`, exactly as a
+    /// stream subscription's is.
+    CacheWatchStarted {
+        subscription_id: u64,
+        /// The offset live delivery begins at: every change at or past it is
+        /// delivered, and everything before it was covered by replay or by the
+        /// snapshot. This is the client's first checkpoint.
+        resume_offset: u64,
+        /// True when `from_offset` names history that compaction has already
+        /// collapsed. The watch then begins with each matching key's *current*
+        /// value instead of the collapsed history — the same resnapshot
+        /// contract the control plane's assignment watch uses. Never true for
+        /// a watch that did not ask to resume.
+        #[serde(default)]
+        resnapshot: bool,
+    },
+    /// One cache change, delivered on a watch's event stream.
+    CacheEvent {
+        key: String,
+        /// The value the key now holds; absent means the key was deleted.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::base64_serde::base64_option_bytes"
+        )]
+        value: Option<Bytes>,
+        /// The cache-log offset of the change. Offsets are naturally sparse on
+        /// a filtered watch — other keys' changes consume them — so a gap here
+        /// is *not* a drop signal; `CacheWatchLagged` is.
+        offset: u64,
+        /// Absolute Unix milliseconds this value expires at; `0` means never.
+        /// `0` for a delete.
+        #[serde(default)]
+        expires_at_millis: u64,
+    },
+    /// The watch fell behind and its queue dropped changes; the broker ends the
+    /// event stream after sending this. Filtering makes offsets sparse, so a
+    /// drop on a watch is not visible as an offset jump the way a stream
+    /// subscriber's is — this signal is what makes the loss loud. Re-watching
+    /// with `from_offset = resume_from` is gapless.
+    CacheWatchLagged {
+        /// The offset of the first change this watch missed.
+        resume_from: u64,
+    },
     // Cache read response (value is optional for misses).
     CacheValue {
         tenant_id: String,

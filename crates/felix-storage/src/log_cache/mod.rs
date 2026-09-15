@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 use crate::disk_log::{DiskLog, layout};
 use crate::log::{AppendOnlyLog, AppendRecord, LogConfig, Offset, ReadRange, ShardKey};
-use crate::{Result, StorageApi, StorageError};
+use crate::{CacheChange, CacheObserver, CacheSnapshotEntry, Result, StorageApi, StorageError};
 
 mod record;
 pub use record::CacheOp;
@@ -91,6 +91,9 @@ pub struct LogCache {
     root: PathBuf,
     config: LogConfig,
     shards: SyncMutex<HashMap<CacheId, Arc<CacheShard>>>,
+    /// Told about every applied write, while the shard's write lock is held —
+    /// which is what makes the order it sees the shard's order.
+    observer: SyncMutex<Option<Arc<dyn CacheObserver>>>,
 }
 
 impl std::fmt::Debug for CacheShard {
@@ -119,6 +122,7 @@ impl LogCache {
             root,
             config,
             shards: SyncMutex::new(HashMap::new()),
+            observer: SyncMutex::new(None),
         })
     }
 
@@ -326,8 +330,8 @@ impl CacheShard {
         Ok(())
     }
 
-    /// Append one record and fold it into the index.
-    async fn write(&self, state: &mut ShardState, op: CacheOp) -> Result<()> {
+    /// Append one record and fold it into the index, reporting its offset.
+    async fn write(&self, state: &mut ShardState, op: CacheOp) -> Result<Offset> {
         let payload = op.encode();
         let bytes = payload.len() as u64;
         let appended = state
@@ -368,7 +372,7 @@ impl CacheShard {
                 }
             }
         }
-        Ok(())
+        Ok(appended.first_offset)
     }
 
     /// Read the record the index points at, and hand back its value.
@@ -601,6 +605,22 @@ impl StorageApi for LogCache {
         }
     }
 
+    fn set_change_observer(&self, observer: Arc<dyn CacheObserver>) -> bool {
+        *self.observer.lock() = Some(observer);
+        true
+    }
+
+    async fn live_entries(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<CacheSnapshotEntry>> {
+        self.live_entries_checked(tenant_id, namespace, cache, shard)
+            .await
+    }
+
     async fn len(&self) -> usize {
         let shards: Vec<Arc<CacheShard>> = self.shards.lock().values().cloned().collect();
         let now = now_millis();
@@ -640,20 +660,34 @@ impl LogCache {
         value: Bytes,
         ttl: Option<std::time::Duration>,
     ) -> Result<()> {
-        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let shard_index = shard;
+        let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
         let mut state = shard.state.lock().await;
         shard.ensure_index(&mut state).await?;
         let expires_at_millis = ttl.map_or(0, |ttl| now_millis() + ttl.as_millis() as u64);
-        shard
+        let offset = shard
             .write(
                 &mut state,
                 CacheOp::Put {
                     key: key.to_string(),
-                    value,
+                    value: value.clone(),
                     expires_at_millis,
                 },
             )
             .await?;
+        // Observed while the state lock is still held: that hold is what makes
+        // the order watchers see the shard's write order, and it fires only for
+        // a write the log has already accepted.
+        self.notify(CacheChange {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            shard: shard_index,
+            key: key.to_string(),
+            value: Some(value),
+            offset,
+            expires_at_millis,
+        });
         if CacheShard::should_compact(&state.index) {
             shard.compact(&mut state).await?;
         }
@@ -717,7 +751,8 @@ impl LogCache {
         shard: u32,
         key: &str,
     ) -> Result<Option<Bytes>> {
-        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let shard_index = shard;
+        let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
         let mut state = shard.state.lock().await;
         shard.ensure_index(&mut state).await?;
         let Some(entry) = state.index.entries.get(key).copied() else {
@@ -728,7 +763,7 @@ impl LogCache {
         } else {
             shard.read_value(&state, entry).await?
         };
-        shard
+        let offset = shard
             .write(
                 &mut state,
                 CacheOp::Delete {
@@ -736,7 +771,58 @@ impl LogCache {
                 },
             )
             .await?;
+        self.notify(CacheChange {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            shard: shard_index,
+            key: key.to_string(),
+            value: None,
+            offset,
+            expires_at_millis: 0,
+        });
         Ok(previous)
+    }
+
+    fn notify(&self, change: CacheChange) {
+        let observer = self.observer.lock().clone();
+        if let Some(observer) = observer {
+            observer.cache_changed(change);
+        }
+    }
+
+    /// Every live key in one shard with its current value and offset.
+    ///
+    /// Expired entries are excluded, as they are from every other read. The
+    /// offsets are what let a watcher join this snapshot to live delivery
+    /// without doubling: a change at or past the snapshot's tail arrives live,
+    /// and one below it is already in here.
+    pub async fn live_entries_checked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<CacheSnapshotEntry>> {
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let mut state = shard.state.lock().await;
+        shard.ensure_index(&mut state).await?;
+        let now = now_millis();
+        let mut entries = Vec::new();
+        for (key, entry) in &state.index.entries {
+            if entry.is_expired(now) {
+                continue;
+            }
+            if let Some(value) = shard.read_value(&state, *entry).await? {
+                entries.push(CacheSnapshotEntry {
+                    key: key.clone(),
+                    value,
+                    offset: entry.offset,
+                    expires_at_millis: entry.expires_at_millis,
+                });
+            }
+        }
+        Ok(entries)
     }
 }
 

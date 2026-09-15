@@ -21,6 +21,7 @@
 mod telemetry;
 
 mod broker;
+pub mod cache_watch;
 mod commit_order;
 mod config;
 pub mod consumer_groups;
@@ -58,6 +59,7 @@ pub use broker::{
     Broker, CacheMetadata, ConsistencyLevel, HistoryRange, PublishOutcome, ResumedSubscription,
     StartPosition, StreamHandle, StreamMetadata,
 };
+pub use cache_watch::{CacheChangeEvent, CacheWatchFilter, CacheWatchHub, CacheWatchSubscription};
 pub use config::SubQueuePolicy;
 pub use delivery::DeliveryEnvelope;
 pub use durable::{DurableStorage, StreamLog};
