@@ -28,7 +28,10 @@
 //! ## Honest limits
 //! Single-node, loopback, fanout 3. These numbers say nothing about behaviour at
 //! thousands of subscribers or across a real network. Dropped events are gone
-//! permanently — Felix is at-most-once today, with no replay and no redelivery.
+//! permanently, because this demo runs an ephemeral stream that drops on
+//! overflow — that is what makes the drops observable. Felix offers stronger
+//! options: a durable stream replays by offset, and a queue redelivers with
+//! bounded attempts and a dead-letter destination.
 
 mod render;
 mod scenario;

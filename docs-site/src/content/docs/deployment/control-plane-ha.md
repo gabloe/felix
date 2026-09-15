@@ -138,7 +138,9 @@ start.
 | Backups and point-in-time recovery | The Postgres platform |
 | Schema migrations and cross-version readiness | Felix |
 
-The full contract — and when the deferred Felix-owned metadata Raft
-([#333](https://github.com/gabloe/felix/issues/333)) should be reconsidered —
-is in
-[`docs/ha-postgres.md`](https://github.com/gabloe/felix/blob/main/docs/ha-postgres.md).
+The full contract is in
+[`docs/ha-postgres.md`](https://github.com/gabloe/felix/blob/main/docs/ha-postgres.md),
+including why the Felix-owned alternative was deferred and what changed. That
+alternative has since shipped: if operating a Postgres is the part you would
+rather not, [Metadata Raft](/felix/architecture/metadata-raft/) holds the same
+metadata in the control-plane instances themselves.

@@ -470,7 +470,10 @@ know about each other; every write and every read goes to the database.
 - Placement is a pure function of a metadata snapshot, so two instances planning
   the same cluster reach the same answer without agreeing on one
 
-Raft would move this off Postgres and is not started.
+A Raft backend moves this off Postgres entirely, with the instances holding
+the metadata between them — see [Metadata Raft](/felix/architecture/metadata-raft/).
+Postgres remains supported; the properties above hold either way, because
+placement stays a pure function of a snapshot.
 
 ### Broker Synchronization
 

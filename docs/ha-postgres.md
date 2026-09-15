@@ -146,11 +146,12 @@ below fired, and the alternative now has a decided design —
 HA remains a supported backend and everything on this page stays true for
 it; Raft is the option that removes the external dependency.**
 
-The deferred alternative — control-plane instances forming their own Raft
-group and owning metadata directly ([the design sketch in
-control-plane.md](control-plane.md#raft-scope-control-plane-only)) — removes
-the external dependency at the cost of Felix implementing consensus, snapshot
-transfer, and its own backup story. The triggers, kept for the record:
+That alternative — control-plane instances forming their own Raft group and
+owning metadata directly ([the implemented design in
+metadata-raft-design.md](metadata-raft-design.md)) — removes the external
+dependency at the cost of Felix implementing consensus, snapshot transfer,
+and its own backup story. It was deferred for as long as these triggers held,
+and is kept here as the record of why it was taken up:
 
 - Operating an HA Postgres (or paying for a managed one) is acceptable for
   every environment Felix targets. The moment Felix needs to run well where no

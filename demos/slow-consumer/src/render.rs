@@ -245,7 +245,9 @@ pub fn print_comparison(outcomes: &[RunOutcome]) {
     println!(
         "\n  Measured single-node over loopback at fanout {}. These numbers say nothing\n  \
          about behaviour at thousands of subscribers or across a real network.\n  \
-         Lost events are gone: Felix is at-most-once today, with no replay.\n",
+         Lost events are gone: this demo publishes to an ephemeral stream that\n  \
+         drops on overflow. A durable stream replays by offset, and a queue\n  \
+         redelivers — at-most-once here is the configuration, not the system.\n",
         outcomes.first().map(|o| o.subscribers.len()).unwrap_or(0)
     );
 }

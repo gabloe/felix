@@ -83,7 +83,7 @@ each asserts the property it demonstrates as a test.
   <LinkCard
     title="Local state divergence"
     href="/felix/demos/state-divergence/"
-    description="The counterpart: what at-most-once actually costs a consumer that holds local state, and what lossless delivery costs in throughput."
+    description="The counterpart: what an at-most-once configuration costs a consumer that holds local state, and what lossless delivery costs in throughput."
   />
 </CardGrid>
 
@@ -157,7 +157,8 @@ boundaries — including what Felix is deliberately *not*.
     - Replication with leader leases, quorum acknowledgement and failover
     - A log-backed cache: routed to one owner, replicated, put/get/delete
     - Consumer groups: poll, acknowledge, redeliver, dead-letter, redrive
-    - A control plane over REST and Postgres, and capability negotiation on the wire
+    - A control plane over REST, holding metadata in Raft, Postgres or memory,
+      and capability negotiation on the wire
     - Tenant-scoped tokens, RBAC, and OIDC token exchange
   </Card>
   <Card title="Not built yet" icon="seti:plan">

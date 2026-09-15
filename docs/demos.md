@@ -158,8 +158,10 @@ is lost anywhere and the publisher is throttled, slowing every consumer to the
 speed of the slowest. Neither is correct in general; which you want is a product
 decision.
 
-Numbers are single-node loopback at fanout 3. Lost events are gone — Felix is
-at-most-once today.
+Numbers are single-node loopback at fanout 3. Lost events are gone because this
+demo runs an ephemeral stream that drops on overflow; that configuration is
+at-most-once by choice, which is what makes the drops visible. A durable stream
+replays by offset and a queue redelivers.
 
 ---
 

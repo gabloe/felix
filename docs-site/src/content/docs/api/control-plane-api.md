@@ -5,7 +5,7 @@ title: "Control Plane API"
 The Felix control plane manages cluster metadata, stream definitions, shard placement, and node membership. This document describes the control plane architecture, APIs, and operational patterns.
 
 :::note[Current Status]
-The control plane HTTP API is implemented for metadata, placement, and authentication (token exchange and JWKS). Raft clustering is planned and not started. This document covers the current endpoints; where it describes something unbuilt it says so.
+The control plane HTTP API is implemented for metadata, placement, and authentication (token exchange and JWKS). Raft clustering has shipped and is selectable as a storage backend. This document covers the current endpoints; where it describes something unbuilt it says so.
 :::
 ## Authentication and Token Exchange (HTTP)
 
@@ -193,16 +193,20 @@ Fetch tenant signing keys (public JWKS) used by brokers to verify Felix tokens.
 The control plane is a separate service holding the metadata brokers read:
 tenants, namespaces, streams, caches, the node catalog, and shard assignments.
 
-It is a **stateless REST service over Postgres**, and consistency comes from
-there rather than from a consensus protocol between instances — instances do not
-know about each other. Run several against one highly available database; each
-answers `/v1/system/ready` only when it can reach a database whose schema
-matches its build.
+It is a **REST service**, and where its consistency comes from depends on the
+backend. On Postgres the instances are stateless and do not know about each
+other: consistency comes from the shared database, and you run several against
+one highly available one — each answering `/v1/system/ready` only when it can
+reach a database whose schema matches its build. On the Raft backend the
+instances hold the metadata themselves and consistency comes from the consensus
+between them. The API below is identical either way.
 
-Raft is the intended way to make this metadata highly available without
-depending on Postgres for it. It is not started.
+A Raft backend makes this metadata highly available without depending on
+Postgres for it: the instances replicate it between themselves and survive
+losing one without losing an acknowledged write. Both backends serve the same
+API, so nothing below changes with the choice.
 
-Today's shape, with the database holding what a Raft group would:
+The Postgres shape, with the database holding what the Raft group otherwise does:
 
 ```mermaid
 graph TB

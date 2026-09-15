@@ -522,7 +522,8 @@ Yes. Sharding, replication, and the control plane are built:
   for a majority before acknowledging
 - **Failover**: a lost leader is replaced by a replica that holds the log, in
   about a second on a local three-node cluster
-- **Control plane**: REST over Postgres, placing shards on a timer
+- **Control plane**: REST over Raft, Postgres, or memory, placing shards on a
+  timer
 
 What is missing is **rebalancing** — a shard whose leader is alive is never
 moved, however uneven that leaves the cluster — and **mTLS between brokers**.

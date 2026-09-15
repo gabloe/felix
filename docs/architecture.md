@@ -195,7 +195,7 @@ Felix is opinionated by design.
 
 ## Cluster Architecture
 
-![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane backed by Postgres places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](assets/architecture.svg)
+![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](assets/architecture.svg)
 
 Three properties carry most of the design.
 
