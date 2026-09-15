@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789477579286,
+  "lastUpdate": 1789479044910,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7800,6 +7800,58 @@ window.BENCHMARK_DATA = {
             "range": "31906.25",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 552451.05\nmean: 537848.30\nstdev: 31906.25\ncv: 5.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39e05738e58ba36d1d0c81feaa8e4f53bfbe3d5b",
+          "message": "feat(queues): replicate the dead-letter list with its shard (#362)\n\nThe one gap left in group state: the cursors replicated (#314) but the\nlist of offsets a group gave up on did not, so a promoted leader\nresumed each group correctly and forgot exactly the records an operator\nhad been told to look at — and a redrive after failover had nothing to\nredrive.\n\nThe blocker was shape, not shipping. Dead letters were one log per\n(stream, group) — a set the replication driver cannot enumerate,\nbecause groups appear whenever a consumer names one — where the driver\nwalks shards. So the store is re-keyed to one log per stream shard,\nexactly as the cursors are shaped, with the group folded into the entry\nkey (group US offset). Shipping is then the machinery that already\nships the cursors: a fourth log kind, two new internal message kinds\n(ReplicateDeadLetterRecords/Bootstrap, kinds 18/19 — the internal\nprotocol evolves by adding kinds, and the kind is the only thing\nstopping a follower appending what a group abandoned into where it\nresumes), shipped on the shard's replica set at the shard's generation,\nnever gating the records.\n\nEntries recorded under the earlier layout are still listed and can\nstill be discarded — the legacy log is read-only, opened only when its\ndirectory already exists, and never written again. They were never\nshipped, so only per-shard entries survive a failover, which the docs\nsay plainly.\n\nProven the way the cursors were: a cluster test dead-letters a record,\nkills the leader, and the promoted replica lists it and serves the\nredrive — with the record delivered again, attempts reset. Reverted-fix\nproof done with the harness trap in mind: dead-letter shipping disabled,\nthe broker binary rebuilt, and the test fails at exactly the\npromoted-leader-lost-the-list assertion; restored, it passes.\n\nDocs updated everywhere the gap was recorded: projections.md,\nsemantics.md (claims now cited to the cluster tests), the queues page,\nthe status table, internal-protocol.md (a group-state section), the\nqueue demo's own narration, and demos.md.",
+          "timestamp": "2026-09-15T06:28:05-07:00",
+          "tree_id": "94ca68f52a0189973f6cf9e3c06e0c0223ef7fe4",
+          "url": "https://github.com/gabloe/felix/commit/39e05738e58ba36d1d0c81feaa8e4f53bfbe3d5b"
+        },
+        "date": 1789479044206,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231841.94,
+            "range": "5112.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231841.94\nmean: 231816.82\nstdev: 5112.44\ncv: 2.21%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231841.94,
+            "range": "5112.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231841.94\nmean: 231816.82\nstdev: 5112.44\ncv: 2.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55005.16,
+            "range": "1421.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55005.16\nmean: 54929.26\nstdev: 1421.09\ncv: 2.59%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 550051.55,
+            "range": "14210.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 550051.55\nmean: 549292.59\nstdev: 14210.91\ncv: 2.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
