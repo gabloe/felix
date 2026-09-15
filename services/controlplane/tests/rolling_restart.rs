@@ -202,11 +202,29 @@ fn traffic_loop(
         ] {
             stats.calls.fetch_add(1, Ordering::Relaxed);
             let mut outcome = http(ready[0], method, path, Some(&bearer), body);
-            if outcome.is_none() && ready.len() > 1 {
-                // The connection died before an answer; the LB re-sends
-                // through the other in-rotation instance.
-                stats.failovers.fetch_add(1, Ordering::Relaxed);
-                outcome = http(ready[1], method, path, Some(&bearer), body);
+            if outcome.is_none() {
+                // The connection died before an answer. A real load balancer
+                // does not retry against the rotation it sampled before the
+                // call — that snapshot can be stale in both directions across
+                // a SIGKILL, which flips no readiness before dying — it
+                // re-probes and re-sends through whatever is ready *now*.
+                // Only a connection-level failure is retried; a served error
+                // status is a failure below, and a retry with nothing ready
+                // stays a failure.
+                let retry = addrs
+                    .iter()
+                    .copied()
+                    .filter(|addr| *addr != ready[0])
+                    .find(|addr| {
+                        matches!(
+                            http(*addr, "GET", "/v1/system/ready", None, None),
+                            Some((200, _))
+                        )
+                    });
+                if let Some(addr) = retry {
+                    stats.failovers.fetch_add(1, Ordering::Relaxed);
+                    outcome = http(addr, method, path, Some(&bearer), body);
+                }
             }
             match outcome {
                 Some((200, _)) => {}
