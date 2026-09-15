@@ -412,10 +412,16 @@ async fn an_unreachable_peer_backs_off() {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind");
         socket.local_addr().expect("addr")
     };
+    // A window no CI stall outlives, so the second request below is inside it
+    // however slowly this test is scheduled. The proof of "no dial" is the
+    // error variant, not the clock: a refusal inside the window is
+    // `Unavailable`, while an actual dial to this address fails as a connect
+    // error. Asserting on elapsed time was a proxy for the same thing and
+    // flaked whenever the runner stalled past the deadline.
     let pool = pool(PeerTransportConfig {
         handshake_timeout: Duration::from_millis(100),
-        reconnect_base: Duration::from_millis(200),
-        reconnect_max: Duration::from_millis(200),
+        reconnect_base: Duration::from_secs(60),
+        reconnect_max: Duration::from_secs(60),
         ..config()
     });
 
@@ -424,18 +430,17 @@ async fn an_unreachable_peer_backs_off() {
 
     // Inside the backoff window the next request must be refused without a dial,
     // which is what makes a dead peer cheap rather than a dial loop.
-    let started = std::time::Instant::now();
     let second = pool
         .request(PEER, dead, forward())
         .await
         .expect_err("still unreachable");
     assert!(
-        started.elapsed() < Duration::from_millis(50),
-        "the backoff window was not honoured; it dialled again",
+        matches!(second, PeerError::Unavailable { .. }),
+        "the backoff window was not honoured; it dialled again: {second:?}"
     );
     assert!(
-        matches!(second, PeerError::Unavailable { .. }),
-        "{second:?}"
+        second.to_string().contains("reconnecting in"),
+        "the refusal should say it is backing off: {second}"
     );
 
     pool.shutdown().await;
