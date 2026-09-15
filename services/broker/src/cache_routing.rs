@@ -116,6 +116,12 @@ pub(crate) async fn apply_cache_op(
                     .delete(tenant_id, namespace, cache, shard, key)
                     .await
             }
+            // Counter operations go through `apply_counter_op`, which owns the
+            // counter store; routing them here would answer from the wrong
+            // seam.
+            CacheRequest::CounterAdd { .. } | CacheRequest::CounterGet => {
+                return Err("not a cache operation: counters route separately".to_string());
+            }
         }),
         CacheRoute::Forward {
             key: forward_key,
@@ -132,6 +138,66 @@ pub(crate) async fn apply_cache_op(
             };
             crate::peer::forward_cache_op(pool, &target, &forward_key, key, &request)
                 .await
+                .map_err(|err| err.to_string())
+        }
+        CacheRoute::Refused(reason) => Err(reason),
+    }
+}
+
+/// Apply a counter operation wherever the key belongs.
+///
+/// A counter key routes exactly as a cache key of the same cache does — same
+/// hash, same shard, same owner — which is what "scoped like cache keys"
+/// means in practice: one resolution, two stores. The same refusal rules
+/// apply, for the same reasons: an unroutable operation is refused rather
+/// than served locally, and a failed read is an error rather than a miss.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_counter_op(
+    broker: &felix_broker::Broker,
+    ingress: Option<&IngressRouter>,
+    peers: Option<&crate::peer::PeerPool>,
+    tenant_id: &str,
+    namespace: &str,
+    cache: &str,
+    key: &str,
+    request: CacheRequest,
+) -> Result<Option<i64>, String> {
+    match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
+        CacheRoute::Local { shard } => {
+            let Some(counters) = broker.counters() else {
+                return Err("this broker has no durable storage for counters".to_string());
+            };
+            match request {
+                CacheRequest::CounterAdd { delta } => counters
+                    .add(tenant_id, namespace, cache, shard, key, delta)
+                    .await
+                    .map(|(sum, _)| Some(sum))
+                    .map_err(|err| err.to_string()),
+                CacheRequest::CounterGet => counters
+                    .get(tenant_id, namespace, cache, shard, key)
+                    .await
+                    .map_err(|err| err.to_string()),
+                // The counter path never builds these; reaching here is a bug
+                // in this file, not in the caller.
+                other => Err(format!("not a counter operation: {other:?}")),
+            }
+        }
+        CacheRoute::Forward {
+            key: forward_key,
+            target,
+        } => {
+            let Some(pool) = peers else {
+                return Err(format!(
+                    "no peer transport: this broker cannot forward to {}",
+                    target.node_id
+                ));
+            };
+            let answer = crate::peer::forward_cache_op(pool, &target, &forward_key, key, &request)
+                .await
+                .map_err(|err| err.to_string())?;
+            answer
+                .map(|bytes| felix_storage::counter_log::decode_sum(&bytes))
+                .transpose()
                 .map_err(|err| err.to_string())
         }
         CacheRoute::Refused(reason) => Err(reason),

@@ -108,7 +108,12 @@ impl ReplicaHandler {
             // The cursors belong to their stream's shard, so ownership is
             // checked against that shard rather than a placement of their own.
             kind: match log_kind {
-                felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
+                // The counter log belongs to its cache's shard, so ownership
+                // is checked against the cache's placement — the cursors make
+                // the same argument about their stream.
+                felix_broker::LogKind::Cache | felix_broker::LogKind::Counters => {
+                    felix_router::ShardKind::Cache
+                }
                 felix_broker::LogKind::Stream
                 | felix_broker::LogKind::GroupCursors
                 | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,
@@ -202,7 +207,12 @@ impl ReplicaHandler {
             // The cursors belong to their stream's shard, so ownership is
             // checked against that shard rather than a placement of their own.
             kind: match log_kind {
-                felix_broker::LogKind::Cache => felix_router::ShardKind::Cache,
+                // The counter log belongs to its cache's shard, so ownership
+                // is checked against the cache's placement — the cursors make
+                // the same argument about their stream.
+                felix_broker::LogKind::Cache | felix_broker::LogKind::Counters => {
+                    felix_router::ShardKind::Cache
+                }
                 felix_broker::LogKind::Stream
                 | felix_broker::LogKind::GroupCursors
                 | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,

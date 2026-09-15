@@ -321,6 +321,9 @@ impl ForwardingHandler {
                     )
                     .await
             }
+            CacheOpKind::CounterAdd | CacheOpKind::CounterGet => {
+                return self.apply_counter_op(op, &key).await;
+            }
         };
 
         metrics::record_served(metrics::OUTCOME_OK);
@@ -328,6 +331,72 @@ impl ForwardingHandler {
             correlation_id,
             value,
         })
+    }
+
+    /// The counter half of a forwarded cache op: the delta and the sum both
+    /// ride the envelope's value bytes as eight big-endian bytes.
+    async fn apply_counter_op(&self, op: ForwardCacheOp, key: &ShardKey) -> InternalMessage {
+        let correlation_id = op.correlation_id;
+        let Some(counters) = self.broker.counters() else {
+            // Refused rather than answered empty: a requester told a counter
+            // does not exist, when the truth is this broker cannot count,
+            // would trust an answer nothing stands behind.
+            return InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::Unavailable,
+                detail: "this broker has no durable storage for counters".to_string(),
+            });
+        };
+        let served = match op.op {
+            CacheOpKind::CounterAdd => {
+                let delta = match felix_storage::counter_log::decode_sum(&op.value) {
+                    Ok(delta) => delta,
+                    Err(err) => {
+                        return InternalMessage::ForwardCacheError(ForwardCacheError {
+                            correlation_id,
+                            code: ErrorCode::Malformed,
+                            detail: err.to_string(),
+                        });
+                    }
+                };
+                counters
+                    .add(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                        delta,
+                    )
+                    .await
+                    .map(|(sum, _)| Some(sum))
+            }
+            _ => {
+                counters
+                    .get(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                    )
+                    .await
+            }
+        };
+        match served {
+            Ok(sum) => {
+                metrics::record_served(metrics::OUTCOME_OK);
+                InternalMessage::ForwardCacheOk(ForwardCacheOk {
+                    correlation_id,
+                    value: sum.map(felix_storage::counter_log::encode_sum),
+                })
+            }
+            Err(err) => InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::Unavailable,
+                detail: err.to_string(),
+            }),
+        }
     }
 }
 

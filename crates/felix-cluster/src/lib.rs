@@ -770,6 +770,42 @@ impl Cluster {
         Ok(value.map(|value| value.to_vec()))
     }
 
+    /// Add to a counter through a named broker, whether or not it owns the
+    /// key's shard — routing to the owner is the behaviour under test.
+    pub async fn counter_add_via(
+        &self,
+        node_id: &str,
+        cache: &str,
+        key: &str,
+        delta: i64,
+    ) -> Result<i64> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        client
+            .counter_add(&self.tenant_id, &self.namespace, cache, key, delta)
+            .await
+            .with_context(|| format!("counter add {cache}/{key} via {node_id}"))
+    }
+
+    /// Read a counter through a named broker.
+    pub async fn counter_get_via(
+        &self,
+        node_id: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<i64>> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        client
+            .counter_get(&self.tenant_id, &self.namespace, cache, key)
+            .await
+            .with_context(|| format!("counter get {cache}/{key} via {node_id}"))
+    }
+
     /// Watch one cache key with retained delivery, through a named broker.
     ///
     /// Both halves are returned because dropping the client closes the

@@ -491,6 +491,43 @@ pub enum Message {
         /// The offset of the first change this watch missed.
         resume_from: u64,
     },
+    // Apply a signed delta to a counter; answered with `CounterValue` carrying
+    // the sum including this delta.
+    //
+    // Sent only to a broker that advertised `FEATURE_COUNTERS`: an older one
+    // has no arm for this variant, and an unrecognised message type ends its
+    // control loop.
+    //
+    // A counter is scoped exactly as a cache key is — the same registered
+    // cache scope, the same key-to-shard hash, the same owner — but lives in a
+    // store of its own: a counter and a cache value may share a key and are
+    // unrelated. **Delivery is at least once**: a retried add after a lost
+    // acknowledgement counts twice, and deltas carry no dedupe identity. See
+    // `docs/projections.md` for the decision.
+    CounterAdd {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        key: String,
+        delta: i64,
+        request_id: u64,
+    },
+    // Read a counter's current sum; answered with `CounterValue`.
+    CounterGet {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        key: String,
+        request_id: u64,
+    },
+    /// A counter's sum. Absent means the counter has never been written —
+    /// which is a different answer from a sum of zero, exactly as a cache miss
+    /// differs from a stored empty value.
+    CounterValue {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        request_id: u64,
+    },
     // Cache read response (value is optional for misses).
     CacheValue {
         tenant_id: String,

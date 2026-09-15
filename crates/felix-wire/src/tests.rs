@@ -1458,3 +1458,77 @@ fn cache_watch_retained_is_a_new_feature_bit_and_disturbs_nothing() {
         crate::FEATURE_CACHE_WATCH_RETAINED
     ));
 }
+
+/// The counter messages round trip, and their answers keep never-written and
+/// zero apart.
+#[test]
+fn counter_messages_round_trip() {
+    let add = Message::CounterAdd {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "metrics".to_string(),
+        key: "page-views".to_string(),
+        delta: -3,
+        request_id: 9,
+    };
+    let decoded = Message::decode(add.encode().expect("encode")).expect("decode");
+    assert_eq!(add, decoded);
+
+    let get = Message::CounterGet {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "metrics".to_string(),
+        key: "page-views".to_string(),
+        request_id: 10,
+    };
+    let decoded = Message::decode(get.encode().expect("encode")).expect("decode");
+    assert_eq!(get, decoded);
+
+    // A sum of zero is a value; a counter never written has none, and the
+    // absent field stays off the wire entirely.
+    let zero = Message::CounterValue {
+        value: Some(0),
+        request_id: 10,
+    };
+    let decoded = Message::decode(zero.encode().expect("encode")).expect("decode");
+    assert_eq!(zero, decoded);
+    let missing = Message::CounterValue {
+        value: None,
+        request_id: 10,
+    };
+    let frame = missing.encode().expect("encode");
+    let json = std::str::from_utf8(&frame.payload).expect("utf8");
+    assert!(
+        !json.contains("\"value\":"),
+        "absent must be omitted: {json}"
+    );
+    assert_eq!(Message::decode(frame).expect("decode"), missing);
+}
+
+/// The counters bit is new and disjoint, absent from silence, and not implied
+/// by any cache feature.
+#[test]
+fn counters_is_a_new_feature_bit_and_disturbs_nothing() {
+    assert_eq!(
+        crate::FEATURE_COUNTERS
+            & (crate::FEATURE_TOPOLOGY
+                | crate::FEATURE_REDIRECT
+                | crate::FEATURE_CACHE_DELETE
+                | crate::FEATURE_CONSUMER_GROUP
+                | crate::FEATURE_GROUP_DEAD_LETTERS
+                | crate::FEATURE_STREAM_SHARDS
+                | crate::FEATURE_CACHE_WATCH
+                | crate::FEATURE_CACHE_WATCH_RETAINED),
+        0,
+        "the counters bit overlaps one already in use",
+    );
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_COUNTERS
+    ));
+    assert!(!crate::supports_feature(
+        crate::FEATURE_CACHE_DELETE | crate::FEATURE_CACHE_WATCH,
+        crate::FEATURE_COUNTERS
+    ));
+    assert!(!crate::supports_feature(0, crate::FEATURE_COUNTERS));
+}

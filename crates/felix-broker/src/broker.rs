@@ -92,6 +92,12 @@ pub struct Broker {
     /// group whose position is lost on restart redelivers everything it had
     /// already processed, which is worse than refusing to run a queue at all.
     pub(crate) consumer_groups: Option<Arc<crate::consumer_groups::ConsumerGroups>>,
+    /// Counters, when this broker has somewhere to write their log.
+    ///
+    /// `None` without durable storage, and deliberately not faked in memory:
+    /// a sum that any restart resets is worse than refusing to count at all —
+    /// the same argument consumer groups make about their cursors.
+    pub(crate) counters: Option<Arc<felix_storage::CounterStore>>,
     /// Fanout for cache watches, when the cache store can observe its writes.
     ///
     /// `None` for a store with no log: a watch's contract is built on log
@@ -262,8 +268,20 @@ impl Broker {
             durable_storage: None,
             consumer_groups: None,
             group_reader: None,
+            counters: None,
             cache_watches,
         }
+    }
+
+    /// Where counters keep their logs.
+    pub fn with_counters(mut self, counters: Arc<felix_storage::CounterStore>) -> Self {
+        self.counters = Some(counters);
+        self
+    }
+
+    /// The counter store, if this broker can count.
+    pub fn counters(&self) -> Option<&Arc<felix_storage::CounterStore>> {
+        self.counters.as_ref()
     }
 
     /// Fanout for cache watches, if this broker's cache store can serve them.
@@ -913,6 +931,13 @@ impl Broker {
                 .await
                 .ok()
                 .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::Counters => self
+                .counters
+                .as_ref()?
+                .shard_log(tenant_id, namespace, name, shard)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
             crate::LogKind::Stream => self
                 .durable_storage
                 .as_ref()?
@@ -949,6 +974,13 @@ impl Broker {
                 .group_reader
                 .as_ref()?
                 .dead_letters()
+                .shard_log_at(tenant_id, namespace, name, shard, base_offset)
+                .await
+                .ok()
+                .map(crate::durable::StreamLog::from_log),
+            crate::LogKind::Counters => self
+                .counters
+                .as_ref()?
                 .shard_log_at(tenant_id, namespace, name, shard, base_offset)
                 .await
                 .ok()

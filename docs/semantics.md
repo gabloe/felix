@@ -295,6 +295,24 @@ and the watch is live on it.
 > `a_retained_value_survives_a_restart`;
 > `crates/felix-cluster/tests/cache_failover.rs::a_retained_watch_survives_the_loss_of_the_owner`.
 
+**A counter folds deltas into a durable sum** (#350). `counter_add` /
+`counter_get`, negotiated as `FEATURE_COUNTERS` and offered only with durable
+storage. Scoped and routed exactly as a cache key — same scope, same shard,
+same owner, same forwarding — but stored beside the cache, so a counter and a
+cache value sharing a key are unrelated. Each add answers with the sum
+including itself; never-written is distinct from zero. The sum survives
+restart, compaction (checkpoints, offsets never renumbered), and leader
+failover, where the promoted replica folds the true sum from its shipped log
+and keeps counting. **At least once**: a retried add after a lost
+acknowledgement double-counts — deltas carry no dedupe identity, and
+`docs/projections.md` records the decision.
+
+> `services/broker/tests/counters.rs`, including
+> `an_add_answers_with_the_sum_including_it` and
+> `a_counter_survives_a_restart`;
+> `crates/felix-storage/src/counter_log/tests.rs::compaction_moves_neither_the_sum_nor_the_offsets`;
+> `crates/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
+
 What a cache still does not declare is a consistency level. A stream chooses
 `Leader` or `Quorum`; a cache write is acknowledged by its leader once the
 record is durable there, and replication follows. So losing a leader in the

@@ -266,3 +266,94 @@ async fn a_retained_watch_survives_the_loss_of_the_owner() {
         other => panic!("expected a live change, got {other:?}"),
     }
 }
+
+/// Read a counter until some survivor serves the expected sum.
+async fn counter_until(
+    cluster: &Cluster,
+    readers: &[String],
+    key: &str,
+    expected: i64,
+    budget: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        for reader in readers {
+            if let Ok(Some(sum)) = cluster.counter_get_via(reader, CACHE, key).await
+                && sum == expected
+            {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// **#350's failover criterion.** The sum survives losing the broker that
+/// accumulated it — the promoted replica folds the true sum from its shipped
+/// log — and keeps counting from there: the counter is live state on the
+/// replacement, not a relic.
+#[serial]
+#[tokio::test]
+async fn a_counter_survives_the_loss_of_its_owner() {
+    let mut cluster = Cluster::start(replicated_cache())
+        .await
+        .expect("start cluster");
+
+    let leader = cluster
+        .shard_owner_of("cache", CACHE, 0)
+        .await
+        .expect("cache shard owner");
+
+    let mut expected = 0i64;
+    for delta in [30, -5, 17] {
+        expected += delta;
+        let sum = cluster
+            .counter_add_via(&leader, CACHE, "views", delta)
+            .await
+            .expect("counter add");
+        assert_eq!(sum, expected, "the running answer drifted before the kill");
+    }
+
+    // A pass for the counter log to reach the replicas, then take the leader
+    // out.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    cluster.kill_node(&leader).expect("kill the owner");
+
+    assert!(
+        failover_from(&cluster, &leader, Duration::from_secs(30)).await,
+        "no replica was promoted after {leader} died",
+    );
+
+    let survivors: Vec<String> = cluster
+        .node_ids()
+        .into_iter()
+        .filter(|node| node != &leader)
+        .collect();
+
+    assert!(
+        counter_until(
+            &cluster,
+            &survivors,
+            "views",
+            expected,
+            Duration::from_secs(45)
+        )
+        .await,
+        "the promoted replica lost the sum (wanted {expected})",
+    );
+
+    // And it keeps counting: an add lands on the promoted owner and continues
+    // from the true sum rather than restarting it.
+    let continued = cluster
+        .counter_add_via(&survivors[0], CACHE, "views", 8)
+        .await
+        .expect("counter add after failover");
+    assert_eq!(
+        continued,
+        expected + 8,
+        "the promoted replica restarted the count",
+    );
+}

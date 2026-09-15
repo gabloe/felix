@@ -131,6 +131,18 @@ fn every_message() -> Vec<InternalMessage> {
             shard: shard(),
             base_offset: 5_000,
         }),
+        InternalMessage::ReplicateCounterRecords(ReplicateRecords {
+            correlation_id: 42,
+            shard: shard(),
+            first_offset: 100,
+            checksum: 0x0102_0304,
+            payloads: vec![Bytes::from_static(b"delta")],
+        }),
+        InternalMessage::ReplicateCounterBootstrap(ReplicateBootstrap {
+            correlation_id: 42,
+            shard: shard(),
+            base_offset: 5_000,
+        }),
     ]
 }
 
@@ -412,12 +424,12 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(20).is_err());
+    assert!(Kind::from_u16(22).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
     assert!(CacheOpKind::from_u8(0).is_err());
-    assert!(CacheOpKind::from_u8(4).is_err());
+    assert!(CacheOpKind::from_u8(6).is_err());
 }
 
 /// Retryability is a property of the code, so a requester does not have to
@@ -562,6 +574,8 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (17, Kind::ReplicateGroupBootstrap),
         (18, Kind::ReplicateDeadLetterRecords),
         (19, Kind::ReplicateDeadLetterBootstrap),
+        (20, Kind::ReplicateCounterRecords),
+        (21, Kind::ReplicateCounterBootstrap),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);

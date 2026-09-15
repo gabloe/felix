@@ -830,6 +830,18 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
                 ..m
             })
         }
+        InternalMessage::ReplicateCounterRecords(m) => {
+            InternalMessage::ReplicateCounterRecords(ReplicateRecords {
+                correlation_id,
+                ..m
+            })
+        }
+        InternalMessage::ReplicateCounterBootstrap(m) => {
+            InternalMessage::ReplicateCounterBootstrap(ReplicateBootstrap {
+                correlation_id,
+                ..m
+            })
+        }
         InternalMessage::ReplicateCacheRecords(m) => {
             InternalMessage::ReplicateCacheRecords(ReplicateRecords {
                 correlation_id,

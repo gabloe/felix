@@ -175,6 +175,15 @@ never holds up the log it describes. What this buys is a promotion that keeps
 the whole group, not half of it — the promoted leader resumes each group where
 it had reached *and* can list and redrive what it had given up on.
 
+A cache shard has the same shape of companion:
+`ReplicateCounterRecords`/`ReplicateCounterBootstrap` (kinds 20 and 21) ship
+its counter log on the cache's replica set, so a promoted replica folds the
+true sum rather than restarting it. And the forwarded cache operation grew two
+op kinds beside put/get/delete — `CounterAdd` (4) and `CounterGet` (5) — with
+the delta and the sum riding the envelope's existing value bytes as eight
+big-endian bytes, so the body layout is untouched and an old peer refuses the
+op rather than misparsing it.
+
 ### Forwarded cache operation
 
 A cache key hashes to a shard, and that shard has one owner. A broker that
