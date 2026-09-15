@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789482474307,
+  "lastUpdate": 1789486979022,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8008,6 +8008,58 @@ window.BENCHMARK_DATA = {
             "range": "10534.57",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 759496.76\nmean: 760896.51\nstdev: 10534.57\ncv: 1.38%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "47f908d55fc8e60451da591f07c3eeff16038495",
+          "message": "Real-network performance suite: felix-loadgen + Bicep IaC (#370)\n\n* feat(perf): the real-network performance suite — instrument + Bicep IaC\n\nThe automation behind docs/perf-real-network.md: measure Felix on real\nAzure networks instead of loopback, from release artifacts, with a real\nIdP on the hot path, producing the structured data a comprehensive\nanalysis page is assembled from.\n\nTwo halves.\n\nfelix-loadgen — the measuring instrument, and the one code gap the design\nnamed: every existing driver is loopback-bound (latency-demo runs an\nin-process broker, soak spawns its own child), so none can measure what a\ndeployment's client feels. This one dials the addresses it is given and\ndrives the real routed paths — forwards and redirects included — across\nfour scenarios: pub/sub (acknowledgement round trip and publish-to-delivery\nlatency, one clock because the generator holds both ends), cache and counter\nround trips spread across brokers, and keyed-watch fanout delivery. It emits\nthe stdout shape scripts/perf already parses plus one machine-readable\nLOADGEN_JSON line per case — the contract the runner consumes — and reports\ntransient retries (routing convergence, backpressure) as data rather than\nhiding or dying on them. It is the instrument, not the measured system:\nbrokers and the control plane run release tarballs; the loadgen builds from\na ref that contains it (main), deliberately not the release tag it measures.\n\nscripts/perf/azure — reproducible IaC in Bicep. main.bicep provisions one\nresource-group-per-session (VNet + NSG, a proximity placement group for the\none-zone T1 baseline or per-zone pinning for the three-zone T2 quorum tier,\nbroker/control-plane/load-gen VMs with cloud-init); session.sh deploys and\nseeds through the real bootstrap + IdP token-exchange + registration REST\nflow; run.sh drives the matrix and pulls artifacts back with a session.json\nof environment metadata; teardown.sh deletes the group. Bicep because a\ndeclarative template is what makes a session reproducible — same parameters,\nsame cluster — and because a create-run-destroy lifecycle has no long-lived\nstate to manage. Budget guardrails throughout: everything in one group,\nteardown as the last line, a +8h auto-teardown tag as backstop.\n\nA felix-cluster integration test calibrates the instrument against a real\nlocal cluster before it is trusted against a paid one: cache, counter, and\nwatch scenarios assert the run completes, accounts for every operation, and\nemits the JSON row. The pub/sub calibration is #[ignore]d — it is flaky\nagainst the in-process harness under loopback burst (a tight acked-publish\nloop overruns the harness's small ingress queue), a pacing artifact that\ndoes not exist over a real network, where the Azure runs exercise it for\nreal.\n\n* perf(azure): mint the IdP token from app-registration secrets\n\nRemoves the only manual JWT-handling step. idp-token.sh does the\nclient-credentials grant (three secrets + the Application ID URI) and\nsession.sh derives issuer/JWKS from the tenant and mints the token when\none is not pasted in — so the operator sets secrets, not a raw token,\nand a long session can re-mint rather than expire. Adds subscription\ntargeting for a multi-subscription login, and gitignores the session\ndirectory, which holds the bootstrap token.\n\n* perf(azure): local session.env for secrets, gitignored\n\nThe client secret and session config live in one local session.env\n(copied from session.env.example, gitignored), sourced before a run.\nNo secret in the repo, in shell history, or echoed by any script.\n\n* perf(azure): deploy compiled ARM JSON, not .bicep directly\n\naz's bundled bicep ships the wrong architecture on Apple Silicon (an ELF\nbinary in a macOS install), so a .bicep deploy dies with 'Exec format\nerror'. session.sh now compiles main.bicep to main.json — preferring a\nreal bicep on PATH, else az's once its version check is off — and\ndeploys the JSON, so the deployment never depends on that binary.\nmain.json is a build artifact and gitignored.\n\n* perf(azure): size the topology to a 20-vCPU quota\n\nThe MSDN/Visual Studio default Total Regional Cores quota is 20; the\ninitial topology asked for 22 and failed preflight (no VMs created).\nTrim the load generator to 4 vCPU (D4as_v5), keeping brokers at 4 vCPU\nas the system under test: 3x4 + 2 + 4 = 18 cores, under both the\nregional and DASv5-family caps.\n\n* perf(azure): loadgen ref must contain the crate; fail loudly if not\n\nfelix-loadgen lives on the PR branch until #370 merges, so LOADGEN_REF\ndefaults there (switch to main after merge). And the cloud-init build\nnow chains build && install && marker so a ref without the crate fails\nthe step loudly instead of continuing and stranding the session waiter\non a marker that never gets written.",
+          "timestamp": "2026-09-15T08:40:24-07:00",
+          "tree_id": "fabf43752320f4fa0eaf51c25891998a84f4eb60",
+          "url": "https://github.com/gabloe/felix/commit/47f908d55fc8e60451da591f07c3eeff16038495"
+        },
+        "date": 1789486978598,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235886.97,
+            "range": "1816.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235886.97\nmean: 235923.43\nstdev: 1816.50\ncv: 0.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235886.97,
+            "range": "1816.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235886.97\nmean: 235923.43\nstdev: 1816.50\ncv: 0.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56175.14,
+            "range": "3593.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56175.14\nmean: 53903.97\nstdev: 3593.62\ncv: 6.67%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 561751.37,
+            "range": "35936.15",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 561751.37\nmean: 539039.70\nstdev: 35936.15\ncv: 6.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
