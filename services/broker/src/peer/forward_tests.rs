@@ -141,21 +141,44 @@ async fn a_redirect_is_followed_to_the_new_owner() {
     );
 }
 
-/// **A redirect that does not advance the generation is refused.** Following it
-/// would send the batch back where it came from, and the two brokers would
-/// bounce it between them until the attempt budget ran out.
+/// **A same-generation redirect to a broker not yet tried is followed.** On a
+/// freshly formed cluster every shard is at generation 0, and a forwarder whose
+/// routing snapshot has not converged points at the wrong owner *there*. The
+/// correct owner's redirect is also at generation 0, so refusing it for "not
+/// advancing" would make that transient misroute fatal instead of
+/// self-correcting — the flake behind #297's sharded-subscribe test.
 #[tokio::test]
-async fn a_redirect_that_does_not_advance_the_generation_is_refused() {
-    for generation in [3, 4] {
-        let owner = ScriptedOwner::new([Ok(moved_to("broker-c", "10.0.0.5:7002", generation))]);
+async fn a_same_generation_redirect_to_a_new_owner_is_followed() {
+    let owner = ScriptedOwner::new([
+        Ok(moved_to("broker-c", "10.0.0.5:7002", 4)),
+        Ok(accepted(1, 1)),
+    ]);
 
-        let err = forward(&owner).await.expect_err("should be refused");
-        assert!(
-            matches!(err, ForwardError::Refused { .. }),
-            "generation {generation}: {err}",
-        );
-        assert_eq!(owner.attempts(), 1, "the batch was bounced back");
-    }
+    assert_eq!(forward(&owner).await.expect("accepted"), Some((1, 1)));
+    assert_eq!(
+        owner.asked(),
+        vec![("broker-b".to_string(), 4), ("broker-c".to_string(), 4)],
+        "the correction was followed at the same generation",
+    );
+}
+
+/// **A redirect back to a (node, generation) already tried is a loop, and is
+/// refused.** Two brokers that disagree would otherwise bounce the batch
+/// between them until the attempt budget ran out; the loop is cut the moment it
+/// closes rather than after three wasted round trips.
+#[tokio::test]
+async fn a_redirect_that_loops_back_to_a_tried_owner_is_refused() {
+    let owner = ScriptedOwner::new([
+        // broker-b (the start) → broker-c at the same generation: followed.
+        Ok(moved_to("broker-c", "10.0.0.5:7002", 4)),
+        // broker-c → back to broker-b at that same generation: the loop closes.
+        Ok(moved_to("broker-b", "10.0.0.4:7002", 4)),
+    ]);
+
+    let err = forward(&owner).await.expect_err("should be refused");
+    assert!(matches!(err, ForwardError::Refused { .. }), "{err}");
+    assert!(err.to_string().contains("loop"), "{err}");
+    assert_eq!(owner.attempts(), 2, "refused as soon as the loop closed");
 }
 
 /// A redirect to an address that does not parse is a dead end, not something to

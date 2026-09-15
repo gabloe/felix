@@ -143,10 +143,15 @@ async fn a_sharded_subscription_receives_every_record() {
     // The control that makes the above mean something: if every record had
     // landed on one shard, a single-shard subscription would also have passed.
     let covered: HashSet<u32> = seen.values().copied().collect();
+    let mut per_shard: HashMap<u32, usize> = HashMap::new();
+    for shard in seen.values() {
+        *per_shard.entry(*shard).or_default() += 1;
+    }
     assert!(
         covered.len() > 1,
-        "all {} records arrived from shard {covered:?}; the keys did not spread and this test \
-         would pass without following shards at all",
+        "all {} records arrived from shard {covered:?} (per shard: {per_shard:?}); the keys did \
+         not spread and this test would pass without following shards at all. Every key landing \
+         on one shard is what a forwarded publish stamped with the wrong shard looks like",
         seen.len()
     );
 }

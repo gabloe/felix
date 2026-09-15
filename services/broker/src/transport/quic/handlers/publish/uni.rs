@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use crate::auth::AuthContext;
 use crate::transport::quic::handlers::publish::ingress::enqueue_publish;
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, publish_target, resolve_route,
+    PublishContext, PublishJob, StreamHandleCache, UNKEYED_SHARD, publish_target, resolve_route,
 };
 use crate::transport::quic::telemetry::log_decode_error;
 
@@ -72,13 +72,14 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
-            crate::shard_routing::shard_for(1, None),
+            UNKEYED_SHARD,
         )
         .await,
         publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
+        UNKEYED_SHARD,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
@@ -145,13 +146,14 @@ pub(crate) async fn handle_publish_message_uni(
             &tenant_id,
             &namespace,
             &stream,
-            crate::shard_routing::shard_for(1, None),
+            UNKEYED_SHARD,
         )
         .await,
         publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
+        UNKEYED_SHARD,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
@@ -217,13 +219,14 @@ pub(crate) async fn handle_publish_batch_message_uni(
             &tenant_id,
             &namespace,
             &stream,
-            crate::shard_routing::shard_for(1, None),
+            UNKEYED_SHARD,
         )
         .await,
         publish_ctx,
         &tenant_id,
         &namespace,
         &stream,
+        UNKEYED_SHARD,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,

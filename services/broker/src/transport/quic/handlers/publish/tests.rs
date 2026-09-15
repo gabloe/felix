@@ -3059,3 +3059,50 @@ fn cache_keys_are_injective_over_an_alphabet_containing_nul() {
     }
     assert_eq!(seen.len(), parts.len().pow(3) * 3);
 }
+
+/// **A forwarded publish carries the shard it was routed for.**
+///
+/// The batch and the route have to name the same shard: the owner appends to
+/// the shard the `ForwardKey` names, so a key routed to shard 3 and forwarded
+/// with shard 0 is written to the wrong log entirely. That was the defect —
+/// both the local and the forward branch stamped a hardcoded `shard_for(1,
+/// None)`, which is always 0 — and its signature was every key of a multi-shard
+/// stream arriving on shard 0 while the router had dispatched them correctly.
+///
+/// Revert the `shard` argument to `shard_for(1, None)` and this fails.
+#[tokio::test]
+async fn a_forwarded_publish_is_stamped_with_the_shard_it_was_routed_for() {
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let peers = crate::peer::PeerPool::new(
+        "broker-a".to_string(),
+        crate::peer::PeerTransportConfig::default(),
+        shutdown.clone(),
+    )
+    .expect("bind a peer pool");
+    let (mut ctx, _rx, _tx) = make_publish_context(1);
+    ctx.peers = Some(peers);
+
+    let target = ForwardTarget {
+        node_id: "broker-b".to_string(),
+        advertise_addr: std::net::SocketAddr::from(([127, 0, 0, 1], 7001)),
+        generation: 4,
+    };
+    let routed = publish_target(
+        PublishRoute::Forward(target),
+        &ctx,
+        "t1",
+        "ns",
+        "stream",
+        3,
+        felix_wire::internal::AckMode::OnCommit,
+    )
+    .expect("a forwardable route with a peer pool must produce a target");
+
+    match routed {
+        PublishTarget::Forward { key, .. } => assert_eq!(
+            key.shard, 3,
+            "the batch must name the shard the route was resolved for",
+        ),
+        _ => panic!("expected a forward target"),
+    }
+}

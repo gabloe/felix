@@ -67,7 +67,7 @@ pub(crate) use uni::{
 #[cfg(test)]
 use crate::auth::AuthContext;
 use crate::peer::ForwardTarget;
-use crate::shard_routing::{Dispatch, IngressRouter, dispatch, shard_for};
+use crate::shard_routing::{Dispatch, IngressRouter, dispatch};
 use crate::shard_watch::{ShardKey, ShardKind};
 #[cfg(test)]
 use crate::transport::quic::errors::AckEnqueueError;
@@ -297,12 +297,26 @@ pub(crate) fn needs_quorum(target: &Option<PublishTarget>) -> bool {
     )
 }
 
+/// The shard a publish that carries no routing key belongs to.
+///
+/// The binary frame layouts are fixed and have no room for a key, so every
+/// publish on those paths is unkeyed and a stream's shard 0 is where it lands —
+/// the same answer `shard_for` gives for `None`. Named so the keyless paths say
+/// which shard they mean instead of each recomputing it, because route and batch
+/// disagreeing about the shard is precisely the bug this replaced.
+pub(crate) const UNKEYED_SHARD: u32 = 0;
+
 pub(crate) fn publish_target(
     route: PublishRoute,
     publish_ctx: &PublishContext,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
+    // The shard `resolve_route` resolved and dispatched on. It has to travel
+    // with the batch: the owner writes it to the shard this names, so a
+    // hardcoded 0 here sends every keyed publish to shard 0's owner no matter
+    // which shard the key belongs to.
+    shard: u32,
     ack: felix_wire::internal::AckMode,
 ) -> Option<PublishTarget> {
     match route {
@@ -314,7 +328,7 @@ pub(crate) fn publish_target(
                 tenant_id: tenant_id.to_string(),
                 namespace: namespace.to_string(),
                 stream: stream.to_string(),
-                shard: shard_for(1, None),
+                shard,
                 kind: ShardKind::Stream,
             }),
         }),
@@ -335,8 +349,10 @@ pub(crate) fn publish_target(
                     tenant_id: tenant_id.to_string(),
                     namespace: namespace.to_string(),
                     stream: stream.to_string(),
-                    // Matches `resolve_route`: no routing key on the wire yet.
-                    shard: shard_for(1, None),
+                    // The shard the route was resolved for. The owner appends to
+                    // exactly this shard, so it must match what `resolve_route`
+                    // dispatched on or the record lands in another shard's log.
+                    shard,
                 },
                 ack,
             })

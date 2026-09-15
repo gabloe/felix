@@ -304,13 +304,22 @@ async fn a_broker_that_no_longer_owns_the_shard_redirects() {
     listener.stop().await;
 }
 
-/// A redirect that does not advance the generation would send the batch back
-/// where it came from. Bounded or not, that is a loop.
+/// A redirect back to the broker the batch was just sent to, at the generation
+/// it was already sent at, is a loop. Bounded or not, following it would bounce
+/// the batch between two brokers that disagree.
+///
+/// A redirect to a broker *not* yet tried is a different thing entirely — a
+/// correction — and is followed even at the same generation, because on a
+/// freshly formed cluster every shard is at generation 0 and the correct owner
+/// has nothing higher to offer. That case is covered in the `forward` unit
+/// tests.
 #[tokio::test]
-async fn a_redirect_that_does_not_advance_the_generation_is_refused() {
+async fn a_redirect_that_loops_back_to_a_tried_owner_is_refused() {
     use async_trait::async_trait;
     use felix_wire::internal::NotLeader;
 
+    // Redirects to the very node the batch was just sent to, at the same
+    // generation: the loop closes immediately.
     struct AlwaysRedirectsBackwards;
 
     #[async_trait]
@@ -339,7 +348,7 @@ async fn a_redirect_that_does_not_advance_the_generation_is_refused() {
     .await
     .expect_err("a backwards redirect must be refused, not followed");
     assert!(
-        err.to_string().contains("not ahead of"),
+        err.to_string().contains("loop"),
         "the error should say why the redirect was rejected: {err}",
     );
 
