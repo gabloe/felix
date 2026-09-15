@@ -44,3 +44,5 @@ data/soak/
 
 # Perf session inventories carry the bootstrap token and derived state.
 scripts/perf/azure/sessions/
+scripts/perf/azure/*.env
+!scripts/perf/azure/session.env.example

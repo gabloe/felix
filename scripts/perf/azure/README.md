@@ -3,19 +3,25 @@
 The automation for `docs/perf-real-network.md`. One *session* = one resource
 group = one Bicep deployment, created for a run and deleted after it.
 
+### Secrets: a local `session.env`, never committed
+
+```bash
+cp scripts/perf/azure/session.env.example scripts/perf/azure/session.env
+# edit session.env — fill in the GUIDs and the ONE client secret
+set -a; source scripts/perf/azure/session.env; set +a
+```
+
+`session.env` is gitignored (only `session.env.example` is tracked). The
+client secret lives there and nowhere else — not in the repo, not in shell
+history, not echoed by any script. Everything below reads it from the
+environment.
+
+### Run
+
 ```bash
 az login                                    # the MSDN account
-export AZ_SUBSCRIPTION=<subscription-guid>  # if the login has more than one
-export SESSION=t1-a TIER=t1 RELEASE_TAG=v0.3.0 LOADGEN_REF=main
-
-# The IdP, the easy way: three app-registration secrets + the audience, and
-# the suite mints the token and derives issuer/JWKS from the tenant. No JWT to
-# paste, and it re-mints when one expires.
-export IDP_TENANT_ID=<tenant-guid>
-export IDP_CLIENT_ID=<felix-perf app client id>
-export IDP_CLIENT_SECRET=<a client secret on that app>
-export IDP_AUDIENCE=api://<felix-perf app client id>   # the Application ID URI
-
+# session.env is already sourced (above), so the suite has everything: the
+# subscription, the tier/release, and the IdP secrets it mints a token from.
 ./session.sh                   # provision + seed (~10 min, mostly instrument build)
 ./run.sh                       # the matrix (~2-4 h); results in sessions/<name>-results/
 ./teardown.sh                  # ALWAYS. ~$1/hour while it exists.
