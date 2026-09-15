@@ -490,6 +490,20 @@ broker is never asked for state it would silently not deliver. Mutually
 exclusive with `from_offset` — a resume already replays what a retained start
 shortcuts.
 
+### Counters
+
+```rust
+// Apply a delta and learn the sum including it, in one round trip.
+let after = client.counter_add("acme", "prod", "limits", "user:42:reqs", 1).await?;
+
+// Read; None means never written — distinct from a sum of zero.
+let sum = client.counter_get("acme", "prod", "metrics", "page:home").await?;
+```
+
+Scoped and routed like cache keys, stored beside the cache; durable and
+replicated with the shard. At-least-once: a retry after a lost ack counts
+twice. Needs a broker advertising `FEATURE_COUNTERS` (durable brokers only).
+
 ### Concurrent Cache Operations
 
 Pipeline multiple cache operations:

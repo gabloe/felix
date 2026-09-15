@@ -260,9 +260,20 @@ mod tests;
 /// build a `Bytes` and a TTL for a read.
 #[derive(Debug, Clone)]
 pub enum CacheRequest {
-    Put { value: Bytes, ttl_ms: u64 },
+    Put {
+        value: Bytes,
+        ttl_ms: u64,
+    },
     Get,
     Delete,
+    /// Apply a signed delta to the counter of this key. The delta rides the
+    /// value bytes as eight big-endian bytes, so the envelope is unchanged and
+    /// an old peer refuses the op rather than misparsing the body.
+    CounterAdd {
+        delta: i64,
+    },
+    /// Read the counter's sum; answered in the value bytes the same way.
+    CounterGet,
 }
 
 impl CacheRequest {
@@ -271,6 +282,12 @@ impl CacheRequest {
             Self::Put { value, ttl_ms } => (CacheOpKind::Put, value.clone(), *ttl_ms),
             Self::Get => (CacheOpKind::Get, Bytes::new(), 0),
             Self::Delete => (CacheOpKind::Delete, Bytes::new(), 0),
+            Self::CounterAdd { delta } => (
+                CacheOpKind::CounterAdd,
+                felix_storage::counter_log::encode_sum(*delta),
+                0,
+            ),
+            Self::CounterGet => (CacheOpKind::CounterGet, Bytes::new(), 0),
         }
     }
 

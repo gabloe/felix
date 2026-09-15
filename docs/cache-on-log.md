@@ -229,6 +229,15 @@ watches, and a client whose broker fails re-establishes against the promoted
 owner by offset — the rebuilt index and continued offset space are what make
 that resume land exactly where the old watch left off.
 
+## Counters, beside the cache
+
+A counter is addressed like a cache key and routed like one, but lives in a
+store of its own under `<root>/counters/` — a new durable record shape gets a
+new root, so a build that predates it never meets bytes it cannot read in a
+log it already serves. `docs/projections.md` owns the design; the load-bearing
+consequence here is that a counter and a cache value may share a key and are
+unrelated, and a cache watch does not see counter changes.
+
 ## Replication
 
 A cache's shards are replicated by the machinery that replicates a stream's: the

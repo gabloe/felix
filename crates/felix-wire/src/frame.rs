@@ -143,6 +143,18 @@ pub const FEATURE_CACHE_WATCH: u32 = 0x0000_0040;
 /// exactly the state it joined for.
 pub const FEATURE_CACHE_WATCH_RETAINED: u32 = 0x0000_0080;
 
+/// The broker serves counters: `counter_add` and `counter_get`.
+///
+/// Advertised by a *broker*, like every request-shaped feature: sending either
+/// to a broker with no arm for it ends that broker's control loop rather than
+/// returning an error.
+///
+/// Only a broker with durable storage advertises it. A counter is a fold over
+/// a log — the sum is rebuilt from the deltas on recovery — and a broker with
+/// nowhere to write the log would be offering a sum that any restart resets,
+/// which is worse than refusing to count at all.
+pub const FEATURE_COUNTERS: u32 = 0x0000_0100;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -151,7 +163,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_GROUP_DEAD_LETTERS
     | FEATURE_STREAM_SHARDS
     | FEATURE_CACHE_WATCH
-    | FEATURE_CACHE_WATCH_RETAINED;
+    | FEATURE_CACHE_WATCH_RETAINED
+    | FEATURE_COUNTERS;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

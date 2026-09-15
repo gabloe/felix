@@ -46,6 +46,10 @@ pub enum LogKind {
     /// has lost which records its groups abandoned would silently redrive
     /// nothing and list nothing.
     GroupDeadLetters,
+    /// The counter log belonging to a cache shard: signed deltas folded into
+    /// running sums. Rides the cache shard's replica set the way group state
+    /// rides a stream shard's, so a promoted replica resumes the true sum.
+    Counters,
 }
 pub mod dead_letters;
 mod delivery;

@@ -328,6 +328,14 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                             }
                                             None => 0,
                                         }
+                                        // Only when there is somewhere to write
+                                        // the counter log. A sum any restart
+                                        // resets is worse than refusing to
+                                        // count at all.
+                                        | match broker.counters() {
+                                            Some(_) => felix_wire::FEATURE_COUNTERS,
+                                            None => 0,
+                                        }
                                         // Advertised unconditionally. A broker
                                         // with no routing snapshot answers 1,
                                         // which is the truth for a single-node
@@ -964,6 +972,187 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 )
                 .await?;
             }
+            Message::CounterAdd {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                delta,
+                request_id,
+            } => {
+                // An add is a write, authorized as one.
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheWrite,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::CacheMessage(Message::Error {
+                                message: format!(
+                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                                ),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    continue;
+                }
+                let applied = crate::cache_routing::apply_counter_op(
+                    &broker,
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.peers.as_deref(),
+                    &tenant_id,
+                    &namespace,
+                    &cache,
+                    &key,
+                    crate::peer::CacheRequest::CounterAdd { delta },
+                )
+                .await;
+                let value = match applied {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::CacheMessage(Message::Error {
+                                    message: format!("counter add not served: {reason}"),
+                                }),
+                            )
+                            .await,
+                            &ack_timeout_state,
+                            &ack_throttle_tx,
+                            &cancel_tx,
+                        )
+                        .await?;
+                        continue;
+                    }
+                };
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::CacheMessage(Message::CounterValue { value, request_id }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            Message::CounterGet {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                request_id,
+            } => {
+                if !authorize_cache(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::CacheRead,
+                    &namespace,
+                    &cache,
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            &out_ack_tx,
+                            &out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            &ack_throttle_tx,
+                            Outgoing::CacheMessage(Message::Error {
+                                message: format!(
+                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                                ),
+                            }),
+                        )
+                        .await,
+                        &ack_timeout_state,
+                        &ack_throttle_tx,
+                        &cancel_tx,
+                    )
+                    .await?;
+                    continue;
+                }
+                let read = crate::cache_routing::apply_counter_op(
+                    &broker,
+                    publish_ctx.ingress.as_deref(),
+                    publish_ctx.peers.as_deref(),
+                    &tenant_id,
+                    &namespace,
+                    &cache,
+                    &key,
+                    crate::peer::CacheRequest::CounterGet,
+                )
+                .await;
+                let value = match read {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        // A read this broker cannot route is an error, never
+                        // "no counter": absence is an answer about the data,
+                        // and this is an answer about the broker.
+                        handle_ack_enqueue_result(
+                            send_outgoing_critical(
+                                &out_ack_tx,
+                                &out_ack_depth,
+                                "felix_broker_out_ack_depth",
+                                &ack_throttle_tx,
+                                Outgoing::CacheMessage(Message::Error {
+                                    message: format!("counter get not served: {reason}"),
+                                }),
+                            )
+                            .await,
+                            &ack_timeout_state,
+                            &ack_throttle_tx,
+                            &cancel_tx,
+                        )
+                        .await?;
+                        continue;
+                    }
+                };
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::CacheMessage(Message::CounterValue { value, request_id }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
             Message::GroupPoll {
                 tenant_id,
                 namespace,
@@ -1505,6 +1694,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::GroupDeadLetterList { .. }
             | Message::CacheValue { .. }
             | Message::CacheOk { .. }
+            | Message::CounterValue { .. }
             | Message::CacheWatchStarted { .. }
             | Message::CacheEvent { .. }
             | Message::CacheWatchLagged { .. }

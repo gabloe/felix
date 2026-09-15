@@ -139,6 +139,15 @@ pub enum CorruptionKind {
         available: usize,
     },
     CacheRecordKeyNotUtf8,
+    /// A counter record that is not the shape this build writes: too short,
+    /// a version or op it does not know, a key length that overruns the
+    /// record, or a key that is not UTF-8. One variant for all five because a
+    /// counter folded over a misread record is wrong forever after, and every
+    /// one of them is answered the same way — refuse the log.
+    CounterRecord {
+        detail: &'static str,
+        found: u64,
+    },
 }
 
 impl fmt::Display for CorruptionKind {
@@ -198,6 +207,9 @@ impl fmt::Display for CorruptionKind {
             ),
             CorruptionKind::CacheRecordKeyNotUtf8 => {
                 write!(f, "cache record key is not valid UTF-8")
+            }
+            CorruptionKind::CounterRecord { detail, found } => {
+                write!(f, "counter record {detail} ({found})")
             }
         }
     }

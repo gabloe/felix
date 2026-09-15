@@ -118,6 +118,12 @@ rule and one replication path.
     3. An acknowledgement settles one record; the group's durable cursor advances over a contiguous run of them.
     4. Anything unanswered is redelivered, and dead-lettered once it has been attempted too many times.
   </Card>
+  <Card title="Composed data flow" icon="right-arrow">
+    Because every semantic is a reading of one log, they compose — each flow below is the primitive a whole class of application is usually hand-built from:
+    1. **Watch a key or prefix** ([keyed watch](/felix/features/cache/#7-keyed-watch)): config push and cache invalidation — every instance learns of a change the moment it lands, with an offset to resume from instead of a poll loop.
+    2. **Current state first, then changes** (retained delivery): presence and state sync — join a room, hold the roster immediately, stay current; the confirmation says the exact moment your state is complete.
+    3. **Deltas folded into a durable sum** (counters): rate limits, usage metering, live tallies — increment and learn where you stand in one round trip, with a sum that survives restart, compaction, and failover.
+  </Card>
 </CardGrid>
 
 ## Key Features

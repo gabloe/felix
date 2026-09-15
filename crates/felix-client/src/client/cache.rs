@@ -39,6 +39,14 @@ pub(crate) enum CacheRequest {
         message: Message,
         response: oneshot::Sender<Result<Option<Bytes>>>,
     },
+    /// A request answered with `CounterValue`: an add reporting the sum it
+    /// produced, or a read of the current one. Same exchange, different
+    /// answer shape.
+    Counter {
+        request_id: u64,
+        message: Message,
+        response: oneshot::Sender<Result<Option<i64>>>,
+    },
 }
 
 pub(crate) async fn run_cache_worker_with_limit(
@@ -162,6 +170,66 @@ async fn handle_cache_request(
                 }
             }
         }
+        CacheRequest::Counter {
+            request_id,
+            message,
+            response,
+        } => {
+            let result = counter_round_trip(
+                send,
+                recv,
+                message,
+                sample,
+                request_id,
+                frame_scratch,
+                max_frame_bytes,
+            )
+            .await;
+            match result {
+                Ok(value) => {
+                    let _ = response.send(Ok(value));
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = response.send(Err(err));
+                    Err(anyhow::anyhow!("cache stream failed"))
+                }
+            }
+        }
+    }
+}
+
+/// The counter exchange: identical plumbing, a `CounterValue` answer.
+async fn counter_round_trip(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    message: Message,
+    sample: bool,
+    request_id: u64,
+    frame_scratch: &mut BytesMut,
+    max_frame_bytes: usize,
+) -> Result<Option<i64>> {
+    let frame = message.encode().context("encode message")?;
+    write_frame_parts(send, &frame).await?;
+    let frame =
+        match read_frame_cache_timed_into_with_limit(recv, sample, frame_scratch, max_frame_bytes)
+            .await?
+        {
+            Some(frame) => frame,
+            None => return Err(anyhow::anyhow!("counter response closed")),
+        };
+    match Message::decode(frame).context("decode message")? {
+        Message::CounterValue {
+            value,
+            request_id: resp_id,
+        } => {
+            if resp_id != request_id {
+                return Err(anyhow::anyhow!("counter request id mismatch"));
+            }
+            Ok(value)
+        }
+        Message::Error { message } => Err(anyhow::anyhow!("counter error: {message}")),
+        other => Err(anyhow::anyhow!("counter response unexpected: {other:?}")),
     }
 }
 

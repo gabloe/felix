@@ -296,6 +296,45 @@ everything already queued, sends this, and finishes the event stream.
 `from_offset = resume_from` is gapless. Loss is loud by construction, because
 sparse offsets would otherwise hide it.
 
+### CounterAdd
+```
+{ "type": "counter_add", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "key": "<string>", "delta": <i64>, "request_id": <u64> }
+```
+
+Sent only to a broker that advertised `FEATURE_COUNTERS`. Applies a signed
+delta — negative to subtract — and is answered with `counter_value` carrying
+the sum *including* this delta, so incrementing and learning where you stand
+is one round trip.
+
+A counter is scoped exactly as a cache key is: the same registered cache
+scope, the same key-to-shard hash, the same owner, the same forwarding from a
+non-owner. It lives beside the cache, not in it — a counter and a cache value
+may share a key and are unrelated, and a cache watch does not see counter
+changes.
+
+**Delivery is at least once.** A client that retries an add after a lost
+acknowledgement counts twice: deltas carry no dedupe identity. An application
+that cannot tolerate a double-count keeps its own idempotency key outside the
+counter. See `docs/projections.md` for the decision.
+
+### CounterGet
+```
+{ "type": "counter_get", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "key": "<string>", "request_id": <u64> }
+```
+
+Answered with `counter_value`.
+
+### CounterValue (server -> client)
+```
+{ "type": "counter_value", "value": <i64|absent>, "request_id": <u64> }
+```
+
+An absent `value` means the counter has never been written — a different
+answer from a sum of zero, exactly as a cache miss differs from a stored
+empty value.
+
 ### StreamShards
 ```
 { "type": "stream_shards", "tenant_id": "<string>", "namespace": "<string>",
@@ -363,6 +402,12 @@ stream.
   an answer rather than a silence. The join is gapless and unambiguous: the
   same register-before-read discipline as a resume, with duplicates detectable
   by offset.
+- CounterAdd folds a signed delta into a durable running sum and answers with
+  the sum including it; CounterGet reads the current one, with never-written
+  distinct from zero. The sum survives restart, compaction (which collapses
+  applied deltas into a checkpoint without renumbering the log), and leader
+  failover — the counter log replicates beside its cache shard. At-least-once:
+  a retried add double-counts, stated where the semantics are.
 - GroupPoll returns `group_records`, which may be empty: nothing was available
   is an answer, not an error. Each record is claimed until the broker's
   visibility timeout lapses, after which it is handed to whoever polls next.
@@ -579,6 +624,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0020` | `FEATURE_STREAM_SHARDS` | The broker answers `stream_shards` |
 | `0x0040` | `FEATURE_CACHE_WATCH` | The broker accepts `cache_watch` |
 | `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
+| `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -612,6 +658,9 @@ the reason the dead-letter bit is not folded into the consumer-group bit: a
 broker built when the watch bit meant live-and-resume only would ignore the
 request's `retained` field and serve a live-only watch — silent misdelivery,
 which is worse than the refused request a missing bit produces.
+`FEATURE_COUNTERS` depends on durable storage, like the group features: a
+counter is a fold over a log, and a sum that any restart resets is worse than
+refusing to count at all.
 
 They are two bits rather than one because a bit says which requests exist, and
 widening what an existing bit promises is the one change that cannot be made

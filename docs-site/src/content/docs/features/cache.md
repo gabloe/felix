@@ -368,7 +368,58 @@ whose cache is log-backed: an in-memory cache has no offsets to anchor resume,
 duplicate detection, or the lag signal to. See the
 [wire protocol](/felix/architecture/wire-protocol/) for the message shapes.
 
-### 8. Eviction (in-memory only: best-effort)
+### 8. Counters
+
+A counter as a log semantic: `counter_add` appends a signed delta, the broker
+folds the running sum, and the answer is the sum *including* your delta — so
+incrementing and learning where you stand is one round trip:
+
+```rust
+// One round trip: apply the delta and learn the result.
+let hits = client.counter_add("acme", "prod", "limits", "user:42:reqs", 1).await?;
+if hits > LIMIT {
+    return Err(RateLimited);
+}
+
+// Point read; None means never written, which is not the same as zero.
+let views = client.counter_get("acme", "prod", "metrics", "page:home").await?;
+```
+
+Counters are scoped and routed exactly like cache keys — same cache scope,
+same key-to-shard hash, same owner — but live beside the cache, not in it: a
+counter and a cache value may share a key and are unrelated, and a cache
+watch does not see counter changes.
+
+The sum is durable and replicated: it survives a restart (rebuilt by folding
+the log), compaction (applied deltas collapse into a checkpoint without the
+sum or the offsets moving), and leader failover (the counter log ships with
+its cache shard, so the promoted replica folds the true sum and keeps
+counting). Negotiated as `FEATURE_COUNTERS`, durable brokers only.
+
+:::caution[At-least-once, honestly]
+A retried `counter_add` after a lost acknowledgement counts twice — deltas
+carry no dedupe identity. This replaces the earlier best-effort
+read-modify-write rate limiting shown below with something durable and
+atomic per shard, but it does not make increments exactly-once; an
+application that cannot tolerate a double-count keeps its own idempotency
+key.
+:::
+
+### 9. Composed semantics: which flow for which problem
+
+The cache's semantics are readings of one log, so they compose — and each
+composition is the primitive a class of application is usually hand-built
+from:
+
+| You are building | Reach for | Why this shape |
+|---|---|---|
+| Config push, feature flags, cache invalidation | **Keyed watch** on the config key or prefix | Every instance learns of the change the moment it lands; the offset makes reconnects gapless instead of "poll and hope" |
+| Presence, lobbies, collaborative state | **Retained watch** on a prefix | Join and immediately hold the roster, then stay current; `retained_count` tells you the exact moment your state is complete, and an empty room is a definite zero |
+| A read-heavy dashboard over changing state | **Retained watch**, materialized locally | Current values first, then only the changes — no re-fetch loop, and a lag is signalled loudly rather than shown as stale data |
+| Rate limiting, quotas, usage metering | **Counter** per principal | Increment-and-read in one round trip against the shard's owner, durable across restart and failover — not a racy get-modify-put |
+| Live tallies (votes, likes, inventory deltas) | **Counter**, read by pollers or fronted by a put | Deltas fold server-side; publish the folded sum into a watched cache key when watchers need push instead of poll |
+
+### 10. Eviction (in-memory only: best-effort)
 
 **Current eviction policy**: Best-effort under memory pressure.
 
@@ -709,7 +760,9 @@ impl RateLimiter {
 ```
 
 :::note[Better Rate Limiting]
-For production rate limiting, atomic increment operations (planned) will avoid race conditions. Current approach is best-effort.
+Shipped: [counters](#8-counters) are the atomic increment this note used to
+promise — `counter_add` is one durable, routed round trip and replaces the
+read-modify-write above.
 :::
 ### 4. Temporary Data Storage
 
@@ -810,9 +863,6 @@ watch is exactly that notification, with offsets instead of best effort.
 **Atomic operations**:
 
 ```rust
-// Increment counter
-client.cache_increment("counters", "page-views", 1).await?;
-
 // Compare-and-swap
 client.cache_cas(
     "locks",
@@ -821,6 +871,10 @@ client.cache_cas(
     new_value
 ).await?;
 ```
+
+Increment shipped as [counters](#8-counters) — a fold over the log rather
+than an operation on a cache value, which is why it survives failover.
+Compare-and-swap remains future.
 
 **Multi-key operations**:
 

@@ -45,6 +45,7 @@ pub async fn replicate_once<R: PeerRequester>(
     cursors: &mut HashMap<ShardKey, ShardCursors>,
     group_cursors: &mut HashMap<ShardKey, ShardCursors>,
     dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
+    counter_cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
     if broker.durable_storage().is_none() {
         // Nothing to replicate from. Without durable storage a broker's streams
@@ -223,6 +224,20 @@ pub async fn replicate_once<R: PeerRequester>(
             )
             .await;
         }
+        // A cache shard's counterpart: the counter log rides the cache's
+        // replica set the way group state rides the stream's, and gates
+        // nothing for the same reason.
+        if key.kind == felix_router::ShardKind::Cache {
+            ship_aux_log(
+                requester,
+                broker,
+                key,
+                route,
+                felix_broker::LogKind::Counters,
+                counter_cursors,
+            )
+            .await;
+        }
 
         halted += entry
             .followers
@@ -239,6 +254,7 @@ pub async fn replicate_once<R: PeerRequester>(
     cursors.retain(|key, _| live_shards.contains(key));
     group_cursors.retain(|key, _| live_shards.contains(key));
     dead_letter_cursors.retain(|key, _| live_shards.contains(key));
+    counter_cursors.retain(|key, _| live_shards.contains(key));
     // A shard this broker no longer leads stops promising a quorum. Dropping
     // the mark ends any publish still waiting on it, rather than leaving it to
     // run out its timeout for an answer that can no longer come.
@@ -465,6 +481,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         let mut cursors = HashMap::new();
         let mut group_cursors = HashMap::new();
         let mut dead_letter_cursors = HashMap::new();
+        let mut counter_cursors = HashMap::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
@@ -479,6 +496,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &mut cursors,
                 &mut group_cursors,
                 &mut dead_letter_cursors,
+                &mut counter_cursors,
             )
             .await;
         }

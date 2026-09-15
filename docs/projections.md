@@ -127,6 +127,52 @@ consumer per shard is the application's job today.
 leader is lost, or after a redrive. Every consumer has to be able to see the
 same record again.
 
+## Counters
+
+The projection model, applied a third time: **a counter is a fold over a log
+of signed deltas**, exactly as a group's cursor is a fold over its
+acknowledgements and the cache index is a fold over its puts. `counter_add`
+appends a delta record; the running sum per key is the derived state, rebuilt
+by replaying the log on recovery and never trusted from memory; compaction
+collapses the applied deltas into one **checkpoint record** per key — the
+fold, restated — appended at the tail so the offset space continues and
+replication stays coherent across it. A regression test asserts compaction
+changes neither the observable sum nor the log's numbering.
+
+Three decisions, recorded here because #350 asked for them explicitly:
+
+- **Scope.** A counter is addressed `(tenant, namespace, cache, key)` — the
+  registered cache scope, the same key-to-shard hash, the same owner and
+  forwarding — but lives in a store of its own beside the cache
+  (`<root>/counters/`). Beside rather than inside, because a counter record
+  is a new durable shape: mixed into the cache's logs it would make every one
+  of them unreadable to a build that predates counters, promoted replicas
+  included, with the cache's own puts as collateral. In its own store the
+  blast radius is the counters. The corollary is that a counter and a cache
+  value may share a key and are unrelated.
+- **Watch interplay.** A cache watch does not see counter changes — they are
+  different logs. A watch over counters (sums, not deltas, by the same
+  argument retained delivery makes) is future work, not a silent half-feature
+  of the cache watch.
+- **Idempotency.** Delivery is **at least once**, honestly: a client that
+  retries an add after a lost acknowledgement counts twice, because deltas
+  carry no dedupe identity. The failure mode is exactly that — a lost ack
+  plus a retry equals a double-count — and an application that cannot
+  tolerate it keeps its own idempotency key outside the counter. A dedupe
+  window was considered and deferred: it narrows the window without closing
+  it, at a cost on every add.
+
+The sum survives what the cursors survive, proven the same way: restart
+(rebuilt fold), compaction (checkpoint), and leader failover — the counter
+log rides its cache shard's replica set the way group state rides a stream
+shard's, shipped by the same driver pass and gating nothing.
+
+> `crates/felix-storage/src/counter_log/tests.rs`, including
+> `compaction_moves_neither_the_sum_nor_the_offsets` and
+> `the_sum_survives_a_restart`;
+> `services/broker/tests/counters.rs::an_add_answers_with_the_sum_including_it`;
+> `crates/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
+
 ## Where this stops being true
 
 The claims above are the ones with tests. These are the gaps, listed so nothing

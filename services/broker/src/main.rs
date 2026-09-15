@@ -267,6 +267,21 @@ where
         Some(storage) => broker.with_durable_storage(storage),
         None => broker,
     };
+    // Counters on a root of their own, beside the cache's rather than inside
+    // it: a counter record is a new durable shape, and a store of its own
+    // keeps its blast radius to the counters. Only with durable storage — a
+    // sum any restart resets is worse than refusing to count.
+    let broker = match &durable_config {
+        Some(durable) => {
+            let root = durable.root.join("counters");
+            tracing::info!(root = %root.display(), "opening counters");
+            broker.with_counters(std::sync::Arc::new(
+                felix_storage::CounterStore::open(&root, durable.log.clone())
+                    .with_context(|| format!("open the counter log at {}", root.display()))?,
+            ))
+        }
+        None => broker,
+    };
     tracing::info!("broker started");
     let controlplane_url = config
         .controlplane_url

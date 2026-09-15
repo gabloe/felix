@@ -284,6 +284,23 @@ Subscribe to changes for one cache key or key prefix.
   subscription's
 - Served by the shard's owner; elsewhere answered with `not_leader`
 
+#### CounterAdd / CounterGet
+
+Counter operations, scoped and routed like cache keys.
+
+```json
+{ "type": "counter_add", "tenant_id": "string", "namespace": "string",
+  "cache": "string", "key": "string", "delta": "number", "request_id": "number" }
+{ "type": "counter_get", "tenant_id": "string", "namespace": "string",
+  "cache": "string", "key": "string", "request_id": "number" }
+```
+
+**Semantics**:
+- Sent only to a broker that advertised `FEATURE_COUNTERS` (durable brokers only)
+- Both answered with `counter_value`; an add's answer is the sum *including*
+  its delta
+- At-least-once: a retried add after a lost acknowledgement counts twice
+
 ### Server → Client Messages
 
 #### Event
@@ -417,6 +434,15 @@ The watch fell behind; the broker ends the stream after this.
 **Semantics**:
 - Everything already queued was delivered first
 - Re-watching with `from_offset = resume_from` is gapless
+
+#### CounterValue
+
+```json
+{ "type": "counter_value", "value": "number | absent", "request_id": "number" }
+```
+
+Absent `value` means the counter has never been written — distinct from a sum
+of zero.
 
 #### Ok
 
