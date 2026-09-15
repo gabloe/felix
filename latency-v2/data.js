@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789445445746,
+  "lastUpdate": 1789447194337,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9768,6 +9768,72 @@ window.BENCHMARK_DATA = {
             "range": "336.11",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1090.00\nmean: 944.20\nstdev: 336.11\ncv: 35.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "113c549261b2b246cd1497efad29a902b804407b",
+          "message": "feat(cache): keyed watch — subscribe to a cache key or prefix (#348) (#360)\n\nA cache you can only poll is much weaker than one you can subscribe to.\ncache_watch, negotiated as FEATURE_CACHE_WATCH, subscribes to changes for\none key or key prefix and delivers each applied write in the shard's\nwrite order with its log offset — puts with their values, deletes as\ntombstones. Pure composition of what existed: the log gives every change\nan offset, the index gives current state, and bounded per-watcher queues\nwith try_send give fanout that never blocks a writer.\n\nThe pieces:\n\n- felix-wire: FEATURE_CACHE_WATCH and four messages (cache_watch,\n  cache_watch_started, cache_event, cache_watch_lagged), all additive\n  and negotiated; a pre-negotiation peer exchanges byte-identical frames.\n- felix-storage: LogCache reports each applied write to a CacheObserver\n  while still holding the shard's write lock — that hold is what makes\n  the order watchers see the shard's order — plus live_entries() for\n  snapshot reads. Compaction notifies nothing: it moves records without\n  changing what the cache holds. Only log-backed stores opt in, so the\n  feature is advertised exactly where offsets exist to anchor it.\n- felix-broker: CacheWatchHub fans out filtered changes. A watcher whose\n  queue overflows is ended, not thinned: filtering makes offsets sparse,\n  so a drop cannot be read from an offset jump the way a stream\n  subscriber's can — the hub records the first missed offset and the\n  delivery path reports it, and re-watching from it is gapless.\n  Watcher ids are monotonic u64s, never recycled (the Slab lesson, #256).\n- broker service: the handler joins resume to live with the\n  register-before-read discipline the stream resume path proved out;\n  an offset compaction has collapsed is answered with a marked snapshot\n  of current values (resnapshot), never a silent gap; ownership is\n  redirected, never proxied, through the same dispatch subscribes use,\n  and a shard the cache does not have is refused rather than served\n  quiet. Verified by reverting to the natural-but-wrong order (catch-up\n  read before registration) and watching the join test fail.\n- felix-client: watch_cache / watch_cache_shard with typed Lagged and\n  resnapshot surfaces, riding the existing event-router plumbing.\n\nDocs are part of the change: protocol.md (messages, feature bit, flow\ndiagram), cache-on-log.md (the watch contract and its reasoning),\nsemantics.md (claims with test citations), subscribe-routing.md, the\ndocs-site cache/wire-protocol/client-sdk pages, an animated diagram of\nfiltered delivery, and the status table gains a keyed-watch row.",
+          "timestamp": "2026-09-14T21:37:41-07:00",
+          "tree_id": "eb849a6d761754ab416b8462ef99c72c98a97db1",
+          "url": "https://github.com/gabloe/felix/commit/113c549261b2b246cd1497efad29a902b804407b"
+        },
+        "date": 1789447191452,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 94,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 94.00\nmean: 94.00\nstdev: 0.71\ncv: 0.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 125,
+            "range": "2.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 126.40\nstdev: 2.19\ncv: 1.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 151,
+            "range": "44.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 151.00\nmean: 171.60\nstdev: 44.87\ncv: 26.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 128,
+            "range": "5.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 129.80\nstdev: 5.26\ncv: 4.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 261,
+            "range": "217.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 261.00\nmean: 355.20\nstdev: 217.94\ncv: 61.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 571,
+            "range": "620.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 571.00\nmean: 821.60\nstdev: 620.80\ncv: 75.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
