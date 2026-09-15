@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789426076734,
+  "lastUpdate": 1789438329408,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9438,6 +9438,72 @@ window.BENCHMARK_DATA = {
             "range": "209.52",
             "unit": "us",
             "extra": "trials: 5\nmedian: 492.00\nmean: 625.60\nstdev: 209.52\ncv: 33.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16e50a28675c993b615fc5c44a853bceae67ba66",
+          "message": "fix(broker): forward a publish to the shard it was routed for (#356)\n\n`publish_target` stamped both the local `ShardKey` and the forwarded\n`ForwardKey` with `shard_for(1, None)` — always 0 — discarding the shard\n`resolve_route` had just resolved and dispatched on.\n\nThe owner appends to the shard the message names, so a key that routed to\nshard 3 was forwarded to shard 3's owner carrying shard 0. That owner does\nnot hold shard 0, so it answered `NotLeader` naming shard 0's owner at\ngeneration 0, and the forward was refused as \"not ahead of 0\". Where that\nredirect was followed the record landed in shard 0's log instead: a whole\nstream's keys collapsing onto one shard while the router had dispatched\nevery one of them correctly, with nothing downstream able to notice.\n\nThread the resolved shard through `publish_target`. The keyless binary and\nuni paths name `UNKEYED_SHARD`, so the route and the batch provably agree\nrather than each recomputing a shard.\n\nLoosen the forward loop guard, which the wrong shard exposed. It refused\nany redirect that did not advance the generation, but on a freshly formed\ncluster every shard sits at generation 0 and the correct owner has nothing\nhigher to offer — so a forwarder whose routing snapshot had not converged\nfailed instead of self-correcting. Refuse only a redirect back to a\n(node, generation) already tried, which is a real loop, and follow a\ncorrection to a node not yet tried.\n\nThe cluster harness now waits for every broker to report a stream's full\nwidth before `start` returns. `stream_shards` reads the same routing\nsnapshot the publish path does, and a broker holding only part of the\nassignments reports width 1 and silently routes every key to shard 0.\n\n`a_sharded_subscription_receives_every_record` flaked on this, failing\n~40% of runs under CPU load. It now passes 16/16 with records spread\n12/10/6/12 across the four shards — the distribution the routing hash\nactually produces.",
+          "timestamp": "2026-09-14T19:09:58-07:00",
+          "tree_id": "2021e4e00578f7176594278e12c4c552cf2f0cf8",
+          "url": "https://github.com/gabloe/felix/commit/16e50a28675c993b615fc5c44a853bceae67ba66"
+        },
+        "date": 1789438326337,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 94,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 94.00\nmean: 94.20\nstdev: 0.45\ncv: 0.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 125,
+            "range": "2.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 126.20\nstdev: 2.68\ncv: 2.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 161,
+            "range": "5.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 160.60\nstdev: 5.94\ncv: 3.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 126,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 126.00\nmean: 126.40\nstdev: 0.55\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 258,
+            "range": "6.57",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 259.80\nstdev: 6.57\ncv: 2.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1324,
+            "range": "480.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1324.00\nmean: 1035.00\nstdev: 480.05\ncv: 46.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
