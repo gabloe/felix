@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789443401944,
+  "lastUpdate": 1789445289671,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -9636,6 +9636,72 @@ window.BENCHMARK_DATA = {
             "range": "512.98",
             "unit": "us",
             "extra": "trials: 5\nmedian: 890.00\nmean: 1122.60\nstdev: 512.98\ncv: 45.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3c715213746e25729e16e4705a521d23a6f2349",
+          "message": "test(controlplane): prove readiness against a database that can fail (#122) (#358)\n\nThe readiness mechanism was built and documented: liveness split from\nreadiness, a bounded store check, a cache window, a draining short-circuit,\nand a Postgres probe that also compares the applied migration version with\nthe one this build expects. What was missing is evidence. The unit tests\ndrive a fake probe that returns `Err` on command, which proves the cache and\nthe timeout but says nothing about a database, and every acceptance\ncriterion on #122 is written about a database.\n\nSo these run the real router over a real `PostgresStore`, reached through a\nTCP proxy the test can cut, black-hole, and restore. Cutting it is a genuine\noutage from the pool's point of view — connections drop, new ones are\nrefused — and nothing in the process knows it was deliberate.\n\nProven:\n\n- an instance that cannot reach its database leaves rotation, and is *not*\n  restarted for it: `/v1/system/ready` turns 503 while `/v1/system/live`\n  stays 200. Both halves matter and they pull opposite ways.\n- a transient outage recovers with no intervention: connectivity returns and\n  readiness follows, with nothing restarted and no pool rebuilt.\n- a database older than this build stays out of rotation: the newest applied\n  migration row is hidden, readiness turns 503, and returns when it is put\n  back.\n- a probe still answers when the database accepts connections and then says\n  nothing — the case that matters most, because a prober with no answer keeps\n  sending traffic until its own timeout. With a single-connection pool that\n  one wedged connection is the whole pool.\n\nVerified to have teeth: swapping `StoreProbe` for `AlwaysReady` fails four of\nthe five, the baseline being the one that legitimately still passes.\n\nThey live behind `pg-tests` like the other database tests, so they run in the\ncoverage job, which provides `FELIX_TEST_DATABASE_URL`, and skip rather than\nfail where no database is reachable.",
+          "timestamp": "2026-09-14T21:06:02-07:00",
+          "tree_id": "ebe8d4d821ba36e7bac0a6269fe731594a7ea51a",
+          "url": "https://github.com/gabloe/felix/commit/f3c715213746e25729e16e4705a521d23a6f2349"
+        },
+        "date": 1789445288189,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 76,
+            "range": "6.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 76.00\nmean: 78.60\nstdev: 6.39\ncv: 8.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 107,
+            "range": "11.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 107.00\nmean: 111.60\nstdev: 11.52\ncv: 10.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 124,
+            "range": "927.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 124.00\nmean: 544.80\nstdev: 927.05\ncv: 170.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 103,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 103.00\nmean: 102.80\nstdev: 0.84\ncv: 0.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 222,
+            "range": "4.16",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 222.00\nmean: 221.60\nstdev: 4.16\ncv: 1.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 335,
+            "range": "140.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 335.00\nmean: 408.00\nstdev: 140.25\ncv: 34.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
