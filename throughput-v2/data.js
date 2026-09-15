@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789426078718,
+  "lastUpdate": 1789438332727,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7436,6 +7436,58 @@ window.BENCHMARK_DATA = {
             "range": "16180.18",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 599726.49\nmean: 594288.16\nstdev: 16180.18\ncv: 2.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16e50a28675c993b615fc5c44a853bceae67ba66",
+          "message": "fix(broker): forward a publish to the shard it was routed for (#356)\n\n`publish_target` stamped both the local `ShardKey` and the forwarded\n`ForwardKey` with `shard_for(1, None)` — always 0 — discarding the shard\n`resolve_route` had just resolved and dispatched on.\n\nThe owner appends to the shard the message names, so a key that routed to\nshard 3 was forwarded to shard 3's owner carrying shard 0. That owner does\nnot hold shard 0, so it answered `NotLeader` naming shard 0's owner at\ngeneration 0, and the forward was refused as \"not ahead of 0\". Where that\nredirect was followed the record landed in shard 0's log instead: a whole\nstream's keys collapsing onto one shard while the router had dispatched\nevery one of them correctly, with nothing downstream able to notice.\n\nThread the resolved shard through `publish_target`. The keyless binary and\nuni paths name `UNKEYED_SHARD`, so the route and the batch provably agree\nrather than each recomputing a shard.\n\nLoosen the forward loop guard, which the wrong shard exposed. It refused\nany redirect that did not advance the generation, but on a freshly formed\ncluster every shard sits at generation 0 and the correct owner has nothing\nhigher to offer — so a forwarder whose routing snapshot had not converged\nfailed instead of self-correcting. Refuse only a redirect back to a\n(node, generation) already tried, which is a real loop, and follow a\ncorrection to a node not yet tried.\n\nThe cluster harness now waits for every broker to report a stream's full\nwidth before `start` returns. `stream_shards` reads the same routing\nsnapshot the publish path does, and a broker holding only part of the\nassignments reports width 1 and silently routes every key to shard 0.\n\n`a_sharded_subscription_receives_every_record` flaked on this, failing\n~40% of runs under CPU load. It now passes 16/16 with records spread\n12/10/6/12 across the four shards — the distribution the routing hash\nactually produces.",
+          "timestamp": "2026-09-14T19:09:58-07:00",
+          "tree_id": "2021e4e00578f7176594278e12c4c552cf2f0cf8",
+          "url": "https://github.com/gabloe/felix/commit/16e50a28675c993b615fc5c44a853bceae67ba66"
+        },
+        "date": 1789438331977,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 320477.88,
+            "range": "7361.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320477.88\nmean: 323588.70\nstdev: 7361.31\ncv: 2.27%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 320477.88,
+            "range": "7361.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320477.88\nmean: 323588.70\nstdev: 7361.31\ncv: 2.27%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 76096.13,
+            "range": "2104.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 76096.13\nmean: 75630.57\nstdev: 2104.80\ncv: 2.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 760961.34,
+            "range": "21047.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 760961.34\nmean: 756305.70\nstdev: 21047.98\ncv: 2.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
