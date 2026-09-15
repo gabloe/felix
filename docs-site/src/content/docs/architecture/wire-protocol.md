@@ -264,7 +264,8 @@ Subscribe to changes for one cache key or key prefix.
   "key": "string | absent",
   "prefix": "string | absent",
   "shard": "number | absent",
-  "from_offset": "number | absent"
+  "from_offset": "number | absent",
+  "retained": "bool | absent"
 }
 ```
 
@@ -274,6 +275,10 @@ Subscribe to changes for one cache key or key prefix.
 - Exactly one of `key` / `prefix`; both or neither is refused
 - `from_offset` resumes at the first change not yet seen; absent watches from
   now. An offset past the tail is refused with `subscribe_cursor_error`
+- `retained` asks for current state first — each matching key's current value,
+  then live changes. Requires `FEATURE_CACHE_WATCH_RETAINED` (an older
+  watch-capable broker would ignore the field and silently serve a live-only
+  watch), and is refused together with `from_offset`
 - Confirmed with `cache_watch_started`; changes arrive as `cache_event` on a
   unidirectional stream bound by `event_stream_hello`, exactly like a
   subscription's
@@ -362,7 +367,8 @@ Watch confirmation.
   "type": "cache_watch_started",
   "subscription_id": "number",
   "resume_offset": "number",
-  "resnapshot": "bool | absent"
+  "resnapshot": "bool | absent",
+  "retained_count": "number | absent"
 }
 ```
 
@@ -372,6 +378,10 @@ Watch confirmation.
 - `resnapshot: true` means the requested history was collapsed by compaction,
   so the watch begins with each matching key's current value instead — a
   defined signal, never a silent gap
+- `retained_count`, present exactly when retained delivery was requested, is
+  how many current values precede live delivery — `0` is the defined "no
+  retained value" answer, so joining an empty key cannot be mistaken for a
+  slow one
 
 #### CacheEvent
 

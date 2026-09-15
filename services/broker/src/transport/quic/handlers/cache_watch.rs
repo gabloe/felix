@@ -9,8 +9,9 @@
 //!    either queued or reported as the lag offset.
 //! 2. Read the shard log's tail. Registration happened first, so every change
 //!    below the tail is on disk and every change at or past it is queued.
-//! 3. Serve `[from_offset, tail)` from the log (or the current values, when
-//!    compaction collapsed that history), then live changes, dropping queued
+//! 3. Serve the catch-up — `[from_offset, tail)` from the log for a resume,
+//!    or each matching key's current value for a retained watch and for a
+//!    resume compaction has collapsed — then live changes, dropping queued
 //!    duplicates below the tail by offset.
 //!
 //! Reading history first and registering after is the version that looks
@@ -79,6 +80,7 @@ pub(crate) struct WatchRequest {
     pub(crate) prefix: Option<String>,
     pub(crate) shard: Option<u32>,
     pub(crate) from_offset: Option<u64>,
+    pub(crate) retained: bool,
     pub(crate) subscription_id: Option<u64>,
 }
 
@@ -257,15 +259,27 @@ pub(crate) async fn handle_cache_watch_message(
         Replay {
             from: u64,
         },
-        /// The requested history was collapsed by compaction: deliver each
-        /// matching key's current value instead, then live. Defined and loud,
-        /// never a silent gap — the same resnapshot contract the control
-        /// plane's assignment watch uses.
-        Resnapshot,
+        /// Each matching key's current value, then live — either because the
+        /// watch asked for retained delivery, or because the offset it asked
+        /// to resume from was collapsed by compaction and current state is the
+        /// defined answer, never a silent gap.
+        Snapshot,
     }
-    let catch_up = match request.from_offset {
-        None => CatchUp::None,
-        Some(from) if from > tail => {
+    let catch_up = match (request.retained, request.from_offset) {
+        (true, Some(_)) => {
+            // A resume already reconstructs the state a retained start would
+            // shortcut, and delivering both would hand over every value twice.
+            subscriptions.release();
+            responder
+                .send(Message::Error {
+                    message: "cache_watch takes retained or from_offset, not both".to_string(),
+                })
+                .await?;
+            return Ok(true);
+        }
+        (true, None) => CatchUp::Snapshot,
+        (false, None) => CatchUp::None,
+        (false, Some(from)) if from > tail => {
             subscriptions.release();
             responder
                 .send(Message::SubscribeCursorError {
@@ -276,9 +290,39 @@ pub(crate) async fn handle_cache_watch_message(
                 .await?;
             return Ok(true);
         }
-        Some(from) if from >= base => CatchUp::Replay { from },
-        Some(_) => CatchUp::Resnapshot,
+        (false, Some(from)) if from >= base => CatchUp::Replay { from },
+        (false, Some(_)) => CatchUp::Snapshot,
     };
+    // The compacted-resume case, distinct from asked-for retained delivery
+    // because the confirmation reports them differently.
+    let resnapshot = matches!(catch_up, CatchUp::Snapshot) && !request.retained;
+
+    // Snapshots are read *before* the confirmation goes out, because a
+    // retained watch's confirmation carries how many values follow — `Some(0)`
+    // being the defined "joined an empty key" answer, which silence could
+    // never be. Entries at or past the tail are left out: they were applied
+    // after the watcher registered, so their changes arrive live, and writing
+    // them here would double them.
+    let snapshot = match catch_up {
+        CatchUp::Snapshot => {
+            match snapshot_entries(broker.cache(), &request, shard, &filter, tail).await {
+                Ok(entries) => Some(entries),
+                Err(err) => {
+                    subscriptions.release();
+                    responder
+                        .send(Message::Error {
+                            message: format!("cache snapshot failed: {err}"),
+                        })
+                        .await?;
+                    return Ok(true);
+                }
+            }
+        }
+        _ => None,
+    };
+    let retained_count = request
+        .retained
+        .then(|| snapshot.as_ref().map_or(0, Vec::len) as u64);
 
     let subscription_id = request
         .subscription_id
@@ -317,26 +361,17 @@ pub(crate) async fn handle_cache_watch_message(
         .send(Message::CacheWatchStarted {
             subscription_id,
             resume_offset: tail,
-            resnapshot: matches!(catch_up, CatchUp::Resnapshot),
+            resnapshot,
+            retained_count,
         })
         .await?;
 
-    let catch_up_result = match catch_up {
-        CatchUp::None => Ok(()),
-        CatchUp::Replay { from } => {
+    let catch_up_result = match (catch_up, snapshot) {
+        (CatchUp::Replay { from }, _) => {
             write_replayed_changes(&mut event_send, &log, &filter, from, tail).await
         }
-        CatchUp::Resnapshot => {
-            write_snapshot(
-                &mut event_send,
-                broker.cache(),
-                &request,
-                shard,
-                &filter,
-                tail,
-            )
-            .await
-        }
+        (CatchUp::Snapshot, Some(entries)) => write_snapshot(&mut event_send, entries).await,
+        _ => Ok(()),
     };
     if let Err(err) = catch_up_result {
         subscriptions.release();
@@ -412,20 +447,19 @@ async fn write_replayed_changes(
     Ok(())
 }
 
-/// Deliver each matching key's current value, for a resume whose history was
-/// collapsed by compaction.
+/// Each matching key's current value below `tail`, in offset order.
 ///
-/// Only entries below `tail` are written: an entry at or past it was applied
-/// after the watcher registered, so its change arrives live and writing it
-/// here would double it.
-async fn write_snapshot(
-    event_send: &mut quinn::SendStream,
+/// Entries at or past `tail` are left out: they were applied after the
+/// watcher registered, so their changes arrive live and including them here
+/// would double them. Offset order, so the client's checkpoint advances
+/// monotonically through the snapshot exactly as it does through a replay.
+async fn snapshot_entries(
     cache: &(dyn felix_storage::StorageApi + Send),
     request: &WatchRequest,
     shard: u32,
     filter: &CacheWatchFilter,
     tail: u64,
-) -> Result<()> {
+) -> Result<Vec<felix_storage::CacheSnapshotEntry>> {
     let mut entries = cache
         .live_entries(
             &request.tenant_id,
@@ -434,14 +468,18 @@ async fn write_snapshot(
             shard,
         )
         .await
-        .map_err(|err| anyhow::anyhow!("cache snapshot failed: {err}"))?;
-    // Offset order, so the client's checkpoint advances monotonically through
-    // the snapshot exactly as it does through a replay.
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    entries.retain(|entry| entry.offset < tail && filter.matches(&entry.key));
     entries.sort_by_key(|entry| entry.offset);
+    Ok(entries)
+}
+
+/// Deliver a snapshot's current values on the event stream.
+async fn write_snapshot(
+    event_send: &mut quinn::SendStream,
+    entries: Vec<felix_storage::CacheSnapshotEntry>,
+) -> Result<()> {
     for entry in entries {
-        if entry.offset >= tail || !filter.matches(&entry.key) {
-            continue;
-        }
         write_message(
             event_send,
             Message::CacheEvent {

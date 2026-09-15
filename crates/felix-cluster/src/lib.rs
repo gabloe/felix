@@ -675,6 +675,34 @@ impl Cluster {
         Ok(value.map(|value| value.to_vec()))
     }
 
+    /// Watch one cache key with retained delivery, through a named broker.
+    ///
+    /// Both halves are returned because dropping the client closes the
+    /// connection the watch is delivered on. Unlike a cache get, a watch is
+    /// not forwarded: a broker that does not own the key's shard answers with
+    /// a redirect, which surfaces here as an error for the caller to act on.
+    pub async fn cache_watch_retained_via(
+        &self,
+        node_id: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<(felix_client::Client, felix_client::CacheWatch)> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        let client = client::connect(node.client_addr, &self.tenant_id, &self.client_token).await?;
+        let watch = client
+            .watch_cache_retained(
+                &self.tenant_id,
+                &self.namespace,
+                cache,
+                felix_client::CacheWatchFilter::Key(key.to_string()),
+            )
+            .await
+            .with_context(|| format!("cache watch {cache}/{key} via {node_id}"))?;
+        Ok((client, watch))
+    }
+
     /// Subscribe on a named broker and return the client and subscription.
     ///
     /// Both are returned because dropping the client closes the connection the

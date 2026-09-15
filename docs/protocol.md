@@ -215,7 +215,7 @@ one that did not.
 { "type": "cache_watch", "tenant_id": "<string>", "namespace": "<string>",
   "cache": "<string>", "key": "<string>|absent", "prefix": "<string>|absent",
   "shard": <u32|absent>, "from_offset": <u64|absent>,
-  "subscription_id": <u64|absent> }
+  "retained": <bool|absent>, "subscription_id": <u64|absent> }
 ```
 
 Sent only to a broker that advertised `FEATURE_CACHE_WATCH`. Subscribes to
@@ -235,10 +235,19 @@ now — live changes only. An offset past the tail is refused with
 `subscribe_cursor_error` rather than silently reinterpreted. Watches are served
 by the shard's owner and redirected (`not_leader`) elsewhere, like subscribes.
 
+`retained` asks for current state first: each matching key's current value —
+MQTT's retained message — then live changes. Sent only to a broker that
+advertised `FEATURE_CACHE_WATCH_RETAINED`: an older watch-capable broker would
+ignore the unknown field and serve a live-only watch, the client silently
+missing exactly the state it joined for. Refused alongside `from_offset` —
+the replay already reconstructs the state a retained start shortcuts, and
+serving both would hand over every value twice.
+
 ### CacheWatchStarted (server -> client)
 ```
 { "type": "cache_watch_started", "subscription_id": <u64>,
-  "resume_offset": <u64>, "resnapshot": <bool|absent> }
+  "resume_offset": <u64>, "resnapshot": <bool|absent>,
+  "retained_count": <u64|absent> }
 ```
 
 Confirms the watch. The same `subscription_id` arrives in the
@@ -252,6 +261,15 @@ history that compaction has already collapsed; the watch then begins with each
 matching key's **current value** instead of the collapsed history — the same
 snapshot-plus-changes contract the control plane's assignment watch uses, and
 never a silent gap.
+
+`retained_count` is how many retained values follow before live delivery, and
+is present exactly when the watch asked for retained delivery. `0` is the
+defined "no retained value" answer: joining an empty key is an answer, not a
+silence indistinguishable from a slow key. Once this many changes have
+arrived, the client holds the current state. A key whose newest write raced
+past `resume_offset` during establishment can be absent from the retained set;
+its change is already queued and arrives as the first live event, folding to
+the same state.
 
 ### CacheEvent (server -> client)
 ```
@@ -337,6 +355,14 @@ stream.
   `cache_watch_lagged` naming the offset to re-watch from. TTL expiry is not a
   change: nothing is appended when an entry lapses, so no event is delivered —
   a watcher that cares about expiry reads `expires_at_millis` off the put.
+- A `retained` CacheWatch delivers current state first: each matching key's
+  current value at the offset of the write that produced it, then live changes
+  from `resume_offset` — so a client joins and immediately holds the state
+  without waiting for the next write. `retained_count` in the confirmation
+  bounds the state phase, `0` meaning the key or prefix held nothing, which is
+  an answer rather than a silence. The join is gapless and unambiguous: the
+  same register-before-read discipline as a resume, with duplicates detectable
+  by offset.
 - GroupPoll returns `group_records`, which may be empty: nothing was available
   is an answer, not an error. Each record is claimed until the broker's
   visibility timeout lapses, after which it is handed to whoever polls next.
@@ -414,15 +440,15 @@ sequenceDiagram
     participant B as Broker
     participant L as Cache log
     Note over C,B: Authenticated control stream with FEATURE_CACHE_WATCH negotiated
-    C->>B: cache_watch (key or prefix, from_offset?)
+    C->>B: cache_watch (key or prefix, from_offset? or retained?)
     Note over B: Register watcher first — pins the live edge
     B->>L: read tail
     B-->>C: event_stream_hello (uni stream)
-    B-->>C: cache_watch_started (resume_offset = tail, resnapshot?)
-    alt from_offset retained
+    B-->>C: cache_watch_started (resume_offset = tail, resnapshot?, retained_count?)
+    alt from_offset still in the log
         B->>L: read [from_offset, tail)
         B-->>C: cache_event × n (replayed history, offsets ascending)
-    else from_offset compacted away
+    else from_offset compacted away, or retained requested
         B-->>C: cache_event × n (current value per matching key)
     end
     Note over B,C: Live: queued changes below tail are duplicates and dropped by offset
@@ -552,6 +578,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0010` | `FEATURE_GROUP_DEAD_LETTERS` | The broker serves `group_dead_letters`, `group_discard`, `group_redrive` |
 | `0x0020` | `FEATURE_STREAM_SHARDS` | The broker answers `stream_shards` |
 | `0x0040` | `FEATURE_CACHE_WATCH` | The broker accepts `cache_watch` |
+| `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -580,6 +607,11 @@ every restart, so a broker with none offers neither. `FEATURE_CACHE_WATCH`
 depends on the cache being log-backed, for the same shape of reason: a watch's
 contract — resume, duplicate detection, the lag signal — is built on log
 offsets, and a broker whose cache is the in-memory fallback has none to offer.
+`FEATURE_CACHE_WATCH_RETAINED` travels with it, and is a bit of its own for
+the reason the dead-letter bit is not folded into the consumer-group bit: a
+broker built when the watch bit meant live-and-resume only would ignore the
+request's `retained` field and serve a live-only watch — silent misdelivery,
+which is worse than the refused request a missing bit produces.
 
 They are two bits rather than one because a bit says which requests exist, and
 widening what an existing bit promises is the one change that cannot be made

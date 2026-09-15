@@ -26,7 +26,9 @@ use std::time::Duration;
 
 const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const CACHE: &str = "sessions";
-const RECV_TIMEOUT: Duration = Duration::from_secs(10);
+// A liveness bound, not a performance assertion: generous, because this
+// binary's join tests run under the whole workspace's parallel load in CI.
+const RECV_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct DemoAuthBundle {
     auth: Arc<BrokerAuth>,
@@ -272,7 +274,7 @@ async fn a_prefix_watch_sees_exactly_the_prefix() -> Result<()> {
 /// Verified against the inverted order (catch-up read before registration —
 /// the natural-looking implementation and a real past stream defect): these
 /// joins then lose mid-replay writes and this test fails.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_resumed_watch_is_gapless_under_concurrent_writes() -> Result<()> {
     const WRITES: u32 = 200;
     const JOINS: u32 = 6;
@@ -581,4 +583,317 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
         QuinnClientConfig::with_root_certificates(Arc::new(roots))?,
         None,
     )
+}
+
+/// **Retained delivery: current state first, then live — under concurrent
+/// writes at join time.** A writer streams numbered values into one key of a
+/// 200-key roster while retained prefix watches join over and over. Each join
+/// must deliver exactly `retained_count` state entries (the full quiescent
+/// roster among them, no key twice), and the watched key's events — retained
+/// value, then live — must be consecutively numbered with ascending offsets:
+/// a gap means the join lost a write landing mid-establishment, a repeat
+/// means it doubled one.
+///
+/// Verified against the inverted order (snapshot read before registration):
+/// writes landing during the snapshot read are then in neither half, and this
+/// test fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retained_watch_delivers_current_state_then_live_under_concurrent_writes() -> Result<()> {
+    const ROSTER: u32 = 400;
+    const WRITES: u32 = 400;
+    const JOINS: u32 = 8;
+
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    // A quiescent roster with values big enough to make the snapshot read
+    // slow: the shard lock is held across it, so concurrent writes pile up
+    // behind it and burst out the moment it releases — which is exactly the
+    // window a wrongly-ordered join loses.
+    let member = vec![b'm'; 4096];
+    for i in 0..ROSTER {
+        client
+            .cache_put(
+                "t1",
+                "default",
+                CACHE,
+                &format!("user:r{i:03}"),
+                member.clone().into(),
+                None,
+            )
+            .await?;
+    }
+
+    let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let writer_client = running.client().await?;
+    let writer_progress = Arc::clone(&progress);
+    let writer = tokio::spawn(async move {
+        for i in 1..=WRITES {
+            writer_client
+                .cache_put(
+                    "t1",
+                    "default",
+                    CACHE,
+                    "user:seq",
+                    i.to_string().into_bytes().into(),
+                    None,
+                )
+                .await?;
+            writer_progress.store(i, std::sync::atomic::Ordering::Release);
+            // A non-matching neighbour keeps the watched offsets sparse.
+            writer_client
+                .cache_put(
+                    "t1",
+                    "default",
+                    CACHE,
+                    "order:9",
+                    b"n".to_vec().into(),
+                    None,
+                )
+                .await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+
+    for _ in 0..JOINS {
+        let target = (progress.load(std::sync::atomic::Ordering::Acquire) + 3).min(WRITES);
+        let mut watch = client
+            .watch_cache_retained(
+                "t1",
+                "default",
+                CACHE,
+                CacheWatchFilter::Prefix("user:".to_string()),
+            )
+            .await?;
+        let count = watch
+            .retained_count()
+            .expect("a retained watch reports its count") as usize;
+        let resume = watch.resume_offset();
+
+        // State phase: exactly `count` entries, all below the live edge, no
+        // key twice.
+        let mut state = std::collections::HashMap::new();
+        for _ in 0..count {
+            let change = change(next_item(&mut watch).await);
+            assert!(
+                change.offset < resume,
+                "a retained value must sit below the live edge",
+            );
+            let value = change.value.expect("retained values are puts");
+            assert!(
+                state
+                    .insert(change.key.clone(), (change.offset, value))
+                    .is_none(),
+                "key {} delivered twice in one snapshot",
+                change.key,
+            );
+        }
+        for i in 0..ROSTER {
+            let key = format!("user:r{i:03}");
+            assert_eq!(
+                state.get(&key).map(|(_, value)| value.len()),
+                Some(member.len()),
+                "the roster is missing {key}",
+            );
+        }
+
+        // The watched key's events must be consecutively numbered across the
+        // retained/live boundary. Its current value can race past the live
+        // edge mid-join — then it is absent here and its change arrives live,
+        // which folds to the same state.
+        let state_value = match state.get("user:seq") {
+            Some((_, value)) => Some(String::from_utf8(value.to_vec())?.parse::<u32>()?),
+            None => None,
+        };
+        if progress.load(std::sync::atomic::Ordering::Acquire) == WRITES && state_value.is_none() {
+            panic!("a quiescent key is missing from the retained state");
+        }
+        if state_value.is_some_and(|value| value >= target) {
+            // The retained state already covers everything this round would
+            // wait for live; nothing further is owed.
+            continue;
+        }
+        let mut expect = state_value.map_or(0, |value| value + 1);
+        let mut last_offset = None;
+        loop {
+            let change = change(next_item(&mut watch).await);
+            assert!(
+                change.offset >= resume,
+                "a live change below the live edge is a duplicate",
+            );
+            assert_eq!(change.key, "user:seq", "a quiescent key changed");
+            if let Some(last) = last_offset {
+                assert!(change.offset > last, "live offsets must ascend");
+            }
+            last_offset = Some(change.offset);
+            let value: u32 = String::from_utf8(change.value.expect("a put").to_vec())?.parse()?;
+            if expect == 0 {
+                expect = value; // the raced current value arrived live
+            }
+            assert_eq!(
+                value, expect,
+                "the join lost or doubled a write landing while it was established",
+            );
+            expect += 1;
+            if value >= target {
+                break;
+            }
+        }
+    }
+    writer.await??;
+
+    running.stop().await;
+    Ok(())
+}
+
+/// Joining an empty key is an answer, not a silence: the confirmation says
+/// zero retained values, and the watch is live from there.
+#[tokio::test]
+async fn a_retained_watch_on_an_empty_key_reports_no_value() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    let mut watch = client
+        .watch_cache_retained(
+            "t1",
+            "default",
+            CACHE,
+            CacheWatchFilter::Key("never-written".to_string()),
+        )
+        .await?;
+    assert_eq!(
+        watch.retained_count(),
+        Some(0),
+        "an empty key must be a definite zero, not silence",
+    );
+
+    client
+        .cache_put(
+            "t1",
+            "default",
+            CACHE,
+            "never-written",
+            b"first".to_vec().into(),
+            None,
+        )
+        .await?;
+    let live = change(next_item(&mut watch).await);
+    assert_eq!(live.value.as_deref(), Some(&b"first"[..]));
+    assert!(live.offset >= watch.resume_offset());
+
+    running.stop().await;
+    Ok(())
+}
+
+/// An unretained watch reports no count at all — absent, not zero — so a
+/// client cannot mistake a live-only watch for a retained one that found
+/// nothing.
+#[tokio::test]
+async fn an_unretained_watch_reports_no_count() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+
+    let watch = running
+        .client()
+        .await?
+        .watch_cache(
+            "t1",
+            "default",
+            CACHE,
+            CacheWatchFilter::Key("k".to_string()),
+            None,
+        )
+        .await?;
+    assert_eq!(watch.retained_count(), None);
+
+    running.stop().await;
+    Ok(())
+}
+
+/// A retained watch may name its shard explicitly, like any other.
+#[tokio::test]
+async fn a_retained_watch_takes_an_explicit_shard() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+
+    client
+        .cache_put("t1", "default", CACHE, "user:1", b"v".to_vec().into(), None)
+        .await?;
+    let mut watch = client
+        .watch_cache_shard_retained(
+            "t1",
+            "default",
+            CACHE,
+            CacheWatchFilter::Prefix("user:".to_string()),
+            Some(0),
+        )
+        .await?;
+    assert_eq!(watch.retained_count(), Some(1));
+    assert_eq!(
+        change(next_item(&mut watch).await).value.as_deref(),
+        Some(&b"v"[..])
+    );
+
+    running.stop().await;
+    Ok(())
+}
+
+/// **The retained value outlives the broker that stored it.** A restart wipes
+/// every index; the promoted-or-restarted broker rebuilds it from the log,
+/// and a new retained watch is served from that rebuilt index at the same
+/// offset the write originally took.
+#[tokio::test]
+async fn a_retained_value_survives_a_restart() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let running = start(dir.path()).await?;
+    let client = running.client().await?;
+    client
+        .cache_put(
+            "t1",
+            "default",
+            CACHE,
+            "user:1",
+            b"alice".to_vec().into(),
+            None,
+        )
+        .await?;
+    let mut before = client
+        .watch_cache_retained(
+            "t1",
+            "default",
+            CACHE,
+            CacheWatchFilter::Key("user:1".to_string()),
+        )
+        .await?;
+    assert_eq!(before.retained_count(), Some(1));
+    let original = change(next_item(&mut before).await);
+    drop(before);
+    drop(client);
+    running.stop().await;
+
+    let restarted = start(dir.path()).await?;
+    let mut after = restarted
+        .client()
+        .await?
+        .watch_cache_retained(
+            "t1",
+            "default",
+            CACHE,
+            CacheWatchFilter::Key("user:1".to_string()),
+        )
+        .await?;
+    assert_eq!(after.retained_count(), Some(1));
+    let rebuilt = change(next_item(&mut after).await);
+    assert_eq!(rebuilt.value.as_deref(), Some(&b"alice"[..]));
+    assert_eq!(
+        rebuilt.offset, original.offset,
+        "the rebuilt index must name the same record the write took",
+    );
+
+    restarted.stop().await;
+    Ok(())
 }

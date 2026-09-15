@@ -297,9 +297,15 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                         // built on log offsets, so a broker
                                         // whose cache has no log has nothing to
                                         // anchor a resume to and must not
-                                        // invite one.
+                                        // invite one. Retained delivery rides
+                                        // the same machinery — the snapshot is
+                                        // the index the log already maintains —
+                                        // so the two bits travel together here.
                                         | match broker.cache_watches() {
-                                            Some(_) => felix_wire::FEATURE_CACHE_WATCH,
+                                            Some(_) => {
+                                                felix_wire::FEATURE_CACHE_WATCH
+                                                    | felix_wire::FEATURE_CACHE_WATCH_RETAINED
+                                            }
                                             None => 0,
                                         }
                                         | match publish_ctx.client_endpoints {
@@ -915,6 +921,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 prefix,
                 shard,
                 from_offset,
+                retained,
                 subscription_id,
             } => {
                 // A watch is a read of the cache, and is authorized as one.
@@ -950,6 +957,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         prefix,
                         shard,
                         from_offset,
+                        retained,
                         subscription_id,
                     },
                     peer_features,
