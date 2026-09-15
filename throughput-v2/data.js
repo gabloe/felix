@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789479044910,
+  "lastUpdate": 1789481696625,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -7852,6 +7852,58 @@ window.BENCHMARK_DATA = {
             "range": "14210.91",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 550051.55\nmean: 549292.59\nstdev: 14210.91\ncv: 2.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3755dc63bff188aa09c0afc2aa405025d40668b",
+          "message": "Users/gabloe/rolling restart lb retry (#368)\n\n* test(controlplane): retry a dead connection against a re-probed rotation\n\na_rolling_restart_serves_every_watch_and_heartbeat failed in CI (one\nfailure, zero failovers): the harness's load balancer samples readiness\nonce per iteration, makes both calls against that snapshot, and retries\nonly through the other instance *in the snapshot*. Across the SIGKILL\nstep the snapshot is stale in both directions — a kill flips no\nreadiness before landing, so the doomed instance was sampled ready, and\nthe survivor's probe can blip right after its own restart — leaving a\none-instance rotation whose only member was already dead, with nowhere\nto retry.\n\nA real load balancer re-probes and re-sends through whatever is ready\nnow, so the harness does the same on a connection-level failure. The\nmilestone's substance is untouched: a served error status is still a\nfailure, a retry with nothing ready is still a failure, and a window\nwith no ready instance is still an outage.\n\n* test(controlplane): same stale-rotation retry fix for the raft chaos harness\n\nthe_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write\nflaked under full-workspace load with the identical signature the\nrolling-restart test had: a connection-level failure counted as a\nfailure because the retry only considers the rotation sampled before\nthe call. Same fix — on a dead connection, re-probe and re-send through\nwhatever is ready now. Served error statuses and nothing-ready-now stay\nfailures, so the milestone's substance is untouched.",
+          "timestamp": "2026-09-15T07:12:41-07:00",
+          "tree_id": "313cedd780b7c66985e18c02e58df78fbe41407b",
+          "url": "https://github.com/gabloe/felix/commit/a3755dc63bff188aa09c0afc2aa405025d40668b"
+        },
+        "date": 1789481696033,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 393817.36,
+            "range": "11188.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393817.36\nmean: 388592.24\nstdev: 11188.19\ncv: 2.88%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 393817.36,
+            "range": "11188.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393817.36\nmean: 388592.24\nstdev: 11188.19\ncv: 2.88%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 84088.3,
+            "range": "1838.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 84088.30\nmean: 84512.91\nstdev: 1838.83\ncv: 2.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 840882.98,
+            "range": "18388.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 840882.98\nmean: 845129.13\nstdev: 18388.36\ncv: 2.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
