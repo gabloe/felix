@@ -34,10 +34,15 @@ param allowedSshCidr string
 @description('Token the control plane\'s bootstrap listener requires.')
 param bootstrapToken string
 
+// Sized to fit a 20-vCPU Total Regional Cores quota (the MSDN/Visual Studio
+// default): 3x4 brokers + 2 control plane + 4 load generator = 18 cores. The
+// brokers stay at 4 vCPU — they are the system under test, kept comparable to
+// the local runs — so the loadgen took the cut. Raise loadgenVmSize (and the
+// quota) if the fanout/throughput cases show it CPU-bound.
 param brokerCount int = 3
 param brokerVmSize string = 'Standard_D4as_v5'
 param controlPlaneVmSize string = 'Standard_D2as_v5'
-param loadgenVmSize string = 'Standard_D8as_v5'
+param loadgenVmSize string = 'Standard_D4as_v5'
 
 @description('Broker data disk, GiB. Premium, so fsync latency is a real number.')
 param brokerDataDiskGib int = 128
