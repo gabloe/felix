@@ -1292,6 +1292,20 @@ name = "felix-crypto"
 version = "0.3.0"
 
 [[package]]
+name = "felix-loadgen"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "felix-client",
+ "felix-wire",
+ "quinn",
+ "rustls",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "felix-metadata"
 version = "0.3.0"
 dependencies = [
@@ -4288,6 +4302,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

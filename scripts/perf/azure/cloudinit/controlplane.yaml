@@ -1,0 +1,46 @@
+#cloud-config
+# The control plane for one perf session. {0} is the release tarball URL and
+# {1} the bootstrap token, substituted by main.bicep.
+#
+# Memory-backed store, deliberately: this suite measures the data plane, and
+# a session's metadata fits in memory and dies with the session. The
+# control-plane-HA story has its own Postgres-backed tests.
+package_update: true
+write_files:
+  - path: /usr/local/sbin/felix-controlplane-env.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      ip=$(curl -s -H Metadata:true \
+        "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/privateIpAddress?api-version=2021-02-01&format=text")
+      mkdir -p /etc/felix
+      cat > /etc/felix/controlplane.env <<ENV
+      FELIX_CONTROLPLANE_BIND=$ip:8080
+      FELIX_CONTROLPLANE_METRICS_BIND=$ip:9200
+      FELIX_REGION_ID=azure
+      FELIX_BOOTSTRAP_ENABLED=true
+      FELIX_BOOTSTRAP_BIND_ADDR=$ip:8081
+      FELIX_BOOTSTRAP_TOKEN={1}
+      ENV
+  - path: /etc/systemd/system/felix-controlplane.service
+    content: |
+      [Unit]
+      Description=Felix control plane (perf session)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      EnvironmentFile=/etc/felix/controlplane.env
+      ExecStart=/usr/local/bin/felix-controlplane
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - curl -fsSL "{0}" -o /tmp/felix.tar.gz
+  - mkdir -p /tmp/felix && tar -xzf /tmp/felix.tar.gz -C /tmp/felix --strip-components=1
+  - install -m 0755 /tmp/felix/felix-controlplane /usr/local/bin/felix-controlplane
+  - systemctl daemon-reload
+  - systemctl enable --now felix-controlplane
+  - touch /var/lib/cloud/instance/felix-provisioned

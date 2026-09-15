@@ -1,0 +1,66 @@
+#cloud-config
+# A Felix broker for one perf session. {0} is the release tarball URL and
+# {1} the control plane's private IP, substituted by main.bicep.
+#
+# The broker unit is installed but not started: it needs a node token that
+# does not exist until the control plane is bootstrapped and seeded, so
+# seed.sh drops the token and starts the service — provisioning and
+# credentialling stay separate steps with separate failures.
+package_update: true
+write_files:
+  - path: /usr/local/sbin/felix-broker-env.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Written at boot from the instance's own metadata, because the private
+      # IP is not known when the template renders.
+      set -euo pipefail
+      ip=$(curl -s -H Metadata:true \
+        "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/privateIpAddress?api-version=2021-02-01&format=text")
+      host=$(hostname)
+      mkdir -p /etc/felix /data/felix
+      cat > /etc/felix/broker.env <<ENV
+      FELIX_NODE_ID=$host
+      FELIX_REGION_ID=azure
+      FELIX_CONTROLPLANE_URL=http://{1}:8080
+      FELIX_QUIC_BIND=$ip:5000
+      FELIX_CLIENT_ADVERTISE_ADDR=$ip:5000
+      FELIX_INTERNAL_BIND=$ip:7000
+      FELIX_NODE_ADVERTISE_ADDR=$ip:7000
+      FELIX_BROKER_METRICS_BIND=$ip:9100
+      FELIX_DURABLE_STORAGE_DIR=/data/felix
+      FELIX_NODE_TOKEN_FILE=/etc/felix/node.token
+      ENV
+  - path: /etc/systemd/system/felix-broker.service
+    content: |
+      [Unit]
+      Description=Felix broker (perf session)
+      After=network-online.target data.mount
+      Wants=network-online.target
+
+      [Service]
+      ExecStartPre=/usr/local/sbin/felix-broker-env.sh
+      EnvironmentFile=/etc/felix/broker.env
+      ExecStart=/usr/local/bin/felix-broker
+      Restart=on-failure
+      LimitNOFILE=1048576
+
+      [Install]
+      WantedBy=multi-user.target
+disk_setup:
+  /dev/disk/azure/scsi1/lun0:
+    table_type: gpt
+    layout: true
+    overwrite: false
+fs_setup:
+  - device: /dev/disk/azure/scsi1/lun0
+    partition: 1
+    filesystem: ext4
+mounts:
+  - ["/dev/disk/azure/scsi1/lun0-part1", "/data", "ext4", "defaults,nofail", "0", "2"]
+runcmd:
+  - curl -fsSL "{0}" -o /tmp/felix.tar.gz
+  - mkdir -p /tmp/felix && tar -xzf /tmp/felix.tar.gz -C /tmp/felix --strip-components=1
+  - install -m 0755 /tmp/felix/felix-broker /usr/local/bin/felix-broker
+  - systemctl daemon-reload
+  - touch /var/lib/cloud/instance/felix-provisioned
