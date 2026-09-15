@@ -324,13 +324,48 @@ sequenceDiagram
     Note over App: checkpoint offset + 1 after each change
 ```
 
+**Retained delivery: current state first.** A watch can start from the state
+instead of from now — MQTT's retained message, and the primitive presence and
+state-sync applications are built on. `watch_cache_retained` delivers each
+matching key's current value (at the offset of the write that produced it),
+then live changes; a client joins and immediately holds the roster:
+
+```rust
+let mut watch = client
+    .watch_cache_retained("acme", "prod", "presence", CacheWatchFilter::Prefix("room:7:".into()))
+    .await?;
+
+// Exactly this many values are the current state — 0 means the room is
+// empty, which is an answer, not a silence.
+let joining = watch.retained_count().expect("a retained watch reports its count");
+
+let mut roster = std::collections::HashMap::new();
+while let Some(item) = watch.recv().await {
+    if let CacheWatchItem::Change(change) = item {
+        match change.value {
+            Some(value) => roster.insert(change.key, value),
+            None => roster.remove(&change.key),
+        };
+        // After `joining` changes the roster is complete; everything further
+        // is someone arriving or leaving, live.
+    }
+}
+```
+
+Retained and `from_offset` are mutually exclusive — a resume already replays
+the state a retained start shortcuts. And the two compose with everything
+above: a retained watch that later falls behind still lags loudly, and a key
+whose newest write races past the join arrives as the first live change
+instead of in the state, folding to the same result.
+
 TTL expiry delivers no event — expiry is lazy and appends nothing to the log —
 but every put carries its `expires_at_millis`, so a watcher that mirrors the
 cache can expire entries itself.
 
-The feature is negotiated (`FEATURE_CACHE_WATCH`) and advertised only by
-brokers whose cache is log-backed: an in-memory cache has no offsets to anchor
-resume, duplicate detection, or the lag signal to. See the
+The features are negotiated (`FEATURE_CACHE_WATCH`, with retained delivery as
+its own `FEATURE_CACHE_WATCH_RETAINED` bit) and advertised only by brokers
+whose cache is log-backed: an in-memory cache has no offsets to anchor resume,
+duplicate detection, or the lag signal to. See the
 [wire protocol](/felix/architecture/wire-protocol/) for the message shapes.
 
 ### 8. Eviction (in-memory only: best-effort)

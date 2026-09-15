@@ -101,9 +101,11 @@ flowchart TD
 ```
 
 That is the target. What exists today is the transport and fanout layer
-underneath it, plus the first watch primitive on top: a keyed cache watch —
-subscribe to one key or prefix, resume by offset, loud loss — is on the wire
-(see the table below for exactly how far it goes).
+underneath it, plus the first watch primitives on top: a keyed cache watch —
+subscribe to one key or prefix, resume by offset, loud loss — and retained
+delivery on it, which is exactly the "current value plus every subsequent
+change, gap-free" contract this section describes, for cache keys (see the
+table below for exactly how far it goes).
 
 ### Why not etcd, Consul, or ZooKeeper?
 
@@ -148,7 +150,7 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | Bounded per-subscriber queues | ✅ Today | Explicit depth limits at every stage |
 | Slow-consumer isolation | ✅ Today | `Block`, `DropNew` (default), `DropOld` — see [`SubQueuePolicy`](/felix/reference/configuration/) |
 | Key/value cache with TTL | ✅ Today | Scoped `(tenant, namespace, cache, key)`, lazy expiry against an absolute expiry time that survives a restart |
-| Keyed cache watch | 🚧 Partial | Subscribe to changes for one cache key or key prefix (`cache_watch`, negotiated as `FEATURE_CACHE_WATCH`): each applied write is delivered in the shard's write order with its log offset, deletes included. Resume by offset replays from the cache's log and joins live delivery with no gap and no duplicate, proven under concurrent writes at join time; an offset compaction has collapsed is answered with a marked snapshot of current values, never a silent gap; a watch that falls behind is ended with a signal naming the offset to re-watch from, because filtered offsets are sparse and a drop would otherwise be invisible. Log-backed caches only — an in-memory cache has no offsets to anchor any of this to, and does not advertise the feature. Partial because a prefix watch reads one shard (a multi-shard cache means one watch per shard, with no client helper yet), and re-watching a promoted replica after failover is designed for but not yet chaos-proven |
+| Keyed cache watch | 🚧 Partial | Subscribe to changes for one cache key or key prefix (`cache_watch`, negotiated as `FEATURE_CACHE_WATCH`): each applied write is delivered in the shard's write order with its log offset, deletes included. Resume by offset replays from the cache's log and joins live delivery with no gap and no duplicate, proven under concurrent writes at join time; an offset compaction has collapsed is answered with a marked snapshot of current values, never a silent gap; a watch that falls behind is ended with a signal naming the offset to re-watch from, because filtered offsets are sparse and a drop would otherwise be invisible. Retained delivery (`FEATURE_CACHE_WATCH_RETAINED`) starts a watch from current state: each matching key's current value first — the offset-carrying retained message — then live changes, with the confirmation counting the state phase so joining an empty key is a definite zero rather than silence; proven under concurrent writes at join time, across a restart's rebuilt index, and through leader failover, where the promoted replica serves the retained value and the watch is live on it. Log-backed caches only — an in-memory cache has no offsets to anchor any of this to, and does not advertise the features. Partial because a prefix watch reads one shard (a multi-shard cache means one watch per shard, with no client helper yet) |
 | Multi-tenant scoping | ✅ Today | Tenant and namespace required on all data-plane operations |
 | Token-based authorization | ✅ Today | OIDC token exchange, tenant-scoped JWTs, broker-side permission checks on publish/subscribe/cache |
 | Control plane metadata service | ✅ Today | REST + OpenAPI, tenant/namespace/stream/cache CRUD, snapshot and changes feeds, in-memory or Postgres backing. Any number of identical instances over one HA Postgres: a rolling restart of every instance, with broker heartbeats and watches flowing throughout, serves every call — proven by test, with the database's own HA an explicit operational contract ([`docs/ha-postgres.md`](https://github.com/gabloe/felix/blob/main/docs/ha-postgres.md)). Tenant bootstrap is atomic and exactly-once across instances, with token rotation and optional mTLS on the bootstrap listener |

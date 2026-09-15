@@ -279,6 +279,22 @@ nothing. See `docs/cache-on-log.md` and `docs/protocol.md`.
 > `a_watch_from_a_compacted_offset_resnapshots`;
 > `crates/felix-broker/src/cache_watch_tests.rs::overflow_ends_the_watch_and_names_the_first_missed_offset`.
 
+**A watch can start from current state** (#349). A `retained` watch delivers
+each matching key's current value first — at the offset of the write that
+produced it — then live changes: MQTT's retained message, and the join
+primitive state-sync applications need. `retained_count` in the confirmation
+makes joining an empty key a definite zero rather than silence. Negotiated as
+`FEATURE_CACHE_WATCH_RETAINED`, a bit of its own so an older watch-capable
+broker is never asked for state it would silently not deliver. Survives
+failover: a promoted replica serves the retained value from its rebuilt index,
+and the watch is live on it.
+
+> `services/broker/tests/cache_watch.rs`, including
+> `a_retained_watch_delivers_current_state_then_live_under_concurrent_writes`,
+> `a_retained_watch_on_an_empty_key_reports_no_value` and
+> `a_retained_value_survives_a_restart`;
+> `crates/felix-cluster/tests/cache_failover.rs::a_retained_watch_survives_the_loss_of_the_owner`.
+
 What a cache still does not declare is a consistency level. A stream chooses
 `Leader` or `Quorum`; a cache write is acknowledged by its leader once the
 record is durable there, and replication follows. So losing a leader in the

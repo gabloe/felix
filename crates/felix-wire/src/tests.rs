@@ -1269,6 +1269,7 @@ fn cache_watch_messages_round_trip() {
         prefix: None,
         shard: None,
         from_offset: Some(7),
+        retained: false,
         subscription_id: None,
     };
     let decoded = Message::decode(watch.encode().expect("encode")).expect("decode");
@@ -1282,6 +1283,7 @@ fn cache_watch_messages_round_trip() {
         prefix: Some("user:".to_string()),
         shard: Some(3),
         from_offset: None,
+        retained: false,
         subscription_id: Some(9),
     };
     let decoded = Message::decode(prefix_watch.encode().expect("encode")).expect("decode");
@@ -1291,6 +1293,7 @@ fn cache_watch_messages_round_trip() {
         subscription_id: 9,
         resume_offset: 12,
         resnapshot: true,
+        retained_count: None,
     };
     let decoded = Message::decode(started.encode().expect("encode")).expect("decode");
     assert_eq!(started, decoded);
@@ -1361,4 +1364,97 @@ fn cache_watch_is_a_new_feature_bit_and_disturbs_nothing() {
     ));
     // Silence from a peer that predates negotiation must not be read as support.
     assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_WATCH));
+}
+
+/// Retained delivery rides the existing watch messages as optional fields, so
+/// a watch that does not use it stays byte-identical to one that predates it.
+#[test]
+fn retained_watch_fields_round_trip_and_default_off_the_wire() {
+    let watch = Message::CacheWatch {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "presence".to_string(),
+        key: None,
+        prefix: Some("user:".to_string()),
+        shard: None,
+        from_offset: None,
+        retained: true,
+        subscription_id: None,
+    };
+    let decoded = Message::decode(watch.encode().expect("encode")).expect("decode");
+    assert_eq!(watch, decoded);
+
+    // An unretained watch must not carry the field at all: an old broker sees
+    // exactly the frame an old client would have sent.
+    let plain = Message::CacheWatch {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        cache: "presence".to_string(),
+        key: Some("k".to_string()),
+        prefix: None,
+        shard: None,
+        from_offset: None,
+        retained: false,
+        subscription_id: None,
+    };
+    let frame = plain.encode().expect("encode");
+    let json = std::str::from_utf8(&frame.payload).expect("utf8");
+    assert!(
+        !json.contains("retained"),
+        "an unset flag must stay off the wire: {json}"
+    );
+
+    // A frame that predates the field reads as unretained.
+    let legacy = r#"{"type":"cache_watch","tenant_id":"t1","namespace":"ns",
+        "cache":"presence","key":"k"}"#;
+    match serde_json::from_str::<Message>(legacy).expect("legacy watch") {
+        Message::CacheWatch { retained, .. } => assert!(!retained),
+        other => panic!("expected cache_watch, got {other:?}"),
+    }
+
+    // `Some(0)` is the "no retained value" signal, distinct from absent.
+    let started = Message::CacheWatchStarted {
+        subscription_id: 3,
+        resume_offset: 8,
+        resnapshot: false,
+        retained_count: Some(0),
+    };
+    let decoded = Message::decode(started.encode().expect("encode")).expect("decode");
+    assert_eq!(started, decoded);
+    let legacy = r#"{"type":"cache_watch_started","subscription_id":1,"resume_offset":0}"#;
+    match serde_json::from_str::<Message>(legacy).expect("legacy started") {
+        Message::CacheWatchStarted { retained_count, .. } => assert_eq!(retained_count, None),
+        other => panic!("expected cache_watch_started, got {other:?}"),
+    }
+}
+
+/// The retained bit is new, disjoint, and never implied by the watch bit: a
+/// broker built when the watch bit meant live-and-resume only must not be
+/// asked for retained delivery it would silently not perform.
+#[test]
+fn cache_watch_retained_is_a_new_feature_bit_and_disturbs_nothing() {
+    assert_eq!(
+        crate::FEATURE_CACHE_WATCH_RETAINED
+            & (crate::FEATURE_TOPOLOGY
+                | crate::FEATURE_REDIRECT
+                | crate::FEATURE_CACHE_DELETE
+                | crate::FEATURE_CONSUMER_GROUP
+                | crate::FEATURE_GROUP_DEAD_LETTERS
+                | crate::FEATURE_STREAM_SHARDS
+                | crate::FEATURE_CACHE_WATCH),
+        0,
+        "the retained bit overlaps one already in use",
+    );
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_CACHE_WATCH_RETAINED
+    ));
+    assert!(!crate::supports_feature(
+        crate::FEATURE_CACHE_WATCH,
+        crate::FEATURE_CACHE_WATCH_RETAINED
+    ));
+    assert!(!crate::supports_feature(
+        0,
+        crate::FEATURE_CACHE_WATCH_RETAINED
+    ));
 }

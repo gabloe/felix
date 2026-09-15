@@ -156,3 +156,113 @@ async fn a_cache_value_survives_the_loss_of_its_owner() {
         "the cache lost its contents when {leader} died",
     );
 }
+
+/// Retained state until some survivor serves it, or the budget runs out.
+///
+/// A watch is redirected rather than forwarded, so most survivors answer
+/// `not_leader` — the loop simply tries each until it lands on the promoted
+/// owner, exactly as a redirect-following client would.
+async fn retained_watch_until(
+    cluster: &Cluster,
+    survivors: &[String],
+    key: &str,
+    budget: Duration,
+) -> Option<(
+    (felix_client::Client, felix_client::CacheWatch),
+    u64,
+    Vec<u8>,
+)> {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        for node in survivors {
+            let Ok((client, mut watch)) = cluster.cache_watch_retained_via(node, CACHE, key).await
+            else {
+                continue;
+            };
+            if watch.retained_count() != Some(1) {
+                continue;
+            }
+            let item = tokio::time::timeout(Duration::from_secs(5), watch.recv()).await;
+            if let Ok(Some(felix_client::CacheWatchItem::Change(change))) = item {
+                let value = change.value.map(|value| value.to_vec()).unwrap_or_default();
+                return Some(((client, watch), change.offset, value));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// **#349's failover criterion.** A promoted replica serves the retained value
+/// from its rebuilt index — and the watch is *live* on it: a write after the
+/// failover reaches the watcher that joined after it.
+#[serial]
+#[tokio::test]
+async fn a_retained_watch_survives_the_loss_of_the_owner() {
+    let mut cluster = Cluster::start(replicated_cache())
+        .await
+        .expect("start cluster");
+
+    let leader = cluster
+        .shard_owner_of("cache", CACHE, 0)
+        .await
+        .expect("cache shard owner");
+    let shipped_before = cluster
+        .metric(&leader, "felix_broker_replication_shipped_total")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0.0);
+
+    cluster
+        .cache_put_via(&leader, CACHE, "k", b"retained")
+        .await
+        .expect("cache put");
+    replication_settled(&cluster, &leader, shipped_before).await;
+    cluster.kill_node(&leader).expect("kill the owner");
+
+    assert!(
+        failover_from(&cluster, &leader, Duration::from_secs(30)).await,
+        "no replica was promoted after {leader} died",
+    );
+
+    let survivors: Vec<String> = cluster
+        .node_ids()
+        .into_iter()
+        .filter(|node| node != &leader)
+        .collect();
+
+    let Some(((_client, mut watch), offset, value)) =
+        retained_watch_until(&cluster, &survivors, "k", Duration::from_secs(45)).await
+    else {
+        panic!("no promoted replica served the retained value after {leader} died");
+    };
+    assert_eq!(
+        value.as_slice(),
+        b"retained",
+        "the promoted replica served the wrong retained value",
+    );
+
+    // And the watch is live on the promoted owner: a write after failover
+    // reaches the watcher that joined after it, at a later offset.
+    cluster
+        .cache_put_via(&survivors[0], CACHE, "k", b"after-failover")
+        .await
+        .expect("cache put after failover");
+    let live = tokio::time::timeout(Duration::from_secs(15), watch.recv())
+        .await
+        .expect("the promoted watch went quiet")
+        .expect("the promoted watch ended");
+    match live {
+        felix_client::CacheWatchItem::Change(change) => {
+            assert_eq!(change.value.as_deref(), Some(&b"after-failover"[..]));
+            assert!(
+                change.offset > offset,
+                "the promoted log rewound its offsets",
+            );
+        }
+        other => panic!("expected a live change, got {other:?}"),
+    }
+}

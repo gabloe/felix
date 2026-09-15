@@ -131,6 +131,18 @@ pub const FEATURE_STREAM_SHARDS: u32 = 0x0000_0020;
 /// name them — and a cache with no log has none to offer.
 pub const FEATURE_CACHE_WATCH: u32 = 0x0000_0040;
 
+/// The broker serves *retained* delivery on a `cache_watch`: each matching
+/// key's current value first, then live changes.
+///
+/// A bit of its own rather than folded into `FEATURE_CACHE_WATCH`, for the
+/// reason the dead-letter bit is not folded into the consumer-group bit: a bit
+/// says which requests exist, and widening what an existing bit promises is
+/// the one change that cannot be made safely. A broker built when
+/// `FEATURE_CACHE_WATCH` meant live-and-resume only would ignore the unknown
+/// `retained` field and serve a live-only watch — the client silently missing
+/// exactly the state it joined for.
+pub const FEATURE_CACHE_WATCH_RETAINED: u32 = 0x0000_0080;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -138,7 +150,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_CONSUMER_GROUP
     | FEATURE_GROUP_DEAD_LETTERS
     | FEATURE_STREAM_SHARDS
-    | FEATURE_CACHE_WATCH;
+    | FEATURE_CACHE_WATCH
+    | FEATURE_CACHE_WATCH_RETAINED;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

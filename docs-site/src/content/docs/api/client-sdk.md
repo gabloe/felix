@@ -465,6 +465,31 @@ advertising `FEATURE_CACHE_WATCH` — only brokers whose cache is log-backed do.
 See [Cache Features](/felix/features/cache/#7-keyed-watch) for the full
 contract.
 
+### Retained Watch
+
+Start from current state instead of from now: each matching key's current
+value first, then live changes — the join primitive for presence and state
+sync:
+
+```rust
+let mut watch = client
+    .watch_cache_retained(
+        "acme",
+        "prod",
+        "presence",
+        CacheWatchFilter::Prefix("room:7:".into()),
+    )
+    .await?;
+
+// The state phase is exactly this many changes; 0 means empty, definitively.
+let state_size = watch.retained_count().expect("retained watches report a count");
+```
+
+Needs `FEATURE_CACHE_WATCH_RETAINED`, a separate bit so an older watch-capable
+broker is never asked for state it would silently not deliver. Mutually
+exclusive with `from_offset` — a resume already replays what a retained start
+shortcuts.
+
 ### Concurrent Cache Operations
 
 Pipeline multiple cache operations:

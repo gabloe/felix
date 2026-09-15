@@ -740,6 +740,53 @@ impl Client {
             .await
     }
 
+    /// Watch a key or prefix, receiving current state first: each matching
+    /// key's current value — the retained message — then live changes.
+    ///
+    /// This is what a client joining should not have to poll for: subscribe
+    /// and immediately hold the state, then stay current. The confirmation
+    /// says how many retained values precede live delivery
+    /// ([`CacheWatch::retained_count`]), so joining an empty key is a definite
+    /// `Some(0)` rather than a silence indistinguishable from a slow key. A
+    /// retained value arrives at the offset of the write that produced it;
+    /// everything at [`CacheWatch::resume_offset`] or later is live.
+    ///
+    /// Fails without sending anything when the broker did not advertise
+    /// [`felix_wire::FEATURE_CACHE_WATCH_RETAINED`]: an older watch-capable
+    /// broker would ignore the request's retained field and serve a live-only
+    /// watch — silently missing exactly the state the caller joined for.
+    pub async fn watch_cache_retained(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::client::cache_watch::CacheWatchFilter,
+    ) -> Result<crate::client::cache_watch::CacheWatch> {
+        self.watch_cache_shard_retained(tenant_id, namespace, cache, filter, None)
+            .await
+    }
+
+    /// [`Client::watch_cache_retained`] against an explicit shard of the cache.
+    pub async fn watch_cache_shard_retained(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::client::cache_watch::CacheWatchFilter,
+        shard: Option<u32>,
+    ) -> Result<crate::client::cache_watch::CacheWatch> {
+        if !felix_wire::supports_feature(
+            self.server_features,
+            felix_wire::FEATURE_CACHE_WATCH_RETAINED,
+        ) {
+            return Err(anyhow::anyhow!(
+                "this broker does not support retained cache watch"
+            ));
+        }
+        self.establish_cache_watch(tenant_id, namespace, cache, filter, shard, None, true)
+            .await
+    }
+
     /// [`Client::watch_cache`] against an explicit shard of the cache.
     ///
     /// The shard applies to a prefix watch; a key watch resolves its own shard
@@ -752,6 +799,29 @@ impl Client {
         filter: crate::client::cache_watch::CacheWatchFilter,
         shard: Option<u32>,
         from_offset: Option<u64>,
+    ) -> Result<crate::client::cache_watch::CacheWatch> {
+        self.establish_cache_watch(
+            tenant_id,
+            namespace,
+            cache,
+            filter,
+            shard,
+            from_offset,
+            false,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn establish_cache_watch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::client::cache_watch::CacheWatchFilter,
+        shard: Option<u32>,
+        from_offset: Option<u64>,
+        retained: bool,
     ) -> Result<crate::client::cache_watch::CacheWatch> {
         if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CACHE_WATCH) {
             return Err(anyhow::anyhow!("this broker does not support cache watch"));
@@ -789,6 +859,7 @@ impl Client {
                 prefix,
                 shard,
                 from_offset,
+                retained,
                 subscription_id: None,
             },
         )
@@ -800,12 +871,13 @@ impl Client {
             self.runtime_config.max_frame_bytes,
         )
         .await?;
-        let (subscription_id, resume_offset, resnapshot) = match response {
+        let (subscription_id, resume_offset, resnapshot, retained_count) = match response {
             Some(Message::CacheWatchStarted {
                 subscription_id,
                 resume_offset,
                 resnapshot,
-            }) => (subscription_id, resume_offset, resnapshot),
+                retained_count,
+            }) => (subscription_id, resume_offset, resnapshot, retained_count),
             Some(Message::SubscribeCursorError {
                 reason,
                 requested,
@@ -846,6 +918,7 @@ impl Client {
             recv,
             resume_offset,
             resnapshot,
+            retained_count,
             self.runtime_config.client_sub_queue_capacity.max(1),
             self.runtime_config.max_frame_bytes,
         ))

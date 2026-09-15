@@ -199,6 +199,23 @@ control plane's assignment watch already uses. Compaction itself is silent to
 watchers — it moves where live records sit without changing what the cache
 holds, so notifying would report phantom writes.
 
+**Retained delivery is the snapshot pointed at establishment.** A watch that
+asks for `retained` receives each matching key's current value first — MQTT's
+retained message — then live changes: a client joins and immediately holds the
+state instead of waiting for the next write, which is the primitive presence
+and state-sync applications are built on. It is literally cache-read composed
+with the watch's join: the same index snapshot the compacted-resume path
+serves, delivered at establishment instead of as a fallback, under the same
+register-before-read discipline. The confirmation carries `retained_count`, so
+joining an empty key is a definite `0` rather than a silence
+indistinguishable from a slow key — and so the client knows the exact moment
+its state is complete. A key whose newest write races past the live edge
+mid-join can be absent from the retained set; its change is already queued and
+arrives as the first live event, folding to the same state, with the offset
+making the situation legible. Refused together with `from_offset`: the replay
+already reconstructs the state a retained start shortcuts, and serving both
+would deliver every value twice.
+
 **TTL expiry is not a change.** Expiry is lazy and appends nothing, so no event
 is delivered when an entry lapses; the put's `expires_at_millis` travels with
 the event for watchers that care. A watch replaying history also replays writes

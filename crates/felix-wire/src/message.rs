@@ -425,6 +425,17 @@ pub enum Message {
         /// one. Absent means from now: live changes only.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_offset: Option<u64>,
+        /// Deliver each matching key's *current* value first, then live
+        /// changes — MQTT's retained message. Refused alongside `from_offset`,
+        /// whose replay already reconstructs the state this shortcuts.
+        ///
+        /// Sent only to a broker that advertised
+        /// `FEATURE_CACHE_WATCH_RETAINED`. An older watch-capable broker would
+        /// ignore this unknown field and serve a live-only watch — a client
+        /// silently missing the state it joined for — so the client must not
+        /// send it on the strength of `FEATURE_CACHE_WATCH` alone.
+        #[serde(default, skip_serializing_if = "is_false")]
+        retained: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subscription_id: Option<u64>,
     },
@@ -444,6 +455,13 @@ pub enum Message {
         /// a watch that did not ask to resume.
         #[serde(default)]
         resnapshot: bool,
+        /// How many retained values follow before live delivery, present
+        /// exactly when the watch asked for retained delivery. `Some(0)` is
+        /// the defined "no retained value" signal: joining an empty key is an
+        /// answer, not silence, so it cannot be mistaken for a slow one. Once
+        /// this many changes have arrived, the client holds the current state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retained_count: Option<u64>,
     },
     /// One cache change, delivered on a watch's event stream.
     CacheEvent {
@@ -573,6 +591,13 @@ pub enum AckMode {
     None,
     PerMessage,
     PerBatch,
+}
+
+/// For `skip_serializing_if`: an unset flag stays off the wire entirely, so a
+/// message that does not use it is byte-identical to one that predates it.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Message {

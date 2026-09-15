@@ -53,6 +53,7 @@ pub struct CacheWatch {
     items: mpsc::Receiver<CacheWatchItem>,
     resume_offset: u64,
     resnapshot: bool,
+    retained_count: Option<u64>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -61,6 +62,7 @@ impl CacheWatch {
         recv: RecvStream,
         resume_offset: u64,
         resnapshot: bool,
+        retained_count: Option<u64>,
         queue_capacity: usize,
         max_frame_bytes: usize,
     ) -> Self {
@@ -70,6 +72,7 @@ impl CacheWatch {
             items: rx,
             resume_offset,
             resnapshot,
+            retained_count,
             task,
         }
     }
@@ -92,6 +95,18 @@ impl CacheWatch {
     /// the collapsed history.
     pub fn resnapshot(&self) -> bool {
         self.resnapshot
+    }
+
+    /// How many retained values precede live delivery, when this watch asked
+    /// for retained delivery ([`crate::Client::watch_cache_retained`]).
+    ///
+    /// `Some(0)` is the defined "no retained value" answer: the key or prefix
+    /// held nothing at join, which is not the same as a slow key. After this
+    /// many changes have arrived, the watch holds the current state and
+    /// everything further is live — equivalently, a change with
+    /// `offset >= resume_offset()` is live rather than retained.
+    pub fn retained_count(&self) -> Option<u64> {
+        self.retained_count
     }
 }
 
