@@ -680,6 +680,24 @@ per instance no matter how many probers there are. A transient outage clears on
 its own: readiness returns as soon as the store answers again, within the cache
 window.
 
+Every claim in this section is exercised against a real Postgres reached through
+a proxy the test can cut, black-hole, and restore, in
+`tests/readiness_pg.rs` (`cargo test -p controlplane --features pg-tests --test
+readiness_pg`):
+
+| Claim | What the test does |
+| --- | --- |
+| An instance that cannot reach its database leaves rotation | Cuts connectivity; `/v1/system/ready` turns `503` |
+| …and is *not* restarted for it | Asserts `/v1/system/live` stays `200` through the same outage |
+| A transient outage recovers with no intervention | Restores connectivity; readiness returns on its own |
+| A database older than this build does not get traffic | Hides the newest applied migration row; readiness turns `503`, and returns when it is put back |
+| A probe answers rather than hangs | Black-holes the connection — established, then silent — and the probe still comes back inside its own bound |
+
+The mechanism itself (cache window, timeout, draining short-circuit) is covered
+separately in `src/readiness_tests.rs` against a probe that fails on command;
+the tests above are what make those the *database's* behaviour rather than a
+fake's.
+
 ### During a shutdown
 
 On SIGTERM the instance **fails readiness first**, before it stops accepting

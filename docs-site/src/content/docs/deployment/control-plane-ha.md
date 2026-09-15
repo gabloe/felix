@@ -94,6 +94,13 @@ so polling faster costs nothing and gains nothing), `timeoutSeconds: 3`
 external outage does not deserve, and Felix's `/v1/system/live` deliberately
 answers from memory.
 
+Both halves are proven against a real database, not asserted: a test cuts
+connectivity beneath the connection pool and checks that readiness turns `503`
+while liveness stays `200`, that readiness returns by itself when connectivity
+does, that an instance running ahead of its migrations stays out of rotation,
+and that a probe meeting a database which accepts connections but never answers
+still comes back inside its own bound instead of hanging.
+
 On SIGTERM an instance fails readiness first and keeps serving for
 `FELIX_SHUTDOWN_PREDRAIN_MS` so load balancers can act on it, then drains
 against `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` — the whole sequence is on
