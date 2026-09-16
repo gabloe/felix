@@ -105,9 +105,19 @@ knobs changed:
 | 4 KiB | 1 | 2,209 µs | **253 µs** |
 | 0 B | 10 | 6,140 µs | **325 µs** |
 
-Turning delivery batching off cuts publish-to-delivery latency by **~30×**, to
-essentially the acknowledgement latency — the message reaches the subscriber the
-instant it is durable. The default trades that for batching that helps sustained
+```mermaid
+xychart-beta
+    title "Publish-to-delivery p50 (µs), fanout 1: default batching vs latency profile"
+    x-axis "Payload" ["0 B", "256 B", "4 KiB"]
+    y-axis "delivery p50 (µs)" 0 --> 6500
+    bar [5907, 6014, 2209]
+    bar [190, 202, 253]
+```
+
+The tall bars are the default (throughput-oriented) batching; the near-flat bars
+are the latency profile. Turning delivery batching off cuts publish-to-delivery
+latency by **~30×**, to essentially the acknowledgement latency — the message
+reaches the subscriber the instant it is durable. The default trades that for batching that helps sustained
 fanout throughput. Neither is "the" number; both are, and now both are measured.
 
 ### Token exchange (the real IdP hot path)
@@ -153,6 +163,18 @@ false-bottleneck it — Felix's write ceiling is:
 Ingest is loss-free at every point (`publish_retries = 0`). Throughput climbs to
 **~1.09 GB/s** / **3.68 M msg/s** and then plateaus.
 
+```mermaid
+xychart-beta
+    title "Aggregate 4 KiB ingest vs publishers (one load generator)"
+    x-axis "Concurrent publishers" [1, 3, 6, 12, 24]
+    y-axis "MB/s" 0 --> 1600
+    bar [280, 852, 1091, 1040, 1073]
+    line [280, 852, 1091, 1040, 1073]
+```
+
+The climb is steep to 6 publishers, then flat — the signature of hitting a fixed
+limit, which the next section identifies.
+
 ### Where the ceiling actually is
 
 The plateau from 6→24 publishers is the tell, and two measurements confirm it is
@@ -173,6 +195,14 @@ directly by adding a **second** load generator (a D2) and driving both at once:
 | Load generator 1 (D4) | 1,084 MB/s | 0 |
 | Load generator 2 (D2) | 549 MB/s | 0 |
 | **Aggregate** | **1,633 MB/s (13.1 Gbit/s)** | 0 |
+
+```mermaid
+xychart-beta
+    title "4 KiB ingest ceiling: one vs two load generators (MB/s)"
+    x-axis ["1 generator (D4)", "2 generators (D4 + D2)"]
+    y-axis "MB/s" 0 --> 1800
+    bar [1091, 1633]
+```
 
 The first generator held its full 1,084 MB/s while the second added 549 — clean
 linear addition, zero loss. The single-generator 1.09 GB/s was never Felix's
