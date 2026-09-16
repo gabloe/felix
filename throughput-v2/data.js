@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789588820214,
+  "lastUpdate": 1789598947840,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8476,6 +8476,58 @@ window.BENCHMARK_DATA = {
             "range": "10699.49",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 558189.59\nmean: 555359.00\nstdev: 10699.49\ncv: 1.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc480efa23f2348561a473c78b5f42062d753cc6",
+          "message": "fix(placement): bounded-load rendezvous + comment cleanup sweep (#388)\n\n* fix(placement): bounded-load rendezvous + comment cleanup sweep\n\nTwo changes, one branch:\n\nPlacement: pure highest-random-weight rendezvous balances only in the\nlimit of many keys. At real cluster scale it skewed hard (24 shards over\nthree brokers at 11/5/8; a staggered start could funnel everything onto\nthe first broker to register). Placement now skips a node already\ncarrying its balanced share so the shard spills to the next-highest\nnode, with a second uncapped pass so a full-but-uncapped cluster still\nplaces. Regression test pins the even split at small shard counts.\n\nComments: cross-cutting sweep removing ~2,800 lines of boilerplate\ncomments (templated section headers, step-by-step narration, restating\ntest names, trivial doc-examples) concentrated in felix-authz, the\ncontrol-plane auth/API stack, and a few QUIC transport files. Kept and\ntightened the genuine why-comments; issue references restructured so\nsentences stand alone with (#NNN) as a citation.\n\n* test(controlplane): serialize readiness_pg tests to fix migration race\n\nThe schema-mismatch test removes the newest _sqlx_migrations row to\nsimulate an old database, then restores it. The five tests in this\nbinary share one database and run concurrently, so a connect() in that\nwindow re-runs the already-applied migration and fails on its first\nnon-idempotent statement (0009's fk_shard_assignments_cache, as seen in\nCI coverage). Marking the binary's tests #[serial] closes the window;\nthe migration itself is left untouched because sqlx checksums applied\nmigrations.",
+          "timestamp": "2026-09-16T15:46:38-07:00",
+          "tree_id": "d8c401681fa434e997027d90e6227e8a401240e3",
+          "url": "https://github.com/gabloe/felix/commit/dc480efa23f2348561a473c78b5f42062d753cc6"
+        },
+        "date": 1789598947442,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 240011.04,
+            "range": "3779.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 240011.04\nmean: 239261.43\nstdev: 3779.38\ncv: 1.58%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 240011.04,
+            "range": "3779.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 240011.04\nmean: 239261.43\nstdev: 3779.38\ncv: 1.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57101.83,
+            "range": "793.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57101.83\nmean: 56827.79\nstdev: 793.28\ncv: 1.40%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 571018.34,
+            "range": "7932.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 571018.34\nmean: 568277.96\nstdev: 7932.81\ncv: 1.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
