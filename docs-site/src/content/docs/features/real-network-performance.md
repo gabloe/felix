@@ -462,14 +462,20 @@ does). What that first run found is as much about the *hardware* as the engines:
   pattern doesn't even reach the sequential ceiling), and Felix's own sustained
   durable rate is bounded by the same wall (see the durability caution above).
   So on this hardware ingest does not separate the engines; it measures the SSD.
-- **Latency is where Felix separates, cleanly.** Felix's acked-publish p99 is
-  **~224 µs**. Redpanda's produce→ack p99 is **70–136 ms** — *at a trivial
-  1000 msg/s* — with a sub-millisecond median but a tail dominated by periodic
-  flush stalls on this SSD. Felix's ack path doesn't gate on a disk flush, so its
-  tail stays tight where Redpanda's does not. **The honest caveat:** that
-  Redpanda tail is disk- and config-sensitive; on NVMe, or tuned by someone who
-  runs Redpanda for a living, it would be far better. This is *on this hardware*,
-  not a claim about Redpanda's ceiling.
+- **Latency is where Felix separates.** Both sides ack *from memory* here —
+  Redpanda with `write_caching`, Felix on its default Leader / periodic-fsync
+  path — so this is a matched comparison, not durable-versus-not. Felix's
+  acked-publish p99 is **~224 µs**; Redpanda's produce→ack p99 is **70–136 ms**,
+  and this is *at a trivial 1000 msg/s*. Medians are sub-millisecond for both;
+  the whole difference is the tail. Redpanda's ack, though served from memory,
+  still gets caught behind the log's periodic flush; Felix's default ack does
+  not. The claim is deliberately narrow: Felix's *own* `OnCommit` path **does**
+  gate on the flush (~4 ms, see the durability section), so this is "default ack
+  vs `write_caching` ack, and only one of them catches the flush in its tail" —
+  not "Felix never touches disk." **Caveat, honestly both ways:** that tail
+  tightens on NVMe, so it is partly this SSD — but flush-stall tails are also
+  exactly what Kafka-family systems hit on network-attached storage every day, so
+  this is a real deployment pattern, not only a rig artifact.
 - **Fanout lands in the same ballpark, but the instrument ran out first.**
   Redpanda served ~912 K msg/s across 8 consumer groups re-reading one topic —
   next to Felix's 1.0 M msg/s to 500 subscribers — but the JVM Kafka clients on
@@ -479,11 +485,19 @@ does). What that first run found is as much about the *hardware* as the engines:
   point where it shows in broker CPU.
 
 The two honest limits: **ingest needs NVMe** (so the test measures the engine,
-not a 170 MB/s SSD) and **fanout needs a lighter client** (so the broker, not a
-JVM-per-consumer on a small VM, is the bottleneck). Both are the next run —
-including re-running the Felix suite on NVMe for its true sustained-durable
-ceiling. Kafka and NATS go through the same harness once the rig can do them
-justice. Full configs and raw output are in `scripts/perf/azure/compare/`.
+not a 170 MB/s SSD) and **fanout needs a lighter client** (a librdkafka-based
+consumer, not a JVM-per-consumer on a small VM, so the *broker* is the
+bottleneck). Both are the next run — including re-running the Felix suite on NVMe
+for its true sustained-durable ceiling. And the number to carry through all of
+it is **CPU at saturation** — MB/s per vCPU and absolute utilisation — because
+when the disk is the constraint, what each engine *spends* to hold the ceiling is
+the thing that still separates them, and the thing that predicts what happens
+when fanout and failover are layered on top. It is also where Felix's bill comes
+due: it pays QUIC's tax (per-packet AEAD, userspace packetisation, no kernel
+`sendfile`) that a plaintext, zero-copy log does not, so holding pace *per core*
+is the efficiency claim worth proving. Kafka and NATS go through the same harness
+once the rig can do them justice. Full configs and raw output are in
+`scripts/perf/azure/compare/`.
 
 ## What we found and fixed
 
