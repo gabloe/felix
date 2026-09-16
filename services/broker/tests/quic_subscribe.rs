@@ -133,7 +133,6 @@ fn build_client_config(cert: CertificateDer<'static>, auth: &AuthFixture) -> Res
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_subscribe_unauthorized_and_stream_missing` behavior.
 async fn quic_subscribe_unauthorized_and_stream_missing() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
@@ -191,7 +190,6 @@ async fn quic_subscribe_unauthorized_and_stream_missing() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_subscribe_batch_receive_and_cancel` behavior.
 async fn quic_subscribe_batch_receive_and_cancel() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "2");
@@ -260,7 +258,6 @@ async fn quic_subscribe_batch_receive_and_cancel() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_subscribe_fanout_and_drop_cleanup` behavior.
 async fn quic_subscribe_fanout_and_drop_cleanup() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_EVENT_BATCH_MAX_EVENTS", "2");
@@ -340,7 +337,6 @@ async fn quic_subscribe_fanout_and_drop_cleanup() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_subscribe_invalid_frame_closes_stream` behavior.
 async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");

@@ -1,48 +1,9 @@
-//! Error types for Felix authorization and token processing.
-//!
-//! Centralizes error variants for authz validation, key handling, and JWT work.
-//!
-//! # How it fits
-//! All authz modules return [`AuthzResult`] with these variants to keep error
-//! handling consistent across broker and control-plane code.
-//!
-//! - Variants are stable; external callers may match on them.
-//! - JWT errors are wrapped to preserve context from `jsonwebtoken`.
-//! # Examples
-//! ```rust
-//! use felix_authz::{AuthzError, AuthzResult};
-//!
-//! fn validate(flag: bool) -> AuthzResult<()> {
-//!     if !flag {
-//!         return Err(AuthzError::InvalidPermission("missing".to_string()));
-//!     }
-//!     Ok(())
-//! }
-//! assert!(validate(false).is_err());
-//! ```
-//!
-//! # Common pitfalls
-//! - Dropping the underlying JWT error loses the root cause in logs.
-//! - Converting all errors to strings makes it hard to match on variants in tests.
-//!
-//! # Future work
-//! - Add richer error context for policy evaluation (subject, action, resource).
+//! Error variants for token, key, and permission handling. Callers match on
+//! these, so treat the set as a stable surface; JWT failures keep the
+//! underlying `jsonwebtoken` error for the root cause.
 use thiserror::Error;
 
 /// Errors emitted by Felix authorization helpers.
-///
-/// # Summary
-/// Enumerates the failure modes for token, key, and permission handling.
-///
-/// - Variants that carry tenant IDs must include the raw tenant string.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::AuthzError;
-///
-/// let err = AuthzError::MissingSigningKey("tenant-1".to_string());
-/// assert!(err.to_string().contains("tenant-1"));
-/// ```
 #[derive(Debug, Error)]
 pub enum AuthzError {
     #[error("invalid action: {0}")]
@@ -63,20 +24,6 @@ pub enum AuthzError {
     MissingJwks(String),
 }
 
-/// Result alias for authorization operations.
-///
-/// # Summary
-/// Standardizes return types for authz helpers and key stores.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{AuthzResult, AuthzError};
-///
-/// fn ok() -> AuthzResult<()> {
-///     Ok(())
-/// }
-/// let _ = ok();
-/// ```
 pub type AuthzResult<T> = Result<T, AuthzError>;
 
 #[cfg(test)]

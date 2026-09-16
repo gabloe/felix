@@ -1,6 +1,7 @@
 //! What happens to a leader that was never told it stopped being one.
 //!
-//! #115's central safety criterion: *no record is acknowledged by two
+//! The central safety criterion of replication (#115): *no record is
+//! acknowledged by two
 //! conflicting leaders for the same logical epoch*. A killed leader cannot
 //! violate it — it is gone. A **paused** one can: it is alive, it still
 //! believes it holds the shard, and it comes back after the cluster has moved
@@ -53,8 +54,8 @@ async fn replay(cluster: &Cluster, node_id: &str) -> Vec<String> {
 /// Being named leader and being able to serve are different moments: the
 /// promoted broker learns of its own promotion through the same watch as
 /// everything else, and has to open the shard before it can accept a write.
-/// Retrying is what the cluster asks of an application here, and #119 is where
-/// the client learns to do it for itself.
+/// Retrying is what the cluster asks of an application here; teaching the
+/// client to do it for itself is tracked as #119.
 async fn publish_when_ready(cluster: &Cluster, node_id: &str, payload: &[u8]) {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut last = String::new();
@@ -92,7 +93,8 @@ async fn failover_from(cluster: &Cluster, gone: &str) -> Option<String> {
 /// What every broker in the cluster holds, and who the cluster thinks owns the
 /// shard.
 ///
-/// #115 asks for a timeline when a scenario fails, because "a record is
+/// The replication work (#115) asks for a timeline when a scenario fails,
+/// because "a record is
 /// missing" is not something anyone can act on: the question is always whether
 /// it is missing from the log or missing from the answer, and which brokers
 /// have it.

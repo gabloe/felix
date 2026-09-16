@@ -1,7 +1,7 @@
 //! Subscribing to the broker that does not own the shard.
 //!
-//! #118. Before this, such a subscribe was accepted and then delivered
-//! nothing -- the worst available answer, because it is indistinguishable from
+//! Such a subscribe used to be accepted and then delivered
+//! nothing (#118) -- the worst available answer, because it is indistinguishable from
 //! a stream with no traffic, and an application waits forever without an error
 //! to act on. `docs/subscribe-routing.md` records the decision: redirect to the
 //! owner rather than proxy for it.

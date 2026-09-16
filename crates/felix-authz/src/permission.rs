@@ -1,44 +1,10 @@
-//! Permission and permission-pattern primitives.
-//!
-//! Defines strongly typed permission values and parseable permission patterns.
-//!
-//! # How it fits
-//! Request handlers and policy loaders produce `PermissionPattern` values which
-//! are later evaluated by the permission matcher.
-//!
-//! - Permission strings are `action:resource`.
-//! - Action names must match the canonical [`Action`] strings.
-//! # Examples
-//! ```rust
-//! use felix_authz::{Action, Permission};
-//!
-//! let permission = Permission::new(Action::StreamPublish, "stream:tenant-a/payments/*");
-//! assert!(permission.as_string().starts_with("stream.publish:"));
-//! ```
-//!
-//! # Common pitfalls
-//! - Forgetting the resource portion (`action:resource`) during parsing.
-//! - Passing unvalidated action strings into `PermissionPattern::parse`.
-//!
-//! # Future work
-//! - Add typed resource wrappers to reduce stringly-typed permissions.
+//! Typed permissions and permission patterns. The string form is
+//! `action:resource`, where the action must be one of the canonical
+//! [`Action`] strings.
 use crate::{Action, AuthzError, AuthzResult};
 use serde::{Deserialize, Serialize};
 
-/// Concrete permission granting an action on a specific resource.
-///
-/// # Summary
-/// Holds the canonical action and resource identifier.
-///
-/// - `resource` should use the same namespace format as policy rules.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{Action, Permission};
-///
-/// let permission = Permission::new(Action::CacheRead, "cache:tenant-a/payments/session/1");
-/// assert_eq!(permission.action, Action::CacheRead);
-/// ```
+/// A grant of one action on one concrete resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Permission {
     pub action: Action,
@@ -46,13 +12,6 @@ pub struct Permission {
 }
 
 impl Permission {
-    /// Create a new permission from an action and resource string.
-    ///
-    /// # Parameters
-    /// - `action`: the action to allow.
-    /// - `resource`: resource identifier string.
-    ///
-    /// - A new [`Permission`].
     pub fn new(action: Action, resource: impl Into<String>) -> Self {
         Self {
             action,
@@ -60,31 +19,13 @@ impl Permission {
         }
     }
 
-    /// Render the permission as a `action:resource` string.
-    ///
-    /// - A newly allocated string representation.
-    ///
-    /// - Allocates a new `String` each call.
+    /// The `action:resource` string form.
     pub fn as_string(&self) -> String {
-        // Use the canonical action string to keep policies stable.
         format!("{}:{}", self.action.as_str(), self.resource)
     }
 }
 
-/// Permission pattern that allows wildcards in the resource.
-///
-/// # Summary
-/// Holds an action plus a resource pattern used for wildcard matching.
-///
-/// - `resource_pattern` may contain `*` as a glob.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{Action, PermissionPattern};
-///
-/// let pattern = PermissionPattern::new(Action::StreamSubscribe, "stream:tenant-a/payments/*");
-/// assert_eq!(pattern.action, Action::StreamSubscribe);
-/// ```
+/// A grant whose resource may contain `*` wildcards.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PermissionPattern {
     pub action: Action,
@@ -92,13 +33,6 @@ pub struct PermissionPattern {
 }
 
 impl PermissionPattern {
-    /// Create a new permission pattern from an action and resource pattern.
-    ///
-    /// # Parameters
-    /// - `action`: the action to allow.
-    /// - `resource_pattern`: resource pattern with optional wildcards.
-    ///
-    /// - A new [`PermissionPattern`].
     pub fn new(action: Action, resource_pattern: impl Into<String>) -> Self {
         Self {
             action,
@@ -106,11 +40,7 @@ impl PermissionPattern {
         }
     }
 
-    /// Render the permission pattern as a string.
-    ///
-    /// - `action:resource_pattern` string.
-    ///
-    /// - Allocates a new `String`.
+    /// The `action:resource_pattern` string form.
     pub fn as_string(&self) -> String {
         format!("{}:{}", self.action.as_str(), self.resource_pattern)
     }
@@ -120,11 +50,11 @@ impl std::str::FromStr for PermissionPattern {
     type Err = AuthzError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        // Split on the first colon to recover action and resource pattern.
+        // Split on the first colon only — resources contain colons too
+        // ("stream.publish:stream:tenant-a/...").
         let (action, resource) = value
             .split_once(':')
             .ok_or_else(|| AuthzError::InvalidPermission(value.to_string()))?;
-        // Parse the action string to an enum variant.
         let action = <Action as std::str::FromStr>::from_str(action)
             .map_err(|_| AuthzError::InvalidAction(action.to_string()))?;
         Ok(Self::new(action, resource))
@@ -132,16 +62,11 @@ impl std::str::FromStr for PermissionPattern {
 }
 
 impl PermissionPattern {
-    /// Parse a permission pattern from a string.
-    ///
-    /// # Parameters
-    /// - `value`: a `action:resource_pattern` string.
-    ///
-    /// - Parsed [`PermissionPattern`].
+    /// Parse an `action:resource_pattern` string.
     ///
     /// # Errors
-    /// - [`AuthzError::InvalidPermission`] if the string is missing a colon.
-    /// - [`AuthzError::InvalidAction`] if the action is unknown.
+    /// [`AuthzError::InvalidPermission`] when the colon is missing,
+    /// [`AuthzError::InvalidAction`] when the action is unknown.
     pub fn parse(value: &str) -> AuthzResult<Self> {
         value.parse()
     }

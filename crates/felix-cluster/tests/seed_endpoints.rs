@@ -93,9 +93,9 @@ async fn a_seed_list_survives_losing_the_leader() {
     // a corpse and times out. The cluster recovers within a feed interval; the
     // client does not know that and has no retry of its own.
     //
-    // So this is what an application has to write today, and it is exactly what
-    // #119 moves into the client: classify the failure as retryable, back off,
-    // and try again.
+    // So this is what an application has to write today, and it is exactly
+    // what the planned client-side retry (#119) will absorb: classify the
+    // failure as retryable, back off, and try again.
     let mut published = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let mut last = String::new();

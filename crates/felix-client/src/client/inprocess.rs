@@ -40,17 +40,14 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct InProcessClient {
-    // Keep an Arc so callers can clone the client cheaply.
     broker: Arc<Broker>,
 }
 
 impl InProcessClient {
-    // Construct a client that shares the broker running in this process.
     pub fn new(broker: Arc<Broker>) -> Self {
         Self { broker }
     }
 
-    // Forward publish calls directly to the broker.
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -64,7 +61,6 @@ impl InProcessClient {
             .map_err(Into::into)
     }
 
-    // Subscribe to a topic and return a managed subscription.
     pub async fn subscribe(
         &self,
         tenant_id: &str,

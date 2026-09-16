@@ -1,41 +1,13 @@
-//! RBAC policy and grouping models.
-//!
-//! # Purpose and responsibility
-//! Defines the policy and grouping record shapes shared across storage, API
-//! handlers, and Casbin enforcement.
-//!
-//! # Where it fits in Felix
-//! These types are persisted in the control-plane store and loaded into the
-//! RBAC enforcer during token exchange and admin operations.
-//!
-//! # Key invariants and assumptions
-//! - `subject`, `object`, and `action` must align with the Casbin model.
-//! - Grouping rules associate a user/subject with a role.
-//!
-//! # Security considerations
-//! - These records directly influence authorization; treat them as privileged.
+//! Policy and grouping record shapes shared by the store, the admin API, and
+//! the Casbin enforcer. These rows feed authorization directly.
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// A single RBAC policy rule.
+/// One Casbin policy rule: `(subject, object, action)`.
 ///
-/// Represents the `(subject, object, action)` tuple used by Casbin.
-///
-/// Provides a stable, serializable shape for storing and transporting policy.
-///
-/// - `action` must match the Felix action vocabulary.
-/// - `object` must be compatible with `keyMatch2` pattern matching.
-///
-/// # Example
-/// ```rust
-/// use controlplane::auth::rbac::policy_store::PolicyRule;
-///
-/// let rule = PolicyRule {
-///     subject: "role:admin".to_string(),
-///     object: "tenant:t1".to_string(),
-///     action: "tenant.manage".to_string(),
-/// };
-/// ```
+/// `action` comes from the Felix action vocabulary; `object` must work with
+/// `keyMatch2` patterns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PolicyRule {
     pub subject: String,
@@ -43,23 +15,7 @@ pub struct PolicyRule {
     pub action: String,
 }
 
-/// A single RBAC grouping rule.
-///
-/// Binds a user/subject to a role for role-based access.
-///
-/// Separates role assignment from policy definition for clarity and reuse.
-///
-/// - `user` and `role` must be non-empty identifiers.
-///
-/// # Example
-/// ```rust
-/// use controlplane::auth::rbac::policy_store::GroupingRule;
-///
-/// let rule = GroupingRule {
-///     user: "user:alice".to_string(),
-///     role: "role:tenant_admin".to_string(),
-/// };
-/// ```
+/// One Casbin grouping rule: binds a user/subject to a role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct GroupingRule {
     pub user: String,

@@ -1,5 +1,5 @@
-//! #278's last acceptance criterion: a cache survives losing the broker that
-//! owned its shard.
+//! A cache survives losing the broker that owned its shard — the last
+//! acceptance criterion of shared caches (#278).
 //!
 //! A cache is a log, so replicating one is the same machinery that replicates a
 //! stream — the leader ships records at their offsets and a promoted follower
@@ -195,7 +195,8 @@ async fn retained_watch_until(
     }
 }
 
-/// **#349's failover criterion.** A promoted replica serves the retained value
+/// **The failover criterion of retained watches (#349).** A promoted
+/// replica serves the retained value
 /// from its rebuilt index — and the watch is *live* on it: a write after the
 /// failover reaches the watcher that joined after it.
 #[serial]
@@ -291,7 +292,8 @@ async fn counter_until(
     }
 }
 
-/// **#350's failover criterion.** The sum survives losing the broker that
+/// **The failover criterion of counters (#350).** The sum survives losing
+/// the broker that
 /// accumulated it — the promoted replica folds the true sum from its shipped
 /// log — and keeps counting from there: the counter is live state on the
 /// replacement, not a relic.

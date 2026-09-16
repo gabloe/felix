@@ -213,8 +213,8 @@ async fn records_published_across_a_failover_are_all_readable() {
     cluster.shutdown().await;
 }
 
-/// **A publish that cannot succeed is not retried.** #119 asks for failures to
-/// be classified, and this is why: a credential without `stream.publish` fails
+/// **A publish that cannot succeed is not retried.** The planned client-side
+/// retry (#119) has to classify failures, and this is why: a credential without `stream.publish` fails
 /// the same way on every broker and after every backoff, so retrying it only
 /// delays the error the application needs to see.
 ///

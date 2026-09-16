@@ -1,29 +1,9 @@
-//! Casbin model definition for Felix authorization policies.
-//!
-//! Provides the embedded Casbin model string and helper to build a
-//! `DefaultModel` for policy evaluation.
-//!
-//! # How it fits
-//! The authorization layer loads this model before applying policy rules.
-//! Request handlers and tests call into this module to ensure model parity.
-//!
-//! - The matcher must include domain and action checks.
-//! - `keyMatch2` is used for resource pattern matching.
-//! # Examples
-//! ```rust
-//! use felix_authz::casbin_model_string;
-//!
-//! assert!(casbin_model_string().contains("[matchers]"));
-//! ```
-//!
-//! # Common pitfalls
-//! - Changing the model without updating policies/tests causes authorization drift.
-//! - Removing `keyMatch2` breaks wildcard resource matching.
-//!
-//! # Future work
-//! - Load the model from a shared config to enable hot-reload in services.
+//! The embedded Casbin model. Everything that evaluates policy loads it from
+//! here so the model can't drift between services and tests.
 use casbin::prelude::DefaultModel;
 
+// The matcher checks domain (tenant) and action exactly; only the resource
+// (`obj`) gets keyMatch2 wildcards.
 const MODEL: &str = r#"
 [request_definition]
 r = sub, dom, obj, act
@@ -41,47 +21,14 @@ e = some(where (p.eft == allow))
 m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && keyMatch2(r.obj, p.obj) && r.act == p.act
 "#;
 
-/// Return the embedded Casbin model as a static string.
-///
-/// # Parameters
-/// - None.
-///
-/// - The model string, suitable for logging or tests.
-///
-/// - The returned string must match the model used by policy evaluation.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::casbin_model_string;
-///
-/// assert!(casbin_model_string().contains("keyMatch2"));
-/// ```
+/// The embedded Casbin model, for logging and tests.
 pub fn casbin_model_string() -> &'static str {
     MODEL
 }
 
-/// Build a Casbin `DefaultModel` from the embedded string.
-///
-/// # Parameters
-/// - None.
-///
-/// - A parsed `DefaultModel` ready for policy enforcement.
-///
-/// # Errors
-/// - Panics if the embedded model is invalid (should never happen in CI).
-///
-/// - Parsing is O(model size) and should be cached by callers.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::casbin_model;
-///
-/// # async fn load() {
-/// let _model = casbin_model().await;
-/// # }
-/// ```
+/// Parse the embedded model. Parsing is cheap but not free — callers that
+/// evaluate policy repeatedly should hold on to the result.
 pub async fn casbin_model() -> DefaultModel {
-    // Parse the static model definition once per call.
     DefaultModel::from_str(MODEL)
         .await
         .expect("casbin model must be valid")

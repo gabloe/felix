@@ -1,6 +1,6 @@
 //! A cache whose keys are owned by different brokers.
 //!
-//! #278. Every broker used to serve its own copy of every cache, so a `put` on
+//! Every broker used to serve its own copy of every cache (#278), so a `put` on
 //! one was invisible to a `get` on another — and worse, two brokers could hold
 //! *different* values for one key with nothing to reconcile them. A miss is
 //! detectable; divergence is not.

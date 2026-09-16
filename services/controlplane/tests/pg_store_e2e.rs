@@ -455,7 +455,6 @@ async fn pg_store_with_config(config: StoreConfig) -> Result<Option<PgFixture>> 
 #[tokio::test]
 #[serial]
 async fn pg_store_core_crud_and_auth() -> Result<()> {
-    // This test guards CRUD, auth, and change-stream basics across real Postgres.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
@@ -1360,7 +1359,6 @@ async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_signing_keys_requires_current() -> Result<()> {
-    // This test prevents accepting signing key sets without a current key.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
@@ -1407,7 +1405,6 @@ async fn pg_store_signing_keys_requires_current() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_full_surface_area() -> Result<()> {
-    // This test ensures all store methods remain wired and return consistent data.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
@@ -1581,7 +1578,6 @@ async fn pg_store_full_surface_area() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_store_change_and_auth_parsing_errors() -> Result<()> {
-    // This test ensures parsing errors surface for invalid change/auth rows.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
@@ -1680,7 +1676,6 @@ async fn pg_store_change_and_auth_parsing_errors() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_change_retention_trims_changes() -> Result<()> {
-    // This test ensures the retention task trims change tables as configured.
     let Some(fixture) = pg_store_with_retention(1).await? else {
         return Ok(());
     };
@@ -1713,7 +1708,6 @@ async fn pg_change_retention_trims_changes() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_changes_monotonic_and_delete_not_found() -> Result<()> {
-    // This test prevents regressions in change ordering and delete-not-found behavior.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };
@@ -1777,7 +1771,6 @@ async fn pg_changes_monotonic_and_delete_not_found() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()> {
-    // This test ensures bootstrap initializes auth state and JWKS includes rotated keys.
     let Some(fixture) = pg_store().await? else {
         return Ok(());
     };

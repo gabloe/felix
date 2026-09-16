@@ -133,7 +133,6 @@ fn build_client_config(cert: CertificateDer<'static>, auth: &AuthFixture) -> Res
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_unauthorized_and_stream_missing` behavior.
 async fn quic_publish_unauthorized_and_stream_missing() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
@@ -202,7 +201,6 @@ async fn quic_publish_unauthorized_and_stream_missing() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_ack_and_batch_success` behavior.
 async fn quic_publish_ack_and_batch_success() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
@@ -260,7 +258,6 @@ async fn quic_publish_ack_and_batch_success() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_commit_ack_ok` behavior.
 async fn quic_publish_commit_ack_ok() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "true");
@@ -308,7 +305,6 @@ async fn quic_publish_commit_ack_ok() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_binary_decode_error_closes_stream` behavior.
 async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
@@ -383,7 +379,6 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_missing_request_id_returns_error` behavior.
 async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
@@ -467,7 +462,6 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `quic_publish_binary_batch_success` behavior.
 async fn quic_publish_binary_batch_success() -> Result<()> {
     unsafe {
         std::env::set_var("FELIX_ACK_ON_COMMIT", "false");

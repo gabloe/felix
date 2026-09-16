@@ -149,10 +149,8 @@ async fn open_authenticated_bi(
     max_frame_bytes: usize,
     frame_scratch: &mut BytesMut,
 ) -> Result<(quinn::SendStream, quinn::RecvStream)> {
-    // Step 1: Open a bi-directional stream and perform auth handshake.
     let (mut send, mut recv) = connection.open_bi().await?;
     crate::transport::quic::write_message(&mut send, auth_message(auth)).await?;
-    // Step 2: Read the auth response; reject on anything but OK.
     let response =
         crate::transport::quic::read_message_limited(&mut recv, max_frame_bytes, frame_scratch)
             .await?;
@@ -163,7 +161,6 @@ async fn open_authenticated_bi(
 }
 
 #[tokio::test]
-// This test prevents regressions in `cache_put_get_round_trip` behavior.
 async fn cache_put_get_round_trip() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -273,7 +270,6 @@ async fn cache_put_get_round_trip() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `publish_rejects_unknown_stream` behavior.
 async fn publish_rejects_unknown_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -375,7 +371,6 @@ async fn publish_rejects_unknown_stream() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `publish_ack_on_commit_smoke` behavior.
 async fn publish_ack_on_commit_smoke() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -443,7 +438,6 @@ async fn publish_ack_on_commit_smoke() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `publish_sharding_preserves_stream_order` behavior.
 async fn publish_sharding_preserves_stream_order() -> Result<()> {
     // Ordering assertion, not a latency assertion. The QUIC I/O runtime pool is
     // process-global, so under `cargo test` parallelism dozens of concurrent
@@ -685,7 +679,6 @@ async fn run_control_loop_with_frames(
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_handles_publish_and_cache_requests` behavior.
 async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1380,7 +1373,6 @@ async fn control_loop_cache_put_rejects_tenant_mismatch() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_handles_binary_and_decode_error` behavior.
 async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1455,7 +1447,6 @@ async fn control_loop_handles_binary_and_decode_error() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_handles_cancel_and_graceful_close` behavior.
 async fn control_loop_handles_cancel_and_graceful_close() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -1588,7 +1579,6 @@ async fn control_loop_handles_cancel_toggle_and_continues() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_cache_put_best_effort_full_and_closed` behavior.
 async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1701,7 +1691,6 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `uni_loop_publish_and_errors` behavior.
 async fn uni_loop_publish_and_errors() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -1795,7 +1784,6 @@ async fn uni_loop_publish_and_errors() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `writer_loop_branches` behavior.
 async fn writer_loop_branches() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -1909,7 +1897,6 @@ async fn writer_loop_branches() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_loop_branches` behavior.
 async fn ack_waiter_loop_branches() -> Result<()> {
     test_hooks::reset();
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
@@ -2036,7 +2023,6 @@ async fn ack_waiter_loop_branches() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_loop_cancel_branch` behavior.
 async fn ack_waiter_loop_cancel_branch() -> Result<()> {
     let (out_ack_tx, mut out_ack_rx) = mpsc::channel(1);
     tokio::spawn(async move { while out_ack_rx.recv().await.is_some() {} });
@@ -2073,7 +2059,6 @@ async fn ack_waiter_loop_cancel_branch() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `handle_stream_drain_timeout_branch` behavior.
 async fn handle_stream_drain_timeout_branch() -> Result<()> {
     test_hooks::reset();
     test_hooks::set_force_drain_timeout(true);
@@ -2122,7 +2107,6 @@ async fn handle_stream_drain_timeout_branch() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_stream_rejects_unexpected_message` behavior.
 async fn control_stream_rejects_unexpected_message() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2169,7 +2153,6 @@ async fn control_stream_rejects_unexpected_message() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `cache_put_unknown_cache_closes_stream` behavior.
 async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -2237,7 +2220,6 @@ async fn cache_put_unknown_cache_closes_stream() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `cache_get_unknown_cache_closes_stream` behavior.
 async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -2303,7 +2285,6 @@ async fn cache_get_unknown_cache_closes_stream() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `uni_stream_rejects_non_publish` behavior.
 async fn uni_stream_rejects_non_publish() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -2402,7 +2383,6 @@ fn spawn_ack_waiter_with_closed_out_ack(
 }
 
 #[tokio::test]
-// This test prevents regressions in `delay_frame_source_returns_none` behavior.
 async fn delay_frame_source_returns_none() -> Result<()> {
     let mut source = DelayFrameSource {
         delay: Duration::from_millis(1),
@@ -2414,7 +2394,6 @@ async fn delay_frame_source_returns_none() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `pending_frame_source_returns_none` behavior.
 async fn pending_frame_source_returns_none() -> Result<()> {
     let ready = Arc::new(AtomicBool::new(false));
     let mut source = PendingFrameSource {
@@ -2428,7 +2407,6 @@ async fn pending_frame_source_returns_none() -> Result<()> {
 }
 
 #[test]
-// This test prevents regressions in `should_reset_throttle_true_when_crossing_low_water` behavior.
 fn should_reset_throttle_true_when_crossing_low_water() {
     assert!(super::hooks::should_reset_throttle(Some((
         ACK_HI_WATER,
@@ -2438,7 +2416,6 @@ fn should_reset_throttle_true_when_crossing_low_water() {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `writer_loop_cancel_breaks_on_cancel` behavior.
 async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
     let (server_config, cert) = build_server_config()?;
     let server = Arc::new(QuicServer::bind(
@@ -2484,7 +2461,6 @@ async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `writer_loop_records_timings_when_sampled` behavior.
 async fn writer_loop_records_timings_when_sampled() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -2543,7 +2519,6 @@ async fn writer_loop_records_timings_when_sampled() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_loop_cancel_changed_breaks` behavior.
 async fn ack_waiter_loop_cancel_changed_breaks() -> Result<()> {
     let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
     drop(out_ack_rx);
@@ -2569,7 +2544,6 @@ async fn ack_waiter_loop_cancel_changed_breaks() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_loop_logs_on_enqueue_failure` behavior.
 async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (out_ack_tx, out_ack_rx) = mpsc::channel(1);
     drop(out_ack_rx);
@@ -2695,7 +2669,6 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_error` behavior.
 async fn ack_waiter_enqueue_failure_publish_error() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2719,7 +2692,6 @@ async fn ack_waiter_enqueue_failure_publish_error() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_dropped` behavior.
 async fn ack_waiter_enqueue_failure_publish_dropped() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2742,7 +2714,6 @@ async fn ack_waiter_enqueue_failure_publish_dropped() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_timeout` behavior.
 async fn ack_waiter_enqueue_failure_publish_timeout() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2766,7 +2737,6 @@ async fn ack_waiter_enqueue_failure_publish_timeout() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_ok` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2789,7 +2759,6 @@ async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_error` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2812,7 +2781,6 @@ async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_dropped` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2834,7 +2802,6 @@ async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `ack_waiter_enqueue_failure_publish_batch_timeout` behavior.
 async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
     let (ack_waiter_tx, waiters, handle) =
         spawn_ack_waiter_with_closed_out_ack(Duration::from_millis(5));
@@ -2856,7 +2823,6 @@ async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_pre_canceled_exits` behavior.
 async fn control_loop_pre_canceled_exits() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2915,7 +2881,6 @@ async fn control_loop_pre_canceled_exits() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_cancel_changed_breaks` behavior.
 async fn control_loop_cancel_changed_breaks() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -2981,7 +2946,6 @@ async fn control_loop_cancel_changed_breaks() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_cancel_changed_continues` behavior.
 async fn control_loop_cancel_changed_continues() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -3049,7 +3013,6 @@ async fn control_loop_cancel_changed_continues() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_subscribe_done_true` behavior.
 async fn control_loop_subscribe_done_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
@@ -3204,7 +3167,6 @@ async fn control_loop_cache_get_records_lookup_timing() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `control_loop_cache_timings_recorded` behavior.
 async fn control_loop_cache_timings_recorded() -> Result<()> {
     timings::enable_collection(1);
     timings::set_enabled(true);
@@ -3292,7 +3254,6 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_cache_get_missing_no_request_id_returns_true` behavior.
 async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -3361,7 +3322,6 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_cache_put_missing_no_request_id_returns_true` behavior.
 async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -3432,7 +3392,6 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
 }
 
 #[tokio::test]
-// This test prevents regressions in `control_loop_error_message_returns_false` behavior.
 async fn control_loop_error_message_returns_false() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
@@ -3496,7 +3455,6 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `uni_loop_breaks_on_enqueue_error` behavior.
 async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -3598,7 +3556,6 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
 }
 
 #[tokio::test]
-// This test prevents regressions in `handle_uni_stream_smoke` behavior.
 async fn handle_uni_stream_smoke() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     broker.register_tenant("t1").await?;
@@ -3657,7 +3614,6 @@ async fn handle_uni_stream_smoke() -> Result<()> {
 
 #[tokio::test]
 #[serial]
-// This test prevents regressions in `handle_stream_drain_timeout_sleep_branch` behavior.
 async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
     test_hooks::reset();
     let auth = auth_fixture("t1", default_perms());

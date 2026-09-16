@@ -1,20 +1,6 @@
-//! QUIC connection accept loop and per-connection worker setup.
-//!
-//! # Purpose and responsibility
-//! Accepts incoming QUIC connections, configures per-connection publish workers,
-//! and spawns stream handlers for publish, subscribe, and cache workloads.
-//!
-//! # Where it fits in Felix
-//! The broker's QUIC transport entrypoint; it wires network connections to the
-//! publish/subscribe protocol handlers.
-//!
-//! # Key invariants and assumptions
-//! - Each connection gets its own publish worker pool for isolation.
-//! - Ingress depth counters must be decremented when queues drain or close.
-//!
-//! # Security considerations
-//! - Authentication is performed per stream via the `BrokerAuth` handler.
-//! - Errors are logged without leaking payload contents.
+//! The broker's QUIC entrypoint: the accept loop, per-connection setup, and
+//! dispatch of bi/uni streams to the publish/subscribe/cache handlers.
+//! Authentication happens per stream via `BrokerAuth`.
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_broker::timings as broker_publish_timings;
@@ -39,27 +25,10 @@ use super::handlers::subscribe::WriterLaneManager;
 
 use super::streams::{handle_stream, handle_uni_stream};
 
-/// Serve incoming QUIC connections for the broker.
-///
-/// Runs the accept loop, spawns a task per connection, and configures timing
-/// telemetry based on the broker configuration.
-///
-/// Centralizes connection lifecycle handling and isolates per-connection work.
-///
-/// - Timing telemetry is disabled when `disable_timings` is set.
-/// - Each accepted connection is handled in its own task.
+/// Serve incoming QUIC connections: accept loop, one task per connection.
 ///
 /// # Errors
-/// - Propagates QUIC accept errors from the server.
-///
-/// # Example
-/// ```rust,no_run
-/// use std::sync::Arc;
-/// use broker::transport::quic::serve;
-/// # async fn run(server: Arc<felix_transport::QuicServer>, broker: Arc<felix_broker::Broker>, config: broker::config::BrokerConfig, auth: Arc<broker::auth::BrokerAuth>) {
-/// let _ = serve(server, broker, config, auth).await;
-/// # }
-/// ```
+/// Propagates QUIC accept errors from the server.
 pub async fn serve(
     server: Arc<QuicServer>,
     broker: Arc<Broker>,
@@ -343,35 +312,16 @@ fn build_publish_context(
     }
 }
 
-/// Handle a single QUIC connection and its streams, winding down when
-/// `shutdown` is cancelled.
+/// Handle one QUIC connection, winding down when `shutdown` is cancelled.
 ///
-/// Creates per-connection publish workers and dispatches incoming bi/uni streams
-/// to their respective handlers.
-///
-/// Keeps per-connection state (publish queues and depth counters) scoped to the
-/// connection lifecycle.
-///
-/// # Why it takes a shutdown token
-/// A connection task otherwise ends only when the *peer* disconnects. Subscribers
-/// hold connections open indefinitely by design, so a drain that just waits for
-/// connection tasks to finish would never complete: it would burn the entire
-/// deadline on every shutdown and then force-abort, dropping exactly the
-/// in-flight work the drain was meant to protect.
-///
-/// # Shutdown semantics
-/// Cancellation stops this connection accepting *new* streams, gives the streams
-/// already in flight a bounded grace period to finish, and then closes the QUIC
-/// connection so the peer learns this was a clean shutdown rather than a
-/// disappearance.
-///
-/// - `worker_count` and `publish_queue_depth` are at least 1.
-/// - Global ingress depth counters are decremented when workers exit.
-/// - The stream grace is bounded, so one connection cannot outlast the caller's
-///   drain budget.
-///
-/// # Errors
-/// - Returns on connection-level QUIC errors.
+/// The shutdown token exists because a connection task otherwise ends only
+/// when the *peer* disconnects — subscribers hold connections open
+/// indefinitely by design, so a drain that just waited for connection tasks
+/// would burn its whole deadline and then force-abort exactly the in-flight
+/// work it meant to protect. Cancellation stops this connection accepting
+/// *new* streams, gives streams already in flight a bounded grace period,
+/// then closes the QUIC connection so the peer sees a clean shutdown rather
+/// than a disappearance.
 pub(crate) async fn handle_connection_with_shutdown(
     broker: Arc<Broker>,
     connection: QuicConnection,

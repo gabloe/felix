@@ -1,82 +1,19 @@
-//! JWKS data types used for Felix key distribution.
+//! Minimal JWKS types for publishing Ed25519 public keys.
 //!
-//! Define minimal JSON Web Key Set structures for publishing Ed25519 public keys.
-//!
-//! - JWKS must contain only public key material.
-//! - Felix uses OKP/Ed25519 with `alg = EdDSA`.
-//!
-//! - JWKS is public and should be treated as untrusted input by consumers.
-//! - Private keys must never be serialized into these structs.
-//!
-//! - These are plain data types with no concurrency concerns.
-//!
-//! Populate [`Jwks`] with one or more [`Jwk`] entries and serialize with `serde`.
-//!
-//! # Common pitfalls
-//! - Publishing private key material in `x` or adding extra fields by mistake.
-//! - Using base64 instead of base64url encoding for `x`.
-//!
-//! # Future work
-//! - Add validation helpers to enforce OKP/Ed25519 invariants on construction.
+//! Only public key material belongs here. Felix signs with OKP/Ed25519
+//! (`alg = EdDSA`) and nothing else. Note `x` is base64url, not plain base64.
+
 use serde::{Deserialize, Serialize};
 
-/// Intended usage for a JWK.
-///
-/// Indicates whether a key is used for signatures.
-///
-/// # Parameters / returns
-/// - Serialized/deserialized as a lowercase string value.
-///
-/// # Errors
-/// - Not applicable (enum).
-///
-/// - Felix uses only signing keys (`sig`).
-///
-/// - `KeyUse::Sig` is the only variant supported by Felix.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::KeyUse;
-///
-/// let usage = KeyUse::Sig;
-/// ```
+/// Intended use for a JWK. Felix only signs, so `Sig` is the only variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyUse {
     Sig,
 }
 
-/// A single JSON Web Key entry.
-///
-/// Represents an Ed25519 public key in JWKS format.
-///
-/// # Parameters / returns
-/// - Fields are populated from key storage or JWKS responses.
-/// - Serialized as JSON for JWKS endpoints.
-///
-/// # Errors
-/// - Not applicable (data container).
-///
-/// - Only public key data (`x`) should be populated; never include private keys.
-///
-/// - `kty` must be `"OKP"`, `alg` must be `"EdDSA"`, `crv` should be `"Ed25519"`.
-///
-/// - This is a plain data container; cloning is O(fields).
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{Jwk, KeyUse};
-///
-/// let jwk = Jwk {
-///     kty: "OKP".to_string(),
-///     kid: "k1".to_string(),
-///     alg: "EdDSA".to_string(),
-///     use_field: KeyUse::Sig,
-///     crv: Some("Ed25519".to_string()),
-///     x: Some("base64url".to_string()),
-/// };
-/// assert_eq!(jwk.kty, "OKP");
-/// ```
+/// One Ed25519 public key in JWK form: `kty = "OKP"`, `alg = "EdDSA"`,
+/// `crv = "Ed25519"`, with the base64url public key in `x`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Jwk {
     pub kty: String,
@@ -90,36 +27,7 @@ pub struct Jwk {
     pub x: Option<String>,
 }
 
-/// A JSON Web Key Set container.
-///
-/// Wraps a list of JWK entries for serialization.
-///
-/// # Parameters / returns
-/// - `keys` contains the public JWK entries.
-///
-/// # Errors
-/// - Not applicable (data container).
-///
-/// - Ensure only public keys are included.
-///
-/// - Cloning scales with the number of keys.
-///
-/// # Example
-/// ```rust
-/// use felix_authz::{Jwk, Jwks, KeyUse};
-///
-/// let jwks = Jwks {
-///     keys: vec![Jwk {
-///         kty: "OKP".to_string(),
-///         kid: "k1".to_string(),
-///         alg: "EdDSA".to_string(),
-///         use_field: KeyUse::Sig,
-///         crv: Some("Ed25519".to_string()),
-///         x: Some("base64url".to_string()),
-///     }],
-/// };
-/// assert_eq!(jwks.keys.len(), 1);
-/// ```
+/// The key set served to verifiers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Jwks {
     pub keys: Vec<Jwk>,
@@ -131,7 +39,6 @@ mod tests {
 
     #[test]
     fn jwks_roundtrip() {
-        // This test ensures JWKS serialization stays stable for clients.
         let jwks = Jwks {
             keys: vec![Jwk {
                 kty: "OKP".to_string(),

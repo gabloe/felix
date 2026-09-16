@@ -28,7 +28,6 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn jwks_endpoint_returns_keys_for_tenant() {
-    // This test ensures JWKS output is EdDSA/Ed25519 and does not include RSA fields.
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
@@ -95,7 +94,6 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
 
 #[tokio::test]
 async fn jwks_endpoint_missing_tenant_returns_404() {
-    // This test prevents leaking tenant presence by returning a consistent 404.
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),

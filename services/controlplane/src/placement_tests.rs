@@ -164,6 +164,38 @@ fn placement_skew_stays_bounded() {
     }
 }
 
+/// The realistic failure the loose 300-shard test cannot catch: at the
+/// handful-of-shards scale a cluster actually starts at, pure highest-score
+/// rendezvous skewed hard — a real cluster put 24 shards over three brokers at
+/// 11/5/8, and 48 over two at 48/0 (single-node saturation). Bounded-load
+/// rendezvous holds every node to its exact share when the share divides evenly.
+#[test]
+fn small_shard_counts_are_evenly_balanced() {
+    let cases = [
+        (24u32, &["broker-a", "broker-b", "broker-c"][..], 8usize),
+        (48, &["broker-a", "broker-b"][..], 24),
+    ];
+    for (shards, ids, each) in cases {
+        let streams = vec![stream("orders", shards)];
+        let nodes = live(ids);
+        let plan = plan(&streams, &[], &nodes, &[], &NothingCaughtUp);
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, leader, _) in plan.to_place() {
+            *counts.entry(leader.to_string()).or_default() += 1;
+        }
+        assert_eq!(
+            counts.len(),
+            ids.len(),
+            "every node should lead shards: {counts:?}"
+        );
+        assert!(
+            counts.values().all(|c| *c == each),
+            "{shards} shards over {} nodes should be {each} each, got {counts:?}",
+            ids.len(),
+        );
+    }
+}
+
 /// Reconciliation must be idempotent: applying a plan and planning again keeps
 /// everything, so a periodic pass does not churn the persisted rows.
 #[test]

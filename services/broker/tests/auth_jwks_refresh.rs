@@ -67,7 +67,6 @@ async fn serve_jwks(jwks: Jwks) -> SocketAddr {
 
 #[tokio::test]
 async fn jwks_refresh_and_authenticate() -> Result<()> {
-    // This test ensures the broker refreshes JWKS and accepts EdDSA tokens.
     let signing_key = Ed25519SigningKey::from_bytes(&TEST_PRIVATE_KEY);
     let public_key = signing_key.verifying_key().to_bytes();
     let jwks = jwks_from_public_key(&public_key, "k1");

@@ -79,15 +79,13 @@ fn verify_token(
     tenant_id: &str,
     token: &str,
 ) -> Result<FelixClaims, jsonwebtoken::errors::Error> {
-    // Step 1: Enforce EdDSA-only Felix tokens to avoid RSA downgrade.
     let header = jsonwebtoken::decode_header(token)?;
     if header.alg != Algorithm::EdDSA {
         return Err(jsonwebtoken::errors::Error::from(
             jsonwebtoken::errors::ErrorKind::InvalidToken,
         ));
     }
-    // Step 2: If `kid` is set, ensure it belongs to the tenant key set.
-    // This mirrors production behavior and avoids accepting unknown keys.
+    // Mirrors production: a `kid` that names no tenant key is rejected.
     if let Some(kid) = header.kid.as_deref()
         && !keys.all_keys().any(|key| key.kid == kid)
     {
@@ -97,13 +95,11 @@ fn verify_token(
     }
     let mut last_err = None;
     for key in keys.all_keys() {
-        // Step 3: Ensure public key length is correct before decoding.
         let _: [u8; 32] = key.public_key.as_slice().try_into().map_err(|_| {
             jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken)
         })?;
         let x = URL_SAFE_NO_PAD.encode(key.public_key);
         let decoding_key = DecodingKey::from_ed_components(&x)?;
-        // Step 4: Validate issuer/audience and tenant scope after signature check.
         let mut validation = Validation::new(key.alg);
         validation.set_audience(&["felix-broker"]);
         validation.set_issuer(&["felix-auth"]);
@@ -126,8 +122,6 @@ fn verify_token(
 
 #[tokio::test]
 async fn exchange_returns_tenant_scoped_token() {
-    // This test ensures the exchange path mints EdDSA tokens scoped to a tenant
-    // and containing RBAC-derived permissions.
     let jwks = jwks_for_key("kid-1");
     let (addr, _handle) = spawn_jwks_server(jwks).await;
 
@@ -267,8 +261,6 @@ async fn exchange_returns_tenant_scoped_token() {
 
 #[tokio::test]
 async fn exchange_forbidden_without_policies() {
-    // This test prevents regressions where tokens are minted without any RBAC
-    // policies, which would violate authorization expectations.
     let jwks = jwks_for_key("kid-1");
     let (addr, _handle) = spawn_jwks_server(jwks).await;
 

@@ -1,39 +1,13 @@
-//! Principal identity model and helpers.
+//! Principal identity: stable IDs derived from validated OIDC claims.
 //!
-//! # Purpose and responsibility
-//! Creates stable principal identifiers and constructs principal records from
-//! validated OIDC claims.
-//!
-//! # Where it fits in Felix
-//! The OIDC validation flow uses these helpers to normalize identities before
-//! policy evaluation and token exchange.
-//!
-//! # Key invariants and assumptions
-//! - Principal IDs are deterministic for a given issuer+subject pair.
-//! - The ID is derived from normalized strings (caller must normalize).
-//!
-//! # Security considerations
-//! - Principal IDs are derived via hashing and do not expose the raw subject.
-//! - Callers must validate issuer/subject before constructing principals.
+//! The ID is a hash of issuer + subject, so it is deterministic without
+//! persisting the raw subject. Callers validate and normalize the claims
+//! first; nothing here checks them.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Normalized principal identity derived from an OIDC token.
-///
-/// Stores the stable principal ID plus the original issuer/subject and groups.
-///
-/// Provides a consistent identity representation for RBAC and auditing.
-///
-/// - `principal_id` must be derived from `issuer` + `subject`.
-/// - `groups` contains raw group strings from the IdP.
-///
-/// # Example
-/// ```rust
-/// use controlplane::auth::principal::{from_claims, Principal};
-///
-/// let principal = from_claims("https://issuer", "user-1", vec!["admins".to_string()]);
-/// assert_eq!(principal.issuer, "https://issuer");
-/// ```
+/// Normalized identity used for RBAC and auditing: the stable `principal_id`
+/// plus the original issuer/subject and the IdP's raw group strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Principal {
     pub principal_id: String,
@@ -42,26 +16,9 @@ pub struct Principal {
     pub groups: Vec<String>,
 }
 
-/// Derive a stable principal ID from issuer and subject.
-///
-/// Hashes `issuer|subject` using SHA-256 and returns the hex digest.
-///
-/// Keeps a stable identifier without persisting raw subject values.
-///
-/// - The same inputs must yield the same output.
-///
-/// # Errors
-/// - Does not return errors.
-///
-/// # Example
-/// ```rust
-/// use controlplane::auth::principal::principal_id;
-///
-/// let id = principal_id("https://issuer", "user-1");
-/// assert!(!id.is_empty());
-/// ```
+/// Stable principal ID: hex SHA-256 of `issuer|subject`. The delimiter keeps
+/// `("ab", "c")` and `("a", "bc")` from colliding.
 pub fn principal_id(issuer: &str, subject: &str) -> String {
-    // Combine issuer and subject with a delimiter to avoid ambiguity.
     let mut hasher = Sha256::new();
     hasher.update(issuer.as_bytes());
     hasher.update(b"|");
@@ -69,26 +26,8 @@ pub fn principal_id(issuer: &str, subject: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Build a [`Principal`] from validated OIDC claims.
-///
-/// Constructs a principal with a deterministic ID and the provided group list.
-///
-/// Centralizes how principals are derived so policy evaluation is consistent.
-///
-/// - `issuer` and `subject` must already be validated and normalized.
-///
-/// # Errors
-/// - Does not return errors.
-///
-/// # Example
-/// ```rust
-/// use controlplane::auth::principal::from_claims;
-///
-/// let principal = from_claims("https://issuer", "user-1", vec![]);
-/// assert_eq!(principal.subject, "user-1");
-/// ```
+/// Build a [`Principal`] from already-validated OIDC claims.
 pub fn from_claims(issuer: &str, subject: &str, groups: Vec<String>) -> Principal {
-    // Derive the stable principal ID from issuer and subject.
     Principal {
         principal_id: principal_id(issuer, subject),
         issuer: issuer.to_string(),

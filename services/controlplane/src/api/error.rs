@@ -1,49 +1,14 @@
-//! API error types and helpers.
-//!
-//! # Purpose and responsibility
-//! Centralizes HTTP error response construction to keep error shapes uniform
-//! across control-plane endpoints.
-//!
-//! # Where it fits in Felix
-//! All API handlers use these helpers to return structured errors to clients
-//! and to translate store failures into HTTP responses.
-//!
-//! # Key invariants and assumptions
-//! - Error responses must include a stable `code` and human-readable `message`.
-//! - Status codes must align with the error category.
-//!
-//! # Security considerations
-//! - Internal errors log details server-side but return generic messages.
-//! - Request IDs are optional; avoid leaking sensitive details in messages.
+//! Uniform HTTP error shapes for the API. Every response body carries a
+//! stable `code` plus a human-readable `message`; internal failures are
+//! logged server-side and returned as generic messages so store details never
+//! leak to clients.
 use crate::api::types::ErrorResponse;
 use crate::store::StoreError;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-/// Structured API error returned by handlers.
-///
-/// Couples an HTTP status code with a JSON error body.
-///
-/// Provides a single error type that implements `IntoResponse` for Axum.
-///
-/// - `status` must match the semantics of `body.code`.
-///
-/// # Example
-/// ```rust
-/// use axum::http::StatusCode;
-/// use controlplane::api::error::ApiError;
-/// use controlplane::api::types::ErrorResponse;
-///
-/// let err = ApiError {
-///     status: StatusCode::NOT_FOUND,
-///     body: ErrorResponse {
-///         code: "not_found".to_string(),
-///         message: "missing".to_string(),
-///         request_id: None,
-///     },
-/// };
-/// ```
+/// An HTTP status paired with the JSON error body.
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
@@ -56,11 +21,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Build a 404 Not Found error.
-///
-/// Returns an `ApiError` with code `not_found` and the provided message.
+/// 404 with code `not_found`.
 pub fn api_not_found(message: &str) -> ApiError {
-    // Return a consistent not-found error shape.
     ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
@@ -71,11 +33,9 @@ pub fn api_not_found(message: &str) -> ApiError {
     }
 }
 
-/// Build a 404 error for disabled features.
-///
-/// Uses a `not_enabled` code to indicate the endpoint is disabled.
+/// 404 with code `not_enabled` — deliberately a 404, so callers can't probe
+/// which features a deployment has disabled.
 pub fn api_not_enabled(message: &str) -> ApiError {
-    // Use NOT_FOUND to avoid exposing disabled feature presence.
     ApiError {
         status: StatusCode::NOT_FOUND,
         body: ErrorResponse {
@@ -86,11 +46,8 @@ pub fn api_not_enabled(message: &str) -> ApiError {
     }
 }
 
-/// Build a 409 Conflict error.
-///
-/// Returns an `ApiError` with a caller-provided conflict code.
+/// 409 with a caller-chosen conflict code.
 pub fn api_conflict(code: &str, message: &str) -> ApiError {
-    // Caller provides a specific conflict code for precise client handling.
     ApiError {
         status: StatusCode::CONFLICT,
         body: ErrorResponse {
@@ -101,11 +58,9 @@ pub fn api_conflict(code: &str, message: &str) -> ApiError {
     }
 }
 
-/// Build a 500 Internal Server Error from a store error.
-///
-/// Logs the store error and returns a generic internal error response.
+/// 500 from a store error: the error is logged here, the client gets only
+/// `message`.
 pub fn api_internal(message: &str, err: &StoreError) -> ApiError {
-    // Log internal details server-side for debugging; return generic message.
     tracing::error!(error = ?err, "controlplane storage error");
     ApiError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -117,9 +72,6 @@ pub fn api_internal(message: &str, err: &StoreError) -> ApiError {
     }
 }
 
-/// Build a 500 Internal Server Error without a store error.
-///
-/// Returns a generic internal error response with the provided message.
 /// An error with a status the caller chose.
 ///
 /// For the cases where the status *is* the answer rather than a fault report —
@@ -135,8 +87,8 @@ pub fn api_error(status: StatusCode, code: &str, message: &str) -> ApiError {
     }
 }
 
+/// 500 without a store error to log.
 pub fn api_internal_message(message: &str) -> ApiError {
-    // Internal error without a concrete store error to log.
     ApiError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         body: ErrorResponse {
@@ -147,11 +99,8 @@ pub fn api_internal_message(message: &str) -> ApiError {
     }
 }
 
-/// Build a 401 Unauthorized error.
-///
-/// Returns an `ApiError` with code `unauthorized`.
+/// 401 with code `unauthorized`.
 pub fn api_unauthorized(message: &str) -> ApiError {
-    // Authentication failed or missing.
     ApiError {
         status: StatusCode::UNAUTHORIZED,
         body: ErrorResponse {
@@ -162,11 +111,8 @@ pub fn api_unauthorized(message: &str) -> ApiError {
     }
 }
 
-/// Build a 403 Forbidden error.
-///
-/// Returns an `ApiError` with code `forbidden`.
+/// 403 with code `forbidden`.
 pub fn api_forbidden(message: &str) -> ApiError {
-    // Authorization failed despite authentication.
     ApiError {
         status: StatusCode::FORBIDDEN,
         body: ErrorResponse {
@@ -177,11 +123,8 @@ pub fn api_forbidden(message: &str) -> ApiError {
     }
 }
 
-/// Build a 400 Bad Request validation error.
-///
-/// Returns an `ApiError` with code `validation_error`.
+/// 400 with code `validation_error`.
 pub fn api_validation_error(message: &str) -> ApiError {
-    // Client input failed validation or was malformed.
     ApiError {
         status: StatusCode::BAD_REQUEST,
         body: ErrorResponse {

@@ -1,7 +1,8 @@
 //! A client that learns the cluster instead of being told all of it.
 //!
-//! #117. An application configured with one broker address is configured with
-//! a single point of failure, however many brokers the cluster has. These cover
+//! An application configured with one broker address is configured with
+//! a single point of failure, however many brokers the cluster has (#117).
+//! These cover
 //! the seam: what the client is told, what it does with it, and whether the one
 //! address it started from can then be taken away.
 //!
