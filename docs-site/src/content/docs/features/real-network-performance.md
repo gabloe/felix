@@ -19,8 +19,10 @@ NIC's raw line rate while encrypting every byte, so it is bound by *its own CPU*
 doing the crypto, not by the network; a second generator lifts the total to
 1.63 GB/s with the first undegraded. Acknowledged-publish latency is **~181 µs**
 p50, and **durability is free for throughput** (group commit makes the durable
-path match in-memory). Nothing here bottlenecks on Felix until the brokers are
-genuinely saturated.
+path match in-memory). And fanout — the thing Felix is built for — delivers **over
+a million messages a second to 500 subscribers on a single broker with zero loss**,
+while the publisher's acknowledgement latency never moves. Nothing here bottlenecks
+on Felix until the brokers are genuinely saturated.
 
 ### Headline numbers
 
@@ -36,6 +38,7 @@ Microsoft Entra ID verifying every token** — nothing on loopback, nothing fake
 | **Durable throughput** | **identical to in-memory** — group commit makes durability *free* |
 | **Network efficiency** | **~73 % of raw TCP line rate** — while encrypting every byte (QUIC/TLS 1.3) |
 | **Real-IdP token exchange** | **686 µs** p50 on the control plane |
+| **Fanout scaling** | **1.0 M msg/s** delivered to **500 subscribers, zero loss** — publisher ack held flat at ~206 µs |
 | **Watch fanout 500** | **1,100,000 / 1,100,000** delivered — every message to every watcher |
 
 That is roughly **136 MB/s of ingest per broker vCPU**, climbing **linearly** as
@@ -68,12 +71,19 @@ known quantity:
 | Baseline | Value | How |
 |---|---|---|
 | Raw TCP line rate | **11.9 Gbit/s (1.49 GB/s)** | `iperf3`, load-gen → broker, in-VNet |
-| QUIC path RTT | **~260 µs** | broker `quinn` connection stats |
-| ICMP ping RTT | 0.64–0.93 ms | `ping` (ICMP is deprioritised on Azure and overstates — use the QUIC figure) |
+| `quinn` smoothed RTT | ~260 µs | broker connection stats — a smoothed EWMA, *not* the path RTT (see caveat) |
+| ICMP ping RTT | 0.64–0.93 ms | `ping` — ICMP is deprioritised on Azure and overstates |
 | Path MTU | ~1400 | settled DPLPMTUD |
 | Premium-SSD `fsync` | **3.6 ms p50, 8.7 ms p99** | raw `fsync()` of a 256 B write to `/data` |
 
-These five numbers are the yardsticks every result below is read against.
+**A caveat on the RTT, because a later number leans on it: neither the `quinn`
+figure nor `ping` is the true path round-trip — both overstate it.** `quinn`'s
+stat is a smoothed average that folds in QUIC's ack-delay; Azure deprioritises
+ICMP. The trustworthy read comes from Felix itself: an acknowledged publish
+*cannot* complete in less than one round trip, so the **~182 µs acked-publish
+p50** (below) is a hard *upper bound* on the RTT, and the **~55 µs** it adds over
+the loopback processing floor is the practical estimate of the network's cost.
+Read the path RTT as *tens of microseconds*, not 260.
 
 ## Two profiles, one cluster
 
@@ -102,9 +112,13 @@ across trials), so these are stable, not lucky samples.
 | 4 KiB | **203 / 287 µs** | 211 / 763 µs | 227 / 2866 µs |
 
 p50 barely moves with fanout or payload — the acknowledgement is one round trip
-plus durability admission, and it sits sensibly above the ~260 µs QUIC RTT.
-Tails widen with fanout and payload, which is the real network showing itself;
-loopback cannot.
+plus durability admission. It also *bounds the network*: because an acked publish
+must contain a full round trip, the path RTT is necessarily **below this 182 µs**
+— which is exactly why the ~260 µs `quinn` smoothed_rtt cannot be the real RTT
+(it is an ack-delay-inflated average, not a floor). Decomposed against the
+loopback baseline just below, 182 µs is ~127 µs of in-memory processing plus
+~55 µs of real round trip. Tails widen with fanout and payload, which is the real
+network showing itself; loopback cannot.
 
 **Against the loopback baseline** (`benchmarks.md`, Apple M4 Max, in-memory) —
 a fair matchup, both in-memory:
@@ -115,8 +129,10 @@ a fair matchup, both in-memory:
 | 256 B | 128 µs | 183 µs | +55 µs |
 | 4 KiB | 136 µs | 203 µs | +67 µs |
 
-The real network adds ~55–67 µs to p50 (NIC, switch, real QUIC RTT). That is
-the honest replacement for every localhost latency number Felix has quoted.
+The real network adds ~55–67 µs to p50 (NIC, switch, the path round trip). This
+delta — measured, and consistent with the acked-publish upper bound above — is
+the trustworthy figure for the network's cost, and the honest replacement for
+every localhost latency number Felix has quoted.
 
 ### Publish-to-delivery latency — and the knob that owns it
 
@@ -187,7 +203,10 @@ xychart-beta
 ```
 
 The climb is steep to 6 publishers, then flat — the signature of hitting a fixed
-limit, which the next section identifies.
+limit, which the next section identifies. (The 12-publisher cell, 1,040 MB/s,
+sits just below both 6 and 24: these are single-trial points, and that
+non-monotonic wiggle is within run-to-run spread. The plateau is the result —
+not the exact ordering of points along it.)
 
 ### Where the ceiling actually is
 
@@ -234,7 +253,7 @@ linear addition, zero loss. The single-generator 1.09 GB/s was never Felix's
 limit; the cluster sustains **~1.63 GB/s**, and only now do the brokers become
 the constraint (broker-0 at **84 %** CPU under the doubled load). The true
 ceiling of these three 4-vCPU brokers is ~1.6–1.9 GB/s; a third generator would
-pin it exactly, but the session sits at the 20-vCPU MSDN quota. The headline is
+pin it exactly, but the session sits at the 20-vCPU Azure quota. The headline is
 the shape, not just the number: **Felix's ingest scales linearly with offered
 load until the brokers' own CPU is the wall.**
 
@@ -254,6 +273,61 @@ so the 3.6 ms device `fsync` is amortised to nothing. Durability costs latency,
 not throughput — provided there is concurrency to amortise it (see the cache
 path below for the counter-example).
 
+## Fanout: encode once, deliver to everyone
+
+Ingest is the axis QUIC costs Felix on. Fanout is the axis the architecture is
+built to win: a publish is encoded **once** into a shared `Arc<Bytes>` and handed
+to every subscriber, each behind its own bounded queue — so the broker's
+per-publish work barely grows as subscribers pile on, and one slow subscriber
+cannot back-pressure the rest. Measured on one stream (a single shard, so this is
+*one* broker's delivery path), 256 B, a paced publisher (batch 1, per-message
+ack), subscriber count 1 → 500:
+
+| Subscribers | Delivered throughput | Publisher ack p50 | Publisher ack p99 | Dropped |
+|---|---|---|---|---|
+| 1 | 5.4 K msg/s | **183 µs** | 217 µs | 0 |
+| 10 | 50.5 K msg/s | 191 µs | 317 µs | 0 |
+| 50 | 230.6 K msg/s | 198 µs | 930 µs | 0 |
+| 100 | 410.8 K msg/s | 201 µs | 1.7 ms | 0 |
+| 250 | 814.7 K msg/s | 205 µs | 3.0 ms | 0 |
+| 500 | **1,004,273 msg/s** | **206 µs** | 7.3 ms | **0** |
+
+```mermaid
+xychart-beta
+    title "Delivered throughput vs subscribers (one stream, one broker, zero loss)"
+    x-axis "Subscribers" [1, 10, 50, 100, 250, 500]
+    y-axis "delivered (thousand msg/s)" 0 --> 1100
+    bar [5, 51, 231, 411, 815, 1004]
+    line [5, 51, 231, 411, 815, 1004]
+```
+
+Delivered throughput scales almost linearly, to just over a million messages a
+second on one broker, and nothing is dropped — every publish reaches all 500
+subscribers (`unaccounted = 0` at every row). The publisher hardly feels it: ack
+p50 goes from 183 µs at one subscriber to 206 µs at five hundred, 23 µs for 500×
+the delivery work. That is what encoding a publish once and sharing it buys. A log
+each consumer re-reads on its own, or a single shared delivery queue, could not
+hold a publisher this flat.
+
+The price is in the tail. Ack p99 climbs from 217 µs to 7.3 ms as the broker's
+four cores spend more of each moment fanning out, and the publisher's own rate
+drops from 5.4 K to 2.0 K publishes/s — delivered throughput keeps rising only
+because fanout grows faster than the publish rate falls. A million a second is one
+4-vCPU broker delivering one stream; more streams put more shards on more brokers,
+each with its own delivery path.
+
+Push it the other way — publisher fire-and-forget, faster than a subscriber can
+drain — and the isolation shows: the publisher kept running flat out while the
+bounded per-subscriber queues dropped the overrun (`DropNew`) rather than stalling
+the publisher or the subscribers that were keeping up. The slow consumer pays for
+its own lag. Putting a number on that with one deliberately slow subscriber among
+healthy ones is the next run.
+
+These come from a second session (`f1`) on the same topology, so the curve is
+self-consistent within one session. What ties it to the rest of the page: fanout-1
+ack p50 is 183 µs here against 181–183 µs in the primary session — the same
+hardware behaving the same way.
+
 ## Durability: latency vs throughput
 
 The two ends of the fsync knob, measured on the cache write path (each cache put
@@ -266,7 +340,7 @@ lands on durable storage):
 | OnCommit, 8 writers | 33.4 ms | 233/s |
 
 Two things stand out. First, per-commit durability on the cache path costs a
-full device flush (~4 ms) — exactly the raw `fsync` figure plus the round trip.
+full device flush (~4 ms) — the raw `fsync` figure plus request handling.
 Second — and this is a **finding, not a tuning** — the cache write path does
 *not* group-commit: eight concurrent writers get the same ~230 puts/s as one,
 just with 8× the latency. The durable *stream append* path amortises fsync to
@@ -309,8 +383,8 @@ token.
 |---|---|---|
 | Token exchange (warm JWKS) | **686 µs** | 876 µs |
 
-Sub-millisecond on the control plane (add ~260 µs network for a remote caller),
-and amortised in practice: a Felix token is minted once and presented on many
+Sub-millisecond on the control plane (add one ~55 µs network round trip for a
+remote caller), and amortised in practice: a Felix token is minted once and presented on many
 operations until it expires, so the exchange is a **per-session** cost, not a
 per-message one. Brokers then verify that token *locally* per request against the
 tenant's cached signing keys — again, no control-plane round trip on the data
@@ -321,6 +395,43 @@ token at all.
 **Not measured here** (its own exercise): the control plane under sustained
 exchange load, node-registration and shard-assignment latency, watch-propagation
 time to the brokers, and control-plane failover.
+
+## Where this sits — and how to compare it fairly
+
+These are three 4-vCPU brokers, so the honest axis against Kafka, Redpanda, or
+NATS is **per-vCPU efficiency (~136 MB/s per broker vCPU), not raw totals** —
+those systems publish headline numbers on far larger instances, and a totals
+table would be comparing box sizes, not engines.
+
+Two things cut against Felix here as much as they cut for it:
+
+- **Ingest is Felix's *weakest* axis — and it is most of what is measured above.**
+  A pure write firehose is exactly where Kafka's and Redpanda's kernel `sendfile`
+  zero-copy has a structural edge that QUIC cannot use: Felix encrypts every byte
+  in userspace (TLS 1.3 is not optional over QUIC), which is *why* a single
+  generator is CPU-bound on crypto at 1.09 GB/s rather than NIC-bound. Expect
+  Felix to trail on raw ingest-per-core against a plaintext, zero-copy log. That
+  is the QUIC trade, made on purpose.
+- **Fanout is where the architecture wins — now measured** (see
+  [Fanout](#fanout-encode-once-deliver-to-everyone)). Delivered throughput scales
+  almost linearly to **1.0 M msg/s on a single broker with zero loss**, while the
+  publisher's ack p50 holds flat (183 → 206 µs) across 1 → 500 subscribers. This
+  is the axis a Kafka-style log — re-read independently by each consumer group —
+  is structurally worse at, and the one an ingest-only comparison would skip.
+  Turning it into a head-to-head (N consumer groups per system, plus a
+  deliberately slow consumer to show isolation) is what the comparison work adds
+  next.
+
+And a comparison anyone should believe has to match *configuration*, not just
+hardware: identical durability (Felix `Leader` / `Quorum` ↔ Kafka `acks=1` /
+`acks=all`+`min.insync.replicas`), matched fsync policy (benchmarking Felix
+`on_commit` against a broker left on its default OS-flush measures fsync, not the
+broker), matched replication factor, partition/shard count, and publish batching
+— and **TLS on every system**, since Felix cannot turn it off and a plaintext
+competitor is handed a win Felix structurally can't take. NATS *core* is
+at-most-once and not comparable to a durable stream at all; only JetStream is.
+That matched-configuration harness is being built out alongside this suite; its
+results are their own page.
 
 ## What we found and fixed
 
@@ -347,7 +458,11 @@ and budget). Raw results, including the out-of-band context metrics
 
 This is one T1 session, single-trial for most cells (five for the headline
 latency cells; the throughput ceiling confirmed with a second load generator).
-Cross-session variance, a **third** load generator to pin the exact broker
-ceiling (this session ran into the 20-vCPU MSDN quota with two), and a
-matched-hardware comparison against Kafka/Redpanda via the OpenMessaging
-Benchmark are the next steps.
+The next steps: cross-session variance; a **third** load generator to pin the
+exact ingest ceiling (this session ran into the 20-vCPU Azure quota with two);
+pushing the fanout curve past 500 subscribers (1000 needs the delivery load
+spread across more than one load-generator VM) and a **deliberately slow
+subscriber inside a healthy fleet** to put a number on the isolation the fanout
+section describes; and the matched-hardware, matched-configuration comparison
+against Kafka, Redpanda, and NATS described in
+[Where this sits](#where-this-sits--and-how-to-compare-it-fairly).

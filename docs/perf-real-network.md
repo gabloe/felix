@@ -16,7 +16,7 @@ distance, and flatters quorum: a `Quorum` acknowledgement over loopback costs
 almost nothing extra, which is not the promise a cross-zone deployment is
 buying.
 
-This document is the design for closing that gap. The budget is an MSDN
+This document is the design for closing that gap. The budget is an Azure
 subscription's $200/month of Azure credit, which shapes several decisions
 below — this suite provisions, runs, and **tears down**; nothing idles.
 
@@ -93,7 +93,7 @@ availability zone, in a proximity placement group, accelerated networking on.
 | Load generator | 1 | `Standard_D4as_v5` | The generator must never be the bottleneck; watch it for CPU-bound cases and raise it (and the quota) if it saturates |
 | Broker data disk | 3 | Premium SSD (`Premium_LRS`), 128 GiB | Real durable fsync latency on premium storage |
 
-The topology is sized to **18 vCPU** (3×4 + 2 + 4) so it fits the MSDN default
+The topology is sized to **18 vCPU** (3×4 + 2 + 4) so it fits the Azure subscription default
 **20-vCPU Total Regional / DASv5-family quota** without a quota request. The
 brokers are the system under test and stay at 4 vCPU to match the local runs;
 the load generator took the cut from 8 to 4. Raise `loadgenVmSize` (and request
@@ -130,7 +130,7 @@ is real, and watch/retained delivery lag to a remote subscriber.
 
 The control plane's token exchange verifies IdP tokens against a configured
 allowlist — ES256 by default, **optional RS*/PS*** (`auth/exchange.rs`), which
-is exactly what Entra ID issues. The MSDN subscription's tenant provides it
+is exactly what Entra ID issues. The Azure subscription's tenant provides it
 for free: an app registration, client-credentials flow, and the exchange
 endpoint turns Entra's RS256 access token into a Felix EdDSA token, which is
 what brokers verify per request.
@@ -206,7 +206,7 @@ benchmarks page in the same shape with an environment column (`loopback` |
 
 ## Budget
 
-Costed at pay-as-you-go eastus2 list prices; MSDN credit covers it several
+Costed at pay-as-you-go eastus2 list prices; Azure credit covers it several
 times over.
 
 | Item | $/hour |
