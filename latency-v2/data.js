@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789570161335,
+  "lastUpdate": 1789588815094,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10692,6 +10692,72 @@ window.BENCHMARK_DATA = {
             "range": "964.20",
             "unit": "us",
             "extra": "trials: 5\nmedian: 739.00\nmean: 1203.80\nstdev: 964.20\ncv: 80.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1139ccb0202102c9c05c2d5c111e3e64dcea9f80",
+          "message": "perf(harness): NVMe brokers, release-binary CP, configurable shards (#386)\n\n- Local-NVMe brokers: useLocalNvme + brokerVmSize/brokerCount params; broker.yaml\n  mounts the SKU's ephemeral local disk (RAID0 across azure/local NVMe, or the\n  Dadsv5 resource disk) at /data, bypassing the ~170 MB/s Premium-SSD throughput\n  cap. Never touches the OS disk.\n- Control plane runs the v0.3.1 RELEASE binary again (the source-build was a\n  stopgap before v0.3.1 shipped); default RELEASE_TAG bumped to v0.3.1. Keeps the\n  env-file pre-generation fix (systemd validates EnvironmentFile before\n  ExecStartPre, so a fresh CP could not cold-start without it).\n- Configurable SHARDS (default 12, was hardcoded 1) with delete-before-create so\n  a reseed can change shard count. A single shard pins a stream's whole ingest to\n  one broker, which caps throughput at one broker's write path on fast disk.\n- run-nvme-ingest.sh / run-nvme-multi.sh: durable-vs-in-memory ramp and the\n  multi-loadgen aggregate with broker CPU sampling.\n- README: MSDN -> Azure.",
+          "timestamp": "2026-09-16T12:57:39-07:00",
+          "tree_id": "bc35664a013e0a4162feb25fbcf6aeefb996618b",
+          "url": "https://github.com/gabloe/felix/commit/1139ccb0202102c9c05c2d5c111e3e64dcea9f80"
+        },
+        "date": 1789588813307,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.40\nstdev: 0.55\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "2.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 205.40\nstdev: 2.88\ncv: 1.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 249,
+            "range": "17.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 249.00\nmean: 256.40\nstdev: 17.70\ncv: 6.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "3.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 200.60\nstdev: 3.05\ncv: 1.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 425,
+            "range": "106.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 425.00\nmean: 458.80\nstdev: 106.40\ncv: 23.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 752,
+            "range": "821.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 752.00\nmean: 1248.80\nstdev: 821.27\ncv: 65.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
