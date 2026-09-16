@@ -11,6 +11,14 @@ tasks:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:
     cmds:
+      # felix-cluster's loadgen integration test shells out to a prebuilt
+      # `target/debug/felix-loadgen`. `cargo test` only builds a bin's runnable
+      # executable when that bin's own package has integration tests, and
+      # felix-loadgen's only consumer is a test in *another* crate — so the
+      # workspace test run never produces it, and those cases fail "not found".
+      # Build it up front (the felix-broker bin needs no such help: services/broker
+      # has its own integration tests, so cargo builds it).
+      - "cargo build -p felix-loadgen"
       - "cargo test --workspace"
       # Run separately (not --all-features on the whole workspace): felix-client's
       # `in-process` feature only affects felix-client itself, and keeping it out of
