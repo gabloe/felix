@@ -281,9 +281,14 @@ cannot fsync a gigabyte a second onto a 170 MB/s disk — so the ~1 GB/s
 writes land in the OS page cache and the run finishes before they are all
 flushed. Group commit genuinely makes durability free *for a burst that fits in
 cache*; **sustained** durable throughput on this hardware is bounded by the disk,
-~170 MB/s, the same wall every log-based system hits here. Testing Felix's true
-sustained durable ceiling needs NVMe (a follow-up run). The in-memory figures are
-unaffected — they touch no disk.
+~170 MB/s, the same wall every log-based system hits here. The in-memory figures
+are unaffected — they touch no disk.
+
+**Update — the NVMe follow-up settled it.** Re-run on local-NVMe brokers (below),
+durable OnCommit *does* match in-memory and *holds it sustained*: 1,151 vs 1,136
+MB/s at the plateau, zero drops, iowait ~0. So group commit is genuinely free on
+fast disk — the Premium-SSD number was the burst, the NVMe number is real. See
+[On NVMe](#on-nvme-durability-is-real-and-the-wall-moves-off-the-disk).
 :::
 
 ## Fanout: encode once, deliver to everyone
@@ -487,8 +492,10 @@ does). What that first run found is as much about the *hardware* as the engines:
 The two honest limits: **ingest needs NVMe** (so the test measures the engine,
 not a 170 MB/s SSD) and **fanout needs a lighter client** (a librdkafka-based
 consumer, not a JVM-per-consumer on a small VM, so the *broker* is the
-bottleneck). Both are the next run — including re-running the Felix suite on NVMe
-for its true sustained-durable ceiling. And the number to carry through all of
+bottleneck). The first is now done — [On NVMe](#on-nvme-durability-is-real-and-the-wall-moves-off-the-disk)
+moved the wall off the disk and confirmed durability is free and sustained,
+though a *balanced* cluster ceiling still waits on the shard-assignment fix noted
+there; the lighter-client fanout comparison is still ahead. And the number to carry through all of
 it is **CPU at saturation** — MB/s per vCPU and absolute utilisation — because
 when the disk is the constraint, what each engine *spends* to hold the ceiling is
 the thing that still separates them, and the thing that predicts what happens
@@ -498,6 +505,43 @@ due: it pays QUIC's tax (per-packet AEAD, userspace packetisation, no kernel
 is the efficiency claim worth proving. Kafka and NATS go through the same harness
 once the rig can do them justice. Full configs and raw output are in
 `scripts/perf/azure/compare/`.
+
+## On NVMe: durability is real, and the wall moves off the disk
+
+The Premium-SSD runs left one thing unproven and one thing unanswered: is durable
+throughput real or a page-cache burst, and — once the disk is not the wall — what
+*is*? So the suite was re-run on **local-NVMe brokers** (Azure L-series,
+`L4as_v4` / `L8as_v4`, the two-to-four local NVMe striped RAID0 at ~0.75–1.5 GB/s
+write per broker — instance-store NVMe, which is how throughput-sensitive log
+systems are actually deployed). Same v0.3.1, real Entra, TLS/QUIC, OnCommit
+durable.
+
+Three things came out of it:
+
+- **Durability is genuinely free — sustained, not a burst.** Ramping in-memory
+  against durable OnCommit, the two track within ~5% and are indistinguishable at
+  the plateau (durable **1,151** vs in-memory **1,136 MB/s**; 256 B: **3.56 M**
+  vs **3.41 M msg/s**), with zero drops. On a 170 MB/s disk that was impossible;
+  on NVMe it holds. Group commit does what it claims.
+- **The wall is never the disk.** Every broker-CPU breakdown under load showed
+  **iowait ~0–1.7%**. The cost is user + system + **softirq** — QUIC/UDP packet
+  processing and AEAD — never I/O wait. The NVMe always had headroom.
+- **The per-broker durable ceiling is the commit path, not cores.** Driven hard
+  against a single broker, durable OnCommit tops out at **~977 MB/s while the
+  broker sits at ~48% CPU** — more load just backs up behind the commit sequencer
+  (`publish queue full`), it does not use the idle cores. So durable throughput
+  scales by adding **brokers** (more commit paths), not by adding cores per
+  broker — consistent with the in-memory match above, where each of three brokers
+  ran well under that ceiling.
+
+Two honest limits surfaced with it. **Cross-broker forwarding is expensive:** a
+publish that lands on a non-owner broker is decrypted, re-encrypted to the owner,
+and decrypted again, so round-robin clients spend roughly **twice** the CPU per
+byte of clients that connect to the shard owner (~140 vs ~250 MB/s per vCPU). And
+**shard assignment did not balance** — the control plane put 48/0 of the shards on
+one of two brokers (and 11/5/8 on three), leaving brokers idle and capping any
+clean multi-broker aggregate. Fixing that assignment is the prerequisite for a
+balanced cluster-ceiling number, and is the honest reason one isn't quoted here.
 
 ## What we found and fixed
 
