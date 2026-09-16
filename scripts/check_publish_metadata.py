@@ -43,6 +43,7 @@ COPYLEFT = {
     "felix-crypto",
     "felix-router",
     "felix-cluster",
+    "felix-loadgen",
     "broker",
     "controlplane",
     "agent",
@@ -57,6 +58,7 @@ NOT_PUBLISHABLE = {
     "agent",
     "felix-conformance",
     "felix-cluster",
+    "felix-loadgen",
 }
 
 # crates.io hard requirement is `description`; the rest are discoverability

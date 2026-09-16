@@ -39,6 +39,10 @@ tasks:
     cmds: ["docker rm -f felix-pg-tests >/dev/null 2>&1 || true"]
   coverage:
     cmds:
+      # Same reason as `test`: felix-cluster's loadgen integration test shells
+      # out to a prebuilt target/debug/felix-loadgen, which the coverage run
+      # (like a plain `cargo test`) does not build on its own.
+      - "cargo build -p felix-loadgen"
       - |
         if [ -z "${CI:-}" ]; then
           task pg:down

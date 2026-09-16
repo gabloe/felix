@@ -3,11 +3,21 @@ name = "felix-loadgen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+description = "Load generator that drives a remote Felix cluster for the real-network performance suite"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
 
 # The measuring instrument for the real-network perf suite
 # (docs/perf-real-network.md). Drives a *remote* Felix cluster — every other
 # load driver in the repo is loopback-bound — and emits both the stdout shape
 # scripts/perf expects and one machine-readable JSON line per case.
+#
+# Not published: an internal instrument, not a library anyone consumes from a
+# registry, and it links Felix internals through felix-client (AGPL, per
+# LICENSING.md).
+publish = false
 
 [[bin]]
 name = "felix-loadgen"

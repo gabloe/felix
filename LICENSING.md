@@ -19,6 +19,7 @@ about reciprocity, not about who is allowed to make money.
 | `crates/felix-broker/`, `felix-storage`, `felix-metadata`, `felix-authz`, `felix-crypto`, `felix-router` | AGPL-3.0-only | Server-side core logic. |
 | `services/broker/`, `services/controlplane/`, `services/agent/` | AGPL-3.0-only | The runnable server binaries. |
 | `crates/felix-cluster/` | AGPL-3.0-only | Local multi-node cluster harness for integration and failure tests. It embeds the control plane and drives the broker, so unlike `felix-conformance` it is internal tooling rather than something a third-party implementer runs. Not published. |
+| `crates/felix-loadgen/` | AGPL-3.0-only | Load generator for the real-network performance suite. It drives a remote cluster through `felix-client` and is internal instrumentation, not something a third-party implementer runs. Not published. |
 
 The root [`LICENSE`](LICENSE) file is AGPL-3.0 (the license for
 the project as a whole / the deployable server). [`LICENSE-APACHE`](LICENSE-APACHE)
