@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789552189272,
+  "lastUpdate": 1789570163784,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8372,6 +8372,58 @@ window.BENCHMARK_DATA = {
             "range": "7551.60",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 545825.74\nmean: 544467.98\nstdev: 7551.60\ncv: 1.39%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffdc70fe5732a01e6dfd6de4b00a6f8c3ca54d2b",
+          "message": "docs(perf): record the Redpanda comparison + correct the durable claim (#383)\n\nRecords the first comparison run (Felix vs Redpanda, same D4as_v5 hardware, TLS\non, rf=1, write_caching) and the hardware findings it surfaced:\n\n- Ingest is disk-bound (~170 MB/s Premium SSD, measured); not an engine\n  differentiator here. Corrects the 'durable ~1 GB/s' claim as a page-cache\n  burst, not a sustained rate.\n- Latency is Felix's clean win: acked-publish p99 ~224us vs Redpanda's 70-136ms\n  produce-ack p99 (flush stalls) even at 1000/s. Caveat kept: that tail is\n  disk/config-sensitive.\n- Fanout ~ballpark (Redpanda 912K msg/s @ 8 groups vs Felix 1.0M @ 500 subs) but\n  the JVM Kafka clients capped before the brokers, so it is a floor.\n\nAdds the comparison harness under scripts/perf/azure/compare/ (Bicep, TLS setup,\ningest/fanout benches for Kafka-wire + NATS). Ingest needs NVMe and fanout needs\na lighter client for the full picture; both are the next run.",
+          "timestamp": "2026-09-16T07:46:57-07:00",
+          "tree_id": "52f39e127af666fac996eaabe45a7b3658de9914",
+          "url": "https://github.com/gabloe/felix/commit/ffdc70fe5732a01e6dfd6de4b00a6f8c3ca54d2b"
+        },
+        "date": 1789570163154,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 307903.34,
+            "range": "8432.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 307903.34\nmean: 305831.82\nstdev: 8432.32\ncv: 2.76%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 307903.34,
+            "range": "8432.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 307903.34\nmean: 305831.82\nstdev: 8432.32\ncv: 2.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 70165.24,
+            "range": "2020.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 70165.24\nmean: 71013.14\nstdev: 2020.51\ncv: 2.85%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 701652.43,
+            "range": "20205.07",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 701652.43\nmean: 710131.39\nstdev: 20205.07\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
