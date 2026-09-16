@@ -165,9 +165,23 @@ The plateau from 6→24 publishers is the tell, and two measurements confirm it 
 - **Broker CPU during a sustained 1 GB/s run:** 73 % / 48 % / 42 % across the
   three brokers. Warm, not saturated — real headroom remains.
 
-So the ceiling on this rig is the single load-generator VM's NIC. The brokers
-would go higher; reaching it needs more than one load generator (tracked
-separately).
+So the ceiling at one load generator is that VM's NIC, not the brokers. Proven
+directly by adding a **second** load generator (a D2) and driving both at once:
+
+| Source | Throughput | Retries |
+|---|---|---|
+| Load generator 1 (D4) | 1,084 MB/s | 0 |
+| Load generator 2 (D2) | 549 MB/s | 0 |
+| **Aggregate** | **1,633 MB/s (13.1 Gbit/s)** | 0 |
+
+The first generator held its full 1,084 MB/s while the second added 549 — clean
+linear addition, zero loss. The single-generator 1.09 GB/s was never Felix's
+limit; the cluster sustains **~1.63 GB/s**, and only now do the brokers become
+the constraint (broker-0 at **84 %** CPU under the doubled load). The true
+ceiling of these three 4-vCPU brokers is ~1.6–1.9 GB/s; a third generator would
+pin it exactly, but the session sits at the 20-vCPU MSDN quota. The headline is
+the shape, not just the number: **Felix's ingest scales linearly with offered
+load until the brokers' own CPU is the wall.**
 
 ### Durability is free for throughput
 
@@ -244,6 +258,8 @@ and budget). Raw results, including the out-of-band context metrics
 (`session-extras.json`), live under `scripts/perf/azure/sessions/`.
 
 This is one T1 session, single-trial for most cells (five for the headline
-latency cells). Cross-session variance, a multi-load-generator run to find the
-true broker ceiling, and a matched-hardware comparison against Kafka/Redpanda
-via the OpenMessaging Benchmark are the next steps.
+latency cells; the throughput ceiling confirmed with a second load generator).
+Cross-session variance, a **third** load generator to pin the exact broker
+ceiling (this session ran into the 20-vCPU MSDN quota with two), and a
+matched-hardware comparison against Kafka/Redpanda via the OpenMessaging
+Benchmark are the next steps.
