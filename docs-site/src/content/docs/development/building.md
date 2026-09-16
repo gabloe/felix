@@ -2,7 +2,7 @@
 title: "Building & Testing"
 ---
 
-Complete guide to building, testing, and developing Felix.
+How to build, test, and develop Felix — the same commands CI runs.
 
 ## Build System
 
@@ -455,13 +455,9 @@ task lint && task test && task build
 
 ### CI Requirements for PRs
 
-All PRs must pass:
-
-- ✅ Formatting check
-- ✅ Clippy with no warnings
-- ✅ All tests passing
-- ✅ Documentation builds
-- ✅ No new security vulnerabilities
+CI runs the same commands as `task lint` and `task test`: formatting, clippy
+with warnings denied, the full test suite, the docs build, and dependency
+audit. A PR that passes those locally passes CI.
 
 ## Performance Testing
 
@@ -740,33 +736,12 @@ export RUSTFLAGS="-C link-arg=-fuse-ld=lld"
 export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 ```
 
-## Best Practices
+## Before committing
 
-### Development Workflow
-
-1. **Start with tests**: Write test first (TDD)
-2. **Format often**: Run `cargo fmt` frequently
-3. **Check clippy**: Fix warnings as you go
-4. **Run tests**: Before committing
-5. **Build release**: Test performance changes
-
-### Before Committing
-
-```bash
-# Pre-commit checklist
-task fmt           # Format code
-task lint          # Check style
-task test          # Run tests
-task build         # Verify build
-```
-
-### Performance Testing
-
-1. **Always use release builds**: `--release`
-2. **Warm up**: Run warmup iterations
-3. **Multiple runs**: Average results
-4. **Isolate variables**: Change one thing at a time
-5. **Document environment**: Hardware, OS, config
+`task lint && task test` is the whole pre-commit ritual — it is exactly what
+CI runs. For performance work, measure release builds only, warm up first,
+average several runs, change one variable at a time, and write down the
+environment the numbers came from.
 
 ## Next Steps
 

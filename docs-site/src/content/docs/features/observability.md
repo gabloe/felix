@@ -2,275 +2,38 @@
 title: "Observability"
 ---
 
-Felix provides comprehensive observability through structured logging, optional telemetry, and metrics exposure. This document covers logging configuration, performance telemetry, monitoring integration, and operational debugging.
+Three windows into a running Felix: structured logs, Prometheus metrics, and
+optional per-stage telemetry for performance work. This page lists what
+actually exists and which signals answer which questions — every metric named
+here is one the code emits.
 
 ## Logging
 
-Felix uses structured logging for all operational events, making it easy to parse, filter, and analyze logs in production environments.
-
-### Log Levels
-
-Felix supports standard log levels:
-
-- **ERROR**: Critical failures requiring immediate attention
-- **WARN**: Degraded behavior or approaching limits
-- **INFO**: Normal operational events (default)
-- **DEBUG**: Detailed diagnostic information
-- **TRACE**: Very verbose, includes per-request details
-
-### Configuration
-
-**Environment variable**:
+Felix logs through `tracing`, filtered by the standard `RUST_LOG` variable:
 
 ```bash
-RUST_LOG=info                         # Default: info level for all modules
-RUST_LOG=felix_broker=debug           # Debug level for broker only
-RUST_LOG=felix_broker=trace,felix_wire=debug  # Multiple modules
+RUST_LOG=info                                  # default
+RUST_LOG=felix_broker=debug                    # one module, louder
+RUST_LOG=felix_broker=trace,felix_wire=debug   # several modules
 ```
 
-**Structured output** (JSON):
+Log lines are structured key-value events (tenant, stream, subscription id,
+error), so they grep and parse cleanly. There is no JSON output mode today;
+if your aggregation pipeline needs JSON, wrap the process output.
 
-```bash
-FELIX_LOG_FORMAT=json                 # JSON structured logs
-```
+The lines worth knowing on sight:
 
-Example JSON log:
-
-```json
-{
-  "timestamp": "2026-01-15T10:30:45.123Z",
-  "level": "INFO",
-  "target": "felix_broker",
-  "message": "Subscription created",
-  "fields": {
-    "tenant_id": "acme-corp",
-    "namespace": "production",
-    "stream": "orders",
-    "subscription_id": "sub-abc-123",
-    "subscriber_addr": "10.0.1.45:52341"
-  }
-}
-```
-
-### Key Log Events
-
-**Broker startup**:
-
-```
-INFO felix_broker: Broker starting
-INFO felix_broker: QUIC listening on 0.0.0.0:5000
-INFO felix_broker: Control plane sync disabled (no FELIX_CONTROLPLANE_URL)
-INFO felix_broker: Broker ready
-```
-
-**Connection events**:
-
-```
-INFO felix_broker: New connection from 10.0.1.45:52341
-DEBUG felix_broker: Control stream opened stream_id=0
-INFO felix_broker: Connection closed duration=45.2s
-```
-
-**Publish events**:
-
-```
-DEBUG felix_broker: Publish received tenant=acme ns=prod stream=orders batch_size=64
-DEBUG felix_broker: Fanout complete stream=orders subscribers=12 duration_us=180
-```
-
-**Subscribe events**:
-
-```
-INFO felix_broker: Subscription created tenant=acme ns=prod stream=orders subscription_id=sub-123
-WARN felix_broker: Subscriber falling behind subscription_id=sub-123 queue_depth=980/1024
-WARN felix_broker: Events dropped for subscriber subscription_id=sub-123 dropped=15
-```
-
-**Cache events**:
-
-```
-DEBUG felix_broker: Cache put key=session:user-abc ttl_ms=3600000
-DEBUG felix_broker: Cache get key=session:user-abc result=hit
-DEBUG felix_broker: Cache get key=session:user-xyz result=miss
-```
-
-**Error events**:
-
-```
-ERROR felix_broker: Unknown tenant in publish request tenant=unknown-tenant
-ERROR felix_broker: Publish queue timeout after 2000ms
-WARN felix_broker: QUIC connection error error="connection lost"
-```
-
-### Log Aggregation
-
-Felix logs integrate seamlessly with log aggregation systems:
-
-**Fluentd/Fluent Bit**:
-
-```yaml
-<source>
-  @type tail
-  path /var/log/felix/broker.log
-  pos_file /var/log/felix/broker.log.pos
-  tag felix.broker
-  <parse>
-    @type json
-    time_key timestamp
-    time_format %Y-%m-%dT%H:%M:%S.%LZ
-  </parse>
-</source>
-
-<match felix.**>
-  @type elasticsearch
-  host elasticsearch.example.com
-  port 9200
-  index_name felix
-</match>
-```
-
-**Promtail/Loki**:
-
-```yaml
-clients:
-  - url: http://loki:3100/loki/api/v1/push
-
-scrape_configs:
-  - job_name: felix
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: felix-broker
-          __path__: /var/log/felix/*.log
-    pipeline_stages:
-      - json:
-          expressions:
-            level: level
-            message: message
-            tenant_id: fields.tenant_id
-```
-
-## Telemetry
-
-Felix supports optional telemetry for detailed performance profiling. Telemetry is **disabled by default** to avoid overhead.
-
-### Enabling Telemetry
-
-**Compile-time**:
-
-```toml
-[dependencies]
-felix-broker = { version = "0.1", features = ["telemetry"] }
-felix-client = { version = "0.1", features = ["telemetry"] }
-```
-
-**Runtime** (broker):
-
-```yaml
-# Broker config
-disable_timings: false                 # Enable timing measurements
-```
-
-:::caution[Performance Impact]
-Telemetry adds 5-15% overhead in high-throughput scenarios. Use for profiling and debugging only, not in production hot paths.
-:::
-### Telemetry Metrics
-
-**Client-side metrics**:
-
-```rust
-use felix_client::{frame_counters_snapshot, timings};
-
-// Frame counters
-let counters = frame_counters_snapshot();
-println!("Publish frames sent: {}", counters.publish_frames);
-println!("Event frames received: {}", counters.event_frames);
-println!("Cache put frames: {}", counters.cache_put_frames);
-println!("Cache get frames: {}", counters.cache_get_frames);
-
-// Timing histograms
-let publish_timings = timings::publish_timings_snapshot();
-println!("Publish p50: {:?}", publish_timings.p50);
-println!("Publish p99: {:?}", publish_timings.p99);
-println!("Publish p999: {:?}", publish_timings.p999);
-```
-
-**Broker-side metrics** (future):
-
-- Per-stream publish rate
-- Per-subscription delivery rate
-- Queue depth samples
-- Fanout timing breakdown
-- QUIC flow control events
-
-### Telemetry Use Cases
-
-**Profiling publish latency**:
-
-```rust
-// Enable telemetry
-use felix_client::{Client, ClientConfig};
-use felix_wire::AckMode;
-use std::net::SocketAddr;
-
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig::optimized_defaults(quinn);
-let addr: SocketAddr = "127.0.0.1:5000".parse()?;
-let client = Client::connect(addr, "localhost", config).await?;
-let publisher = client.publisher().await?;
-
-// Run workload
-for _ in 0..10000 {
-    publisher
-        .publish("tenant", "ns", "stream", data.to_vec(), AckMode::None)
-        .await?;
-}
-
-// Analyze results
-let timings = felix_client::timings::publish_timings_snapshot();
-println!("Publish latency:");
-println!("  p50:  {:?}", timings.p50);
-println!("  p95:  {:?}", timings.p95);
-println!("  p99:  {:?}", timings.p99);
-println!("  p999: {:?}", timings.p999);
-```
-
-**Identifying bottlenecks**:
-
-```rust
-// Instrument different stages
-// (requires broker-side telemetry support)
-
-// Stage 1: Wire encode
-let encode_timings = telemetry::encode_timings();
-
-// Stage 2: QUIC send
-let quic_timings = telemetry::quic_send_timings();
-
-// Stage 3: Broker enqueue
-let enqueue_timings = telemetry::enqueue_timings();
-
-// Stage 4: Fanout processing
-let fanout_timings = telemetry::fanout_timings();
-
-// Find slowest stage
-```
+- Startup: the QUIC listen address, and whether control-plane sync is on.
+- `subscriber falling behind` / `events dropped for subscriber` — a
+  subscription hit its bounded queue. This is the log-side view of
+  `felix_sub_queue_dropped_total`.
+- Drain lines during shutdown, saying which subsystems finished in time.
 
 ## Metrics
 
-Felix exposes metrics in Prometheus format for integration with standard
-monitoring stacks. The broker and the control plane each serve their own
-endpoint.
-
-### Metrics Endpoint
-
-```yaml
-# Broker config
-metrics_bind: "0.0.0.0:8080"           # Prometheus metrics endpoint
-```
-
-**Scrape configuration**:
+The broker and the control plane each serve Prometheus text on their own
+metrics endpoint (`metrics_bind` on the broker; `/metrics`, plus `/live` and
+`/ready` for probes).
 
 ```yaml
 # prometheus.yml
@@ -280,142 +43,113 @@ scrape_configs:
       - targets: ['broker-1:8080', 'broker-2:8080', 'broker-3:8080']
 ```
 
-### Metric Types
+Rather than an exhaustive list, here are the questions that come up and the
+metrics that answer them.
 
-**Pub/Sub metrics**:
-
-```prometheus
-# Publish operations
-felix_publish_total{tenant, namespace, stream}              # Counter
-felix_publish_bytes_total{tenant, namespace, stream}        # Counter
-felix_publish_latency_seconds{tenant, namespace, stream}    # Histogram
-felix_publish_errors_total{tenant, namespace, stream, error_type}  # Counter
-
-# Subscribe operations
-felix_subscriptions_active{tenant, namespace, stream}       # Gauge
-felix_events_delivered_total{tenant, namespace, stream}     # Counter
-felix_events_dropped_total{tenant, namespace, stream}       # Counter
-felix_subscriber_lag_messages{subscription_id}              # Gauge
-
-# Queue depths
-felix_publish_queue_depth                                   # Gauge
-felix_broker_ingress_queue_depth                            # Gauge
-broker_sub_lane_queue_len_highwater{lane}                  # Counter-like highwater updates
-broker_sub_lane_enqueued_total{lane}                        # Counter
-broker_sub_lane_dropped_total{lane}                         # Counter
-broker_sub_lane_write_calls_total{lane}                     # Counter
-broker_sub_lane_write_errors_total{lane}                    # Counter
-```
-
-**Cache metrics**:
+**Is the publish path healthy?**
 
 ```prometheus
-# Cache operations
-felix_cache_puts_total{tenant, namespace, cache}            # Counter
-felix_cache_gets_total{tenant, namespace, cache, result}    # Counter (hit/miss)
-felix_cache_latency_seconds{operation, tenant, namespace}   # Histogram
-
-# Cache state
-felix_cache_entries{tenant, namespace, cache}               # Gauge
-felix_cache_bytes{tenant, namespace, cache}                 # Gauge
-felix_cache_evictions_total{tenant, namespace, cache}       # Counter
+felix_publish_requests_total
+felix_publish_bytes_total
+felix_publish_latency_ms                    # histogram
+felix_broker_ingress_queue_depth            # publish jobs waiting
+felix_broker_ingress_dropped_total          # overflow, by policy
+felix_broker_ingress_rejected_total
 ```
 
-**System metrics**:
+A rising ingress depth means publishers are outrunning the broker; drops and
+rejections say the overflow policy fired, which is deliberate and visible.
+
+**Are subscribers keeping up?**
 
 ```prometheus
-# Connections
-felix_connections_active                                    # Gauge
-felix_connections_total                                     # Counter
-felix_connection_errors_total{error_type}                   # Counter
-
-# QUIC metrics
-felix_quic_streams_active{stream_type}                      # Gauge
-felix_quic_packets_sent_total                               # Counter
-felix_quic_packets_lost_total                               # Counter
-felix_quic_flow_control_blocked_total                       # Counter
-
-# Resource usage
-felix_memory_bytes{type}                                    # Gauge (heap, stack, mmap)
-felix_cpu_seconds_total                                     # Counter
-felix_goroutines                                            # Gauge
+felix_subscribe_requests_total
+felix_sub_queue_enqueued_total
+felix_sub_queue_dropped_total               # records lost to slow consumers
+felix_sub_queue_drop_old_emulated_total     # DropOld configured, DropNew behavior
+felix_sub_queue_len
+felix_subscriber_disconnect_total
 ```
 
-### Grafana Dashboards
+`felix_sub_queue_dropped_total` increasing is the signal that a subscriber is
+missing records. On a durable stream the subscriber can detect this itself
+from offset gaps and resume; on an ephemeral stream this counter is the only
+witness.
 
-**Example dashboard queries**:
+**Is durability the bottleneck?** The storage layer's metrics are designed
+around exactly this question — compare append time against sync time, and
+watch the group-commit fan-in:
+
+```prometheus
+felix_storage_append_duration_seconds
+felix_storage_sync_duration_seconds
+felix_storage_sync_batch_appends       # appends served per device flush
+felix_storage_unsynced_bytes           # what a crash would lose right now
+felix_storage_sync_failures_total      # non-zero: acknowledged durability in doubt
+```
+
+If sync dominates append, the fsync policy is the cost. A
+`sync_batch_appends` near 1 under concurrent load means appends are
+serializing on the device instead of sharing a flush.
+
+**Is the cluster healthy?** Membership from both sides, replication, and
+leases:
+
+```prometheus
+felix_node_count                            # control plane: fleet size by lifecycle
+felix_broker_membership_live                # broker: does the cluster still count me
+felix_broker_heartbeat_age_seconds          # alert when this nears the expiry timeout
+felix_broker_replication_lag_records
+felix_broker_replication_halted
+felix_broker_lease_held
+felix_broker_lease_refusals_total           # writes refused after a lease lapsed
+```
+
+**Example queries**:
 
 ```promql
 # Publish rate
-rate(felix_publish_total[1m])
+rate(felix_publish_requests_total[1m])
 
 # p99 publish latency
-histogram_quantile(0.99, rate(felix_publish_latency_seconds_bucket[5m]))
+histogram_quantile(0.99, rate(felix_publish_latency_ms_bucket[5m]))
 
-# Cache hit rate
-rate(felix_cache_gets_total{result="hit"}[5m]) / 
-  rate(felix_cache_gets_total[5m])
+# Records lost to slow consumers
+rate(felix_sub_queue_dropped_total[5m])
 
-# Subscriber lag
-felix_subscriber_lag_messages
-
-# Dropped events
-rate(felix_events_dropped_total[5m])
+# Group-commit effectiveness
+rate(felix_storage_sync_batch_appends_sum[5m]) / rate(felix_storage_sync_batch_appends_count[5m])
 ```
 
-**Pre-built dashboards** (planned):
+## Shutdown and drain
 
-- Felix Overview (system health, throughput, latency)
-- Pub/Sub Deep Dive (per-stream metrics, fanout performance)
-- Cache Performance (hit rates, latency, size)
-- System Resources (CPU, memory, network, QUIC metrics)
+Four signals, and the reason each one exists.
 
-## Health Checks
+| Metric | Type | What it tells you |
+| --- | --- | --- |
+| `felix_ready_state` | gauge | `1` while serving, `0` once draining. Distinguishes an instance that left rotation deliberately from one that vanished. |
+| `felix_inflight_requests` | gauge | Requests being served right now. Watch it fall to zero during a drain. |
+| `felix_drain_duration_ms` | gauge | How long the last drain took. |
+| `felix_drain_forced_total` | counter, by `subsystem` | Subsystems cancelled because the deadline expired. **Non-zero means work was dropped.** |
 
-**HTTP health endpoint**:
+The last one is the point. A drain that finished in time and a drain that was
+cut off both take roughly the deadline to report, so duration alone cannot tell
+them apart — and the log line that says which does not survive the pod.
 
-```bash
-curl http://broker:8080/health
-```
+Alert on `felix_drain_forced_total` increasing. Everything else here is for
+watching a rolling restart happen.
 
-**Response**:
+## Probes
 
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0",
-  "uptime_seconds": 3600,
-  "checks": {
-    "quic_listener": "ok",
-    "memory_usage": "ok",
-    "queue_depths": "ok"
-  }
-}
-```
+The metrics listener serves `/live` and `/ready`, and they answer different
+questions on purpose. `/live` says "this process can respond at all" and
+touches nothing outside the process — a liveness probe drives restarts, and
+restarting every instance because a dependency is down turns one outage into
+a restart loop. `/ready` says "send this instance traffic," and goes false
+first thing during shutdown so load balancers steer away before anything
+stops working. See [Graceful shutdown](/felix/deployment/graceful-shutdown/).
 
-**Kubernetes liveness probe**:
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 30
-```
-
-**Readiness probe**:
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: 8080
-  initialDelaySeconds: 5
-  periodSeconds: 10
-```
-
-## Distributed Tracing
+## Distributed tracing
 
 The broker builds an OTLP tracer provider on startup and installs a
 `tracing-opentelemetry` layer when one is available. It is best-effort: if the
@@ -444,183 +178,35 @@ it came from without the broker being told twice:
 | `CLOUD_REGION` | `cloud.region` |
 | `DEPLOYMENT_ENVIRONMENT` | `deployment.environment` |
 
-**Example trace**:
+## Per-stage telemetry
 
-```
-Publish Request (trace_id: abc123)
-├─ Wire Encode         120 µs
-├─ QUIC Send           80 µs
-├─ Broker Receive      50 µs
-├─ Enqueue             30 µs
-├─ Fanout Processing   150 µs
-│  ├─ Subscriber 1     45 µs
-│  ├─ Subscriber 2     48 µs
-│  └─ Subscriber 3     43 µs
-└─ Ack Send            40 µs
-Total: 470 µs
+For performance investigations, both the broker and client can record
+per-stage timing samples — decode, fanout, write, and so on. It is off by
+default and behind a feature flag, because it is a profiling tool, not a
+production metrics system:
+
+```toml
+[dependencies]
+felix-client = { version = "0.1", features = ["telemetry"] }
 ```
 
-## Alerting
+On the client, `felix_client::frame_counters_snapshot()` returns frame-level
+counters, and `felix_client::timings::take_samples()` drains the recorded
+per-stage samples. The benchmarks and the `latency-demo` binary are the
+worked examples of reading them.
 
-### Recommended Alerts
+On the broker, `FELIX_CONN_STATS_MS` logs QUIC path statistics (MTU, cwnd,
+RTT, loss, flow-control blocking) for healthy connections on an interval —
+the data that says whether a throughput problem is transport-side or above
+it. Off unless set.
 
-**Critical alerts** (page immediately):
+## Debugging quick answers
 
-```yaml
-- alert: BrokerDown
-  expr: up{job="felix-broker"} == 0
-  for: 1m
-  
-- alert: HighPublishErrorRate
-  expr: rate(felix_publish_errors_total[5m]) > 10
-  for: 2m
-  
-- alert: MemoryExhaustion
-  expr: felix_memory_bytes{type="heap"} > 0.9 * felix_memory_limit_bytes
-  for: 5m
-```
-
-**Warning alerts** (investigate soon):
-
-```yaml
-- alert: HighP99Latency
-  expr: histogram_quantile(0.99, rate(felix_publish_latency_seconds_bucket[5m])) > 0.01
-  for: 10m
-  
-- alert: HighDropRate
-  expr: rate(felix_events_dropped_total[5m]) / rate(felix_publish_total[5m]) > 0.001
-  for: 5m
-  
-- alert: HighQueueDepth
-  expr: felix_publish_queue_depth > 0.8 * felix_publish_queue_capacity
-  for: 5m
-```
-
-### On-Call Runbooks
-
-**High latency**:
-
-1. Check Grafana dashboard for bottleneck
-2. Check queue depths - are they filling?
-3. Check subscriber lag - slow subscribers?
-4. Check CPU/memory - resource exhausted?
-5. Consider scaling horizontally or tuning config
-
-**Dropped events**:
-
-1. Identify which subscriptions are dropping
-2. Check subscriber lag for those subscriptions
-3. Check subscriber application logs - slow processing?
-4. Consider increasing `subscriber_queue_capacity` or fixing subscriber performance
-
-**Memory pressure**:
-
-1. Check cache size - growing unbounded?
-2. Check queue depths - deep queues holding large payloads?
-3. Check connection count - too many connections?
-4. Consider reducing flow control windows or adding memory
-
-## Operational Debugging
-
-### Common Issues and Solutions
-
-**Issue**: Subscribers not receiving events
-
-**Debug steps**:
-
-1. Check broker logs for subscription creation
-2. Verify tenant/namespace/stream exist
-3. Check network connectivity from subscriber
-4. Check subscriber application is calling `subscription.next_event()`
-5. Enable DEBUG logging to see event delivery
-
-**Issue**: High publish latency
-
-**Debug steps**:
-
-1. Enable telemetry on client
-2. Check where time is spent (encode, send, ack)
-3. Check broker queue depth - backing up?
-4. Check CPU usage on broker - saturated?
-5. Consider tuning `pub_workers_per_conn` or batching
-
-**Issue**: Cache misses unexpectedly
-
-**Debug steps**:
-
-1. Check TTL - has entry expired?
-2. Check broker restart - cache is ephemeral
-3. Check key spelling - exact match required
-4. Enable DEBUG logging to see cache lookups
-5. Verify tenant/namespace/cache scope is correct
-
-### Diagnostic Tools
-
-**Connection debugging**:
-
-```bash
-# Check QUIC connectivity
-nc -uz broker-ip 5000
-
-# Check TLS certificate
-openssl s_client -connect broker-ip:5000 -showcerts
-```
-
-**Log analysis**:
-
-```bash
-# Filter by level
-cat broker.log | jq 'select(.level == "ERROR")'
-
-# Filter by tenant
-cat broker.log | jq 'select(.fields.tenant_id == "acme-corp")'
-
-# Count errors by type
-cat broker.log | jq -r 'select(.level == "ERROR") | .message' | sort | uniq -c
-```
-
-**Performance profiling**:
-
-```bash
-# CPU profiling (future)
-curl http://broker:8080/debug/pprof/profile?seconds=30 > cpu.prof
-
-# Memory profiling (future)
-curl http://broker:8080/debug/pprof/heap > heap.prof
-```
-
-## Best Practices
-
-1. ✓ Use INFO level in production
-2. ✓ Enable JSON logs for structured parsing
-3. ✓ Centralize logs in aggregation system
-4. ✓ Monitor key metrics (latency, throughput, errors)
-5. ✓ Set up alerts for critical conditions
-6. ✓ Enable telemetry only for debugging
-7. ✓ Document baseline performance metrics
-8. ✓ Create runbooks for common issues
-9. ✓ Test monitoring and alerting before production
-10. ✓ Review logs and metrics weekly
-
-:::tip[Observability is Essential]
-Felix is designed to be observable. Structured logs, metrics, and telemetry make it possible to understand system behavior, debug issues quickly, and optimize performance with confidence.
-:::
-
-
-## Shutdown and drain
-
-Four signals, and the reason each one exists.
-
-| Metric | Type | What it tells you |
-| --- | --- | --- |
-| `felix_ready_state` | gauge | `1` while serving, `0` once draining. Distinguishes an instance that left rotation deliberately from one that vanished. |
-| `felix_inflight_requests` | gauge | Requests being served right now. Watch it fall to zero during a drain. |
-| `felix_drain_duration_ms` | gauge | How long the last drain took. |
-| `felix_drain_forced_total` | counter, by `subsystem` | Subsystems cancelled because the deadline expired. **Non-zero means work was dropped.** |
-
-The last one is the point. A drain that finished in time and a drain that was
-cut off both take roughly the deadline to report, so duration alone cannot tell
-them apart — and the log line that says which does not survive the pod.
-
-Alert on `felix_drain_forced_total` increasing. Everything else here is for
-watching a rolling restart happen.
+- **Subscribers receive nothing**: check the subscription was created (log
+  line), the stream exists, and the application is actually awaiting
+  `next_event()`. Then check `felix_sub_queue_dropped_total`.
+- **Publish latency spiked**: check `felix_broker_ingress_queue_depth`
+  (broker backed up), then `felix_storage_sync_duration_seconds` (durability
+  is the cost), then the client-side telemetry to see which stage grew.
+- **Cache misses you didn't expect**: TTL expiry, a broker restart on an
+  ephemeral cache, or a key/scope mismatch — in that order of likelihood.

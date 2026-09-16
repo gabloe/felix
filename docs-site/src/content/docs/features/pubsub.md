@@ -1,40 +1,35 @@
 ---
-title: "Publish/Subscribe Features"
+title: "Publish/Subscribe"
 ---
 
-Felix provides a high-performance publish/subscribe system designed for real-time event distribution with predictable latency, high fanout, and strong isolation guarantees. This document covers the pub/sub features, delivery semantics, batching strategies, and performance characteristics.
-
-## Overview
-
-Felix pub/sub is built around a simple model:
-
-- **Publishers** send messages to **streams**
-- **Subscribers** receive all messages from streams they subscribe to
-- **Streams** are scoped to `(tenant_id, namespace, stream_name)`
-- **Fanout** is handled efficiently by the broker
+The model is small: publishers send to a **stream**, every subscriber to that
+stream receives what lands on it, and streams are scoped by
+`(tenant, namespace, stream)`. What this page is really about is the two
+properties the implementation works hardest for — cheap fanout, and the
+guarantee that one slow subscriber cannot hurt anyone else.
 
 ```mermaid
 graph LR
     P1[Publisher 1]
     P2[Publisher 2]
     P3[Publisher 3]
-    
+
     B[Broker<br/>Stream: orders]
-    
+
     S1[Subscriber 1]
     S2[Subscriber 2]
     S3[Subscriber 3]
     S4[Subscriber 4]
-    
+
     P1 --> B
     P2 --> B
     P3 --> B
-    
+
     B --> S1
     B --> S2
     B --> S3
     B --> S4
-    
+
     style B fill:#fff3e0,stroke:#334155,color:#111827
     style P1 fill:#e3f2fd,stroke:#334155,color:#111827
     style P2 fill:#e3f2fd,stroke:#334155,color:#111827
@@ -45,16 +40,12 @@ graph LR
     style S4 fill:#c8e6c9,stroke:#334155,color:#111827
 ```
 
-## Core Features
+## Fanout
 
-### 1. High Fanout
-
-Felix excels at high-fanout workloads where one message must be delivered to many subscribers.
-
-**Fanout efficiency**: a publish is encoded once and the encoded frame is
-shared by every subscriber, so fanout costs delivery work rather than
-re-encoding. Measured latency at fanout 1 and 10 (macOS loopback, per-message
-ack, median of 5–10 trials):
+A publish is encoded **once** and the encoded frame is shared by every
+subscriber, so adding subscribers adds delivery work but not re-encoding
+work. Measured latency at fanout 1 and 10 (macOS loopback, per-message ack,
+median of 5–10 trials):
 
 | Fanout | p50 | p99 |
 |--------|-----|-----|
@@ -65,62 +56,33 @@ Fanout above 10 has not been benchmarked; see
 [Benchmarks](/felix/features/benchmarks/) for methodology and the full tables.
 Treat behaviour at hundreds or thousands of subscribers as unmeasured.
 
-**Fanout isolation**: Slow subscribers never block fast subscribers.
+## Batching
+
+### Publisher side
+
+Send several payloads in one request:
 
 ```rust
-// Even with 1000 subscribers, adding a slow one doesn't impact others
-let mut fast_sub = client.subscribe("tenant", "ns", "stream").await?;
-let mut slow_sub = client.subscribe("tenant", "ns", "stream").await?;
+use felix_wire::AckMode;
 
-// Fast subscriber continues at full rate
-tokio::spawn(async move {
-    while let Ok(Some(event)) = fast_sub.next_event().await {
-        process_fast(event).await;  // ~1ms
-    }
-});
-
-// Slow subscriber falls behind, drops messages (at-most-once semantics)
-tokio::spawn(async move {
-    while let Ok(Some(event)) = slow_sub.next_event().await {
-        process_slow(event).await;  // ~100ms
-    }
-});
-```
-
-### 2. Message Batching
-
-Felix supports batching at multiple levels for improved throughput.
-
-#### Publisher-Side Batching
-
-Batch multiple messages into a single publish operation:
-
-```rust
-// Collect messages
 let mut batch = Vec::new();
 for i in 0..64 {
     batch.push(format!("Event {}", i).into_bytes());
 }
 
-// Publish as batch
-use felix_wire::AckMode;
 let publisher = client.publisher().await?;
 publisher
     .publish_batch("tenant", "ns", "stream", batch, AckMode::PerBatch)
     .await?;
 ```
 
-**Throughput improvement**:
+Batching amortizes per-request overhead (framing, syscalls, one ack for the
+whole batch), and it is the single biggest throughput lever on the publish
+path. Measured batch throughput is in
+[Benchmarks](/felix/features/benchmarks/) — and note that a batched run
+measures a throughput profile, not request latency.
 
-| Batch Size | Throughput vs Single | Latency |
-|------------|---------------------|---------|
-| 1 (single) | 1x | 150 µs |
-| 8 | 4x | 180 µs |
-| 32 | 12x | 250 µs |
-| 64 | 18x | 350 µs |
-| 128 | 22x | 600 µs |
-
-#### Acked Publishes Are Pipelined
+### Acked publishes are pipelined
 
 Acked publishes (`AckMode::PerMessage` / `AckMode::PerBatch`) do not stall
 the stream for the broker's round trip. The client writes acked requests back
@@ -135,192 +97,45 @@ A single caller that awaits each publish before issuing the next still
 experiences one round trip per publish, by construction — batch, or publish
 concurrently, to amortize it.
 
-#### Broker-Side Batching
+### Broker side
 
-The broker automatically batches events for delivery to subscribers:
-
-```yaml
-# Broker configuration
-event_batch_max_events: 64         # Max events per batch
-event_batch_max_bytes: 262144      # Max batch size (256 KB)
-event_batch_max_delay_us: 250      # Max batching delay (250 µs)
-```
-
-**Batching triggers**:
-
-Events are sent when **any** condition is met:
-1. `event_batch_max_events` accumulated
-2. `event_batch_max_bytes` reached
-3. `event_batch_max_delay_us` elapsed since first event
-
-**Example**:
-
-```mermaid
-gantt
-    title Event Batching Timeline
-    dateFormat SSS
-    axisFormat %L ms
-    
-    section Publisher
-    Publish events       :active, 000, 050
-    
-    section Broker
-    Accumulate (250µs)   :active, 050, 300
-    Flush batch          :milestone, 300, 0ms
-    Deliver to subs      :active, 300, 400
-```
-
-#### Binary Batching
-
-Subscription event delivery uses binary `EventBatch` framing by default.
-
-**Performance gain**: 30-40% throughput improvement for large payloads.
-
-### 3. Stream Ordering
-
-Felix guarantees ordering within a stream:
-
-**Within-stream ordering**:
-
-```rust
-// Publisher sends in order
-use felix_wire::AckMode;
-let publisher = client.publisher().await?;
-publisher
-    .publish_batch(
-        "tenant",
-        "ns",
-        "orders",
-        vec![b"order-1".to_vec(), b"order-2".to_vec(), b"order-3".to_vec()],
-        AckMode::PerBatch,
-    )
-    .await?;
-
-// Subscriber receives in order
-let mut sub = client.subscribe("tenant", "ns", "orders").await?;
-assert_eq!(
-    sub.next_event().await.unwrap().unwrap().payload,
-    b"order-1"
-);
-assert_eq!(
-    sub.next_event().await.unwrap().unwrap().payload,
-    b"order-2"
-);
-assert_eq!(
-    sub.next_event().await.unwrap().unwrap().payload,
-    b"order-3"
-);
-```
-
-**Across-stream ordering**: No guarantees.
-
-```rust
-// These may arrive in any relative order
-use felix_wire::AckMode;
-let publisher = client.publisher().await?;
-publisher
-    .publish("tenant", "ns", "stream-a", b"msg-a".to_vec(), AckMode::None)
-    .await?;
-publisher
-    .publish("tenant", "ns", "stream-b", b"msg-b".to_vec(), AckMode::None)
-    .await?;
-```
-
-### 4. Subscriber Isolation
-
-Each subscription maintains independent state:
-
-**Per-subscription buffers**:
-
-```rust
-pub struct Subscription {
-    buffer: BoundedQueue<Event>,  // Isolated buffer
-    event_stream: UnidirectionalStream,  // Dedicated QUIC stream
-}
-```
-
-**Buffer configuration**:
+The broker coalesces events into delivery batches per subscription. A batch
+flushes when **any** bound is hit:
 
 ```yaml
-# Broker: per-subscriber buffer and outbound lanes
-subscriber_queue_capacity: 512  # Default
-subscriber_writer_lanes: 4
-subscriber_lane_shard: auto
-
-# Client: additional client-side buffer
-event_router_max_pending: 1024  # Default
+event_batch_max_events: 64      # this many events, or
+event_batch_max_bytes: 262144   # this many bytes, or
+event_batch_max_delay_us: 250   # this much time since the first event
 ```
 
-**Isolation behavior**:
+Small events under a steady load flush on the count bound; big events flush
+on bytes; a trickle flushes on the delay, which is therefore the latency
+floor batching adds. Delivery uses binary `EventBatch` framing by default.
 
-```mermaid
-sequenceDiagram
-    participant P as Publisher
-    participant B as Broker
-    participant S1 as Fast Sub (buffer: 10/1024)
-    participant S2 as Slow Sub (buffer: 1024/1024 FULL)
-    
-    P->>B: Publish event
-    
-    par Fanout
-        B->>S1: Deliver (success)
-    and
-        B-xS2: Drop (buffer full)
-    end
-    
-    Note over S1: Continues receiving
-    Note over S2: Drops messages until catches up
-```
+## Ordering
 
-### 5. Backpressure
+Within one stream (strictly: one shard of one stream), subscribers see
+records in publish order. Across streams there is no ordering relationship at
+all — two publishes to different streams may be observed in either order.
+On a multi-shard stream, ordering is per routing key; see
+[Benchmarks](/felix/features/benchmarks/) and the wire protocol page for how
+keys map to shards.
 
-Felix applies backpressure at multiple levels:
+## Isolation and backpressure
 
-#### QUIC Flow Control
+Each subscription gets its own bounded queue in the broker and its own QUIC
+stream to the client, with its own flow-control window. Backpressure applies
+at each level:
 
-**Connection-level**:
-
-```yaml
-event_conn_recv_window: 268435456  # 256 MiB
-```
-
-When connection window exhausted:
-- Broker stops sending on that connection
-- Other subscriptions on other connections unaffected
-
-**Stream-level**:
-
-```yaml
-event_stream_recv_window: 67108864  # 64 MiB
-```
-
-When stream window exhausted:
-- Broker stops sending on that stream only
-- Other streams continue
-
-#### Application-Level Buffering
-
-**Publisher queue**:
-
-```yaml
-pub_queue_depth: 64
-publish_queue_wait_timeout_ms: 2000
-```
-
-When publish queue full:
-- New publishes block up to timeout
-- After timeout, publish fails with error
-- Indicates broker overload
-
-**Subscriber queue**:
-
-```yaml
-subscriber_queue_capacity: 512
-```
-
-When subscriber queue full:
-- New events are dropped for that subscriber
-- Other subscribers unaffected
+- **QUIC flow control** (per connection and per stream) bounds bytes in
+  flight; a full window pauses that stream only.
+- **The publish queue** (`pub_queue_depth`) bounds admitted-but-uncommitted
+  publishes; when full, new publishes wait up to
+  `publish_queue_wait_timeout_ms`, then fail. That failure means the broker
+  is overloaded, and it is deliberately visible.
+- **The subscriber queue** (`subscriber_queue_capacity`) bounds what one
+  subscription can have pending. What happens when it fills is the overflow
+  policy, and it is the crux:
 
 ![One slow subscriber and two fast ones, under each overflow policy. Under DropNew, the default, the slow subscriber's bounded queue fills and further records are dropped for that subscriber alone while the publisher and the fast subscribers run at full rate. Under Block nothing is dropped, and the publisher and both fast subscribers are pulled down to the slow subscriber's speed.](/felix/diagrams/slow-consumer.svg)
 
@@ -343,44 +158,24 @@ If you need redelivery rather than detection, use a **consumer group**: it
 acknowledges each record and hands back anything unanswered once the visibility
 timeout lapses. See [Projections](/felix/architecture/projections/).
 :::
-## Delivery Semantics
+
+## Delivery semantics
 
 ### At-most-once, per subscriber
 
-This is what a plain subscription gives. A durable stream can be replayed and a
-consumer group redelivers; both are covered below.
+This is what a plain subscription gives: no subscriber acknowledgements, no
+redelivery, the lowest latency. The right fit for signals whose old values
+are worthless — dashboards, telemetry, presence.
 
-Messages are delivered **zero or one time**:
-
-**Characteristics**:
-- No acknowledgements from subscribers
-- No retries or redelivery
-- Lowest latency
-- Suitable for real-time signals, metrics, telemetry
-
-**Message loss scenarios**:
-- Subscriber falls behind its bounded queue
-- Network partition
-- Broker restart, for an **ephemeral** stream. A durable stream keeps its
-  records, and a subscriber resumes from the offset it last saw
-
-**Example use case**:
-
-```rust
-// Real-time dashboard updates where latest value matters
-let mut sub = client.subscribe("tenant", "ns", "sensor-data").await?;
-
-while let Some(event) = sub.next_event().await? {
-    let reading: SensorReading = parse(event.payload)?;
-    update_dashboard(reading);  // Latest value is what matters
-}
-```
+Ways a subscriber misses records: it fell behind its bounded queue, the
+network partitioned, or the broker restarted while the stream was
+**ephemeral**. A durable stream keeps its records across a restart, and a
+subscriber resumes from the offset it last saw.
 
 ### At-least-once, via a consumer group
 
-Messages delivered **one or more times**. This is a different shape from
-`subscribe`: records are **pulled** rather than pushed, because only the consumer
-knows when it has capacity for more work.
+A different shape from `subscribe`: records are **pulled**, because only the
+consumer knows when it has capacity for more work.
 
 - Each record is claimed by one consumer and not handed to another while the
   claim holds
@@ -418,67 +213,33 @@ Deduplicating on receive has to happen in the application in any case — it is
 the only layer that knows what makes two records the same — so deduplicate
 there, keyed on something the record carries.
 
-## Performance Tuning
+## Tuning
 
-### Latency-Optimized Configuration
+Start with the defaults and change things only off a measurement — the
+defaults are what [Benchmarks](/felix/features/benchmarks/) measures. The
+knobs pull in two directions:
 
-Minimize end-to-end latency:
-
-**Broker config**:
+**Toward latency** — smaller batches, shorter delays, shallower queues:
 
 ```yaml
-# Small batches, low delays
 event_batch_max_events: 8
 event_batch_max_delay_us: 100
 fanout_batch_size: 8
-
-# Fast acknowledgements
-ack_on_commit: true
-
-# Minimal buffering
 pub_queue_depth: 16
 subscriber_queue_capacity: 64
 subscriber_writer_lanes: 2
 ```
 
-**Client config**:
-
-```rust
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig {
-    event_conn_pool: 4,
-    event_router_max_pending: 256,
-    ..ClientConfig::optimized_defaults(quinn)
-};
-```
-
-**What to expect**: lowest per-message latency, least batching. See the
-latency profile in [Benchmarks](/felix/features/benchmarks/) for measured
-percentiles; throughput per connection depends on payload size and is not a
-single number.
-
-### Throughput-Optimized Configuration
-
-Maximize message throughput:
-
-**Broker config**:
+**Toward throughput** — bigger batches, deeper queues, more connections:
 
 ```yaml
-# Large batches, higher delays
 event_batch_max_events: 256
 event_batch_max_delay_us: 2000
 fanout_batch_size: 256
-
-# Async acknowledgements
-ack_on_commit: false
-
-# Deep buffering
 pub_queue_depth: 512
 subscriber_queue_capacity: 4096
 subscriber_writer_lanes: 8
 ```
-
-**Client config**:
 
 ```rust
 let quinn = quinn::ClientConfig::with_platform_verifier();
@@ -491,237 +252,17 @@ let config = ClientConfig {
 };
 ```
 
-**What to expect**: highest byte rate, with per-message latency dominated by
-batch fill and queueing. See the throughput profile in
-[Benchmarks](/felix/features/benchmarks/) — and note that its latency
-percentiles measure queueing, not request latency.
+In a throughput-shaped configuration, per-message latency is dominated by
+batch fill and queueing — the latency percentiles of a batched run measure
+the queue, not the request.
 
-### Balanced Configuration (Default)
+## How this compares
 
-General-purpose settings:
-
-**Broker config**:
-
-```yaml
-event_batch_max_events: 64
-event_batch_max_delay_us: 250
-fanout_batch_size: 64
-pub_queue_depth: 64
-subscriber_queue_capacity: 512
-subscriber_writer_lanes: 4
-```
-
-**Client config**:
-
-```rust
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig::optimized_defaults(quinn);  // Uses balanced defaults
-```
-
-**What to expect**: sub-millisecond latency at useful throughput. This is the
-configuration [Benchmarks](/felix/features/benchmarks/) measures by default.
-
-## Advanced Patterns
-
-### Fan-In (Multiple Publishers)
-
-Multiple publishers to one stream:
-
-```rust
-use felix_wire::AckMode;
-use std::net::SocketAddr;
-
-let broker_addr: SocketAddr = "127.0.0.1:5000".parse()?;
-let server_name = "localhost";
-
-// Publisher 1
-tokio::spawn(async move {
-    let client = Client::connect(broker_addr, server_name, config).await?;
-    let publisher = client.publisher().await?;
-    loop {
-        publisher
-            .publish("tenant", "ns", "logs", generate_log(), AckMode::None)
-            .await?;
-    }
-});
-
-// Publisher 2
-tokio::spawn(async move {
-    let client = Client::connect(broker_addr, server_name, config).await?;
-    let publisher = client.publisher().await?;
-    loop {
-        publisher
-            .publish("tenant", "ns", "logs", generate_log(), AckMode::None)
-            .await?;
-    }
-});
-
-// Subscriber receives from both
-let mut sub = client.subscribe("tenant", "ns", "logs").await?;
-while let Some(event) = sub.next_event().await? {
-    process_log(event);
-}
-```
-
-**Ordering**: No cross-publisher ordering guarantees.
-
-### Fan-Out (Multiple Subscribers)
-
-One publisher, many subscribers:
-
-```rust
-// Single publisher
-let publisher = client.publisher().await?;
-for event in events {
-    publisher
-        .publish("tenant", "ns", "events", event, AckMode::None)
-        .await?;
-}
-
-// Many subscribers
-for i in 0..100 {
-    let mut sub = client.subscribe("tenant", "ns", "events").await?;
-    tokio::spawn(async move {
-        while let Some(event) = sub.next_event().await.unwrap() {
-            process(event);
-        }
-    });
-}
-```
-
-**Isolation**: Each subscriber progresses independently.
-
-### Broadcast Pattern
-
-Efficiently broadcast to all subscribers:
-
-```mermaid
-graph TB
-    P[Publisher]
-    B[Broker]
-    
-    subgraph "Subscribers (100+)"
-        S1[Sub 1]
-        S2[Sub 2]
-        S3[Sub 3]
-        SN[Sub N]
-    end
-    
-    P -->|1 publish| B
-    B -->|fanout to all| S1
-    B --> S2
-    B --> S3
-    B --> SN
-    
-    style P fill:#e3f2fd,stroke:#334155,color:#111827
-    style B fill:#fff3e0,stroke:#334155,color:#111827
-    style S1 fill:#c8e6c9,stroke:#334155,color:#111827
-    style S2 fill:#c8e6c9,stroke:#334155,color:#111827
-    style S3 fill:#c8e6c9,stroke:#334155,color:#111827
-    style SN fill:#c8e6c9,stroke:#334155,color:#111827
-```
-
-Felix handles fanout efficiently at the broker, so one publish reaches all subscribers.
-
-### Work Queue Pattern
-
-Consumer groups distribute records across workers: poll for a batch,
-acknowledge each record, and anything not answered for is redelivered once the
-visibility timeout lapses. See
-[Projections](/felix/architecture/projections/) for the rules and their limits.
-
-```rust
-// Future API
-let mut consumer = client.consume_group(
-    "tenant",
-    "ns",
-    "jobs",
-    "worker-group",  // Consumer group name
-).await?;
-
-// Messages distributed across group members
-while let Some(job) = consumer.next().await {
-    process_job(job).await?;
-    job.ack().await?;
-}
-```
-
-**Characteristics**:
-- Shared cursor across group
-- Each message delivered to one consumer
-- Load balancing across consumers
-
-## Monitoring and Observability
-
-### Key Metrics
-
-**Publish metrics**:
-- Publish rate (msg/sec)
-- Publish latency (p50, p99, p999)
-- Publish queue depth
-- Publish failures
-
-**Subscribe metrics**:
-- Subscriber count per stream
-- Event delivery rate per subscriber
-- Subscriber lag (events behind)
-- Dropped events per subscriber
-
-**Broker metrics**:
-- Active streams
-- Fanout operations per second
-- Queue depths (publish, event)
-- Memory usage
-
-### Example Monitoring
-
-```rust
-// Future API (not yet implemented)
-let stats = client.stream_stats("tenant", "ns", "stream").await?;
-println!("Publishers: {}", stats.publisher_count);
-println!("Subscribers: {}", stats.subscriber_count);
-println!("Publish rate: {} msg/sec", stats.publish_rate);
-println!("Total delivered: {}", stats.total_delivered);
-```
-
-## Best Practices
-
-### Publishing
-
-1. **Batch when possible**: 10-100x throughput improvement
-2. **Tune batch size and delay together**: Optimize for your latency/throughput target
-3. **Monitor queue depth**: High depth indicates overload
-4. **Handle errors**: Implement retry logic for important messages
-5. **Spread across connections**: Use connection pooling
-
-### Subscribing
-
-1. **Process async**: Don't block subscription loop
-2. **Handle reconnection**: Auto-reconnect on connection loss
-3. **Monitor lag**: Track how far behind subscriber is
-4. **Size buffers appropriately**: Match processing variance
-5. **Use multiple connections**: For isolation and parallelism
-
-### Stream Design
-
-1. **Scope appropriately**: Tenant → Namespace → Stream
-2. **Partition by use case**: Separate streams for different semantics
-3. **Consider fanout**: High fanout benefits from batching
-4. **Plan for growth**: Monitor stream count and subscriber count
-
-:::tip[Start Simple]
-Begin with default configuration and measure. Tune only when you have profiling data showing a specific bottleneck.
-:::
-## Comparison with Other Systems
-
-| Feature | Felix | Kafka | Redis Pub/Sub | NATS |
-|---------|-------|-------|---------------|------|
-| Delivery | At-most-once, or at-least-once for a durable stream | At-least-once | At-most-once | At-most-once |
-| Ordering | Per-stream | Per-partition | No | No |
-| Persistence | Per stream: ephemeral or durable | Durable | Ephemeral | Optional |
-| Fanout | Excellent | Good | Excellent | Excellent |
-| Latency | 200-800 µs | 2-10 ms | 100-500 µs | 100-400 µs |
-| Throughput | 150-250k/conn | 100k-1M/broker | 100-500k/conn | 100-300k/conn |
-| Backpressure | Built-in (QUIC) | Client-side | None | Optional |
-
-Felix occupies a middle ground: lower latency than Kafka, more features than Redis Pub/Sub, with QUIC's modern networking benefits.
+Roughly: Kafka is durable-first and batch-oriented, with a far bigger
+ecosystem and higher per-message latency; Redis pub/sub and NATS (core) are
+fast fire-and-forget with no per-subscriber isolation or replay. Felix sits
+between: at-most-once fanout with real isolation, plus durable streams and
+consumer groups on the same log when you need replay or redelivery. If your
+workload is heavy stream *processing* — joins, windows, transformations —
+that layer does not exist here; use a processing framework on top, or a
+system that ships one.

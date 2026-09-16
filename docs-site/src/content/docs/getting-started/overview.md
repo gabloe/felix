@@ -2,53 +2,53 @@
 title: "Overview"
 ---
 
-Felix is a low-latency, QUIC-based distributed data backend that unifies three critical patterns into a single system:
+Felix is a distributed data backend that serves three things most systems run
+three products for: event streams, work queues, and a key-value cache. All
+three are readings of the same replicated, append-only log, reached over one
+QUIC connection.
 
-- **Event Streaming (Pub/Sub):** High-fanout message delivery with isolation and backpressure
-- **Message Queues:** Shared consumer groups with acknowledgements
-- **Distributed Cache:** Key-value storage with TTL support
+This page is the short version of how it fits together. The
+[status table](/felix/getting-started/what-felix-is-for/) is the page to trust
+for what is and is not built.
 
-## Design Philosophy
+## The core idea: one log, three readings
 
-Felix is built around core principles that differentiate it from traditional message brokers and caches:
+Internally there is a single primitive — an append-only log per shard. Each
+external API is a different way of reading it:
 
-### 1. Low Latency First
+- **Streams** read by offset. Every subscription keeps its own cursor, so a
+  slow reader never holds anyone else back.
+- **Queues** read through a cursor a consumer group shares. A record goes to
+  one consumer, is redelivered if unacknowledged, and dead-lettered when it
+  keeps failing.
+- **Cache** reads through a key index over the same log: latest value per key,
+  with TTL.
 
-Felix prioritizes **predictable low latency** over maximum batch throughput:
+Because it is one log, there is one durability path, one recovery path, one
+placement rule and one replication path. There is no cache-vs-stream
+consistency bug to have, because there is no second system to disagree with
+the first.
 
-- QUIC transport eliminates head-of-line blocking
-- Optional ephemeral streams with no disk on the hot path
-- Aggressive backpressure prevents cascade failures
-- Bounded memory everywhere to maintain predictable behavior
-- Explicit performance knobs for latency/throughput trade-offs
+## What Felix optimizes for
 
-Real-world results (single-node localhost):
+Predictable latency under load, more than peak batch throughput. The choices
+that follow from that:
 
-- **Pub/Sub:** p50 ~40-50μs, p99 ~300-500μs (varies by payload and fanout)
-- **Cache:** p50 ~160-180μs, p99 ~350-450μs at concurrency=32
+- **QUIC as the only transport.** Streams multiplex over one connection
+  without head-of-line blocking, and every connection is TLS 1.3.
+- **Backpressure everywhere.** Queues are bounded and overflow policy is
+  explicit, so one slow path degrades locally instead of cascading.
+- **Slow-consumer isolation.** A stalled subscriber loses *its own* events
+  (under the default `drop_new` policy) rather than stalling the publisher or
+  other subscribers. The [slow-consumer demo](/felix/demos/slow-consumer-isolation/)
+  runs both policies side by side.
+- **Explicit tuning knobs.** Batching bounds, flow-control windows, pool
+  sizes, and fsync policy are configuration, not magic.
 
-### 2. One Core Log, Many Semantics
+Measured numbers live on the [Benchmarks](/felix/features/benchmarks/) page —
+one place, so they can't drift page to page.
 
-Internally, Felix uses a single append-only log abstraction. Different external semantics are projections over this core:
-
-- **Streams:** fanout cursors per subscription
-- **Queues:** shared consumer-group cursors with acks
-- **Cache:** key → latest value with TTL
-
-This eliminates the operational complexity and consistency bugs from running multiple systems (Kafka + Redis + RabbitMQ) side-by-side.
-
-### 3. Kubernetes-Native
-
-Felix assumes Kubernetes for:
-
-- Process lifecycle management
-- Identity (ServiceAccounts for mTLS)
-- Networking and service discovery
-- Failure detection and orchestration
-
-Felix does **not** reimplement scheduling or node membership—it leverages what Kubernetes already provides.
-
-## Core Components
+## The pieces
 
 Five crates, and the boundaries between them are the design. Everything below
 the dotted line is transport-independent: the broker core has no idea QUIC
@@ -95,138 +95,64 @@ flowchart TB
     class A1,A2,A3 endpoint
 ```
 
-### Felix Wire Protocol (`felix-wire`)
+- **`felix-wire`** is the protocol: a fixed frame header, JSON control
+  messages, binary frames on the data plane, and capability negotiation so
+  old and new peers interoperate. Full details in
+  [Wire Protocol](/felix/architecture/wire-protocol/).
+- **`felix-transport`** wraps QUIC: endpoints, streams, flow-control windows,
+  and dedicated I/O runtimes so the transport driver is never starved by
+  application tasks.
+- **`felix-broker`** is the data plane with no networking in it: the log,
+  subscriber registry, fanout, cache index, consumer groups.
+- **`felix-client`** is the Rust SDK: publisher, subscription, and cache APIs
+  over pooled connections, with reconnection and redirect-following in the
+  cluster client. Clients in other languages are planned but not built.
+- **The control plane** (`services/controlplane`) holds metadata — tenants,
+  namespaces, streams, caches, nodes — behind a REST API, and assigns every
+  shard to a broker. Brokers watch its assignment feed. It is not on the data
+  path: a publish never waits on it.
 
-Language-neutral framed protocol over QUIC:
+## Delivery guarantees, plainly
 
-- Fixed header with magic number, version, and flags
-- Binary frame encoding across the data plane
-- Forward-compatible versioning scheme
+Configured per stream:
 
-See the [Wire Protocol](/felix/architecture/wire-protocol/) documentation for full specification.
+- **Ephemeral streams** are at-most-once. The broker acknowledges receipt,
+  fans out from memory, and a subscriber that falls behind misses records.
+  This is the low-latency mode, and the right one when stale data is worthless
+  anyway.
+- **Durable streams** are at-least-once: a record is persisted before it is
+  acknowledged, and can be replayed from any retained offset. With
+  `consistency: quorum`, the acknowledgement additionally waits until a
+  majority of the replica set holds the record — so a failover cannot lose an
+  acknowledged write.
+- **Consumer groups** redeliver anything unacknowledged, count attempts, and
+  park repeat failures as dead letters you can list, discard, or redrive.
+- **Exactly-once is not implemented** and is not close. If duplicates are
+  unacceptable, deduplicate in the application.
 
-### Transport Layer (`felix-transport`)
+A lost leader is replaced by a replica that provably holds the log — about a
+second on a local three-node cluster. This is tested against process kill,
+graceful stop, a leader frozen past its lease, and a partitioned broker that
+keeps heartbeating.
 
-QUIC abstraction layer providing:
+## Security
 
-- Client and server connection management
-- Connection pooling with configurable size
-- Stream lifecycle management
-- Flow control window configuration
-- TLS 1.3 encryption by default
+Today: TLS 1.3 on every connection, OIDC token exchange at the control plane,
+tenant-scoped tokens, and RBAC enforced at the broker. Not yet: mTLS between
+brokers, end-to-end payload encryption, audit logging. Details in
+[Security](/felix/features/security/).
 
-### Broker (`felix-broker`)
+## Running it
 
-The core data plane implementation:
+A single broker is fine for development and for workloads that fit on one
+machine — durable storage and the cache work there; replication needs
+somewhere to replicate to.
 
-- Pub/sub logic with fanout and batching
-- Cache storage with TTL and lazy expiration
-- Stream registry and routing
-- Backpressure and isolation enforcement
-
-### Client SDK (`felix-client`)
-
-Rust client SDK with:
-
-- Publisher/subscriber/cache APIs
-- Connection and stream pooling
-- Automatic reconnection
-- Configurable batching and flow control
-
-**Planned:** Thin adapters for Python, Go, and other languages.
-
-### Control Plane (In Progress)
-
-Metadata and coordination layer (in progress). Current capabilities include:
-
-- Control plane service with REST API and OpenAPI spec (`/v1/openapi.json`)
-- Tenant, namespace, stream, and cache management endpoints
-- Snapshot + changes feeds for metadata consumers
-- Auth bootstrap endpoints (JWKS + token exchange)
-- Metadata storage in memory, in Postgres, or replicated between the
-  control-plane instances themselves by Raft
-
-Placement and multi-node coordination are implemented: the control plane assigns
-every shard of every stream and cache to a leader by rendezvous hashing, and
-brokers follow its assignment feed.
-
-Raft-based consensus for cluster metadata has shipped: control-plane instances
-replicate metadata between themselves, so availability need not depend on
-Postgres. See [Metadata Raft](/felix/architecture/metadata-raft/).
-
-Planned next steps:
-
-- Quota enforcement
-- Fleet-wide health aggregation
-
-## Consistency & Delivery Guarantees
-
-Felix provides **tunable consistency** configured per stream:
-
-### Ephemeral streams
-
-- **Delivery:** At-most-once (best-effort)
-- **Ordering:** Per-shard ordering preserved for each subscriber
-- **Acknowledgements:** the broker acknowledges receipt, not delivery to subscribers
-
-### Durable and replicated streams
-
-- **Leader-only acks:** Low latency, no replication wait. The default, and what
-  a stream gets unless it asks otherwise
-- **Quorum acks:** Acknowledged once a majority of the replica set — counting
-  the leader — holds the record durably. Implemented; set `consistency` on the
-  stream
-- **Leader failover:** A lost leader is replaced only by a replica that holds
-  the log, in about a second on a local three-node cluster. A record
-  acknowledged under `Quorum` is readable from the replacement. Proven against
-  process kill, graceful stop, freezing a leader past its lease, and partitioning
-  a broker that keeps heartbeating. The lease reads a monotonic clock and never a
-  wall clock, so clock skew cannot affect it
-
-- **At-least-once:** a durable stream persists each record before acknowledging
-  it and replays it from any retained offset. A consumer group goes further and
-  redelivers until acknowledged
-
-### Not built
-
-- **Exactly-once.** Not implemented and not near. Deduplicate in the application
-  if duplicates are unacceptable
-
-## Security Architecture
-
-### Current
-
-- TLS 1.3 for all QUIC connections
-- Transport-level encryption by default
-- OIDC token exchange via control plane with tenant-scoped Felix JWTs
-- Broker-side RBAC enforcement using Felix token permissions
-
-### Planned
-
-- **mTLS:** Mutual authentication between brokers and clients
-- **Envelope Encryption:** Per-region and per-tenant key isolation
-- **End-to-End Encryption:** Optional client-to-client encryption
-- **Audit Logging:** Complete audit trail for compliance
-
-## Deployment Models
-
-### Single broker
-
-For development, and for a workload that fits on one machine. Durable storage
-and the log-backed cache work here; replication has nowhere to go.
-
-```mermaid
-flowchart TB
-    BROKER["Broker<br/><br/>Streams · Cache · Queues<br/>Durable or ephemeral"]
-```
-
-### Multi-broker cluster
+A cluster is brokers plus a control plane:
 
 ![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
-The control plane is **REST over a choice of backend**, and either way it is not
-on the data path: brokers read its assignment feed in the background and resolve
-an owner from a snapshot they already hold.
+The control plane keeps its metadata in one of three backends:
 
 | Backend | What holds the metadata | When to pick it |
 | --- | --- | --- |
@@ -234,41 +160,34 @@ an owner from a snapshot they already hold.
 | `postgres` | One external database the instances share | A platform that already runs an HA Postgres |
 | `raft` | The control-plane instances themselves, replicated between them | No external database to operate — edge sites, appliances, or anywhere Postgres is a burden rather than a convenience |
 
-Raft **has shipped**: the instances form a quorum, hold metadata in their own
-replicated log, and survive losing one without losing an acknowledged write.
-Postgres remains fully supported rather than deprecated — the trade between the
-two is in [Metadata Raft](/felix/architecture/metadata-raft/) and
-[Control-plane HA](/felix/deployment/control-plane-ha/), and there is a
-documented migration from an existing Postgres deployment.
+Raft has shipped: the instances form a quorum and survive losing one without
+losing an acknowledged write. Postgres remains fully supported; the trade
+between the two, and the migration path, are in
+[Metadata Raft](/felix/architecture/metadata-raft/) and
+[Control-plane HA](/felix/deployment/control-plane-ha/).
 
-See [Deployment Guides](/felix/deployment/local/) for detailed instructions.
+Felix runs anywhere a process runs. For orchestrators it ships the pieces
+they expect: readiness and liveness endpoints that answer different questions,
+and a bounded graceful drain on SIGTERM — see
+[Graceful shutdown](/felix/deployment/graceful-shutdown/).
 
-## Performance Characteristics
+## Is Felix right for your workload?
 
-Felix is designed for workloads where:
+A good fit: real-time streaming with high fanout, low-latency caching,
+work distribution with retries and dead letters, and services that currently
+run a broker *and* a cache *and* a queue and would rather run one system.
 
-- **Latency matters more than maximum throughput**
-- **Predictable p99/p999 is critical**
-- **High fanout is common** (1:N message delivery)
-- **Mixed workloads** (streams + cache) share infrastructure
+A bad fit: petabyte-scale batch pipelines, complex stream processing
+(joins, windowing — use Flink or Kafka Streams), or anything that needs a
+mature connector ecosystem today. Felix is young and its ecosystem is one
+language deep.
 
-### When Felix Excels
+The honest version of this list, kept current per capability, is
+[What Felix Is For](/felix/getting-started/what-felix-is-for/).
 
-✅ Real-time event streaming with tight latency SLAs  
-✅ Microservice communication with low overhead  
-✅ Regional data isolation requirements  
-✅ Cache + stream unification to reduce system count  
+## Where to next
 
-### When to Use Something Else
-
-❌ Maximum historical batch processing throughput (use Kafka)  
-❌ Complex stream processing / transformations (use Kafka Streams, Flink)  
-❌ Mature ecosystem with hundreds of connectors required  
-❌ Multi-petabyte data warehouse workloads  
-
-## What's Next?
-
-- [Quickstart Guide](/felix/getting-started/quickstart/) - Get Felix running in minutes
-- [Installation](/felix/getting-started/installation/) - Build from source
-- [Architecture](/felix/architecture/system-design/) - Deep dive into system design
-- [API Documentation](/felix/api/broker-api/) - Learn the APIs
+- [Quickstart](/felix/getting-started/quickstart/) — run a broker and the demos
+- [Installation](/felix/getting-started/installation/) — build from source
+- [System design](/felix/architecture/system-design/) — the architecture in depth
+- [Broker API](/felix/api/broker-api/) — the wire-level API

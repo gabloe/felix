@@ -2,7 +2,10 @@
 title: "Control Plane API"
 ---
 
-The Felix control plane manages cluster metadata, stream definitions, shard placement, and node membership. This document describes the control plane architecture, APIs, and operational patterns.
+The control plane holds the cluster's metadata — tenants, namespaces,
+streams, caches, nodes — behind a REST API, decides shard placement, and
+publishes the assignment feed brokers follow. It is never on the data path.
+This page documents its endpoints and how brokers and operators use them.
 
 :::note[Current Status]
 The control plane HTTP API is implemented for metadata, placement, and authentication (token exchange and JWKS). Raft clustering has shipped and is selectable as a storage backend. This document covers the current endpoints; where it describes something unbuilt it says so.
@@ -256,8 +259,8 @@ The RAFT log stores:
 - **Stream definitions**: Tenant, namespace, stream, retention policies
 - **Shard placement**: Which broker owns which shards
 - **Configuration**: Cluster-wide settings and feature flags
-- **ACLs**: Authorization policies (future)
-- **Quotas**: Rate limits and resource quotas (future)
+- **Quotas**: Rate limits and resource quotas (future; RBAC policies live in
+  the auth store today)
 
 The RAFT log **does not** store:
 - Stream payloads (handled by data plane)
@@ -918,17 +921,11 @@ Key metrics to monitor:
 - Broker metadata sync lag
 - Admin API request rate and latency
 
-## Best Practices
+## Running it well
 
-1. **Run 3 or 5 replicas**: Odd numbers for quorum
-2. **Use persistent volumes**: Avoid data loss on pod restart
-3. **Enable pod disruption budgets**: Maintain quorum during upgrades
-4. **Monitor RAFT health**: Alert on leadership instability
-5. **Automate backups**: Snapshot RAFT state periodically
-6. **Test failover**: Practice control plane recovery procedures
-7. **Separate from data plane**: Don't co-locate with broker pods
-8. **Use dedicated networking**: Avoid noisy neighbors affecting consensus
-
-:::tip[Control Plane Sizing]
-Control plane workload is metadata-only. A 3-node cluster can manage 10,000+ streams and 100+ brokers without issue. Scale vertically (larger nodes) before scaling horizontally.
-:::
+The short version: run an odd number of instances (3 or 5) so Raft has a
+quorum, give them persistent volumes, and keep them off the broker nodes so
+data-plane load can't starve consensus. The full operational guidance —
+disruption budgets, failover drills, the Postgres-to-Raft migration — is in
+[Control-plane HA](/felix/deployment/control-plane-ha/). The workload itself
+is metadata-only and light; it is not on the data path.

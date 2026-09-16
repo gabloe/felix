@@ -2,7 +2,7 @@
 title: "System Design"
 ---
 
-Felix is a low-latency distributed data backend that unifies event streaming, message queueing, and distributed caching over a single QUIC-based transport layer.
+How the whole system fits together: the design goals, the pieces, and the paths a publish, a subscribe, and a cache request take through them.
 
 ## Design Principles
 

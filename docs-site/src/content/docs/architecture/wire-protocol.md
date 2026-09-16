@@ -2,7 +2,10 @@
 title: "Wire Protocol Specification"
 ---
 
-The Felix wire protocol is the language-neutral specification that defines how clients and brokers communicate over the network. This document provides a comprehensive reference for implementing Felix-compatible clients and servers.
+The wire protocol is what a client and a broker actually say to each other:
+a fixed frame header, JSON control messages, binary data-plane frames, and
+the capability negotiation that lets old and new peers interoperate. This is
+the reference for implementing a compatible client or server.
 
 ## Design Goals
 

@@ -2,7 +2,10 @@
 title: "Rust Client SDK"
 ---
 
-The Felix Rust client SDK (`felix-client`) provides ergonomic, high-performance APIs for publishing, subscribing, and caching over QUIC. This document covers installation, configuration, and usage patterns for building applications with Felix.
+`felix-client` is the Rust SDK: publish, subscribe, cache, consumer groups,
+and the cluster client, over pooled QUIC connections. This page is the
+working reference — setup, configuration, and the patterns that matter in
+practice.
 
 ## Installation
 
@@ -761,7 +764,7 @@ println!("Event delivery p50: {:?}", subscribe_timings.p50);
 :::caution[Telemetry Overhead]
 Telemetry adds measurable overhead (5-15% in high-throughput workloads). Use only for debugging and profiling, not in production hot paths unless necessary.
 :::
-## Best Practices
+## Patterns
 
 ### Connection Pooling
 
@@ -940,16 +943,13 @@ async fn test_cache_ttl() {
 }
 ```
 
-## Performance Tips
+## Performance in one paragraph
 
-1. **Tune batching** for your workload (events per batch + flush delay)
-2. **Batch publishes** when latency permits (10-100x improvement)
-3. **Pool connections** appropriately for your workload
-4. **Pipeline cache requests** to amortize round-trip latency
-5. **Don't block subscription loops** with slow processing
-6. **Size buffers** to match variance in processing latency
-7. **Enable telemetry** only for debugging, not production
-8. **Reuse clients** across requests (connection pools are expensive to create)
+Reuse one client (its pools are the expensive part), batch publishes when
+latency permits, pipeline cache requests, and keep the subscription loop
+non-blocking — spawn slow work instead of stalling the reader. Everything
+else is a knob to turn off a measurement; see
+[Benchmarks](/felix/features/benchmarks/).
 
 ## API Reference Summary
 

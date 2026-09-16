@@ -2,7 +2,10 @@
 title: "Component Architecture"
 ---
 
-Felix is built as a modular, composable system with clear separation of concerns. Each component is designed to be independently testable, observable, and evolvable. This document provides a deep dive into each major component of the Felix architecture.
+Six components, and the boundaries between them are the design: the broker
+core has no networking in it, the protocol has no transport in it, and the
+storage layer knows nothing about either. This page walks each component and
+what it owns.
 
 ## Overview
 
@@ -142,7 +145,7 @@ QUIC supports two stream types, each serving specific purposes in Felix:
 
 ### Flow Control Architecture
 
-Felix leverages QUIC's built-in flow control at multiple levels:
+Felix uses QUIC's built-in flow control at multiple levels:
 
 ```mermaid
 graph TB

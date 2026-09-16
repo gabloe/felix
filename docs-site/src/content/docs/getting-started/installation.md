@@ -2,7 +2,7 @@
 title: "Installation"
 ---
 
-This guide covers building Felix from source and verifying your installation.
+Felix has no binary releases yet — you build from source. This takes a Rust toolchain and a few minutes.
 
 ## System Requirements
 

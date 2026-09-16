@@ -2,7 +2,7 @@
 title: "Contributing to Felix"
 ---
 
-Thank you for your interest in contributing to Felix! This guide will help you get started.
+How to get a change into Felix: what to build, what the checks demand, and what a good PR here looks like.
 
 ## Code of Conduct
 
