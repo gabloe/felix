@@ -364,14 +364,18 @@ fn ensure_jwk_matches_algorithm(
     jwk: &jsonwebtoken::jwk::Jwk,
     alg: Algorithm,
 ) -> Result<(), OidcError> {
-    let key_alg = jwk
-        .common
-        .key_algorithm
-        .ok_or_else(|| OidcError::InvalidJwk("missing alg".to_string()))?;
-    let expected = expected_key_algorithm(alg)
-        .ok_or_else(|| OidcError::InvalidJwk("unsupported algorithm".to_string()))?;
-    if key_alg != expected {
-        return Err(OidcError::InvalidJwk("alg mismatch".to_string()));
+    // `alg` is OPTIONAL in a JWK (RFC 7517 §4.4), and major IdPs — Microsoft
+    // Entra among them — publish signing keys without it. Requiring it here
+    // rejected every token those IdPs issue. When the member is present it must
+    // match the token's algorithm; when absent, the key-type/params check below
+    // is what binds the key to the algorithm (an RSA key cannot verify an EC
+    // token or vice versa, and the header `alg` is already allowlisted upstream).
+    if let Some(key_alg) = jwk.common.key_algorithm {
+        let expected = expected_key_algorithm(alg)
+            .ok_or_else(|| OidcError::InvalidJwk("unsupported algorithm".to_string()))?;
+        if key_alg != expected {
+            return Err(OidcError::InvalidJwk("alg mismatch".to_string()));
+        }
     }
 
     match (&jwk.algorithm, alg) {
@@ -694,6 +698,33 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
                 .unwrap_or_else(|err| panic!("{} should validate, got: {err}", alg_name(alg)));
             assert_eq!(validated.subject, "user-1");
         }
+    }
+
+    #[tokio::test]
+    async fn validates_rsa_when_jwk_omits_alg() {
+        // Microsoft Entra (and others) publish JWKS signing keys without the
+        // optional `alg` member (RFC 7517 §4.4). The key type still pins the
+        // algorithm, so an RS256 token must validate against an alg-less RSA
+        // JWK. Before the fix this failed with InvalidJwk("missing alg").
+        let kid = "kid-no-alg";
+        let jwks = json!({
+            "keys": [{
+                "kty": "RSA",
+                "kid": kid,
+                "use": "sig",
+                "n": TEST_JWK_N,
+                "e": TEST_JWK_E
+            }]
+        });
+        let (addr, _handle) = spawn_jwks_server(jwks).await;
+        let issuer = format!("http://{addr}");
+        let token = mint_upstream_token(Algorithm::RS256, &issuer, "aud1", kid);
+        let validator = validator_with_algorithms(vec![Algorithm::ES256, Algorithm::RS256]);
+        let validated = validator
+            .validate(&token, &[issuer_cfg(&issuer, "aud1")])
+            .await
+            .expect("alg-less RSA JWK should validate an RS256 token");
+        assert_eq!(validated.subject, "user-1");
     }
 
     #[tokio::test]

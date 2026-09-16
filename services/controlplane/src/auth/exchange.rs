@@ -234,9 +234,19 @@ pub async fn exchange_token(
         .await
         .map_err(|err| api_internal("failed to load signing keys", &err))?;
 
-    // Step 12: Mint a short-lived Felix token for broker use.
-    // TTL is intentionally short to limit blast radius if leaked.
-    let ttl = Duration::from_secs(900);
+    // Step 12: Mint a Felix token for broker use.
+    // TTL is short by default (900s) to limit blast radius if a token leaks.
+    // That is right for an interactive client that re-exchanges freely, but a
+    // credential a broker holds statically for its whole lifetime, or one used
+    // to drive a long operation, needs more — so the deployment can raise it
+    // with FELIX_EXCHANGE_TOKEN_TTL_SECONDS. The default is unchanged.
+    let ttl = Duration::from_secs(
+        std::env::var("FELIX_EXCHANGE_TOKEN_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|&value| value > 0)
+            .unwrap_or(900),
+    );
     let felix_token = mint_token(&keys, &tenant_id, &principal.principal_id, perms, ttl)
         .map_err(|_| api_internal_message("failed to mint token"))?;
 

@@ -11,6 +11,14 @@ tasks:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:
     cmds:
+      # felix-cluster's loadgen integration test shells out to a prebuilt
+      # `target/debug/felix-loadgen`. `cargo test` only builds a bin's runnable
+      # executable when that bin's own package has integration tests, and
+      # felix-loadgen's only consumer is a test in *another* crate — so the
+      # workspace test run never produces it, and those cases fail "not found".
+      # Build it up front (the felix-broker bin needs no such help: services/broker
+      # has its own integration tests, so cargo builds it).
+      - "cargo build -p felix-loadgen"
       - "cargo test --workspace"
       # Run separately (not --all-features on the whole workspace): felix-client's
       # `in-process` feature only affects felix-client itself, and keeping it out of
@@ -31,6 +39,12 @@ tasks:
     cmds: ["docker rm -f felix-pg-tests >/dev/null 2>&1 || true"]
   coverage:
     cmds:
+      # Same reason as `test`: felix-cluster's loadgen integration test shells
+      # out to a prebuilt felix-loadgen, which the coverage run (like a plain
+      # `cargo test`) does not build on its own. cargo llvm-cov uses
+      # target/llvm-cov-target, not target/debug, so build the binary straight
+      # into that dir — the exact path the test resolves relative to itself.
+      - "cargo build -p felix-loadgen --target-dir target/llvm-cov-target"
       - |
         if [ -z "${CI:-}" ]; then
           task pg:down
@@ -40,11 +54,11 @@ tasks:
         fi
       - |
         if [ -n "${FELIX_TEST_DATABASE_URL:-}" ]; then
-          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         elif docker version >/dev/null 2>&1; then
-          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         else
-          cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         fi
       - "cargo llvm-cov report --summary-only --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/'"
       - |
