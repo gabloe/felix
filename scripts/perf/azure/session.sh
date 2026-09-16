@@ -14,7 +14,7 @@ set -euo pipefail
 : "${SESSION:?SESSION=<name> (becomes the resource group felix-perf-<name>)}"
 : "${LOCATION:=eastus2}"
 : "${TIER:=t1}"
-: "${RELEASE_TAG:=v0.3.0}"
+: "${RELEASE_TAG:=v0.3.1}"
 # The instrument builds from a ref that HAS felix-loadgen. The crate merged to
 # main in #370, so main is the default again; override for a branch under review.
 : "${LOADGEN_REF:=main}"
@@ -75,6 +75,9 @@ deployment=$(az deployment group create \
     tier="${TIER}" \
     releaseUrl="${release_url}" \
     loadgenRef="${LOADGEN_REF}" \
+    brokerCount="${BROKER_COUNT:-3}" \
+    brokerVmSize="${BROKER_VM_SIZE:-Standard_D4as_v5}" \
+    useLocalNvme="${USE_LOCAL_NVME:-false}" \
     sshPublicKey="$(cat "${SSH_KEY_FILE}")" \
     allowedSshCidr="${my_ip}/32" \
     bootstrapToken="${bootstrap_token}" \

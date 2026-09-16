@@ -105,14 +105,20 @@ post_ok "$CP/v1/tenants/$TENANT/namespaces" \
 JSON
 for stream in perf perf-durable; do
   if [ "$stream" = perf-durable ]; then durable=true; else durable=false; fi
-  # Replicated when the tier has zones to replicate across; the Leader vs
-  # Quorum comparison registers its own streams per run.
+  # Delete first so a reseed can change the shard count -- a fresh seed 404s
+  # harmlessly. SHARDS spreads the write load across brokers: a single shard
+  # pins the whole stream (and all its ingest) to one broker, which on fast
+  # local disk caps throughput at one broker's write bandwidth. Default 12 (4
+  # per broker on a 3-broker tier). Replicated when the tier has zones; the
+  # Leader vs Quorum comparison registers its own streams per run.
+  curl -s -X DELETE "$CP/v1/tenants/$TENANT/namespaces/$NAMESPACE/streams/$stream" \
+    -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1 || true
   post_ok "$CP/v1/tenants/$TENANT/namespaces/$NAMESPACE/streams" \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' <<STREAM
 {
   "stream": "$stream",
   "kind": "Stream",
-  "shards": 1,
+  "shards": $SHARDS,
   "replication_factor": $REPLICATION_FACTOR,
   "retention": { "max_age_seconds": null, "max_size_bytes": null },
   "consistency": "Leader",
