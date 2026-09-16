@@ -16,6 +16,22 @@ client secret lives there and nowhere else — not in the repo, not in shell
 history, not echoed by any script. Everything below reads it from the
 environment.
 
+### Orchestration: `az vm run-command`, not SSH
+
+The operator never SSHes into a session. Every operator→VM step — waiting for
+cloud-init, seeding, starting brokers, running the matrix, reading RTT — goes
+through `az vm run-command invoke`, which rides the Azure control plane over
+HTTPS. Two reasons the first live run found the hard way: some operator
+networks deep-packet-inspect and reset outbound `:22` to arbitrary cloud IPs
+(a fresh Azure VM is not whitelisted the way GitHub is), and Ubuntu 24.04's
+socket-activated sshd can fail its first start for want of `/run/sshd`.
+run-command sidesteps both and needs no inbound port at all; the VNet-private
+control plane is reached by running the seed *on* the loadgen, which is inside
+the VNet. The NSG still allows SSH from your address so a human *can* open a
+shell to debug, but nothing in the automation depends on it. Scripts shipped to
+run-command execute under **dash as root**, so `seed-remote.sh` and the inline
+snippets are POSIX sh — no `pipefail`, arrays, or `[[ ]]`.
+
 ### Run
 
 ```bash

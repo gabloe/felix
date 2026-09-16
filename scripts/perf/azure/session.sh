@@ -5,22 +5,28 @@
 # Everything a session creates lives in one resource group, and teardown.sh
 # deletes the group. A scheduled auto-teardown backstops a wedged session so
 # a forgotten cluster cannot idle through the budget.
+#
+# The operator drives the VMs with `az vm run-command` over HTTPS, never SSH
+# (see lib.sh for why). The only inbound port the session needs is nothing:
+# the control plane is VNet-private and reached by running on a VM inside it.
 set -euo pipefail
 
 : "${SESSION:?SESSION=<name> (becomes the resource group felix-perf-<name>)}"
 : "${LOCATION:=eastus2}"
 : "${TIER:=t1}"
 : "${RELEASE_TAG:=v0.3.0}"
-# The instrument builds from a ref that HAS felix-loadgen (not the release
-# tag, which predates the crate). main once merged; a branch while in review.
+# The instrument builds from a ref that HAS felix-loadgen. The crate merged to
+# main in #370, so main is the default again; override for a branch under review.
 : "${LOADGEN_REF:=main}"
 : "${SSH_KEY_FILE:=$HOME/.ssh/id_ed25519.pub}"
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib.sh
+source "${here}/lib.sh"
 group="felix-perf-${SESSION}"
+export GROUP="${group}"
 release_url="https://github.com/gabloe/felix/releases/download/${RELEASE_TAG}/felix-${RELEASE_TAG}-linux-x86_64.tar.gz"
 bootstrap_token="$(openssl rand -hex 24)"
-my_ip="$(curl -fsS https://api.ipify.org)"
 
 # The IdP flow. Two ways in: paste IDP_TOKEN + the issuer/JWKS/audience
 # yourself, or (the easy path) give the three app-registration secrets and let
@@ -31,7 +37,10 @@ if [ -z "${IDP_TOKEN:-}" ] && [ -n "${IDP_TENANT_ID:-}" ]; then
   : "${IDP_CLIENT_ID:?set IDP_CLIENT_ID with IDP_TENANT_ID}"
   : "${IDP_CLIENT_SECRET:?set IDP_CLIENT_SECRET with IDP_TENANT_ID}"
   : "${IDP_AUDIENCE:?set IDP_AUDIENCE (the app Application ID URI)}"
-  export IDP_ISSUER="${IDP_ISSUER:-https://login.microsoftonline.com/${IDP_TENANT_ID}/v2.0}"
+  # JWKS is version-agnostic (validates both v1 and v2 tokens). The issuer is
+  # NOT: an app-only credential issues a v1 token (iss=sts.windows.net/<tenant>/)
+  # even from the v2 endpoint, so seed.sh derives the issuer from the token
+  # itself rather than assuming one here.
   export IDP_JWKS_URL="${IDP_JWKS_URL:-https://login.microsoftonline.com/${IDP_TENANT_ID}/discovery/v2.0/keys}"
   export IDP_TOKEN="$("${here}/idp-token.sh")"
   echo ">> minted an IdP token for audience ${IDP_AUDIENCE}"
@@ -52,6 +61,12 @@ if command -v bicep >/dev/null 2>&1; then
 else
   az bicep build --file "${here}/main.bicep" --outfile "${compiled}"
 fi
+
+# allowedSshCidr no longer gates a working path in (we use run-command, not
+# SSH), but the NSG rule and the parameter remain so a human CAN open a shell
+# for debugging from their own address. 0.0.0.0/0 would be the wrong default;
+# resolve the operator's address and scope the rule to it.
+my_ip="$(curl -fsS https://api.ipify.org)"
 
 deployment=$(az deployment group create \
   --resource-group "${group}" \
@@ -83,28 +98,37 @@ BOOTSTRAP_TOKEN=${bootstrap_token}
 INV
 echo ">> inventory: ${here}/sessions/${SESSION}.env"
 
-echo ">> waiting for cloud-init on the load generator (builds the instrument; several minutes)"
-for _ in $(seq 1 120); do
-  if ssh -o StrictHostKeyChecking=accept-new "felix@${loadgen_ip}" \
-      'test -f /var/lib/cloud/instance/felix-provisioned' 2>/dev/null; then
-    break
-  fi
-  sleep 15
-done
-ssh "felix@${loadgen_ip}" 'test -f /var/lib/cloud/instance/felix-provisioned' \
-  || { echo "loadgen never finished provisioning"; exit 1; }
+# Wait for cloud-init via run-command (not SSH): the loadgen writes the
+# felix-provisioned marker only after building the instrument, which is the
+# slow step. The brokers and control plane finish sooner, but we gate on all
+# three so seed.sh never races a half-provisioned VM.
+wait_provisioned() {
+  vm="$1"
+  for _ in $(seq 1 120); do
+    if run_on_str "${vm}" 'test -f /var/lib/cloud/instance/felix-provisioned && echo __RUNOK__' \
+        >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 15
+  done
+  echo "!! ${vm} never finished cloud-init" >&2
+  return 1
+}
+echo ">> waiting for cloud-init (loadgen builds the instrument; several minutes)"
+wait_provisioned "$(cp_vm)"
+wait_provisioned "$(loadgen_vm)"
+IFS=',' read -ra broker_ip_list <<<"${brokers}"
+for i in "${!broker_ip_list[@]}"; do wait_provisioned "$(broker_vm "${i}")"; done
 
-echo ">> seeding through the load generator (the control plane is VNet-private)"
-scp -q "${here}/seed.sh" "felix@${loadgen_ip}:/tmp/seed.sh"
-ssh "felix@${loadgen_ip}" env \
-  CONTROLPLANE_IP="${cp_ip}" \
-  BROKER_IPS="${brokers}" \
-  BOOTSTRAP_TOKEN="${bootstrap_token}" \
-  IDP_ISSUER="${IDP_ISSUER:-}" \
-  IDP_JWKS_URL="${IDP_JWKS_URL:-}" \
-  IDP_AUDIENCE="${IDP_AUDIENCE:-}" \
-  IDP_TOKEN="${IDP_TOKEN:-}" \
-  bash /tmp/seed.sh
+echo ">> seeding (bootstrap + exchange on the loadgen; token-drop + start per broker)"
+CONTROLPLANE_IP="${cp_ip}" \
+BROKER_COUNT="${#broker_ip_list[@]}" \
+BOOTSTRAP_TOKEN="${bootstrap_token}" \
+IDP_JWKS_URL="${IDP_JWKS_URL:-}" \
+IDP_AUDIENCE="${IDP_AUDIENCE:-}" \
+IDP_TOKEN="${IDP_TOKEN:-}" \
+GROUP="${group}" \
+  bash "${here}/seed.sh"
 
 echo ">> auto-teardown backstop at +8h"
 az group update --name "${group}" \

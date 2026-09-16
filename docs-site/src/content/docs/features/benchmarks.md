@@ -8,6 +8,16 @@ delivery — over real QUIC connections with TLS 1.3. This page documents the
 methodology, current results, the transport levers that matter, and how to
 compare Felix against other pub/sub systems fairly.
 
+:::note[Loopback numbers — the real-network ones are separate]
+The results here are measured over **loopback** (an in-process or same-host
+broker), the right harness for catching regressions in Felix's own code. For
+numbers taken on **real hardware over a real network with a real IdP** — the
+1.63 GB/s aggregate ingest, ~181 µs acked-publish latency, and durability-free-
+for-throughput results — see [Real-Network Performance
+(Azure)](/felix/features/real-network-performance/), which reads the loopback
+figures below as its baseline.
+:::
+
 ## Running the benchmark
 
 ```bash

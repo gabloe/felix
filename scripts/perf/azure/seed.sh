@@ -1,119 +1,106 @@
 #!/usr/bin/env bash
-# Seed one perf session, running ON the load generator (the control plane is
-# VNet-private). The flow is the deployment's own, not a harness shortcut:
+# Seed one perf session, orchestrated from the operator via `az vm run-command`
+# (never SSH — see lib.sh). Three moves:
 #
-#   1. bootstrap-initialize the tenant with the real IdP's issuer + JWKS
-#   2. exchange an IdP token for the Felix operator token
-#   3. create the namespace, streams, and cache scopes the matrix uses
-#   4. exchange node tokens for the brokers, drop them, start the brokers
-#
-# The IdP is whatever the operator points at — Entra ID via IDP_* variables
-# (docs/perf-real-network.md walks the app registration). IDP_TOKEN is a
-# token *from that IdP* for the perf principal; this script never mints
-# anything itself, which is the point of measuring the real flow.
+#   1. On the loadgen (inside the VNet, so it can reach the private control
+#      plane): bootstrap the tenant with the real IdP, exchange the IdP token
+#      for a Felix operator token, create the namespace/streams/cache. This is
+#      the deployment's own flow, measured — not demo auth. seed-remote.sh is
+#      the body; it frames the felix token on stdout.
+#   2. On each broker: drop that token as /etc/felix/node.token and start the
+#      broker. run-command reaches each broker directly, so no loadgen->broker
+#      SSH (which had no key and rode the same DPI-blocked path) is needed.
+#   3. Poll the control plane (from the loadgen) until every broker registers.
 set -euo pipefail
 
 : "${CONTROLPLANE_IP:?}"
-: "${BROKER_IPS:?}"
+: "${BROKER_COUNT:?}"
 : "${BOOTSTRAP_TOKEN:?}"
-: "${IDP_ISSUER:?set IDP_ISSUER (e.g. https://login.microsoftonline.com/<tenant>/v2.0)}"
 : "${IDP_JWKS_URL:?set IDP_JWKS_URL}"
 : "${IDP_AUDIENCE:?set IDP_AUDIENCE (the app registration audience)}"
 : "${IDP_TOKEN:?set IDP_TOKEN (a token from the IdP for the perf principal)}"
+: "${GROUP:?}"
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib.sh
+source "${here}/lib.sh"
 
 TENANT="perf"
 NAMESPACE="default"
-cp="http://${CONTROLPLANE_IP}:8080"
-bootstrap="http://${CONTROLPLANE_IP}:8081"
 
-principal="$(python3 - "$IDP_TOKEN" <<'PY'
-import base64, json, sys
-payload = sys.argv[1].split('.')[1]
-payload += '=' * (-len(payload) % 4)
-claims = json.loads(base64.urlsafe_b64decode(payload))
-print(f"{claims['iss']}#{claims.get('sub', claims.get('oid', ''))}")
-PY
+# --- 1. bootstrap + exchange + scopes, on the loadgen -----------------------
+# A dash header assigns the values seed-remote.sh reads; the tokens are hex/
+# base64url with no single quotes, so single-quoting them is safe. Everything
+# rides run-command's HTTPS to Azure, never the terminal-visible network.
+header="$(cat <<HDR
+set -eu
+CP='http://${CONTROLPLANE_IP}:8080'
+BOOTSTRAP='http://${CONTROLPLANE_IP}:8081'
+BOOTSTRAP_TOKEN='${BOOTSTRAP_TOKEN}'
+IDP_TOKEN='${IDP_TOKEN}'
+IDP_JWKS_URL='${IDP_JWKS_URL}'
+IDP_AUDIENCE='${IDP_AUDIENCE}'
+TENANT='${TENANT}'
+NAMESPACE='${NAMESPACE}'
+REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'
+HDR
 )"
+# Capture without set -e aborting the assignment, so the remote message is
+# always printed — a swallowed run-command message is a blind failure.
+set +e
+seed_out="$(run_on_str "$(loadgen_vm)" "${header}
+$(cat "${here}/seed-remote.sh")")"
+seed_rc=$?
+set -e
+printf '%s\n' "${seed_out}"
+[ ${seed_rc} -eq 0 ] || { echo "!! loadgen seed step failed (see message above)" >&2; exit 1; }
+token="$(printf '%s' "${seed_out}" | extract_between FTOKEN)"
+[ -n "${token}" ] || { echo "!! seed did not return a felix token" >&2; exit 1; }
 
-echo ">> bootstrap-initialize tenant ${TENANT} (principal ${principal})"
-curl -fsS -X POST "${bootstrap}/internal/bootstrap/tenants/${TENANT}/initialize" \
-  -H "X-Felix-Bootstrap-Token: ${BOOTSTRAP_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d @- <<JSON
-{
-  "display_name": "Perf",
-  "idp_issuers": [{
-    "issuer": "${IDP_ISSUER}",
-    "audiences": ["${IDP_AUDIENCE}"],
-    "jwks_url": "${IDP_JWKS_URL}",
-    "claim_mappings": { "subject_claim": "sub" }
-  }],
-  "initial_admin_principals": ["${principal}"],
-  "policies": [
-    { "subject": "role:perf", "object": "stream:${TENANT}/${NAMESPACE}/*", "action": "stream.publish" },
-    { "subject": "role:perf", "object": "stream:${TENANT}/${NAMESPACE}/*", "action": "stream.subscribe" },
-    { "subject": "role:perf", "object": "cache:${TENANT}/${NAMESPACE}/*", "action": "cache.read" },
-    { "subject": "role:perf", "object": "cache:${TENANT}/${NAMESPACE}/*", "action": "cache.write" },
-    { "subject": "role:perf", "object": "cluster:*", "action": "node.manage" },
-    { "subject": "role:perf", "object": "cluster:*", "action": "node.view" }
-  ],
-  "groupings": [{ "user": "${principal}", "role": "role:perf" }]
-}
-JSON
-echo
-
-echo ">> exchange the IdP token for the Felix operator token"
-exchange() {
-  curl -fsS -X POST "${cp}/v1/tenants/${TENANT}/token/exchange" \
-    -H "Authorization: Bearer ${IDP_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    -d '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["felix_token"])'
-}
-token="$(exchange)"
-mkdir -p "$HOME/felix-session"
-printf '%s' "${token}" > "$HOME/felix-session/token"
-auth=(-H "Authorization: Bearer ${token}")
-
-echo ">> namespace, streams, cache scope"
-curl -fsS -X POST "${cp}/v1/tenants/${TENANT}/namespaces" "${auth[@]}" \
-  -H 'Content-Type: application/json' \
-  -d "{\"namespace\": \"${NAMESPACE}\", \"display_name\": \"Perf\"}"
-for stream in perf perf-durable; do
-  durable=$([ "$stream" = perf-durable ] && echo true || echo false)
-  # Replicated when the tier has zones to replicate across; the Leader vs
-  # Quorum comparison registers its own streams per run.
-  curl -fsS -X POST "${cp}/v1/tenants/${TENANT}/namespaces/${NAMESPACE}/streams" "${auth[@]}" \
-    -H 'Content-Type: application/json' \
-    -d @- <<STREAM
-{
-  "stream": "${stream}",
-  "kind": "Stream",
-  "shards": 1,
-  "replication_factor": ${REPLICATION_FACTOR:-1},
-  "retention": { "max_age_seconds": null, "max_size_bytes": null },
-  "consistency": "Leader",
-  "delivery": "AtLeastOnce",
-  "durable": ${durable}
-}
-STREAM
-done
-curl -fsS -X POST "${cp}/v1/tenants/${TENANT}/namespaces/${NAMESPACE}/caches" "${auth[@]}" \
-  -H 'Content-Type: application/json' \
-  -d '{"cache": "perf", "display_name": "Perf"}'
-
-echo
-
-echo ">> node tokens to the brokers, then start them"
-IFS=',' read -ra brokers <<<"${BROKER_IPS}"
-for ip in "${brokers[@]}"; do
-  ssh -o StrictHostKeyChecking=accept-new "felix@${ip}" \
-    "sudo mkdir -p /etc/felix && printf '%s' '${token}' | sudo tee /etc/felix/node.token > /dev/null && sudo systemctl enable --now felix-broker"
+# --- 2. drop the node token on each broker and start it ---------------------
+echo ">> node token to each broker, then start"
+for i in $(seq 0 $((BROKER_COUNT - 1))); do
+  # felix-broker-env.sh regenerates /etc/felix/broker.env before start (the
+  # unit's ExecStartPre does too, but a required EnvironmentFile must already
+  # exist when the unit activates, so we write it here first). reset-failed
+  # clears any earlier give-up. `restart` (not just enable --now) is deliberate:
+  # a re-seed drops a *fresh* token, and the broker reads its token once at
+  # startup with no refresh, so an already-running broker must be restarted to
+  # pick it up — enable --now is a no-op on an active unit.
+  broker_out="$(run_on_str "$(broker_vm "${i}")" "set -eu
+mkdir -p /etc/felix
+printf '%s' '${token}' > /etc/felix/node.token
+chmod 600 /etc/felix/node.token
+/usr/local/sbin/felix-broker-env.sh
+systemctl reset-failed felix-broker 2>/dev/null || true
+systemctl enable felix-broker
+systemctl restart felix-broker
+echo __RUNOK__")" || {
+    printf '%s\n' "${broker_out}" >&2
+    echo "!! broker-${i} did not start (see message above)" >&2
+    exit 1
+  }
+  echo "   broker-${i}: started"
 done
 
+# --- 3. wait for the brokers to register ------------------------------------
 echo ">> waiting for the brokers to register and take their shards"
-for _ in $(seq 1 60); do
-  ready=$(curl -fsS "${cp}/v1/nodes" "${auth[@]}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("nodes", [])))' || echo 0)
-  [ "${ready}" -ge "${#brokers[@]}" ] && break
-  sleep 5
+poll_out="$(run_on_str "$(loadgen_vm)" "set -eu
+TOKEN=\$(cat /home/felix/felix-session/token)
+n=0
+i=0
+while [ \$i -lt 60 ]; do
+  n=\$(curl -fsS 'http://${CONTROLPLANE_IP}:8080/v1/nodes' -H \"Authorization: Bearer \$TOKEN\" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get(\"items\", d.get(\"nodes\", []))))' 2>/dev/null || echo 0)
+  [ \"\$n\" -ge ${BROKER_COUNT} ] && break
+  i=\$((i + 1)); sleep 5
 done
-echo ">> seeded: tenant ${TENANT}, token at ~/felix-session/token"
+printf '__NODES_BEGIN__%s__NODES_END__\n' \"\$n\"
+echo __RUNOK__")"
+registered="$(printf '%s' "${poll_out}" | extract_between NODES)"
+echo ">> ${registered:-0}/${BROKER_COUNT} brokers registered"
+[ "${registered:-0}" -ge "${BROKER_COUNT}" ] || {
+  echo "!! not all brokers registered; inspect with: az vm run-command invoke -g ${GROUP} -n $(broker_vm 0) --command-id RunShellScript --scripts 'journalctl -u felix-broker --no-pager | tail -50'" >&2
+  exit 1
+}
+echo ">> seeded: tenant ${TENANT}, token on the loadgen at ~/felix-session/token"

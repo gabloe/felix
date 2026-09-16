@@ -20,6 +20,14 @@ This document is the design for closing that gap. The budget is an MSDN
 subscription's $200/month of Azure credit, which shapes several decisions
 below — this suite provisions, runs, and **tears down**; nothing idles.
 
+> **The first results are published.** The T1 session's analysis —
+> ~1.09 GB/s / 3.68 M msg/s aggregate ingest (73% of raw line rate), ~181 µs
+> acknowledged-publish latency, durability free for throughput, and every
+> semantic measured against the real Entra IdP — is the "Real-Network
+> Performance (Azure)" page on the docs site
+> (`docs-site/src/content/docs/features/real-network-performance.md`). Raw data
+> lives under `scripts/perf/azure/sessions/`.
+
 **The deliverable is a comprehensive performance-analysis page on the docs
 site**, of publication quality: every scenario's aggregates *and* spread,
 each row stamped with the environment that produced it (tier, VM SKUs, zones,
@@ -53,6 +61,20 @@ Three disciplines carry over from the local suite, and two are new:
   runs its trials (5, as locally) and publishes p50/p99/p999 with spread;
   a run whose trials disagree wildly is a finding about the environment, and
   is labelled as such rather than averaged into a fiction.
+- **Linux host tuning, applied identically by cloud-init.** The local numbers
+  were macOS; the VMs are Ubuntu, and Linux needs two things macOS does not,
+  both held constant across every session so they never become a hidden
+  variable. (1) `net.core.{r,w}mem_max = 26 MiB`: Linux silently clamps a
+  socket's `SO_RCVBUF`/`SO_SNDBUF` to these maxima, and the stock ~208 KB
+  throttles QUIC throughput (`docs/storage-performance.md`,
+  `docs/perf-investigation-throughput.md` round 18). (2) `FELIX_MTU_UPPER_BOUND
+  = 4096` on every QUIC endpoint: Azure's VNet path MTU is ≤1500, so 4096 never
+  caps the achievable size, but it keeps MTU discovery under the Linux UDP-GSO
+  ceiling (`mtu × 10 ≤ 65535`; an MTU ≥8192 hard-stalls sustained throughput
+  with a spurious `EMSGSIZE` quinn never recovers from) and converges faster.
+  `FELIX_INITIAL_MTU` stays unset — pinning it is unsafe before PMTUD on a real
+  path. The Linux build already picks the right `FELIX_IO_RUNTIME_THREADS=0`
+  and core-pinning defaults, so no override is needed there.
 
 ## Topology tiers
 
@@ -68,8 +90,14 @@ availability zone, in a proximity placement group, accelerated networking on.
 |---|---|---|---|
 | Broker | 3 | `Standard_D4as_v5` (4 vCPU, 16 GiB) | Fixed-CPU (no burstable B-series in a measurement), AMD v5 with accelerated networking; 4 vCPU matches the local runs' scale so numbers are comparable |
 | Control plane | 1 | `Standard_D2as_v5` | Off the data path; serves auth, exchange, assignments, watches |
-| Load generator | 1–2 | `Standard_D8as_v5` | The generator must never be the bottleneck; 2× at fanout 50 |
-| Broker data disk | 3 | Premium SSD v2, 64 GiB, 6k provisioned IOPS | Real durable fsync latency, sized to the run, pay-per-GB |
+| Load generator | 1 | `Standard_D4as_v5` | The generator must never be the bottleneck; watch it for CPU-bound cases and raise it (and the quota) if it saturates |
+| Broker data disk | 3 | Premium SSD (`Premium_LRS`), 128 GiB | Real durable fsync latency on premium storage |
+
+The topology is sized to **18 vCPU** (3×4 + 2 + 4) so it fits the MSDN default
+**20-vCPU Total Regional / DASv5-family quota** without a quota request. The
+brokers are the system under test and stay at 4 vCPU to match the local runs;
+the load generator took the cut from 8 to 4. Raise `loadgenVmSize` (and request
+more quota) if the fanout/throughput cases show it CPU-bound.
 
 What T1 answers: publish/subscribe/cache/counter latency and throughput over a
 real NIC and switch, fsync against real premium storage, fanout curves, and
@@ -157,16 +185,23 @@ benchmarks page in the same shape with an environment column (`loopback` |
    (`main.bicep`: one resource group per session — VNet + NSG, a proximity
    placement group for T1 or per-zone pinning for T2, broker/control-plane/
    load-gen VMs with cloud-init) plus the session lifecycle scripts
-   (`session.sh` deploys and seeds, `run.sh` drives the matrix from the
+   (`session.sh` deploys and seeds, `run.sh` drives the matrix on the
    load-gen VM and pulls artifacts back, `teardown.sh` deletes the group).
    Bicep over Terraform because there is no long-lived state to manage in a
    create-run-destroy session, and over raw `az create` calls because a
    declarative template is what makes a session *reproducible* — the same
    parameters yield the same cluster, which is the whole point of a
    published benchmark. cloud-init installs the release artifacts on the
-   brokers and control plane and builds `felix-loadgen` on the generator; the
-   IdP bootstrap, tenant seeding, and stream/cache registration run through
-   the real REST + token-exchange flow in `seed.sh`.
+   brokers and control plane, builds `felix-loadgen` on the generator, and
+   applies the Linux host tuning above; the IdP bootstrap, tenant seeding, and
+   stream/cache registration run through the real REST + token-exchange flow in
+   `seed.sh`. **Orchestration is `az vm run-command`, not SSH**: the operator
+   drives every VM over the Azure control plane's HTTPS, which needs no inbound
+   port and sidesteps two real failures the first live run hit — networks that
+   deep-packet-inspect and reset outbound `:22` to arbitrary cloud IPs, and
+   Ubuntu 24.04's socket-activated sshd failing its first start. The
+   VNet-private control plane is reached by running the seed *on* the loadgen,
+   which is inside the VNet.
 3. **A release to point at** — see below.
 
 ## Budget
