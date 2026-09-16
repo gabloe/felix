@@ -27,7 +27,7 @@ param adminUsername string = 'felix'
 @description('SSH public key for the admin user on every VM.')
 param sshPublicKey string
 
-@description('CIDR allowed to SSH in — the operator\'s address, not 0.0.0.0/0.')
+@description('CIDR allowed to SSH in for manual debugging — the operator\'s address, not 0.0.0.0/0. Orchestration uses run-command and needs no inbound port.')
 param allowedSshCidr string
 
 @secure()
@@ -71,8 +71,10 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
       }
       // Intra-VNet traffic (QUIC 5000/udp, internal 7000/udp, CP 8080/tcp,
       // metrics 9<xx>) rides the default AllowVnetInBound rule; nothing else
-      // is opened. The cluster is reachable only from inside the VNet and
-      // over SSH from the operator.
+      // is opened. The operator drives the session with `az vm run-command`
+      // (HTTPS to the Azure control plane), so no inbound port is needed for
+      // orchestration; this SSH rule exists only so a human CAN open a shell
+      // for debugging from their own address (never 0.0.0.0/0).
     ]
   }
 }

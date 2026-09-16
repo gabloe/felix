@@ -8,6 +8,16 @@
 # credentialling stay separate steps with separate failures.
 package_update: true
 write_files:
+  # Felix asks for 8 MiB UDP socket buffers, but Linux silently clamps
+  # SO_RCVBUF/SO_SNDBUF to net.core.rmem_max/wmem_max — stock ~208 KB, which throttles
+  # QUIC throughput and, on the loopback jumbo-MTU path, collapses it entirely
+  # (docs/storage-performance.md, docs/perf-investigation-throughput.md round 18;
+  # installation.md tells Linux operators to do exactly this). 25 MiB clears the
+  # 8 MiB request with headroom. Applied in runcmd before the broker starts.
+  - path: /etc/sysctl.d/99-felix-quic.conf
+    content: |
+      net.core.rmem_max = 26214400
+      net.core.wmem_max = 26214400
   - path: /usr/local/sbin/felix-broker-env.sh
     permissions: "0755"
     content: |
@@ -30,6 +40,14 @@ write_files:
       FELIX_BROKER_METRICS_BIND=$ip:9100
       FELIX_DURABLE_STORAGE_DIR=/data/felix
       FELIX_NODE_TOKEN_FILE=/etc/felix/node.token
+      # Keep MTU discovery in the Linux-safe, fast-converging band. Azure VNet
+      # path MTU is <=1500, so 4096 never caps the achievable size, stays well
+      # under the UDP-GSO ceiling (mtu*10 <= 65535 => 6553; >=8192 hard-stalls
+      # sustained throughput with a spurious EMSGSIZE quinn never recovers from),
+      # and shrinks the probe range so a false black-hole collapse re-climbs
+      # fast (docs/perf-investigation-throughput.md round 18). NEVER pin
+      # FELIX_INITIAL_MTU on a real path — it is unsafe before PMTUD.
+      FELIX_MTU_UPPER_BOUND=4096
       ENV
   - path: /etc/systemd/system/felix-broker.service
     content: |
@@ -59,6 +77,7 @@ fs_setup:
 mounts:
   - ["/dev/disk/azure/scsi1/lun0-part1", "/data", "ext4", "defaults,nofail", "0", "2"]
 runcmd:
+  - sysctl --system
   - curl -fsSL "{0}" -o /tmp/felix.tar.gz
   - mkdir -p /tmp/felix && tar -xzf /tmp/felix.tar.gz -C /tmp/felix --strip-components=1
   - install -m 0755 /tmp/felix/felix-broker /usr/local/bin/felix-broker
