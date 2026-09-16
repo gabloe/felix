@@ -124,18 +124,6 @@ latency by **~30×**, to essentially the acknowledgement latency — the message
 reaches the subscriber the instant it is durable. The default trades that for batching that helps sustained
 fanout throughput. Neither is "the" number; both are, and now both are measured.
 
-### Token exchange (the real IdP hot path)
-
-The control plane verifies the Entra RS256 token, evaluates RBAC, and mints a
-Felix EdDSA token on every exchange:
-
-| | p50 | p99 |
-|---|---|---|
-| Token exchange (warm JWKS) | **686 µs** | 876 µs |
-
-Sub-millisecond on the control plane; add the ~260 µs network hop for a remote
-caller. This is measured on the deployment's own identity flow, not a shortcut.
-
 ## Throughput
 
 ### The aggregate ingest ceiling
@@ -278,6 +266,39 @@ one key, all 1.1 M deliveries land, p50 4.6 ms. (The queue figure is a
 backlog-drain rate — publish-then-drain — and its redelivery count climbs with
 payload; at-least-once redelivery under a slow drain is a characteristic worth
 its own study.)
+
+## The control plane
+
+Nothing in the numbers above touches the control plane *per message* — and that
+is the point. Brokers seed their metadata (tenants, streams, shard assignments,
+IdP config) from the control plane at startup and cache it, watching for
+changes; the data path — publish, subscribe, cache, queue — never calls it. A
+control plane that is slow, or briefly down, does not slow a publish. So every
+latency and throughput figure on this page is the brokers' story; the control
+plane sits beside the data path, not inside it. (It ran on a `D2as_v5`,
+off the data path, memory-backed — a session's metadata fits in memory and dies
+with it.)
+
+The one place it *is* on the hot path is **authentication**: the token exchange,
+where it verifies the Entra RS256 token, evaluates RBAC, and mints a Felix EdDSA
+token.
+
+| | p50 | p99 |
+|---|---|---|
+| Token exchange (warm JWKS) | **686 µs** | 876 µs |
+
+Sub-millisecond on the control plane (add ~260 µs network for a remote caller),
+and amortised in practice: a Felix token is minted once and presented on many
+operations until it expires, so the exchange is a **per-session** cost, not a
+per-message one. Brokers then verify that token *locally* per request against the
+tenant's cached signing keys — again, no control-plane round trip on the data
+path. For this session the control plane ran a **v0.3.1-candidate build**
+carrying the real-IdP fixes below; released v0.3.0 could not validate an Entra
+token at all.
+
+**Not measured here** (its own exercise): the control plane under sustained
+exchange load, node-registration and shard-assignment latency, watch-propagation
+time to the brokers, and control-plane failover.
 
 ## What we found and fixed
 
