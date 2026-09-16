@@ -367,11 +367,17 @@ lands on durable storage):
 
 Two things stand out. First, per-commit durability on the cache path costs a
 full device flush (~4 ms) — the raw `fsync` figure plus request handling.
-Second — and this is a **finding, not a tuning** — the cache write path does
-*not* group-commit: eight concurrent writers get the same ~230 puts/s as one,
-just with 8× the latency. The durable *stream append* path amortises fsync to
->1 GB/s; the durable *cache write* path serialises on it. That gap is a concrete
-optimisation target (tracked in the backlog).
+Second — and this was the run's **finding, not a tuning** — the cache write
+path at the time did *not* group-commit: eight concurrent writers got the same
+~230 puts/s as one, just with 8× the latency, while the durable *stream
+append* path amortised fsync to >1 GB/s on the same disk.
+
+That gap has since been closed: the cache write path now stages under a short
+lock and commits outside it, sharing the log's group-committed fsync exactly
+as the stream path does (`docs/cache-put-group-commit-plan.md`). The
+OnCommit rows above are the *pre-fix* measurement and stand as the record of
+the bug; the concurrency scaling has not yet been re-measured on this
+topology.
 
 ## The semantics, each measured
 

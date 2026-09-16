@@ -118,6 +118,11 @@ struct LogInner {
     /// Set while a stretched inline rollover holds the segment lock.
     #[cfg(test)]
     inline_roll_active: std::sync::atomic::AtomicBool,
+    /// Device flushes performed, so tests can assert group-commit fan-in —
+    /// per instance, where the global `SYNC_TOTAL` counter cannot isolate one
+    /// log from the rest of a parallel test run.
+    #[cfg(test)]
+    flushes: std::sync::atomic::AtomicU64,
 }
 
 /// Lifecycle of the background rollover.
@@ -360,6 +365,9 @@ impl LogInner {
         }
 
         metrics::counter!(metrics_names::SYNC_TOTAL).increment(1);
+        #[cfg(test)]
+        self.flushes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         metrics::histogram!(metrics_names::SYNC_DURATION_SECONDS)
             .record(started.elapsed().as_secs_f64());
 
@@ -500,6 +508,8 @@ impl DiskLog {
             #[cfg(test)]
             slow_inline_roll_millis: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
+            flushes: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
             inline_roll_active: std::sync::atomic::AtomicBool::new(false),
             roll_task: Mutex::new(None),
             pending_seal: Mutex::new(None),
@@ -560,6 +570,15 @@ impl DiskLog {
     /// Bytes written but not yet flushed — the data a crash would lose now.
     pub fn unsynced_bytes(&self) -> u64 {
         self.inner.segments.read().active().unsynced_bytes()
+    }
+
+    /// Device flushes this log has performed, for tests asserting that group
+    /// commit shared them.
+    #[cfg(test)]
+    pub(crate) fn flushes_performed(&self) -> u64 {
+        self.inner
+            .flushes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Every segment on disk, oldest first.

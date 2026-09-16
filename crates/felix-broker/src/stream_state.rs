@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
-use crate::commit_order::CommitSequencer;
 use crate::config::SubQueuePolicy;
 use crate::delivery::QueuedDelivery;
 use crate::durable::StreamLog;
 use crate::subscription::SubscriptionReceiver;
+use felix_storage::CommitSequencer;
 use felix_storage::log::LogRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

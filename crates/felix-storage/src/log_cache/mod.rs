@@ -19,6 +19,7 @@ use bytes::Bytes;
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::Mutex;
 
+use crate::commit_order::CommitSequencer;
 use crate::disk_log::{DiskLog, layout};
 use crate::log::{AppendOnlyLog, AppendRecord, LogConfig, Offset, ReadRange, ShardKey};
 use crate::{CacheChange, CacheObserver, CacheSnapshotEntry, Result, StorageApi, StorageError};
@@ -75,14 +76,25 @@ struct CacheShard {
     dir: PathBuf,
     label: String,
     config: LogConfig,
-    /// Held across a write and across compaction. A cache write is serialised
-    /// here anyway, so compaction adds no new contention -- only a longer hold.
+    /// Guards the log handle and the index. A write holds it twice, briefly —
+    /// once to stage (claim an offset, no fsync) and once to apply — never
+    /// across the fsync, which is what lets concurrent writers share one
+    /// group-committed flush instead of each paying a whole device flush.
     state: Mutex<ShardState>,
+    /// Re-serialises the post-durability half of writes into disk-offset
+    /// order. Fsyncs overlap; what `get` and the watch observer see does not.
+    sequencer: CommitSequencer,
 }
 
 struct ShardState {
     log: DiskLog,
     index: Index,
+    /// Exclusive end of the last offset range a writer here has reserved with
+    /// the sequencer. Offsets past it were appended by someone else — recovery
+    /// on open, compaction, or a leader shipping records to this follower —
+    /// and `ensure_index` resolves that gap so the sequence can walk past it.
+    /// `None` until the first `ensure_index` aligns the sequencer to the tail.
+    sequenced_through: Option<u64>,
 }
 
 /// A cache backed by the same log streams are.
@@ -232,7 +244,12 @@ impl LogCache {
             state: Mutex::new(ShardState {
                 log,
                 index: Index::default(),
+                sequenced_through: None,
             }),
+            // Aligned to the log's tail by the first `ensure_index`; until
+            // then nothing can reserve, because every writer passes through
+            // `ensure_index` first.
+            sequencer: CommitSequencer::new(0),
         });
         shards.insert(id, Arc::clone(&open));
         Ok(open)
@@ -269,20 +286,52 @@ impl CacheShard {
     /// log must be, because then it cannot be stale in a way that matters.
     async fn ensure_index(&self, state: &mut ShardState) -> Result<()> {
         let tail = state.log.tail_offset().await?;
-        // Records can reach this log without going through `write`: a follower
-        // is shipped them directly, and it may later be promoted and asked to
-        // serve them. So this catches up to the tail rather than building once
-        // and trusting itself forever -- the same rule the segment indexes
-        // follow, for the same reason.
+        // Align the sequencer with records that did not come through the
+        // write path — recovery on open, compaction, or a leader shipping
+        // records to this shard as a follower. Without this, the next writer
+        // would reserve its range past a gap nobody will ever resolve, and
+        // wait on a turn that cannot arrive.
+        match state.sequenced_through {
+            None => {
+                // First touch after open. Nothing can be in flight yet:
+                // every writer passes through here, under this lock, before
+                // it reserves anything.
+                self.sequencer.reset(tail);
+                state.sequenced_through = Some(tail);
+            }
+            Some(through) if tail > through => {
+                // Out-of-band records hold [through, tail). Reserving and
+                // immediately releasing the range resolves it, and the
+                // resolution waits its turn behind any writer still in
+                // flight below it.
+                drop(self.sequencer.reserve(through, tail));
+                state.sequenced_through = Some(tail);
+            }
+            _ => {}
+        }
+        // Fold nothing a writer has staged but not yet committed: staged
+        // records become visible in their writers' apply step, after their
+        // fsync, or a reader could see a put that a crash then loses. With
+        // writers in flight the applied sequence is the visibility frontier;
+        // idle, it equals the tail.
+        let applied = self.sequencer.next_offset();
+        let stop = if state.sequenced_through == Some(applied) {
+            tail
+        } else {
+            applied
+        };
+        // Records can reach this log without going through the write path (see
+        // above), so this catches up rather than building once and trusting
+        // itself forever -- the same rule the segment indexes follow.
         let resume = state.index.covered_through;
-        if resume == Some(tail) {
+        if resume == Some(stop) {
             return Ok(());
         }
         let (mut offset, mut index) = match resume {
             Some(covered) => (covered, std::mem::take(&mut state.index)),
             None => (state.log.base_offset(), Index::default()),
         };
-        while offset < tail {
+        'scan: while offset < stop {
             let records = state
                 .log
                 .read_range(ReadRange {
@@ -294,6 +343,11 @@ impl CacheShard {
                 break;
             }
             for record in &records {
+                if record.offset >= stop {
+                    // A read is bounded by bytes, not offset, so it can hand
+                    // back staged records past the frontier.
+                    break 'scan;
+                }
                 let bytes = record.payload.len() as u64;
                 index.log_bytes += bytes;
                 let op = record::CacheOp::decode(&record.payload)
@@ -325,30 +379,27 @@ impl CacheShard {
                 offset = record.offset + 1;
             }
         }
-        index.covered_through = Some(tail.max(offset));
+        index.covered_through = Some(stop.max(offset));
         state.index = index;
         Ok(())
     }
 
-    /// Append one record and fold it into the index, reporting its offset.
-    async fn write(&self, state: &mut ShardState, op: CacheOp) -> Result<Offset> {
-        let payload = op.encode();
-        let bytes = payload.len() as u64;
-        let appended = state
-            .log
-            .append(&[AppendRecord {
-                payload,
-                timestamp_micros: now_millis() * 1000,
-            }])
-            .await?;
-
+    /// Fold one committed record into the index.
+    ///
+    /// The caller holds the state lock and has waited its turn, so applies
+    /// land strictly in disk-offset order — which is what keeps "a later
+    /// offset wins" true for the index without the lock spanning the fsync.
+    fn apply_op(state: &mut ShardState, op: &CacheOp, offset: Offset, bytes: u64) {
         state.index.log_bytes += bytes;
-        // Every caller reaches here through `ensure_index`, so the watermark is
-        // already set; advancing it keeps the next read from rescanning a record
-        // this just applied. Left alone when it is unset rather than invented,
-        // because a watermark that skips unread history is worse than none.
-        if state.index.covered_through.is_some() {
-            state.index.covered_through = Some(appended.first_offset + 1);
+        // Advance the watermark so the next `ensure_index` does not rescan
+        // this record; never move it backwards, and never invent one, because
+        // a watermark that skips unread history is worse than none.
+        if state
+            .index
+            .covered_through
+            .is_some_and(|covered| covered <= offset)
+        {
+            state.index.covered_through = Some(offset + 1);
         }
         match op {
             CacheOp::Put {
@@ -357,22 +408,21 @@ impl CacheShard {
                 ..
             } => {
                 let entry = Entry {
-                    offset: appended.first_offset,
-                    expires_at_millis,
+                    offset,
+                    expires_at_millis: *expires_at_millis,
                     bytes,
                 };
-                if let Some(previous) = state.index.entries.insert(key, entry) {
+                if let Some(previous) = state.index.entries.insert(key.clone(), entry) {
                     state.index.live_bytes -= previous.bytes;
                 }
                 state.index.live_bytes += bytes;
             }
             CacheOp::Delete { key } => {
-                if let Some(previous) = state.index.entries.remove(&key) {
+                if let Some(previous) = state.index.entries.remove(key) {
                     state.index.live_bytes -= previous.bytes;
                 }
             }
         }
-        Ok(appended.first_offset)
     }
 
     /// Read the record the index points at, and hand back its value.
@@ -405,6 +455,36 @@ impl CacheShard {
     fn should_compact(index: &Index) -> bool {
         index.log_bytes > COMPACT_FLOOR_BYTES
             && index.log_bytes > index.live_bytes.saturating_mul(COMPACT_WHEN_TIMES_LIVE)
+    }
+
+    /// Compact when worthwhile — but only from an apply whose record is the
+    /// newest in the log, with nothing staged behind it.
+    ///
+    /// The gate is load-bearing: compaction swaps the shard directory, and a
+    /// record another writer has staged but not yet committed lives only in
+    /// the old directory. Swapping under it would discard the record while its
+    /// writer is told the write succeeded. `sequenced_through == our_end`
+    /// rules out staged writers (staging advances it under this lock), and
+    /// `tail == our_end` rules out records appended outside the write path.
+    async fn maybe_compact(&self, state: &mut ShardState, our_end: Offset) -> Result<()> {
+        if !Self::should_compact(&state.index) {
+            return Ok(());
+        }
+        if state.sequenced_through != Some(our_end) {
+            return Ok(());
+        }
+        let tail = state.log.tail_offset().await?;
+        if tail != our_end {
+            return Ok(());
+        }
+        self.compact(state).await?;
+        // Compaction re-appended the live set outside the reserve path, so
+        // the sequence restarts at the new tail. The caller's own turn is
+        // still held; the generation bump makes its release a no-op.
+        let new_tail = state.log.tail_offset().await?;
+        self.sequencer.reset(new_tail);
+        state.sequenced_through = Some(new_tail);
+        Ok(())
     }
 
     /// Rewrite the live set into a fresh log and swap it in.
@@ -649,6 +729,13 @@ impl StorageApi for LogCache {
 
 impl LogCache {
     /// `put`, with the failure the trait cannot express.
+    ///
+    /// The write has two halves, and the state lock spans neither fsync nor
+    /// wait. Stage under a short lock (claim an offset and a turn), commit
+    /// outside it (the fsync, group-committed with every concurrent writer),
+    /// then wait the turn out and apply under the lock again. Returning only
+    /// after `commit` keeps the ack durability-gated; applying only after
+    /// `wait` keeps index and watch order equal to disk order.
     #[allow(clippy::too_many_arguments)]
     pub async fn put_checked(
         &self,
@@ -662,22 +749,44 @@ impl LogCache {
     ) -> Result<()> {
         let shard_index = shard;
         let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
-        let mut state = shard.state.lock().await;
-        shard.ensure_index(&mut state).await?;
         let expires_at_millis = ttl.map_or(0, |ttl| now_millis() + ttl.as_millis() as u64);
-        let offset = shard
-            .write(
-                &mut state,
-                CacheOp::Put {
-                    key: key.to_string(),
-                    value: value.clone(),
-                    expires_at_millis,
-                },
-            )
-            .await?;
-        // Observed while the state lock is still held: that hold is what makes
-        // the order watchers see the shard's write order, and it fires only for
-        // a write the log has already accepted.
+        let op = CacheOp::Put {
+            key: key.to_string(),
+            value: value.clone(),
+            expires_at_millis,
+        };
+
+        let (pending, log, bytes, turn) = {
+            let mut state = shard.state.lock().await;
+            shard.ensure_index(&mut state).await?;
+            let payload = op.encode();
+            let bytes = payload.len() as u64;
+            let pending = state
+                .log
+                .append_pending(&[AppendRecord {
+                    payload,
+                    timestamp_micros: now_millis() * 1000,
+                }])
+                .await?;
+            // Claimed the moment the offsets are consumed. The guard releases
+            // the range on every exit path — error, cancellation mid-await —
+            // so a failed commit cannot strand the writers queued behind it.
+            let turn = shard
+                .sequencer
+                .reserve(pending.first_offset(), pending.last_offset() + 1);
+            state.sequenced_through = Some(pending.last_offset() + 1);
+            (pending, state.log.clone(), bytes, turn)
+        };
+
+        log.commit(&pending).await?;
+        turn.wait().await;
+
+        let mut state = shard.state.lock().await;
+        let offset = pending.first_offset();
+        CacheShard::apply_op(&mut state, &op, offset, bytes);
+        // Observed under the apply lock, in turn order: that is what makes
+        // the order watchers see the shard's disk order, and it fires only
+        // for a write that is already durable.
         self.notify(CacheChange {
             tenant_id: tenant_id.to_string(),
             namespace: namespace.to_string(),
@@ -688,9 +797,9 @@ impl LogCache {
             offset,
             expires_at_millis,
         });
-        if CacheShard::should_compact(&state.index) {
-            shard.compact(&mut state).await?;
-        }
+        shard
+            .maybe_compact(&mut state, pending.last_offset() + 1)
+            .await?;
         Ok(())
     }
 
@@ -743,6 +852,10 @@ impl LogCache {
     }
 
     /// `delete`, with the failure the trait cannot express.
+    ///
+    /// Same two-half shape as [`LogCache::put_checked`]. The previous value is
+    /// read at staging time; against concurrent writers to the same key, the
+    /// delete's place in the shard's history is its disk offset.
     pub async fn delete_checked(
         &self,
         tenant_id: &str,
@@ -753,24 +866,43 @@ impl LogCache {
     ) -> Result<Option<Bytes>> {
         let shard_index = shard;
         let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
+        let op = CacheOp::Delete {
+            key: key.to_string(),
+        };
+
+        let (previous, pending, log, bytes, turn) = {
+            let mut state = shard.state.lock().await;
+            shard.ensure_index(&mut state).await?;
+            let Some(entry) = state.index.entries.get(key).copied() else {
+                return Ok(None);
+            };
+            let previous = if entry.is_expired(now_millis()) {
+                None
+            } else {
+                shard.read_value(&state, entry).await?
+            };
+            let payload = op.encode();
+            let bytes = payload.len() as u64;
+            let pending = state
+                .log
+                .append_pending(&[AppendRecord {
+                    payload,
+                    timestamp_micros: now_millis() * 1000,
+                }])
+                .await?;
+            let turn = shard
+                .sequencer
+                .reserve(pending.first_offset(), pending.last_offset() + 1);
+            state.sequenced_through = Some(pending.last_offset() + 1);
+            (previous, pending, state.log.clone(), bytes, turn)
+        };
+
+        log.commit(&pending).await?;
+        turn.wait().await;
+
         let mut state = shard.state.lock().await;
-        shard.ensure_index(&mut state).await?;
-        let Some(entry) = state.index.entries.get(key).copied() else {
-            return Ok(None);
-        };
-        let previous = if entry.is_expired(now_millis()) {
-            None
-        } else {
-            shard.read_value(&state, entry).await?
-        };
-        let offset = shard
-            .write(
-                &mut state,
-                CacheOp::Delete {
-                    key: key.to_string(),
-                },
-            )
-            .await?;
+        let offset = pending.first_offset();
+        CacheShard::apply_op(&mut state, &op, offset, bytes);
         self.notify(CacheChange {
             tenant_id: tenant_id.to_string(),
             namespace: namespace.to_string(),

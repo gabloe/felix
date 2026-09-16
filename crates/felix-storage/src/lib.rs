@@ -5,6 +5,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
+pub mod commit_order;
 pub mod counter_log;
 pub mod disk_log;
 pub mod ephemeral_cache;
@@ -13,6 +14,7 @@ pub mod log_cache;
 pub mod metrics_names;
 pub mod segment;
 pub mod tiered;
+pub use commit_order::{CommitSequencer, CommitTurn};
 pub use counter_log::CounterStore;
 pub use disk_log::{DiskLog, DiskLogProvider};
 pub use ephemeral_cache::EphemeralCache;
