@@ -1,33 +1,10 @@
-//! Felix authn/authz primitives shared by control-plane and broker services.
+//! Authn/authz primitives shared by the control plane and the broker: the
+//! Casbin model, permission matching, and token/JWKS helpers.
 //!
-//! Centralizes the authorization model (Casbin), permission matching, and
-//! token/JWKS helpers used across services.
-//!
-//! # How it fits
-//! Control-plane services mint and publish tokens/JWKS, while brokers verify
-//! tokens and enforce permissions using shared types from this crate.
-//!
-//! - Felix tokens are EdDSA/Ed25519 only; RSA/HS algorithms are rejected.
-//! - Permission strings follow the `action:resource` pattern with wildcards.
-//!
-//! # Important configuration
-//! - Issuer/audience values must be consistent between token issuer and verifier.
-//! - JWKS endpoints must publish only public key material.
-//!
-//! # Examples
-//! ```rust
-//! use felix_authz::{Action, Permission};
-//!
-//! let perm = Permission::new(Action::StreamPublish, "stream:tenant-a/ns/stream");
-//! assert!(perm.as_string().contains("stream.publish"));
-//! ```
-//!
-//! # Common pitfalls
-//! - Skipping permission validation allows malformed patterns into policy stores.
-//! - Mixing issuer/audience across services causes token verification failures.
-//!
-//! # Future work
-//! - Consolidate token and JWKS caching across services for fewer cache invalidations.
+//! The control plane mints tokens and publishes JWKS; brokers verify and
+//! enforce. Both sides must agree on issuer and audience, tokens are
+//! EdDSA/Ed25519 only, and permission strings follow `action:resource` with
+//! wildcards.
 
 mod action;
 mod casbin_model;

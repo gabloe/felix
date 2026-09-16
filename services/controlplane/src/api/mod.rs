@@ -1,19 +1,5 @@
-//! Control-plane HTTP API module.
-//!
-//! # Purpose and responsibility
-//! Exposes route handler modules and shared helper functions used by the REST
-//! API layer.
-//!
-//! # Where it fits in Felix
-//! This module is the entry point for HTTP handlers and shared validation
-//! helpers used across tenant/namespace/stream/cache endpoints.
-//!
-//! # Key invariants and assumptions
-//! - Tenant and namespace existence checks must happen before store mutations.
-//! - Error shapes are standardized via `api::error`.
-//!
-//! # Security considerations
-//! - Existence checks should not leak data beyond tenant scope.
+//! Control-plane HTTP handlers plus the shared existence checks that run
+//! before any store mutation.
 pub mod bootstrap;
 pub mod caches;
 pub mod error;
@@ -30,28 +16,18 @@ use crate::api::error::{ApiError, api_internal, api_not_found};
 use crate::app::AppState;
 use crate::model::NamespaceKey;
 
-/// Ensure a tenant and namespace exist before performing an operation.
-///
-/// Checks tenant existence, then namespace existence, and returns a 404 error
-/// if either is missing.
-///
-/// Centralizes resource validation and keeps error messages consistent.
-///
-/// # Errors
-/// - Returns `ApiError` with 404 when tenant/namespace is missing.
-/// - Returns 500 when the store fails.
+/// 404 unless both the tenant and the namespace exist. The tenant is checked
+/// first so a caller can't learn about namespaces in tenants it can't see.
 pub(crate) async fn ensure_tenant_namespace(
     state: &AppState,
     tenant_id: &str,
     namespace: &str,
 ) -> Result<(), ApiError> {
-    // Validate the tenant first to avoid leaking namespace existence.
     ensure_tenant_exists(state, tenant_id).await?;
     let namespace_key = NamespaceKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
     };
-    // Check namespace existence within the tenant scope.
     let exists = state
         .store
         .namespace_exists(&namespace_key)
@@ -63,20 +39,11 @@ pub(crate) async fn ensure_tenant_namespace(
     Ok(())
 }
 
-/// Ensure a tenant exists before performing an operation.
-///
-/// Checks tenant existence and returns a 404 error if missing.
-///
-/// Centralizes tenant validation to keep handlers consistent.
-///
-/// # Errors
-/// - Returns `ApiError` with 404 when tenant is missing.
-/// - Returns 500 when the store fails.
+/// 404 unless the tenant exists.
 pub(crate) async fn ensure_tenant_exists(
     state: &AppState,
     tenant_id: &str,
 ) -> Result<(), ApiError> {
-    // Check tenant existence via the store.
     let exists = state
         .store
         .tenant_exists(tenant_id)

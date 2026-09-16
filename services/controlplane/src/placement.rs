@@ -1,10 +1,14 @@
 //! Deterministic shard placement.
 //!
-//! Rendezvous hashing (highest random weight): score every eligible node
-//! against the shard, take the highest. Chosen over a consistent-hash ring
-//! because it needs no ring state, no virtual-node tuning, and distributes
-//! noticeably better at the handful-of-brokers scale a cluster actually starts
-//! at — and because removing a node only moves the shards that node held.
+//! **Bounded-load rendezvous hashing.** Score every eligible node against the
+//! shard and take the highest — but skip a node already carrying its balanced
+//! share, so the shard spills to the next node under its share. Rendezvous is
+//! chosen over a consistent-hash ring because it needs no ring state, no
+//! virtual-node tuning, and removing a node only moves the shards that node
+//! held; the load bound is added because plain highest-random-weight balances
+//! only in the limit of many keys, and a cluster starts at a handful of shards
+//! (24 over three brokers skewed 11/5/8) where the bound is the difference
+//! between even use and single-node saturation. See `choose`.
 //!
 //! Everything here is a pure function of a metadata snapshot. That is what makes
 //! "the same snapshot always yields the same placement" testable rather than
@@ -257,6 +261,19 @@ pub fn plan(
         .collect();
     keys.sort_by(|a, b| order(a).cmp(&order(b)));
 
+    // The balanced share for bounded-load rendezvous: total roles (leaders and
+    // replicas) spread evenly across the eligible nodes. Counting replicas keeps
+    // a replicated stream's replica load from starving a node of leadership.
+    let total_roles: u32 = placeables
+        .iter()
+        .map(|p| p.shards.saturating_mul(p.replication_factor.max(1)))
+        .sum();
+    let cap = if eligible.is_empty() {
+        u32::MAX
+    } else {
+        total_roles.div_ceil(eligible.len() as u32).max(1)
+    };
+
     let mut shards = Vec::with_capacity(keys.len());
     for key in keys {
         // An assignment whose leader is still live is kept. Rebalancing it would
@@ -312,7 +329,7 @@ pub fn plan(
             continue;
         }
 
-        let decision = match choose(&key, &eligible, &load) {
+        let decision = match choose(&key, &eligible, &load, cap) {
             Some(leader) => {
                 *load.entry(leader).or_default() += 1;
                 // Followers are the next best-scoring nodes for this shard,
@@ -414,22 +431,47 @@ fn choose_replicas<'a>(
     chosen
 }
 
-/// Highest-scoring node with capacity left.
+/// Highest-scoring node that still keeps the cluster balanced.
+///
+/// **Bounded-load rendezvous.** Pure highest-random-weight balances only in the
+/// limit of many keys; at the handful-of-shards scale a cluster actually starts
+/// at, its variance is large — 24 shards on three nodes landed 11/5/8, and a
+/// staggered start can funnel *everything* onto the first broker to register.
+/// That is single-node saturation while the rest idle. So a shard goes to its
+/// highest-scoring node *unless that node is already carrying its balanced share*
+/// (`cap`), in which case it spills to the next-highest node under its share.
+/// Locality is nearly preserved (a shard only moves off its top choice when that
+/// node is full) and placement stays a deterministic function of the snapshot,
+/// because `plan` walks the shards in sorted order and `load` accumulates the
+/// same way on every instance. `None` only when no node has capacity at all — the
+/// second pass drops the balance cap so a full-but-uncapped cluster still places.
 ///
 /// Ties break on `node_id`, which cannot itself tie: node identity is unique.
-fn choose<'a>(key: &ShardKey, eligible: &[&'a Node], load: &HashMap<&str, u32>) -> Option<&'a str> {
-    eligible
-        .iter()
-        .filter(|node| match node.spec.capacity.max_shards {
-            Some(max) => load.get(node.node_id.as_str()).copied().unwrap_or(0) < max,
-            None => true,
-        })
-        .max_by(|a, b| {
-            score(key, &a.node_id)
-                .cmp(&score(key, &b.node_id))
-                .then_with(|| a.node_id.cmp(&b.node_id))
-        })
-        .map(|node| node.node_id.as_str())
+fn choose<'a>(
+    key: &ShardKey,
+    eligible: &[&'a Node],
+    load: &HashMap<&str, u32>,
+    cap: u32,
+) -> Option<&'a str> {
+    let has_capacity = |node: &Node| match node.spec.capacity.max_shards {
+        Some(max) => load.get(node.node_id.as_str()).copied().unwrap_or(0) < max,
+        None => true,
+    };
+    let under_share = |node: &Node| load.get(node.node_id.as_str()).copied().unwrap_or(0) < cap;
+    let best = |balanced: bool| {
+        eligible
+            .iter()
+            .filter(|node| has_capacity(node))
+            .filter(|node| !balanced || under_share(node))
+            .max_by(|a, b| {
+                score(key, &a.node_id)
+                    .cmp(&score(key, &b.node_id))
+                    .then_with(|| a.node_id.cmp(&b.node_id))
+            })
+    };
+    best(true)
+        .or_else(|| best(false))
+        .map(|n| n.node_id.as_str())
 }
 
 /// Score a (shard, node) pair.

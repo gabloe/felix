@@ -28,22 +28,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Validator for upstream OIDC bearer tokens with cached discovery/JWKS.
-///
-/// Maintains HTTP client and in-memory caches for discovery and JWKS, enabling
-/// efficient validation for configured issuers.
-///
-/// - Constructed via [`UpstreamOidcValidator::new`] or `Default`.
-/// # Examples
-/// ```rust
-/// use controlplane::auth::oidc::UpstreamOidcValidator;
-/// use std::time::Duration;
-///
-/// let validator = UpstreamOidcValidator::new(Duration::from_secs(300), Duration::from_secs(300), 60);
-/// ```
-///
-/// - ES256 is accepted by default.
-/// - RS256/RS384/RS512 and PS256/PS384/PS512 are accepted only when configured.
+/// Validates upstream OIDC bearer tokens, with cached discovery documents and
+/// JWKS. ES256 by default; RS*/PS* only when explicitly allowlisted.
 #[derive(Debug, Clone)]
 pub struct UpstreamOidcValidator {
     client: reqwest::Client,
@@ -55,24 +41,8 @@ pub struct UpstreamOidcValidator {
     allowed_algorithms: Arc<Vec<Algorithm>>,
 }
 
-/// Claims extracted from a validated upstream OIDC token.
-///
-/// Minimal identity payload used to derive a Felix principal.
-///
-/// - Populated by [`UpstreamOidcValidator::validate`].
-/// # Examples
-/// ```rust
-/// use controlplane::auth::oidc::ValidatedToken;
-///
-/// let token = ValidatedToken {
-///     issuer: "https://issuer.example".to_string(),
-///     subject: "user-1".to_string(),
-///     groups: vec!["group-a".to_string()],
-/// };
-/// assert_eq!(token.subject, "user-1");
-/// ```
-///
-/// - The fields are derived from a verified token and should not be tampered with.
+/// The identity extracted from a verified upstream token — just enough to
+/// derive a Felix principal.
 #[derive(Debug, Clone)]
 pub struct ValidatedToken {
     pub issuer: String,
@@ -80,21 +50,7 @@ pub struct ValidatedToken {
     pub groups: Vec<String>,
 }
 
-/// Errors returned during upstream OIDC validation.
-///
-/// Enumerates validation failures such as issuer mismatch, unsupported
-/// algorithms, JWKS lookup errors, or JWT validation errors.
-///
-/// - Variants carry contextual error information.
-/// # Examples
-/// ```rust
-/// use controlplane::auth::oidc::OidcError;
-///
-/// let err = OidcError::IssuerNotAllowed;
-/// assert!(matches!(err, OidcError::IssuerNotAllowed));
-/// ```
-///
-/// - Error details must not include sensitive token contents.
+/// Upstream validation failures. Messages never include token contents.
 #[derive(Debug, thiserror::Error)]
 pub enum OidcError {
     #[error("missing issuer")]
@@ -143,25 +99,8 @@ impl Default for UpstreamOidcValidator {
 }
 
 impl UpstreamOidcValidator {
-    /// Create a new validator with explicit cache TTLs and clock skew.
-    ///
-    /// Configures cache durations for JWKS and discovery documents and sets
-    /// allowable clock skew for JWT validation.
-    ///
-    /// - `jwks_ttl`: Duration to cache JWKS responses.
-    /// - `discovery_ttl`: Duration to cache OIDC discovery documents.
-    /// - `clock_skew_seconds`: Allowed time skew for `iat/exp` validation.
-    ///
-    /// - A configured [`UpstreamOidcValidator`].
-    /// # Examples
-    /// ```rust
-    /// use controlplane::auth::oidc::UpstreamOidcValidator;
-    /// use std::time::Duration;
-    ///
-    /// let validator = UpstreamOidcValidator::new(Duration::from_secs(600), Duration::from_secs(600), 30);
-    /// ```
-    ///
-    /// - Shorter TTLs reduce exposure to stale keys but increase fetch volume.
+    /// ES256-only validator with the given cache TTLs and clock skew.
+    /// Shorter TTLs reduce exposure to stale keys at the cost of more fetches.
     pub fn new(jwks_ttl: Duration, discovery_ttl: Duration, clock_skew_seconds: u64) -> Self {
         Self::new_with_allowed_algorithms(
             jwks_ttl,
@@ -197,51 +136,28 @@ impl UpstreamOidcValidator {
         }
     }
 
-    /// Validate an upstream OIDC bearer token against configured issuers.
-    ///
-    /// Enforces allowed algorithms, resolves issuer configuration, fetches JWKS as needed,
-    /// and validates issuer/audience/subject claims.
-    ///
-    /// - `token`: The JWT bearer token to validate.
-    /// - `issuers`: Allowed issuer configurations for the tenant.
-    ///
-    /// - `Ok(ValidatedToken)` containing issuer, subject, and groups.
+    /// Validate an upstream bearer token against the tenant's configured
+    /// issuers: allowlisted algorithm, resolved JWKS, then signature and
+    /// `iss`/`aud`/`iat` checks.
     ///
     /// # Errors
-    /// - `OidcError::UnsupportedAlgorithm` if token is not an allowed algorithm.
-    /// - `OidcError::IssuerNotAllowed` if `iss` is not configured.
-    /// - `OidcError::MissingKeyId` if the token header lacks a `kid`.
-    /// - `OidcError::JwksKeyNotFound` if the signing key cannot be found.
-    /// - `OidcError::InvalidJwk` if the JWK metadata does not match the algorithm.
-    /// - `OidcError::InvalidClaim` if `iat` is missing or invalid.
-    /// - `OidcError::Jwt` for signature/claim validation failures.
-    /// # Examples
-    /// ```rust,no_run
-    /// use controlplane::auth::oidc::UpstreamOidcValidator;
-    /// use controlplane::auth::idp_registry::IdpIssuerConfig;
-    ///
-    /// async fn validate_token(validator: UpstreamOidcValidator, token: &str, issuers: Vec<IdpIssuerConfig>) {
-    ///     let _ = validator.validate(token, &issuers).await;
-    /// }
-    /// ```
-    ///
-    /// - The algorithm is pinned to the allowlist for IdP validation only.
-    /// - `iss` and `aud` must match configured values.
+    /// An [`OidcError`] naming the specific failure; issuer-not-configured is
+    /// distinguished so the caller can answer 403 instead of 401.
     pub async fn validate(
         &self,
         token: &str,
         issuers: &[IdpIssuerConfig],
     ) -> Result<ValidatedToken, OidcError> {
-        // Step 1: Check header algorithm before any heavy work.
-        // This avoids accepting EdDSA Felix tokens or other algorithms here.
+        // Algorithm check first — this is also what keeps EdDSA Felix tokens
+        // out of the upstream path.
         let header = decode_header(token)?;
         if !self.is_algorithm_allowed(header.alg) {
             return Err(OidcError::UnsupportedAlgorithm);
         }
         let kid = header.kid.as_deref().ok_or(OidcError::MissingKeyId)?;
 
-        // Step 2: Decode claims without verification to locate the issuer.
-        // We only trust these claims after signature verification later.
+        // Unverified decode, purely to find which issuer's JWKS to fetch;
+        // nothing from it is trusted until the signature check below.
         let unsafe_claims = decode_unverified_claims(token)?;
         let issuer = extract_string_claim(&unsafe_claims, "iss").ok_or(OidcError::MissingIssuer)?;
         let issuer_cfg = issuers
@@ -249,8 +165,8 @@ impl UpstreamOidcValidator {
             .find(|cfg| cfg.issuer == issuer)
             .ok_or(OidcError::IssuerNotAllowed)?;
 
-        // Step 3: Resolve and fetch JWKS, retrying once on a miss.
-        // This handles key rotation and transient cache inconsistencies.
+        // On a `kid` miss, refresh once and retry — the miss usually means the
+        // IdP rotated keys since our cached fetch.
         let jwks_url = self.resolve_jwks_url(&issuer, issuer_cfg).await?;
         let jwks = self.get_jwks(&jwks_url).await?;
         let decoding_key = match find_jwk(&jwks, kid) {
@@ -265,8 +181,6 @@ impl UpstreamOidcValidator {
                 DecodingKey::from_jwk(key)?
             }
         };
-        // Step 4: Enforce issuer and audience validation.
-        // This prevents token substitution across tenants or clients.
         let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[issuer_cfg.issuer.as_str()]);
         validation.set_audience(&issuer_cfg.audiences);
@@ -275,10 +189,8 @@ impl UpstreamOidcValidator {
             .extend(["iss".to_string(), "aud".to_string()]);
         validation.leeway = self.clock_skew_seconds;
 
-        // Step 5: Verify the token signature and claims.
         let token = decode::<Value>(token, &decoding_key, &validation)?;
         validate_iat(&token.claims, self.clock_skew_seconds)?;
-        // Step 6: Extract mapped subject and groups for downstream RBAC.
         let subject = extract_string_claim(&token.claims, &issuer_cfg.claim_mappings.subject_claim)
             .ok_or(OidcError::MissingSubject)?;
         let groups = extract_groups_claim(
@@ -298,12 +210,10 @@ impl UpstreamOidcValidator {
         issuer: &str,
         issuer_cfg: &IdpIssuerConfig,
     ) -> Result<String, OidcError> {
-        // Step 1: Use explicit JWKS URL when configured.
-        // This avoids discovery for issuers with custom endpoints.
+        // An explicit JWKS URL skips discovery entirely.
         if let Some(url) = &issuer_cfg.jwks_url {
             return Ok(url.to_string());
         }
-        // Step 2: Build the discovery URL from the issuer if not provided.
         let discovery_url = issuer_cfg.discovery_url.clone().unwrap_or_else(|| {
             format!(
                 "{}/.well-known/openid-configuration",
@@ -311,14 +221,12 @@ impl UpstreamOidcValidator {
             )
         });
 
-        // Step 3: Serve cached discovery results when still valid.
         if let Some(entry) = self.discovery_cache.get(&discovery_url)
             && entry.expires_at > Instant::now()
         {
             return Ok(entry.jwks_url.clone());
         }
 
-        // Step 4: Fetch discovery and cache it for the configured TTL.
         let doc: DiscoveryDocument = self.client.get(&discovery_url).send().await?.json().await?;
         self.discovery_cache.insert(
             discovery_url,
@@ -331,19 +239,15 @@ impl UpstreamOidcValidator {
     }
 
     async fn get_jwks(&self, jwks_url: &str) -> Result<JwkSet, OidcError> {
-        // Step 1: Use cached JWKS when it hasn't expired.
         if let Some(entry) = self.jwks_cache.get(jwks_url)
             && entry.expires_at > Instant::now()
         {
             return Ok(entry.jwks.clone());
         }
-        // Step 2: Refresh JWKS on cache miss or expiry.
         self.refresh_jwks(jwks_url).await
     }
 
     async fn refresh_jwks(&self, jwks_url: &str) -> Result<JwkSet, OidcError> {
-        // We always fetch JWKS over HTTPS (assumed) using reqwest.
-        // A refresh can be triggered by cache expiry or missing `kid`.
         let jwks: JwkSet = self.client.get(jwks_url).send().await?.json().await?;
         self.jwks_cache.insert(
             jwks_url.to_string(),
@@ -424,9 +328,9 @@ fn find_jwk<'a>(jwks: &'a JwkSet, kid: &str) -> Option<&'a jsonwebtoken::jwk::Jw
         .find(|key| key.common.key_id.as_deref() == Some(kid))
 }
 
+// Unverified decode, only ever used to locate the issuer before the real
+// signature check.
 fn decode_unverified_claims(token: &str) -> Result<Value, OidcError> {
-    // We decode claims without verification only to locate the issuer.
-    // Signature validation still happens later using the resolved JWKS.
     let mut parts = token.split('.');
     let _header = parts.next();
     let payload = parts
@@ -440,7 +344,6 @@ fn decode_unverified_claims(token: &str) -> Result<Value, OidcError> {
 }
 
 fn extract_string_claim(claims: &Value, name: &str) -> Option<String> {
-    // Only accept string-valued claims; other types are ignored.
     claims
         .get(name)
         .and_then(|value| value.as_str())
@@ -448,7 +351,6 @@ fn extract_string_claim(claims: &Value, name: &str) -> Option<String> {
 }
 
 fn validate_iat(claims: &Value, leeway_seconds: u64) -> Result<(), OidcError> {
-    // Require `iat` and ensure it is not unreasonably in the future.
     let iat = claims
         .get("iat")
         .and_then(|value| value.as_i64())
@@ -461,8 +363,8 @@ fn validate_iat(claims: &Value, leeway_seconds: u64) -> Result<(), OidcError> {
     Ok(())
 }
 
+// IdPs encode groups as either a string or an array of strings.
 fn extract_groups_claim(claims: &Value, name: Option<&str>) -> Vec<String> {
-    // Groups may be encoded as either a string or array of strings.
     let Some(name) = name else {
         return Vec::new();
     };
@@ -787,9 +689,6 @@ oFnGY0OFksX/ye0/XGpy2SFxYRwGU98HPYeBvAQQrVjdkzfy7BmXQQ==
     }
 
     async fn spawn_jwks_server(jwks: Value) -> (SocketAddr, JoinHandle<()>) {
-        // We spawn a deterministic local JWKS server for tests to avoid flakiness.
-        // Binding to 127.0.0.1:0 lets the OS choose a free port safely.
-
         let app = Router::new().route(
             "/jwks",
             get({

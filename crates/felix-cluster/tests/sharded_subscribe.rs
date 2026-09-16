@@ -1,8 +1,8 @@
 //! Consuming a whole multi-shard stream through one subscription.
 //!
-//! #297. A subscription reads one shard, so until now an application wanting
-//! every record of a four-shard stream had to open four subscriptions, discover
-//! each shard's owner, follow each redirect and merge the results itself.
+//! A subscription reads one shard, so an application wanting every record of
+//! a four-shard stream used to open four subscriptions, discover each shard's
+//! owner, follow each redirect and merge the results itself (#297).
 //!
 //! `ClusterClient::subscribe_sharded` does that. These are the tests for what
 //! it promises — and, as much, for what it refuses to promise.
@@ -82,8 +82,8 @@ async fn drain(
 
 /// **Every record, whichever broker owns the shard it landed on.**
 ///
-/// The acceptance criterion of #297. Without it a subscriber saw shard 0 and
-/// silently missed three quarters of the stream.
+/// The acceptance criterion of the sharded-subscribe work (#297): without it
+/// a subscriber saw shard 0 and silently missed three quarters of the stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn a_sharded_subscription_receives_every_record() {
@@ -302,7 +302,8 @@ async fn one_shard_failing_over_does_not_stop_the_others() {
     let published = keys(40);
     let mut accepted = 0usize;
     for key in &published {
-        // A publish can fail while ownership is moving; that is #269, not this.
+        // A publish can fail while ownership is moving; that gap is tracked
+        // as #269 and is not what this test is about.
         if cluster
             .publish_keyed_via(&alive, STREAM, key.as_bytes(), key.clone().into_bytes())
             .await

@@ -79,7 +79,8 @@ async fn a_claimed_record_is_not_reissued_by_the_cluster() {
     );
 }
 
-/// **#314.** A group's position survives losing the broker that led its shard.
+/// **A group's position survives losing the broker that led its shard**
+/// (#314).
 ///
 /// Before the cursors were replicated, a promoted replica had no record of the
 /// group and started it at zero — redelivering everything already finished.

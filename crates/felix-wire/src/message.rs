@@ -5,6 +5,23 @@ use crate::frame::Frame;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+/// One record handed to a consumer, with the offset it must acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRecord {
+    pub offset: u64,
+    #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
+    pub payload: Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
+    /// can treat a retry differently.
+    ///
+    /// `0` means the broker did not report it — absent rather than first, since
+    /// claiming a first attempt for an unknown one would have a consumer skip
+    /// exactly the retry handling it wanted.
+    #[serde(default)]
+    pub attempts: u32,
+}
+
 /// V1 wire messages encoded in framed payloads.
 ///
 /// ```
@@ -24,23 +41,6 @@ use serde::{Deserialize, Serialize};
 /// let decoded = Message::decode(frame).expect("decode");
 /// assert_eq!(message, decoded);
 /// ```
-/// One record handed to a consumer, with the offset it must acknowledge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupRecord {
-    pub offset: u64,
-    #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
-    pub payload: Bytes,
-    /// How many times this record has been handed out, this delivery included.
-    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
-    /// can treat a retry differently.
-    ///
-    /// `0` means the broker did not report it — absent rather than first, since
-    /// claiming a first attempt for an unknown one would have a consumer skip
-    /// exactly the retry handling it wanted.
-    #[serde(default)]
-    pub attempts: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
@@ -172,22 +172,11 @@ pub enum Message {
         stream: String,
         #[serde(with = "crate::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
-        /// One key for the whole batch.
-        ///
-        /// A batch is routed as a unit, so every record in it shares a shard.
-        /// Splitting a batch across shards would make it several batches with
-        /// several acknowledgements, which is not what the caller asked for.
-        /// Which shard this record belongs to, resolved by hashing.
-        ///
-        /// Absent means shard 0, which is what every record did before routing
-        /// keys existed and what a single-shard stream does regardless. Present
-        /// means the broker hashes it against the stream's shard count.
-        ///
-        /// **Ordering is per key, not per stream.** Two records with the same
-        /// key are ordered with respect to each other; two with different keys
-        /// may be applied by different brokers in either order. A stream with
-        /// one shard keeps total order whatever keys are used, which is what
-        /// makes this safe to add.
+        /// One key for the whole batch, with the same semantics as
+        /// `Publish.key`. A batch is routed as a unit, so every record in it
+        /// shares a shard — splitting a batch across shards would make it
+        /// several batches with several acknowledgements, which is not what
+        /// the caller asked for.
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",

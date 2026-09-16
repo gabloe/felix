@@ -52,29 +52,8 @@ const RETENTION_TICK: Duration = Duration::from_secs(1);
 #[cfg(not(feature = "pg-tests"))]
 const RETENTION_TICK: Duration = Duration::from_secs(60);
 
-/// Durable control-plane store backed by Postgres.
-///
-/// Implements [`ControlPlaneStore`] and [`AuthStore`] using Postgres as the
-/// authoritative metadata store and change-log backend.
-///
-/// - Inputs: Postgres connection config and store config.
-/// - Outputs: durable reads/writes for control-plane metadata.
-///
-/// # Errors
-/// - Connection and query failures are surfaced as [`StoreError`].
-///
-/// - Database URLs may include credentials; avoid logging them.
-/// - Use least-privilege DB roles and TLS in production.
-///
-/// # Example
-/// ```rust,no_run
-/// use controlplane::config::PostgresConfig;
-/// use controlplane::store::{StoreConfig, postgres::PostgresStore};
-///
-/// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
-///     let _ = PostgresStore::connect(&pg, cfg).await;
-/// }
-/// ```
+/// Durable control-plane store: [`ControlPlaneStore`] and [`AuthStore`] on
+/// Postgres. Connection URLs may embed credentials — never log them.
 pub struct PostgresStore {
     pool: PgPool,
     config: StoreConfig,
@@ -205,47 +184,19 @@ struct CacheChangeRow {
 }
 
 impl PostgresStore {
-    /// Connect to Postgres, run migrations, and optionally start retention maintenance.
-    ///
-    /// Creates a connection pool, applies embedded migrations, and starts a
-    /// best-effort retention task when configured.
-    ///
-    /// - Inputs: `pg` connection config and `config` store settings.
-    /// - Output: a ready-to-use [`PostgresStore`].
+    /// Connect, apply embedded migrations, and start the best-effort
+    /// retention task when configured.
     ///
     /// # Errors
-    /// - Connection, migration, or pool setup failures.
-    ///
-    /// - Avoid logging `pg.url` as it may contain credentials.
-    /// - Use TLS and least-privilege DB roles in production.
+    /// Connection, migration, or pool setup failures.
     pub async fn connect(pg: &PostgresConfig, config: StoreConfig) -> StoreResult<Self> {
         #[cfg(any(test, feature = "pg-tests"))]
         let _ = Self::connect_without_migrations;
         Self::connect_internal(pg, config, true).await
     }
 
-    /// Connect to Postgres without running migrations.
-    ///
-    /// Creates a connection pool without applying migrations. Intended for tests
-    /// that manage migrations externally.
-    ///
-    /// - Inputs: `pg` connection config and `config` store settings.
-    /// - Output: a [`PostgresStore`] using the existing schema.
-    ///
-    /// # Errors
-    /// - Connection or pool setup failures.
-    ///
-    /// - Avoid logging `pg.url` as it may contain credentials.
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use controlplane::config::PostgresConfig;
-    /// use controlplane::store::{StoreConfig, postgres::PostgresStore};
-    ///
-    /// async fn open(pg: PostgresConfig, cfg: StoreConfig) {
-    ///     let _ = PostgresStore::connect_without_migrations(&pg, cfg).await;
-    /// }
-    /// ```
+    /// Connect without running migrations, for tests that manage the schema
+    /// themselves.
     #[cfg(any(test, feature = "pg-tests"))]
     pub async fn connect_without_migrations(
         pg: &PostgresConfig,
@@ -259,13 +210,9 @@ impl PostgresStore {
         config: StoreConfig,
         run_migrations: bool,
     ) -> StoreResult<Self> {
-        // Connection pool tuning matters for control-plane stability:
-        // - `max_connections` caps concurrent DB work and protects the DB from overload.
-        // - `acquire_timeout` bounds how long a request will wait for a pooled connection before failing fast.
-        // - `connect_timeout` bounds how long we wait when establishing a new physical connection.
-        //
-        // In production, prefer failing fast + surfacing health failures over hanging indefinitely.
-        // Avoid logging `pg.url` because it may contain credentials.
+        // Bounded pool and acquire timeout: fail fast and surface a health
+        // failure rather than hang when the DB is overloaded. `pg.url` may
+        // carry credentials, so it is never logged.
         let connect_options = PgConnectOptions::from_str(&pg.url)?;
         let pool = PgPoolOptions::new()
             .max_connections(pg.max_connections)
@@ -274,8 +221,8 @@ impl PostgresStore {
             .await?;
 
         if run_migrations {
-            // Migrations run *before* serving requests so handlers can assume the schema exists.
-            // If migrations fail, we fail startup rather than serving partially functional endpoints.
+            // Before serving anything, so handlers can assume the schema; a
+            // failed migration fails startup rather than serving a partial API.
             sqlx::migrate!("./migrations").run(&pool).await?;
         }
 
@@ -2762,14 +2709,12 @@ mod tests {
 
     #[test]
     fn unique_violation_detects_only_db_codes() {
-        // This test prevents false positives when inspecting non-DB errors.
         let err = sqlx::Error::RowNotFound;
         assert!(!is_unique_violation(&err));
     }
 
     #[test]
     fn stream_kind_round_trip() {
-        // This test ensures DB string mapping stays stable for stream kinds.
         assert!(matches!(
             parse_stream_kind("Stream").unwrap(),
             StreamKind::Stream
@@ -2790,7 +2735,6 @@ mod tests {
 
     #[test]
     fn consistency_round_trip() {
-        // This test ensures consistency levels map correctly between DB and API.
         assert!(matches!(
             parse_consistency("Leader").unwrap(),
             crate::model::ConsistencyLevel::Leader
@@ -2812,7 +2756,6 @@ mod tests {
 
     #[test]
     fn delivery_round_trip() {
-        // This test ensures delivery guarantees map correctly between DB and API.
         assert!(matches!(
             parse_delivery("AtMostOnce").unwrap(),
             crate::model::DeliveryGuarantee::AtMostOnce
@@ -2834,7 +2777,6 @@ mod tests {
 
     #[test]
     fn stream_from_db_maps_fields() {
-        // This test guards against schema/model drift when parsing DB rows.
         let row = DbStream {
             tenant_id: "t1".to_string(),
             namespace: "ns".to_string(),

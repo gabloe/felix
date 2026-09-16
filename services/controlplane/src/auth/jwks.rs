@@ -1,32 +1,9 @@
-//! JWKS endpoint handler for tenant signing keys.
+//! The tenant JWKS endpoint: `GET /v1/tenants/{tenant_id}/.well-known/jwks.json`.
 //!
-//! Expose tenant public keys in JWKS format so brokers/clients can verify Felix
-//! tokens without access to private key material.
-//!
-//! Bridges the control-plane key store to external verifiers by translating
-//! internal Ed25519 key material into RFC-compliant JWKS.
-//!
-//! - Broker auth layer fetching `/.well-known/jwks.json`.
-//! - External clients that verify Felix-issued JWTs.
-//!
-//! - Only Ed25519 public keys are exported.
-//! - JWKS never contains private key material.
-//! - `kid` is stable for the life of a key and used for rotation.
-//!
-//! Stateless request handler; relies on async store calls and does not share
-//! mutable state across requests.
-//!
-//! # Security boundary
-//! This is the boundary where public key material leaves the control-plane.
-//! Private keys must never cross this interface.
-//!
-//! # Security model and threat assumptions
-//! - Attackers may call this endpoint; keys are public by design.
-//! - We must avoid accidental RSA exposure by always returning EdDSA/Ed25519.
-//! - JWKS output must be deterministic for cacheability and verification.
-//!
-//! Call the `GET /v1/tenants/{tenant_id}/.well-known/jwks.json` endpoint and use
-//! the returned `x` values as Ed25519 public keys for EdDSA verification.
+//! This is where public key material leaves the control plane so brokers and
+//! clients can verify Felix tokens. Only Ed25519 public keys are exported —
+//! private material never crosses this interface — and both current and
+//! previous keys are served so verification keeps working through rotation.
 use crate::api::error::{ApiError, api_internal, api_not_found};
 use crate::app::AppState;
 use axum::Json;
@@ -36,32 +13,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-/// Return the JWKS for a tenant's current and previous signing keys.
-///
-/// Loads the tenant's signing keys, converts them to JWKs with Ed25519 public
-/// components, and returns a JWKS payload suitable for broker verification.
-///
-/// - `tenant_id`: Path parameter identifying the tenant.
-/// - `state`: Shared application state providing access to the store.
-///
-/// - `Ok(Json<JwksResponse>)` containing Ed25519 public keys.
+/// Serve the JWKS for a tenant's current and previous signing keys.
 ///
 /// # Errors
-/// - `404` if the tenant does not exist.
-/// - `500` if the store fails to load keys.
-/// # Examples
-/// ```rust,no_run
-/// use axum::extract::{Path, State};
-/// use controlplane::app::AppState;
-/// use controlplane::auth::jwks::tenant_jwks;
-///
-/// async fn handle(Path(tenant_id): Path<String>, State(state): State<AppState>) {
-///     let _ = tenant_jwks(Path(tenant_id), State(state)).await;
-/// }
-/// ```
-///
-/// - Only public keys are returned; never expose private keys or seeds.
-/// - The algorithm is pinned to EdDSA to prevent RSA/HS confusion.
+/// `404` when the tenant does not exist, `500` when the store fails.
 #[utoipa::path(
     get,
     path = "/v1/tenants/{tenant_id}/.well-known/jwks.json",
@@ -73,8 +28,6 @@ pub async fn tenant_jwks(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<JwksResponse>, ApiError> {
-    // Step 1: Confirm the tenant exists before serving keys.
-    // This avoids leaking which tenants have keys and simplifies error handling.
     let exists = state
         .store
         .tenant_exists(&tenant_id)
@@ -84,16 +37,13 @@ pub async fn tenant_jwks(
         return Err(api_not_found("tenant not found"));
     }
 
-    // Step 2: Load tenant signing keys from storage.
-    // We intentionally fetch all keys (current + previous) for rotation support.
     let keys = state
         .store
         .get_tenant_signing_keys(&tenant_id)
         .await
         .map_err(|err| api_internal("failed to load signing keys", &err))?;
 
-    // Step 3: Convert internal Ed25519 keys to JWKS entries.
-    // Only the public `x` coordinate is exposed; no private material is serialized.
+    // Only the public `x` coordinate is exposed.
     let mut jwks = JwksResponse { keys: Vec::new() };
     for key in keys.all_keys() {
         let x = URL_SAFE_NO_PAD.encode(key.public_key);
@@ -110,27 +60,7 @@ pub async fn tenant_jwks(
     Ok(Json(jwks))
 }
 
-/// A single JWK entry for an Ed25519 public key.
-///
-/// Represents the minimal fields required for EdDSA verification.
-///
-/// - This is a data container; fields are populated by the JWKS handler.
-/// # Examples
-/// ```rust
-/// use controlplane::auth::jwks::JwkResponse;
-///
-/// let jwk = JwkResponse {
-///     kty: "OKP".to_string(),
-///     kid: "k1".to_string(),
-///     alg: "EdDSA".to_string(),
-///     use_field: "sig".to_string(),
-///     crv: "Ed25519".to_string(),
-///     x: "base64url".to_string(),
-/// };
-/// assert_eq!(jwk.kty, "OKP");
-/// ```
-///
-/// - Only public key material should be stored in `x`.
+/// One Ed25519 public key in JWK form.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct JwkResponse {
     pub kty: String,
@@ -142,35 +72,13 @@ pub struct JwkResponse {
     pub x: String,
 }
 
-/// A JWKS response payload containing one or more JWK entries.
-///
-/// Wraps a list of Ed25519 JWKs for JSON serialization.
-///
-/// - This is a data container; fields are populated by the JWKS handler.
-/// # Examples
-/// ```rust
-/// use controlplane::auth::jwks::{JwkResponse, JwksResponse};
-///
-/// let payload = JwksResponse { keys: vec![JwkResponse {
-///     kty: "OKP".to_string(),
-///     kid: "k1".to_string(),
-///     alg: "EdDSA".to_string(),
-///     use_field: "sig".to_string(),
-///     crv: "Ed25519".to_string(),
-///     x: "base64url".to_string(),
-/// }]};
-/// assert_eq!(payload.keys.len(), 1);
-/// ```
-///
-/// - Only include public keys; never serialize private key material.
+/// The JWKS payload.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct JwksResponse {
     pub keys: Vec<JwkResponse>,
 }
 
 fn alg_to_string(alg: jsonwebtoken::Algorithm) -> String {
-    // We map jsonwebtoken's enum to stable string values for JWKS output.
-    // The EdDSA branch is the only valid algorithm for Felix keys.
     match alg {
         jsonwebtoken::Algorithm::RS256 => "RS256",
         jsonwebtoken::Algorithm::RS384 => "RS384",

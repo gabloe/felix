@@ -1,59 +1,19 @@
-//! Resource string builders for Felix permissions.
-//!
-//! Provides helpers to build canonical resource identifiers used in policies.
-//!
-//! # How it fits
-//! Action handlers and policy writers use these helpers to keep resource strings
-//! consistent across broker and control-plane code.
-//!
-//! - Resource strings are prefixed by a stable kind (`tenant`, `namespace`, `stream`, `cache`).
-//! - Namespace, stream, and cache resources are always tenant-qualified.
-//! # Examples
-//! ```rust
-//! use felix_authz::{Namespace, StreamName, TenantId, stream_resource};
-//!
-//! let tenant = TenantId::new("tenant-a");
-//! let ns = Namespace::new("payments");
-//! let stream = StreamName::new("orders.v1");
-//! assert_eq!(
-//!     stream_resource(&tenant, &ns, &stream),
-//!     "stream:tenant-a/payments/orders.v1"
-//! );
-//! ```
-//!
-//! # Common pitfalls
-//! - Using raw strings instead of these helpers can drift from policy format.
-//! - Forgetting the namespace separator (`/`) breaks wildcard matching.
-//!
-//! # Future work
-//! - Introduce typed resource enums to avoid stringly-typed identifiers.
+//! Canonical resource strings for policies. Always build them through these
+//! helpers — a hand-rolled string that drops the `/` separator or the kind
+//! prefix silently stops matching wildcards.
 use crate::{CacheScope, Namespace, StreamName, TenantId};
 
-/// Build the canonical tenant resource string.
-///
-/// # Parameters
-/// - `tenant_id`: tenant identifier.
-///
-/// - Resource string in the form `tenant:{id}`.
+/// `tenant:{id}`
 pub fn tenant_resource(tenant_id: &TenantId) -> String {
     format!("tenant:{}", tenant_id.as_str())
 }
 
-/// Build the canonical namespace resource string.
-///
-/// - `namespace:{tenant_id}/{namespace}`.
+/// `namespace:{tenant}/{namespace}`
 pub fn namespace_resource(tenant_id: &TenantId, namespace: &Namespace) -> String {
     format!("namespace:{}/{}", tenant_id.as_str(), namespace.as_str())
 }
 
-/// Build the canonical stream resource string.
-///
-/// # Parameters
-/// - `tenant_id`: tenant identifier.
-/// - `namespace`: namespace identifier.
-/// - `stream`: stream name.
-///
-/// - `stream:{tenant_id}/{namespace}/{stream}`.
+/// `stream:{tenant}/{namespace}/{stream}`
 pub fn stream_resource(tenant_id: &TenantId, namespace: &Namespace, stream: &StreamName) -> String {
     format!(
         "stream:{}/{}/{}",
@@ -63,14 +23,7 @@ pub fn stream_resource(tenant_id: &TenantId, namespace: &Namespace, stream: &Str
     )
 }
 
-/// Build the canonical cache resource string.
-///
-/// # Parameters
-/// - `tenant_id`: tenant identifier.
-/// - `namespace`: namespace identifier.
-/// - `cache`: cache scope identifier.
-///
-/// - `cache:{tenant_id}/{namespace}/{cache}`.
+/// `cache:{tenant}/{namespace}/{cache}`
 pub fn cache_resource(tenant_id: &TenantId, namespace: &Namespace, cache: &CacheScope) -> String {
     format!(
         "cache:{}/{}/{}",

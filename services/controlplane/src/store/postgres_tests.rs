@@ -466,7 +466,6 @@ async fn satisfies_the_node_store_contract() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
-    // This test prevents regressions in schema, migrations, and change-log flows.
     let Some(url) = pg_url().await else {
         return Ok(());
     };

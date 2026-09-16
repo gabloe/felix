@@ -1,26 +1,18 @@
-//! Broker membership API handlers.
+//! Broker membership API. A broker registers on boot and then reports health
+//! on an interval; the control plane records the last report and a sweep marks
+//! silent nodes down.
 //!
-//! # Purpose and responsibility
-//! Accepts health reports from brokers and keeps their observed liveness
-//! current.
+//! A heartbeat records liveness only — it never revives a node the cluster
+//! already marked down, and never resurrects a superseded incarnation. The
+//! clock is always the control plane's, not the caller's, so a broker cannot
+//! claim a future heartbeat and outlive its timeout.
 //!
-//! # Where it fits in Felix
-//! A broker registers on boot and then reports health on an interval. The
-//! control plane records the last report; a sweep marks silent nodes down.
-//!
-//! # Key invariants and assumptions
-//! - A heartbeat records liveness. It never revives a node the cluster already
-//!   marked down, and never resurrects a superseded incarnation.
-//! - The clock is the control plane's, not the caller's, so a broker cannot
-//!   claim a future heartbeat and outlive its timeout.
-//!
-//! # Security considerations
-//! - Every write requires `node.manage` over the node being changed. A broker's
-//!   credential is scoped to `node:{its own id}`, so it cannot register, drain,
-//!   deregister, or report health for another broker; an operator holding
-//!   `cluster:*` can manage the whole fleet.
-//! - Reads require `node.view:cluster:*`. The listing exposes advertised
-//!   internal addresses, which is the cluster's network layout.
+//! Every write requires `node.manage` over the node being changed. A broker's
+//! credential is scoped to `node:{its own id}`, so it cannot register, drain,
+//! deregister, or report health for another broker; an operator holding
+//! `cluster:*` can manage the whole fleet. Reads require
+//! `node.view:cluster:*`, since the listing exposes the cluster's network
+//! layout.
 use crate::api::error::{
     ApiError, api_conflict, api_forbidden, api_internal, api_not_found, api_unauthorized,
 };

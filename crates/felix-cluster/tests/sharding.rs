@@ -1,9 +1,9 @@
 //! A stream whose shards live on different brokers.
 //!
-//! #240. Until now every record of every stream landed on shard 0, because the
-//! wire carried no routing key — so a stream configured with four shards had
-//! three that never received anything, and every shard-related test in the
-//! project was a single-shard test.
+//! Until routing keys landed (#240), the wire carried no key and every record
+//! of every stream went to shard 0 — so a stream configured with four shards
+//! had three that never received anything, and every shard-related test in
+//! the project was a single-shard test.
 //!
 //! These are the tests that could not previously be written.
 //!

@@ -1,7 +1,8 @@
 //! A stream whose shards are separate logs.
 //!
-//! #286. The registry used to open shard 0's log whatever shard it was asked
-//! for, while the replication driver and shard lifecycle opened the real index.
+//! The registry used to open shard 0's log whatever shard it was asked for
+//! (#286), while the replication driver and shard lifecycle opened the real
+//! index.
 //! They agreed only for shard 0, which is the only shard anything could reach —
 //! so a routing key (#240) would have written a record to one log and shipped
 //! another.

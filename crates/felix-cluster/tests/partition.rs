@@ -1,6 +1,7 @@
 //! A leader that is healthy and alone.
 //!
-//! #115's remaining fault. Killing, stopping and freezing a broker all make the
+//! The remaining fault from the replication work (#115). Killing, stopping
+//! and freezing a broker all make the
 //! cluster notice by the same means: the heartbeat stops. A **partition** does
 //! not. The broker keeps running and keeps heartbeating, so the control plane
 //! goes on believing it is fine, while it cannot reach a single follower.
