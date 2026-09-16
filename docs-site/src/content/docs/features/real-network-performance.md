@@ -22,6 +22,28 @@ p50, and **durability is free for throughput** (group commit makes the durable
 path match in-memory). Nothing here bottlenecks on Felix until the brokers are
 genuinely saturated.
 
+### Headline numbers
+
+All on **three 4-vCPU brokers** (`D4as_v5`), over a real network, with **real
+Microsoft Entra ID verifying every token** — nothing on loopback, nothing faked.
+
+| | Result |
+|---|---|
+| **Aggregate ingest (4 KiB)** | **1.63 GB/s** (13 Gbit/s), **zero loss** — and still scaling; the brokers aren't saturated |
+| **Message rate (256 B)** | **3.68 million messages / second** |
+| **Acked-publish latency** | **181 µs** p50 — sub-200 µs, tight across 5 trials |
+| **Publish → subscriber latency** | **190 µs** p50 — a **30×** cut from a single broker knob |
+| **Durable throughput** | **identical to in-memory** — group commit makes durability *free* |
+| **Network efficiency** | **~73 % of raw TCP line rate** — while encrypting every byte (QUIC/TLS 1.3) |
+| **Real-IdP token exchange** | **686 µs** p50 on the control plane |
+| **Watch fanout 500** | **1,100,000 / 1,100,000** delivered — every message to every watcher |
+
+That is roughly **136 MB/s of ingest per broker vCPU**, climbing **linearly** as
+clients are added — Felix does not become the bottleneck until the brokers' own
+cores are the wall. Every one of these is a measured number from a single
+provisioned session; the rest of this page is how they were taken and what they
+mean.
+
 ## How this was measured
 
 | | |
