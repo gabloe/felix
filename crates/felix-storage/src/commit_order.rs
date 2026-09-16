@@ -1,26 +1,27 @@
-// One authoritative order per durable stream.
+// One authoritative apply order per log.
 //
-// A durable publish has two halves separated by an `await`:
+// A durable write has two halves separated by an `await`:
 //
 //   1. the durable append, which assigns disk offsets under the segment lock
 //      and then waits for the fsync its policy requires, and
-//   2. everything the rest of the broker observes — the in-memory replay ring
-//      and the fanout to subscribers.
+//   2. everything the rest of the system observes — the broker's replay ring
+//      and fanout, or the cache's index and watch observer.
 //
-// Without coordination those halves can disagree. Two concurrent publishes A
-// and B take disk offsets in that order, both wait on the same group-commit
-// flush, and then resume in whatever order the scheduler picks. B can reach the
-// replay ring first, so the log on disk reads A, B while a cursor replay and a
-// live subscriber both see B, A. Under `FsyncMode::OnCommit` that window is a
-// whole device flush wide — milliseconds — so it is not a theoretical race.
+// Without coordination those halves can disagree. Two concurrent writes A and
+// B take disk offsets in that order, both wait on the same group-commit flush,
+// and then resume in whatever order the scheduler picks. B can apply first, so
+// the log on disk reads A, B while every reader sees B, A. Under
+// `FsyncMode::OnCommit` that window is a whole device flush wide —
+// milliseconds — so it is not a theoretical race.
 //
-// The sequencer closes it. Each publisher waits until every lower offset has
-// been applied, then applies its own and releases the next in line. Disk order
-// becomes the single source of truth for cursor order and delivery order alike.
+// The sequencer closes it. Each writer waits until every lower offset has been
+// applied, then applies its own and releases the next in line. Disk order
+// becomes the single source of truth for what readers observe.
 //
 // What this deliberately does *not* do is serialise the durable append itself.
 // Offsets are still assigned concurrently and flushes are still shared, so
 // group commit keeps its fan-in; only the cheap post-flush half is ordered.
+// The broker's publish path and the cache's write path both rely on that.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,10 +29,10 @@ use std::fmt;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-use felix_storage::log::Offset;
+use crate::log::Offset;
 
-/// Orders the post-durability half of publishes by their disk offset.
-pub(crate) struct CommitSequencer {
+/// Orders the post-durability half of writes by their disk offset.
+pub struct CommitSequencer {
     state: Mutex<SequenceState>,
     ready: Notify,
 }
@@ -84,7 +85,7 @@ impl fmt::Debug for CommitSequencer {
 }
 
 impl CommitSequencer {
-    pub(crate) fn new(next: Offset) -> Self {
+    pub fn new(next: Offset) -> Self {
         Self {
             state: Mutex::new(SequenceState {
                 next,
@@ -97,7 +98,7 @@ impl CommitSequencer {
 
     /// Restart the sequence at `next`, used when a stream adopts a recovered
     /// log and its offsets resume from the durable tail.
-    pub(crate) fn reset(&self, next: Offset) {
+    pub fn reset(&self, next: Offset) {
         {
             let mut state = self.state.lock();
             state.next = next;
@@ -110,8 +111,12 @@ impl CommitSequencer {
         self.ready.notify_waiters();
     }
 
-    #[cfg(test)]
-    pub(crate) fn next_offset(&self) -> Offset {
+    /// The offset whose turn it is — everything below it has applied.
+    ///
+    /// Also how a caller that appends outside the reserve path (recovery,
+    /// compaction, replication shipping) tells whether writers are in flight:
+    /// with nothing reserved and unresolved, this equals the log's next offset.
+    pub fn next_offset(&self) -> Offset {
         self.state.lock().next
     }
 
@@ -126,7 +131,7 @@ impl CommitSequencer {
     /// moving. Claiming the range only *after* a successful append is what
     /// stranded the stream: an abandoned range never released, and every
     /// subsequent publish waited on a turn that could not arrive.
-    pub(crate) fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
+    pub fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
         CommitTurn {
             sequencer: self,
             first_offset,
@@ -137,7 +142,7 @@ impl CommitSequencer {
 }
 
 /// A claim on one offset range. Releasing it lets the next range proceed.
-pub(crate) struct CommitTurn<'a> {
+pub struct CommitTurn<'a> {
     sequencer: &'a CommitSequencer,
     first_offset: Offset,
     next_offset: Offset,
@@ -150,7 +155,7 @@ impl CommitTurn<'_> {
     ///
     /// Cancellation-safe: dropping the guard mid-wait releases this range too,
     /// so a cancelled publisher cannot block the ones behind it.
-    pub(crate) async fn wait(&self) {
+    pub async fn wait(&self) {
         loop {
             // Register interest *before* testing, or a release landing between
             // the test and the await would be missed and this publisher would

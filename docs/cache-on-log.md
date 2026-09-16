@@ -18,7 +18,14 @@ streams needed it first:
 - **Crash safety.** CRC-verified records, torn-tail repair, interior corruption
   refused rather than silently accepted.
 - **Group commit and fsync policy.** A cache write is an append, so it inherits
-  the same throughput lever.
+  the same throughput lever. The write path is shaped like the stream publish
+  path to actually reach it: a short lock claims the offset and a place in the
+  apply order (`felix-storage`'s `CommitSequencer`, shared with the broker),
+  the fsync runs outside any lock so concurrent writers share one flush, and
+  the index update and watch notification apply strictly in offset order
+  afterwards. Durability still gates the acknowledgement *and* visibility: a
+  staged write is invisible to `get` and to watchers until its commit
+  completes and its turn arrives.
 - **Replication.** The driver ships log records and does not care what semantic
   reads them, so the shipping, quorum accounting, and catch-up tracking are all
   reusable as they stand. What is *not* free is opening the right log: the
@@ -99,8 +106,12 @@ byte in place.
 
 It runs when the log has grown past a multiple of its live bytes, so the cost is
 proportional to the garbage and a cache that is mostly live is never compacted.
-Writes are excluded for the duration; a cache write is already serialised behind
-the index lock, so this adds no new contention, only a longer hold.
+It runs only from the apply step of a write whose record is the newest in the
+log, with nothing staged behind it — compaction swaps the shard directory, and
+a record another writer has staged but not yet committed lives only in the old
+one, so swapping under it would silently drop an acknowledged write. Under a
+gapless write storm that defers compaction to the first quiet apply, which every
+burst ends with.
 
 **Compaction continues the offset space rather than restarting it.** The live set
 is appended at the current tail, so an offset names the same record for the life
@@ -167,11 +178,13 @@ bounded-queue-with-`try_send` discipline gives fanout that never blocks a
 writer. `docs/protocol.md` specifies the messages; what follows is the
 reasoning.
 
-**The write order is observed under the shard's write lock.** The store reports
-each applied write to an observer while still holding the lock that serialised
-it, which is what makes the order watchers see *the* order rather than a race.
-The observer must not block there, so fanout is `try_send` against bounded
-queues — the same publisher-never-blocks rule stream fanout follows.
+**The write order watchers see is disk-offset order.** The store reports each
+applied write to an observer under the shard's apply lock, and applies run
+strictly by offset — the same commit sequencer the stream publish path uses.
+Fsyncs overlap across concurrent writers (that is what group-commits them), but
+what the index and every watcher observe is re-serialised into the order the
+log reads. The observer must not block there, so fanout is `try_send` against
+bounded queues — the same publisher-never-blocks rule stream fanout follows.
 
 **The join is register-before-read.** A watch resuming from an offset registers
 its queue first, then reads the log's tail, then serves `[from_offset, tail)`

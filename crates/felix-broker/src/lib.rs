@@ -7,7 +7,8 @@
 // - `error` / `config`: shared error type, capacity defaults, queue policy.
 // - `keys`: map keys plus their borrowed lookup twins.
 // - `delivery`: shared delivery batches and queue-depth accounting.
-// - `commit_order`: one authoritative publish order per durable stream.
+// - `felix_storage::commit_order`: one authoritative apply order per durable
+//   log, shared with the cache write path.
 // - `stream_state`: per-stream subscriber registry, snapshot, and replay log.
 // - `durable`: disk-backed logs for streams registered with `durable: true`.
 // - `subscription`: subscriber-facing receive handles.
@@ -22,7 +23,6 @@ mod telemetry;
 
 mod broker;
 pub mod cache_watch;
-mod commit_order;
 mod config;
 pub mod consumer_groups;
 
