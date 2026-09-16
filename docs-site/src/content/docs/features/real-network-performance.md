@@ -14,11 +14,13 @@ provider on the hot path**.
 The short version: on three 4-vCPU brokers, **Felix's aggregate ingest scales
 linearly with offered load to ~1.63 GB/s (13 Gbit/s) with zero loss — and only
 there do the brokers' own CPUs become the limit.** A single load generator
-already moves **1.09 GB/s** (or **3.68 M messages/s**), ~73 % of the raw network
-line rate while encrypting every byte, before *its* NIC caps out; a second one
-lifts the total to 1.63 GB/s with the first undegraded. Acknowledged-publish
-latency is **~181 µs** p50, and **durability is free for throughput**. Nothing
-here bottlenecks on Felix until the brokers are genuinely saturated.
+already moves **1.09 GB/s** (or **3.68 M messages/s**) — ~73 % of a single
+NIC's raw line rate while encrypting every byte, so it is bound by *its own CPU*
+doing the crypto, not by the network; a second generator lifts the total to
+1.63 GB/s with the first undegraded. Acknowledged-publish latency is **~181 µs**
+p50, and **durability is free for throughput** (group commit makes the durable
+path match in-memory). Nothing here bottlenecks on Felix until the brokers are
+genuinely saturated.
 
 ## How this was measured
 
@@ -182,21 +184,32 @@ limit, which the next section identifies.
 The plateau from 6→24 publishers is the tell, and two measurements confirm it is
 **not the brokers**:
 
-- **Raw network:** the load-gen VM's NIC tops out at **1.49 GB/s** (iperf3).
-  Felix's 1.09 GB/s of *application* payload is **~73 % of raw TCP line rate** —
-  while encrypting (QUIC/TLS 1.3), framing a durable log record, and routing
-  across 12 shards on 3 brokers.
+- **Raw network vs Felix, one path:** a single load-gen NIC ↔ a single broker
+  NIC moves **1.49 GB/s** of raw TCP (`iperf3`). Felix's single-generator
+  1.09 GB/s of *application* payload — **~73 % of that**, while encrypting
+  (QUIC/TLS 1.3), framing a durable log record, and routing across 12 shards — is
+  *below* the raw line rate, so a single generator is not even NIC-bound: it is
+  **CPU-bound doing the crypto** on 4 vCPUs, with NIC headroom to spare.
 - **Broker CPU during a sustained 1 GB/s run:** 73 % / 48 % / 42 % across the
   three brokers. Warm, not saturated — real headroom remains.
 
-So the ceiling at one load generator is that VM's NIC, not the brokers. Proven
-directly by adding a **second** load generator (a D2) and driving both at once:
+So the ceiling at one load generator is that VM's own compute, not the brokers
+and not any single link. Proven directly by adding a **second** load generator
+(a D2), giving a **second NIC and CPU**, and driving both at once:
 
 | Source | Throughput | Retries |
 |---|---|---|
 | Load generator 1 (D4) | 1,084 MB/s | 0 |
 | Load generator 2 (D2) | 549 MB/s | 0 |
 | **Aggregate** | **1,633 MB/s (13.1 Gbit/s)** | 0 |
+
+The aggregate exceeds the 1.49 GB/s single-path `iperf3` figure precisely
+*because* it is not a single path: two generator NICs fan out across three
+broker NICs (each broker takes ~1/3, ≈ 0.55 GB/s), so several NIC pairs carry it
+in parallel and no one link is pushed past its own rate. (This run used the
+**non-durable** stream; the durable-equals-in-memory result below was measured
+at one generator, so 1.63 GB/s *durable* is a well-founded inference, not a
+measured number.)
 
 ```mermaid
 xychart-beta
