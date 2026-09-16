@@ -41,12 +41,10 @@ tasks:
     cmds:
       # Same reason as `test`: felix-cluster's loadgen integration test shells
       # out to a prebuilt felix-loadgen, which the coverage run (like a plain
-      # `cargo test`) does not build on its own. But coverage builds into
-      # target/llvm-cov-target, not target/debug — so build it there, with the
-      # coverage env `show-env` exports, or the test looks in the wrong dir.
-      - |
-        eval "$(cargo llvm-cov show-env --export-prefix)"
-        cargo build -p felix-loadgen
+      # `cargo test`) does not build on its own. cargo llvm-cov uses
+      # target/llvm-cov-target, not target/debug, so build the binary straight
+      # into that dir — the exact path the test resolves relative to itself.
+      - "cargo build -p felix-loadgen --target-dir target/llvm-cov-target"
       - |
         if [ -z "${CI:-}" ]; then
           task pg:down
