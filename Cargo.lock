@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent"
-version = "0.3.1"
+version = "0.4.0-preview"
 
 [[package]]
 name = "ahash"
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "broker"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "controlplane"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1172,7 +1172,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "felix-authz"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "base64 0.23.1",
  "casbin",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "felix-broker"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "ahash 0.8.12",
  "arc-swap",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "felix-cluster"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "axum",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "felix-common"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "metrics",
  "serde",
@@ -1267,7 +1267,7 @@ dependencies = [
 
 [[package]]
 name = "felix-conformance"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1289,11 +1289,11 @@ dependencies = [
 
 [[package]]
 name = "felix-crypto"
-version = "0.3.1"
+version = "0.4.0-preview"
 
 [[package]]
 name = "felix-loadgen"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1307,14 +1307,14 @@ dependencies = [
 
 [[package]]
 name = "felix-metadata"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "felix-router"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "arc-swap",
  "felix-common",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "felix-storage"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "anyhow",
  "libc",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.3.1"
+version = "0.4.0-preview"
 dependencies = [
  "base64 0.23.1",
  "bytes",
