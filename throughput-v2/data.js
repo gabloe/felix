@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789570163784,
+  "lastUpdate": 1789588820214,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8424,6 +8424,58 @@ window.BENCHMARK_DATA = {
             "range": "20205.07",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 701652.43\nmean: 710131.39\nstdev: 20205.07\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1139ccb0202102c9c05c2d5c111e3e64dcea9f80",
+          "message": "perf(harness): NVMe brokers, release-binary CP, configurable shards (#386)\n\n- Local-NVMe brokers: useLocalNvme + brokerVmSize/brokerCount params; broker.yaml\n  mounts the SKU's ephemeral local disk (RAID0 across azure/local NVMe, or the\n  Dadsv5 resource disk) at /data, bypassing the ~170 MB/s Premium-SSD throughput\n  cap. Never touches the OS disk.\n- Control plane runs the v0.3.1 RELEASE binary again (the source-build was a\n  stopgap before v0.3.1 shipped); default RELEASE_TAG bumped to v0.3.1. Keeps the\n  env-file pre-generation fix (systemd validates EnvironmentFile before\n  ExecStartPre, so a fresh CP could not cold-start without it).\n- Configurable SHARDS (default 12, was hardcoded 1) with delete-before-create so\n  a reseed can change shard count. A single shard pins a stream's whole ingest to\n  one broker, which caps throughput at one broker's write path on fast disk.\n- run-nvme-ingest.sh / run-nvme-multi.sh: durable-vs-in-memory ramp and the\n  multi-loadgen aggregate with broker CPU sampling.\n- README: MSDN -> Azure.",
+          "timestamp": "2026-09-16T12:57:39-07:00",
+          "tree_id": "bc35664a013e0a4162feb25fbcf6aeefb996618b",
+          "url": "https://github.com/gabloe/felix/commit/1139ccb0202102c9c05c2d5c111e3e64dcea9f80"
+        },
+        "date": 1789588819615,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231376.7,
+            "range": "4403.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231376.70\nmean: 231703.64\nstdev: 4403.29\ncv: 1.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231376.7,
+            "range": "4403.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231376.70\nmean: 231703.64\nstdev: 4403.29\ncv: 1.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55818.96,
+            "range": "1069.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55818.96\nmean: 55535.90\nstdev: 1069.95\ncv: 1.93%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558189.59,
+            "range": "10699.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558189.59\nmean: 555359.00\nstdev: 10699.49\ncv: 1.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
