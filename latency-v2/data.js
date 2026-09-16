@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789552185831,
+  "lastUpdate": 1789570161335,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10626,6 +10626,72 @@ window.BENCHMARK_DATA = {
             "range": "303.49",
             "unit": "us",
             "extra": "trials: 5\nmedian: 913.00\nmean: 939.60\nstdev: 303.49\ncv: 32.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffdc70fe5732a01e6dfd6de4b00a6f8c3ca54d2b",
+          "message": "docs(perf): record the Redpanda comparison + correct the durable claim (#383)\n\nRecords the first comparison run (Felix vs Redpanda, same D4as_v5 hardware, TLS\non, rf=1, write_caching) and the hardware findings it surfaced:\n\n- Ingest is disk-bound (~170 MB/s Premium SSD, measured); not an engine\n  differentiator here. Corrects the 'durable ~1 GB/s' claim as a page-cache\n  burst, not a sustained rate.\n- Latency is Felix's clean win: acked-publish p99 ~224us vs Redpanda's 70-136ms\n  produce-ack p99 (flush stalls) even at 1000/s. Caveat kept: that tail is\n  disk/config-sensitive.\n- Fanout ~ballpark (Redpanda 912K msg/s @ 8 groups vs Felix 1.0M @ 500 subs) but\n  the JVM Kafka clients capped before the brokers, so it is a floor.\n\nAdds the comparison harness under scripts/perf/azure/compare/ (Bicep, TLS setup,\ningest/fanout benches for Kafka-wire + NATS). Ingest needs NVMe and fanout needs\na lighter client for the full picture; both are the next run.",
+          "timestamp": "2026-09-16T07:46:57-07:00",
+          "tree_id": "52f39e127af666fac996eaabe45a7b3658de9914",
+          "url": "https://github.com/gabloe/felix/commit/ffdc70fe5732a01e6dfd6de4b00a6f8c3ca54d2b"
+        },
+        "date": 1789570159634,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 80,
+            "range": "4.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 80.00\nmean: 82.00\nstdev: 4.06\ncv: 4.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 119,
+            "range": "7.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 119.00\nmean: 118.60\nstdev: 7.50\ncv: 6.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 146,
+            "range": "255.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 146.00\nmean: 279.00\nstdev: 255.63\ncv: 91.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 112,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 112.00\nmean: 111.20\nstdev: 1.92\ncv: 1.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 260,
+            "range": "10.43",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 260.00\nmean: 259.60\nstdev: 10.43\ncv: 4.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 739,
+            "range": "964.20",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 739.00\nmean: 1203.80\nstdev: 964.20\ncv: 80.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
