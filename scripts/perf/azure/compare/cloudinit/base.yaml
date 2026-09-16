@@ -1,0 +1,56 @@
+#cloud-config
+# Common base for every VM in a comparison session. Deliberately does NOT install
+# any of the systems under test — Redpanda, Kafka, and NATS are laid down and torn
+# down over run-command so one set of VMs serves all three in turn. This only puts
+# down what every run needs and the tuning both sides of the comparison get.
+package_update: true
+packages:
+  - openjdk-21-jre-headless   # the Kafka perf CLIs (kafka-producer-perf-test, etc.)
+  - iperf3                    # network-ceiling check, same instrument as the Felix run
+  - jq
+  - curl
+  - chrony                    # keep clocks close so cross-VM latency reads are honest
+  - numactl
+
+write_files:
+  # The same socket-buffer ceilings the Felix brokers were tuned with. Kafka,
+  # Redpanda, and NATS are all TCP; stock Linux caps a TCP window at ~212 KiB,
+  # which throttles a single high-bandwidth-delay connection well below the NIC.
+  # Applying it here means neither side of the comparison is left on stock buffers.
+  - path: /etc/sysctl.d/99-perf.conf
+    content: |
+      net.core.rmem_max = 26214400
+      net.core.wmem_max = 26214400
+      net.core.rmem_default = 26214400
+      net.core.wmem_default = 26214400
+      net.ipv4.tcp_rmem = 4096 87380 26214400
+      net.ipv4.tcp_wmem = 4096 65536 26214400
+      net.core.netdev_max_backlog = 250000
+      net.ipv4.tcp_mtu_probing = 1
+      fs.file-max = 2097152
+
+  # Format and mount the data disk (LUN 0) if this VM has one — brokers do,
+  # clients do not. The Azure-provided by-lun symlink is stable across reboots
+  # where /dev/sd* names are not.
+  - path: /usr/local/sbin/mount-data.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -e
+      DEV=/dev/disk/azure/scsi1/lun0
+      [ -e "$DEV" ] || exit 0
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        mkfs.ext4 -F -m 0 "$DEV"
+      fi
+      mkdir -p /data
+      grep -q '/data' /etc/fstab || echo "$DEV /data ext4 defaults,noatime,nofail 0 2" >> /etc/fstab
+      mount -a
+      chmod 1777 /data
+
+runcmd:
+  - sysctl --system
+  - /usr/local/sbin/mount-data.sh
+  - bash -c 'echo "* soft nofile 1048576" >> /etc/security/limits.conf'
+  - bash -c 'echo "* hard nofile 1048576" >> /etc/security/limits.conf'
+  - systemctl enable --now chrony || systemctl enable --now chronyd || true
+  - touch /var/lib/cloud/instance/base-ready

@@ -47,3 +47,5 @@ scripts/perf/azure/sessions/
 scripts/perf/azure/*.env
 !scripts/perf/azure/session.env.example
 scripts/perf/azure/main.json
+scripts/perf/azure/compare/sessions/
+scripts/perf/azure/compare/*.json
