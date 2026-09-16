@@ -31,6 +31,11 @@ pub struct Common {
     pub batch: usize,
     pub concurrency: usize,
     pub environment: String,
+    // Isolation probe: make the last `slow_subscribers` of the fanout dawdle
+    // `slow_delay` per delivery, so a healthy subscriber (index 0, the sampled
+    // one) and the publisher can be measured while others fall behind and drop.
+    pub slow_subscribers: usize,
+    pub slow_delay: Duration,
 }
 
 const HEADER: usize = 16;
@@ -150,9 +155,15 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
     let expected_per_sub = (common.warmup + common.total) as u64;
     let delivered = Arc::new(AtomicU64::new(0));
     let mut collectors = Vec::new();
+    // The slow subscribers are the highest indices, so index 0 — the one whose
+    // delivery latency is sampled — is always healthy.
+    let fanout = common.fanout.max(1);
+    let slow_from = fanout.saturating_sub(common.slow_subscribers);
     for (index, (client, mut subscription)) in receivers.into_iter().enumerate() {
         let delivered = Arc::clone(&delivered);
         let warmup = common.warmup as u64;
+        let is_slow = common.slow_subscribers > 0 && index >= slow_from;
+        let slow_delay = common.slow_delay;
         collectors.push(tokio::spawn(async move {
             // Sample delivery latency on the first subscriber only; count
             // deliveries on all. Sampling everywhere multiplies memory for a
@@ -173,6 +184,12 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
                                 samples.record(Duration::from_nanos(now.saturating_sub(t0)));
                             }
                         }
+                        // A slow subscriber drains behind the publisher; under
+                        // DropNew its queue overflows and the broker sheds its
+                        // events, which is exactly the isolation being probed.
+                        if is_slow && !slow_delay.is_zero() {
+                            tokio::time::sleep(slow_delay).await;
+                        }
                     }
                     Ok(Ok(None)) | Ok(Err(_)) => break,
                     // Quiet too long: the run is over as far as this
@@ -181,7 +198,7 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
                 }
             }
             drop(client);
-            (samples, received, highest_seq)
+            (samples, received, highest_seq, is_slow)
         }));
     }
 
@@ -269,11 +286,20 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
 
     let mut delivery_samples = Samples::default();
     let mut received_total = 0u64;
+    let mut healthy_received = 0u64;
+    let mut slow_received = 0u64;
     for collector in collectors {
-        let (samples, received, _highest) = collector.await.context("collector")?;
+        let (samples, received, _highest, is_slow) = collector.await.context("collector")?;
         delivery_samples.merge(samples);
         received_total += received;
+        if is_slow {
+            slow_received += received;
+        } else {
+            healthy_received += received;
+        }
     }
+    let slow_count = common.slow_subscribers.min(fanout);
+    let healthy_count = fanout - slow_count;
 
     let expected_total = expected_per_sub * common.fanout.max(1) as u64;
     let unaccounted = expected_total.saturating_sub(received_total);
@@ -321,6 +347,22 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
     println!("  effective throughput = {measured_throughput:.1} msg/s");
     println!("  delivered throughput = {delivered_throughput:.1} msg/s");
     println!("  delivered per-sub throughput = {per_sub:.1} msg/s");
+    if common.slow_subscribers > 0 {
+        println!(
+            "  isolation: {healthy_count} healthy sub(s) got {healthy_received} ({}/sub of {expected_per_sub} expected); {slow_count} slow sub(s) got {slow_received} ({}/sub) — slow-delay {}ms",
+            if healthy_count > 0 {
+                healthy_received / healthy_count as u64
+            } else {
+                0
+            },
+            if slow_count > 0 {
+                slow_received / slow_count as u64
+            } else {
+                0
+            },
+            common.slow_delay.as_millis(),
+        );
+    }
     if let (Some(ack), Some(delivery)) = (ack, delivery) {
         println!(
             "  delivery (publish -> subscriber): p50 = {}, p99 = {}, p999 = {} (ack latency above)",
@@ -347,6 +389,14 @@ pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
         "publish_throughput_msg_s": publish_throughput,
         "effective_throughput_msg_s": measured_throughput,
         "delivered_throughput_msg_s": delivered_throughput,
+        "slow_subscribers": common.slow_subscribers,
+        "slow_delay_ms": common.slow_delay.as_millis() as u64,
+        "healthy_subscribers": healthy_count,
+        "healthy_received": healthy_received,
+        "slow_received": slow_received,
+        "healthy_received_per_sub": if healthy_count > 0 { healthy_received / healthy_count as u64 } else { 0 },
+        "slow_received_per_sub": if slow_count > 0 { slow_received / slow_count as u64 } else { 0 },
+        "expected_per_sub": expected_per_sub,
         "ack_latency_us": ack.map(|p| serde_json::json!({
             "p50": p.p50_us, "p99": p.p99_us, "p999": p.p999_us, "max": p.max_us,
             "samples": common.total,

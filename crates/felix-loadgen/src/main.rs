@@ -62,6 +62,8 @@ fn usage() -> ! {
   --total <n>                 measured operations (default: 20000)
   --payload-bytes <n>         payload size (default: 256)
   --fanout <n>                subscribers or watchers (default: 1)
+  --slow-subscribers <n>      make the last n pubsub subscribers dawdle (default: 0)
+  --slow-delay-ms <n>         per-delivery delay for a slow subscriber (default: 0)
   --batch <n>                 publish batch size; 1 = per-message ack (default: 1)
   --binary                    binary publish framing (no per-message ack)
   --concurrency <n>           workers for cache/counter (default: 8)
@@ -90,6 +92,8 @@ fn parse_args() -> Result<Args> {
     let mut binary = false;
     let mut concurrency = 8usize;
     let mut environment = "unknown".to_string();
+    let mut slow_subscribers = 0usize;
+    let mut slow_delay_ms = 0u64;
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -129,6 +133,16 @@ fn parse_args() -> Result<Args> {
                     .context("--payload-bytes")?
             }
             "--fanout" => fanout = value("--fanout")?.parse().context("--fanout")?,
+            "--slow-subscribers" => {
+                slow_subscribers = value("--slow-subscribers")?
+                    .parse()
+                    .context("--slow-subscribers")?
+            }
+            "--slow-delay-ms" => {
+                slow_delay_ms = value("--slow-delay-ms")?
+                    .parse()
+                    .context("--slow-delay-ms")?
+            }
             "--batch" => batch = value("--batch")?.parse().context("--batch")?,
             "--binary" => binary = true,
             "--concurrency" => {
@@ -163,6 +177,8 @@ fn parse_args() -> Result<Args> {
             batch,
             concurrency,
             environment,
+            slow_subscribers,
+            slow_delay: std::time::Duration::from_millis(slow_delay_ms),
         },
         scenario,
         stream,
