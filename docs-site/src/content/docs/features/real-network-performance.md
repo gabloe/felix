@@ -273,6 +273,19 @@ so the 3.6 ms device `fsync` is amortised to nothing. Durability costs latency,
 not throughput — provided there is concurrency to amortise it (see the cache
 path below for the counter-example).
 
+:::caution[This is a burst, not a sustained rate]
+A later disk measurement forces an honest correction here. The Premium SSD on
+these VMs sustains only **~170 MB/s** of writes (`dd`, direct + fsync). You
+cannot fsync a gigabyte a second onto a 170 MB/s disk — so the ~1 GB/s
+*durable* figures above are a **page-cache burst**: over the measured window the
+writes land in the OS page cache and the run finishes before they are all
+flushed. Group commit genuinely makes durability free *for a burst that fits in
+cache*; **sustained** durable throughput on this hardware is bounded by the disk,
+~170 MB/s, the same wall every log-based system hits here. Testing Felix's true
+sustained durable ceiling needs NVMe (a follow-up run). The in-memory figures are
+unaffected — they touch no disk.
+:::
+
 ## Fanout: encode once, deliver to everyone
 
 Ingest is the axis QUIC costs Felix on. Fanout is the axis the architecture is
@@ -438,8 +451,39 @@ broker), matched replication factor, partition/shard count, and publish batching
 — and **TLS on every system**, since Felix cannot turn it off and a plaintext
 competitor is handed a win Felix structurally can't take. NATS *core* is
 at-most-once and not comparable to a durable stream at all; only JetStream is.
-That matched-configuration harness is being built out alongside this suite; its
-results are their own page.
+That matched-configuration harness lives in `scripts/perf/azure/compare/`. The
+first system through it is **Redpanda** (v26.2.2, same three D4as_v5 brokers,
+TLS on, rf=1, `write_caching` on to ack from memory the way Felix's headline
+does). What that first run found is as much about the *hardware* as the engines:
+
+- **Ingest is disk-bound, and the disk is the story.** A raw `dd` on these VMs'
+  Premium SSD sustains **~170 MB/s** (direct + fsync). Every durable log is
+  capped there — Redpanda measured **45–80 MB/s** (its per-partition write
+  pattern doesn't even reach the sequential ceiling), and Felix's own sustained
+  durable rate is bounded by the same wall (see the durability caution above).
+  So on this hardware ingest does not separate the engines; it measures the SSD.
+- **Latency is where Felix separates, cleanly.** Felix's acked-publish p99 is
+  **~224 µs**. Redpanda's produce→ack p99 is **70–136 ms** — *at a trivial
+  1000 msg/s* — with a sub-millisecond median but a tail dominated by periodic
+  flush stalls on this SSD. Felix's ack path doesn't gate on a disk flush, so its
+  tail stays tight where Redpanda's does not. **The honest caveat:** that
+  Redpanda tail is disk- and config-sensitive; on NVMe, or tuned by someone who
+  runs Redpanda for a living, it would be far better. This is *on this hardware*,
+  not a claim about Redpanda's ceiling.
+- **Fanout lands in the same ballpark, but the instrument ran out first.**
+  Redpanda served ~912 K msg/s across 8 consumer groups re-reading one topic —
+  next to Felix's 1.0 M msg/s to 500 subscribers — but the JVM Kafka clients on
+  4-vCPU VMs saturated before the brokers did, so that is a floor on Redpanda,
+  not its ceiling. The architectural difference (Felix encodes once; Kafka-style
+  consumers each re-read the log) is real but this rig could not push it to the
+  point where it shows in broker CPU.
+
+The two honest limits: **ingest needs NVMe** (so the test measures the engine,
+not a 170 MB/s SSD) and **fanout needs a lighter client** (so the broker, not a
+JVM-per-consumer on a small VM, is the bottleneck). Both are the next run —
+including re-running the Felix suite on NVMe for its true sustained-durable
+ceiling. Kafka and NATS go through the same harness once the rig can do them
+justice. Full configs and raw output are in `scripts/perf/azure/compare/`.
 
 ## What we found and fixed
 
