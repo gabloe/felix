@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789531809182,
+  "lastUpdate": 1789533668220,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8164,6 +8164,58 @@ window.BENCHMARK_DATA = {
             "range": "8435.74",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 943249.85\nmean: 943953.99\nstdev: 8435.74\ncv: 0.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9df8db28fb7d07e2b72298d88da6d9b35f921c15",
+          "message": "release: v0.3.1 (#378)\n\nBump workspace 0.3.0 -> 0.3.1 and add the CHANGELOG entry. The shipped change\nis #371's control-plane fix: accept alg-less Entra JWKS keys (0.3.0 rejected\nevery Entra/RS256 token) and make the exchange-token TTL configurable via\nFELIX_EXCHANGE_TOKEN_TTL_SECONDS.",
+          "timestamp": "2026-09-15T21:38:37-07:00",
+          "tree_id": "9c1aca09096a58970949060bf081902851ddde5e",
+          "url": "https://github.com/gabloe/felix/commit/9df8db28fb7d07e2b72298d88da6d9b35f921c15"
+        },
+        "date": 1789533667327,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 239415.46,
+            "range": "4620.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239415.46\nmean: 238610.32\nstdev: 4620.28\ncv: 1.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 239415.46,
+            "range": "4620.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239415.46\nmean: 238610.32\nstdev: 4620.28\ncv: 1.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56894.31,
+            "range": "637.78",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56894.31\nmean: 57106.76\nstdev: 637.78\ncv: 1.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 568943.15,
+            "range": "6377.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 568943.15\nmean: 571067.57\nstdev: 6377.81\ncv: 1.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
