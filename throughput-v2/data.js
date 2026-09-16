@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789486979022,
+  "lastUpdate": 1789529731730,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8060,6 +8060,58 @@ window.BENCHMARK_DATA = {
             "range": "35936.15",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 561751.37\nmean: 539039.70\nstdev: 35936.15\ncv: 6.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61c48adc592a8883cbdd54247f68a3bc39967e0f",
+          "message": "control plane + loadgen: real-IdP fixes, the perf instrument, and CI (#371)\n\n* fix(controlplane): accept JWKS signing keys that omit the optional `alg`\n\n`ensure_jwk_matches_algorithm` required the JWK to carry an `alg` member and\nrejected the key as `InvalidJwk(\"missing alg\")` otherwise. But `alg` is\nOPTIONAL in a JWK (RFC 7517 §4.4), and major IdPs — Microsoft Entra among them\n— publish their signing keys without it. The effect was that the control\nplane's token exchange 401'd every token issued by such an IdP: the header\nalgorithm was allowlisted and the key was found by `kid`, but the alg-less JWK\nfailed this check before signature verification.\n\nWhen `alg` is present it must still match the token's algorithm. When it is\nabsent, the existing key-type/params match (RSA for RS*/PS*, EC P-256 for\nES256) is what binds the key to the algorithm, and the token header's `alg` is\nalready checked against the configured allowlist — so nothing is loosened for\nkeys that do declare `alg`.\n\nRegression test: an RS256 token validates against an alg-less RSA JWK, which\nfails before the fix.\n\n* feat(controlplane): make exchanged-token TTL configurable\n\nThe token exchange minted a fixed 900s Felix token. That is right for an\ninteractive client that re-exchanges freely, but a broker holds its node token\nstatically for its whole lifetime (services/broker reads it once, no refresh),\nso a 15-minute token means the broker drops out of the cluster a quarter hour\nin. FELIX_EXCHANGE_TOKEN_TTL_SECONDS lets a deployment raise it; the default is\nunchanged.\n\n* fix(ci): build felix-loadgen before the workspace test run\n\nfelix-cluster's loadgen integration test shells out to a prebuilt target/debug/felix-loadgen, but cargo test only produces a bin's runnable executable when that bin's own package has integration tests — felix-loadgen's only consumer is a test in another crate, so 'cargo test --workspace' never built it and the cache/watch cases failed 'felix-loadgen not found'. Build it up front in the test task.\n\n* chore(loadgen): make felix-loadgen a releasable, CI-clean workspace member\n\nfelix-loadgen merged in #370 without the release wiring every crate needs, so publish:check and the coverage job fail on any branch based on main: it had no publish classification, no LICENSE file, and (like felix-cluster) the coverage task never built its binary for the felix-cluster integration test. Mark it publish=false, classify it AGPL-3.0-only (it links Felix internals via felix-client) in LICENSING.md and the check script, add its LICENSE, and build it in the coverage task too.\n\n* fix(ci): build felix-loadgen into the llvm-cov target dir for coverage\n\nThe coverage job runs cargo llvm-cov, which uses target/llvm-cov-target, not target/debug — so my earlier plain 'cargo build -p felix-loadgen' put the binary where the coverage run's felix-cluster test does not look. Build it via 'cargo llvm-cov show-env' so it lands in the coverage target dir with the coverage env.\n\n* fix(ci): build felix-loadgen straight into the llvm-cov target dir\n\nThe show-env approach did not apply (the eval left the target dir unchanged, so the build went to target/debug). Build with an explicit --target-dir target/llvm-cov-target, which is the exact path the felix-cluster loadgen test resolves under coverage. Verified locally that the binary lands there.\n\n* feat(loadgen): queue, retained, and aggregate-ingest scenarios\n\nqueue: consumer-group drain with cumulative acks + redelivery accounting (follows the shard-leader redirect). retained: late-joiner time-to-complete-state across roster sizes. ingest: N publishers across brokers, fire-and-forget binary, no subscribers — the aggregate write ceiling, measured the way multi-partition systems quote it. Folded into #371 alongside the loadgen crate hardening so the whole crate lands CI-green in one place.\n\n* fix(ci): pass --no-clean so coverage keeps the prebuilt felix-loadgen\n\nVerified locally: 'cargo llvm-cov' cleans build artifacts at the start of its\nrun, which deletes the felix-loadgen binary built in the preceding step — so the\nfelix-cluster loadgen test still could not find it. --no-clean skips that clean;\nthe binary built into target/llvm-cov-target survives, and CI starts fresh so no\nstale coverage data is a concern.",
+          "timestamp": "2026-09-15T20:33:16-07:00",
+          "tree_id": "991c59f455bf8bdc3edafedc12789b8befdeb9d4",
+          "url": "https://github.com/gabloe/felix/commit/61c48adc592a8883cbdd54247f68a3bc39967e0f"
+        },
+        "date": 1789529730981,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 316489.64,
+            "range": "3513.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316489.64\nmean: 317086.82\nstdev: 3513.98\ncv: 1.11%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 316489.64,
+            "range": "3513.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316489.64\nmean: 317086.82\nstdev: 3513.98\ncv: 1.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75436.84,
+            "range": "1490.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75436.84\nmean: 75538.92\nstdev: 1490.47\ncv: 1.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 754368.36,
+            "range": "14904.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 754368.36\nmean: 755389.21\nstdev: 14904.74\ncv: 1.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
