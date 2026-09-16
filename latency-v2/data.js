@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789588815094,
+  "lastUpdate": 1789598945873,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10758,6 +10758,72 @@ window.BENCHMARK_DATA = {
             "range": "821.27",
             "unit": "us",
             "extra": "trials: 5\nmedian: 752.00\nmean: 1248.80\nstdev: 821.27\ncv: 65.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc480efa23f2348561a473c78b5f42062d753cc6",
+          "message": "fix(placement): bounded-load rendezvous + comment cleanup sweep (#388)\n\n* fix(placement): bounded-load rendezvous + comment cleanup sweep\n\nTwo changes, one branch:\n\nPlacement: pure highest-random-weight rendezvous balances only in the\nlimit of many keys. At real cluster scale it skewed hard (24 shards over\nthree brokers at 11/5/8; a staggered start could funnel everything onto\nthe first broker to register). Placement now skips a node already\ncarrying its balanced share so the shard spills to the next-highest\nnode, with a second uncapped pass so a full-but-uncapped cluster still\nplaces. Regression test pins the even split at small shard counts.\n\nComments: cross-cutting sweep removing ~2,800 lines of boilerplate\ncomments (templated section headers, step-by-step narration, restating\ntest names, trivial doc-examples) concentrated in felix-authz, the\ncontrol-plane auth/API stack, and a few QUIC transport files. Kept and\ntightened the genuine why-comments; issue references restructured so\nsentences stand alone with (#NNN) as a citation.\n\n* test(controlplane): serialize readiness_pg tests to fix migration race\n\nThe schema-mismatch test removes the newest _sqlx_migrations row to\nsimulate an old database, then restores it. The five tests in this\nbinary share one database and run concurrently, so a connect() in that\nwindow re-runs the already-applied migration and fails on its first\nnon-idempotent statement (0009's fk_shard_assignments_cache, as seen in\nCI coverage). Marking the binary's tests #[serial] closes the window;\nthe migration itself is left untouched because sqlx checksums applied\nmigrations.",
+          "timestamp": "2026-09-16T15:46:38-07:00",
+          "tree_id": "d8c401681fa434e997027d90e6227e8a401240e3",
+          "url": "https://github.com/gabloe/felix/commit/dc480efa23f2348561a473c78b5f42062d753cc6"
+        },
+        "date": 1789598944768,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 146,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 146.00\nmean: 146.20\nstdev: 1.48\ncv: 1.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 187,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 187.00\nmean: 187.80\nstdev: 1.79\ncv: 0.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 213,
+            "range": "54.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 243.20\nstdev: 54.19\ncv: 22.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 189,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 189.00\nmean: 188.80\nstdev: 1.10\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 378,
+            "range": "7.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 378.00\nmean: 379.20\nstdev: 7.19\ncv: 1.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 535,
+            "range": "614.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 535.00\nmean: 828.80\nstdev: 614.71\ncv: 74.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
