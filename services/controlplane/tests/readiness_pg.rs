@@ -16,6 +16,11 @@
 //! Run with `cargo test -p controlplane --features pg-tests readiness_pg`.
 //! Skipped, not failed, when no database is reachable — same rule as the other
 //! pg-tests, so a machine without docker still runs the rest of the suite.
+//!
+//! Every test here is `#[serial]`: they share one database, and the schema
+//! test below removes the newest `_sqlx_migrations` row for a moment. A
+//! concurrent `connect()` in that window re-runs the migration against a
+//! schema that already has it and fails on its first non-idempotent statement.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -27,6 +32,7 @@ use controlplane::app::{self, AppState};
 use controlplane::config::PostgresConfig;
 use controlplane::readiness::{Readiness, StoreProbe};
 use controlplane::store::{StoreConfig, postgres::PostgresStore};
+use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -285,6 +291,7 @@ async fn store_through(url: &str, max_connections: u32) -> Result<Arc<PostgresSt
 
 /// The baseline every other test here is a deviation from.
 #[tokio::test]
+#[serial]
 async fn a_reachable_database_answers_ready() -> Result<()> {
     let Some(url) = database_url() else {
         return Ok(());
@@ -305,6 +312,7 @@ async fn a_reachable_database_answers_ready() -> Result<()> {
 /// *not* fail, or a database outage restarts every instance in a loop — for a
 /// fault none of them caused and no restart can fix.
 #[tokio::test]
+#[serial]
 async fn an_unreachable_database_is_not_ready_but_stays_live() -> Result<()> {
     let Some(url) = database_url() else {
         return Ok(());
@@ -345,6 +353,7 @@ async fn an_unreachable_database_is_not_ready_but_stays_live() -> Result<()> {
 /// needed a restart to rejoin rotation would turn every brief database blip
 /// into an operator action.
 #[tokio::test]
+#[serial]
 async fn readiness_returns_when_the_database_does() -> Result<()> {
     let Some(url) = database_url() else {
         return Ok(());
@@ -388,6 +397,7 @@ async fn readiness_returns_when_the_database_does() -> Result<()> {
 /// version, and an instance rolled out ahead of its migrations stays out of
 /// rotation instead of corrupting what it finds.
 #[tokio::test]
+#[serial]
 async fn a_database_behind_this_builds_schema_is_not_ready() -> Result<()> {
     let Some(url) = database_url() else {
         return Ok(());
@@ -468,6 +478,7 @@ async fn a_database_behind_this_builds_schema_is_not_ready() -> Result<()> {
 /// whatever the pool decides to do about a connection that will not answer,
 /// `/v1/system/ready` has to come back.
 #[tokio::test]
+#[serial]
 async fn a_probe_that_cannot_reach_the_database_answers_within_its_bound() -> Result<()> {
     let Some(url) = database_url() else {
         return Ok(());
