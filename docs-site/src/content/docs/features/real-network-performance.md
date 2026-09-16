@@ -316,12 +316,20 @@ because fanout grows faster than the publish rate falls. A million a second is o
 4-vCPU broker delivering one stream; more streams put more shards on more brokers,
 each with its own delivery path.
 
-Push it the other way — publisher fire-and-forget, faster than a subscriber can
-drain — and the isolation shows: the publisher kept running flat out while the
-bounded per-subscriber queues dropped the overrun (`DropNew`) rather than stalling
-the publisher or the subscribers that were keeping up. The slow consumer pays for
-its own lag. Putting a number on that with one deliberately slow subscriber among
-healthy ones is the next run.
+That isolation is measurable, not just a design claim. Run 50 subscribers on one
+stream and make 10 of them dawdle — 20 ms per delivery, far slower than the
+publisher sends — and the rest carry on untouched:
+
+| 50 subscribers, one stream | Publisher ack p50 | Healthy subs (40) | Slow subs (10) |
+|---|---|---|---|
+| none slow | 198 µs | 42,000 / 42,000 each | — |
+| 10 slow @ 20 ms | **198 µs** | **42,000 / 42,000 each** | 690 / 42,000 each |
+
+The publisher's acknowledgement latency does not move — 198 µs either way — the 40
+healthy subscribers still receive every message, and the 10 slow ones drop ~98% of
+theirs. The loss is charged to the subscriber that fell behind and to no one else,
+which is the whole point of a bounded queue per subscriber under `DropNew`: a slow
+consumer degrades itself, not the publisher and not its neighbours.
 
 These come from a second session (`f1`) on the same topology, so the curve is
 self-consistent within one session. What ties it to the rest of the page: fanout-1
