@@ -35,7 +35,7 @@ snippets are POSIX sh — no `pipefail`, arrays, or `[[ ]]`.
 ### Run
 
 ```bash
-az login                                    # the MSDN account
+az login                                    # the Azure account
 # session.env is already sourced (above), so the suite has everything: the
 # subscription, the tier/release, and the IdP secrets it mints a token from.
 ./session.sh                   # provision + seed (~10 min, mostly instrument build)

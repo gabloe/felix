@@ -2,6 +2,13 @@
 # The control plane for one perf session. {0} is the release tarball URL and
 # {1} the bootstrap token, substituted by main.bicep.
 #
+# Runs the release binary (RELEASE_TAG must be >= v0.3.1): the real-IdP fixes
+# this suite depends on — accepting alg-less Entra JWKS keys, and a configurable
+# exchange-token TTL — shipped in v0.3.1. (v0.3.0 could not validate an Entra
+# token at all, and briefly this template built the control plane from source to
+# get the fix before v0.3.1 existed; the release binary is the right artifact
+# now, and it is what the suite is supposed to measure.)
+#
 # Memory-backed store, deliberately: this suite measures the data plane, and
 # a session's metadata fits in memory and dies with the session. The
 # control-plane-HA story has its own Postgres-backed tests.
@@ -38,8 +45,7 @@ write_files:
       # A broker holds its node token statically for its whole lifetime (it is
       # read once, with no refresh), so the exchange's default 900s TTL drops
       # every broker out of the cluster 15 minutes in. Mint tokens that outlast
-      # a full provision+seed+matrix session. (Requires the exchange-TTL fix in
-      # users/gabloe/oidc-jwk-optional-alg; the release binary ignores it.)
+      # a full provision+seed+matrix session.
       FELIX_EXCHANGE_TOKEN_TTL_SECONDS=28800
       ENV
   - path: /etc/systemd/system/felix-controlplane.service
@@ -66,6 +72,12 @@ runcmd:
   - curl -fsSL "{0}" -o /tmp/felix.tar.gz
   - mkdir -p /tmp/felix && tar -xzf /tmp/felix.tar.gz -C /tmp/felix --strip-components=1
   - install -m 0755 /tmp/felix/felix-controlplane /usr/local/bin/felix-controlplane
+  # Pre-generate the env file before the first start. systemd validates a
+  # (dashless) EnvironmentFile *before* it runs ExecStartPre, so the ExecStartPre
+  # that writes this file cannot satisfy the first start — the service would fail
+  # "Failed to load environment files" and give up. Writing it here in runcmd
+  # breaks that chicken-and-egg; ExecStartPre still regenerates it on reboots.
+  - /usr/local/sbin/felix-controlplane-env.sh
   - systemctl daemon-reload
   - systemctl enable --now felix-controlplane
   - touch /var/lib/cloud/instance/felix-provisioned

@@ -43,6 +43,7 @@ IDP_AUDIENCE='${IDP_AUDIENCE}'
 TENANT='${TENANT}'
 NAMESPACE='${NAMESPACE}'
 REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'
+SHARDS='${SHARDS:-12}'
 HDR
 )"
 # Capture without set -e aborting the assignment, so the remote message is

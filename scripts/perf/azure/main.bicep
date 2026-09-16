@@ -34,7 +34,7 @@ param allowedSshCidr string
 @description('Token the control plane\'s bootstrap listener requires.')
 param bootstrapToken string
 
-// Sized to fit a 20-vCPU Total Regional Cores quota (the MSDN/Visual Studio
+// Sized to fit a 20-vCPU Total Regional Cores quota (the Azure subscription's
 // default): 3x4 brokers + 2 control plane + 4 load generator = 18 cores. The
 // brokers stay at 4 vCPU — they are the system under test, kept comparable to
 // the local runs — so the loadgen took the cut. Raise loadgenVmSize (and the
@@ -44,8 +44,11 @@ param brokerVmSize string = 'Standard_D4as_v5'
 param controlPlaneVmSize string = 'Standard_D2as_v5'
 param loadgenVmSize string = 'Standard_D4as_v5'
 
-@description('Broker data disk, GiB. Premium, so fsync latency is a real number.')
+@description('Broker data disk, GiB. Premium, so fsync latency is a real number. Ignored when useLocalNvme is true.')
 param brokerDataDiskGib int = 128
+
+@description('Put the broker durable log on the SKU\'s ephemeral local disk instead of a Premium managed disk. For a Dadsv5-class SKU (e.g. Standard_D4ads_v5) this bypasses the managed-disk throughput cap that makes durable ingest disk-bound at ~170 MB/s on Premium SSD. Ephemeral, which is fine for a benchmark. When true, no managed data disk is attached and the broker mounts /dev/disk/azure/resource at /data.')
+param useLocalNvme bool = false
 
 var prefix = 'felixperf'
 var vnetCidr = '10.60.0.0/24'
@@ -108,7 +111,8 @@ resource ppg 'Microsoft.Compute/proximityPlacementGroups@2024-07-01' = if (tier 
 var brokerInit = base64(format(
   loadTextContent('cloudinit/broker.yaml'),
   releaseUrl,
-  controlPlaneNic.properties.ipConfigurations[0].properties.privateIPAddress
+  controlPlaneNic.properties.ipConfigurations[0].properties.privateIPAddress,
+  useLocalNvme ? '1' : '0'
 ))
 var controlPlaneInit = base64(format(
   loadTextContent('cloudinit/controlplane.yaml'),
@@ -212,7 +216,9 @@ resource brokers 'Microsoft.Compute/virtualMachines@2024-07-01' = [
       storageProfile: {
         imageReference: image
         osDisk: { createOption: 'FromImage', managedDisk: { storageAccountType: 'Premium_LRS' } }
-        dataDisks: [
+        // No managed data disk when the durable log lives on the SKU's local
+        // disk — the broker mounts /dev/disk/azure/resource at /data instead.
+        dataDisks: useLocalNvme ? [] : [
           {
             lun: 0
             createOption: 'Empty'
