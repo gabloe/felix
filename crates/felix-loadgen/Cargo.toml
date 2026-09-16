@@ -26,8 +26,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 bytes = "1"
-felix-client = { path = "../felix-client", version = "0.3.0" }
-felix-wire = { path = "../felix-wire", version = "0.3.0" }
+felix-client = { path = "../felix-client", version = "0.3.1" }
+felix-wire = { path = "../felix-wire", version = "0.3.1" }
 quinn = "0.11"
 rustls = "0.23"
 serde_json = "1"

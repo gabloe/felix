@@ -11,6 +11,34 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-16
+
+A real-IdP patch. The 0.3.0 token exchange quietly assumed two things that were
+true of the test identity provider and false of Microsoft Entra ID: that a
+JWKS key advertises its own algorithm, and that a broker credential minted for
+fifteen minutes is long enough. Neither holds against a real Entra tenant, and
+0.3.0 could not authenticate against one at all. This release fixes that. No
+wire-protocol change; `felix-wire` `VERSION` remains `1`.
+
+### Fixed
+
+- **The control plane rejected every Microsoft Entra ID token** (#371). Entra's
+  JWKS keys omit the optional `alg` member (RFC 7517 §4.4), and the exchange
+  required it — so a valid RS256 token came back `401 invalid token`. The key's
+  algorithm is now checked only when the JWKS actually states one, still bounded
+  by the key-type match; an alg-less key verifies against the algorithm the
+  token itself declares. 0.3.0 cannot complete a token exchange against Entra;
+  0.3.1 can.
+
+### Added
+
+- **`FELIX_EXCHANGE_TOKEN_TTL_SECONDS`** (#371) — the lifetime of an exchanged
+  Felix token, default `900`. A broker reads its node credential once and holds
+  it for its whole lifetime without refreshing, so the fixed 15-minute TTL
+  dropped every broker out of the cluster a quarter-hour in. Raising the TTL
+  keeps a long-lived node authenticated; it is a stopgap, with proper token
+  refresh tracked as follow-up work.
+
 ## [0.3.0] - 2026-09-15
 
 The composed-semantics release. A cache stopped being something you can only
