@@ -54,11 +54,11 @@ tasks:
         fi
       - |
         if [ -n "${FELIX_TEST_DATABASE_URL:-}" ]; then
-          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="$FELIX_TEST_DATABASE_URL" cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         elif docker version >/dev/null 2>&1; then
-          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         else
-          cargo llvm-cov --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
+          cargo llvm-cov --no-clean --no-cfg-coverage --skip-functions --all-features --workspace --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/' --lcov --output-path lcov.info
         fi
       - "cargo llvm-cov report --summary-only --ignore-filename-regex '(^|/)(demos)(/|$)|(^|/)src/bin/'"
       - |
