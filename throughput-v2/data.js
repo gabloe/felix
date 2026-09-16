@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789533902206,
+  "lastUpdate": 1789536195747,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8268,6 +8268,58 @@ window.BENCHMARK_DATA = {
             "range": "5969.10",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 582989.65\nmean: 583506.65\nstdev: 5969.10\ncv: 1.02%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5414f9aa56d46d915adbb840ddc907a4329c69c9",
+          "message": "docs(perf): fanout-scaling curve + latency/RTT corrections (#380)\n\nAdds the fanout section to the real-network analysis page, measured on the f1\nsession: delivered throughput scales near-linearly to ~1.0 M msg/s on one broker\nacross 1->500 subscribers with zero loss, while publisher ack p50 holds flat at\n~206us (run-fanout.sh produced it).\n\nCorrects the latency section: the acked-publish p50 bounds the path RTT below\n182us, so quinn's 260us smoothed_rtt is not the path RTT (ack-delay-inflated EWMA)\n- fixed everywhere it propagated. Flags the 12-publisher point as single-trial\nspread. Adds a 'Where this sits' section (per-vCPU axis, ingest weak / fanout\nstrong, config parity + TLS discipline). Renames MSDN -> Azure quota.",
+          "timestamp": "2026-09-15T22:20:34-07:00",
+          "tree_id": "ab8ada56853ad842b5606bb24c861e9a32224947",
+          "url": "https://github.com/gabloe/felix/commit/5414f9aa56d46d915adbb840ddc907a4329c69c9"
+        },
+        "date": 1789536194939,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 276495.49,
+            "range": "5872.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 276495.49\nmean: 277054.39\nstdev: 5872.34\ncv: 2.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 276495.49,
+            "range": "5872.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 276495.49\nmean: 277054.39\nstdev: 5872.34\ncv: 2.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60591.02,
+            "range": "669.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60591.02\nmean: 60431.76\nstdev: 669.28\ncv: 1.11%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 605910.15,
+            "range": "6692.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 605910.15\nmean: 604317.63\nstdev: 6692.76\ncv: 1.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
