@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789529731730,
+  "lastUpdate": 1789531809182,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8112,6 +8112,58 @@ window.BENCHMARK_DATA = {
             "range": "14904.74",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 754368.36\nmean: 755389.21\nstdev: 14904.74\ncv: 1.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c8cb198f8e3b613568e19ea541ab056631e1895",
+          "message": "perf: real-network Azure suite + the first analysis page (#377)\n\n* perf(azure): real-network suite harness + analysis page\n\nThe Azure performance suite and its first results.\n\nHarness (scripts/perf/azure): a resource-group-per-session Bicep deployment\ndriven entirely over 'az vm run-command' (not SSH — operator networks DPI-reset\n:22, and Ubuntu 24.04 socket-activated sshd fails first boot); Linux QUIC tuning\nheld constant (net.core rmem/wmem = 25 MiB, FELIX_MTU_UPPER_BOUND=4096); an\nidempotent, diagnostic seed that runs the real Entra bootstrap+exchange and\nstarts brokers; a resilient matrix runner.\n\nAnalysis (docs-site .../features/real-network-performance.md): the first\nreal-network numbers — ~1.09 GB/s / 3.68M msg/s aggregate ingest (73% of raw\nline rate), ~181us acked-publish latency, the two delivery profiles, durability\nfree for throughput via group commit, and every semantic — against the loopback\nbaseline and the measured network ceiling.\n\nCompanion to the code+CI PR #371 (control-plane real-IdP fixes + felix-loadgen\nscenarios/hardening).\n\n* docs(perf): multi-load-generator result — the true throughput scaling\n\nTwo load generators (D4 + D2) sustain ~1.63 GB/s aggregate ingest with linear addition and zero loss, broker-0 at 84% CPU. Proves the single-loadgen ~1.09 GB/s was NIC-bound on the generator, not Felix, and that ingest scales with offered load until the brokers' CPU is the wall (~1.6-1.9 GB/s on 3x4 vCPU). Updates the ceiling section and next-steps.\n\n* docs(perf): add charts (ingest scaling, delivery-latency profiles, multi-loadgen)\n\nThree mermaid xychart figures rendered natively by the docs-site (no committed image assets, reproducible): the 4KiB ingest-vs-publishers curve (the climb-then-plateau), the default-vs-tuned delivery latency (the ~30x knob), and the one-vs-two load-generator aggregate. Validated by check-mermaid.\n\n* docs(perf): lead with the carry-through headline; reconcile the n=24 figure\n\nThe intro headlined the superseded single-loadgen 1.09 GB/s and claimed the\nceiling was the load generator 'not the brokers' — which the body's multi-loadgen\nresult (1.63 GB/s, brokers then the wall at 84% CPU) contradicts. Reframe the\nheadline as the proven linear-scaling story that carries through the throughput\nsections, with 1.09 GB/s / 73%-of-line-rate as the single-generator sub-point.\nFix the 4KiB n=24 table value (1099) to match the chart and the sweep (1073).\n\n* docs(perf): correct the single-loadgen limit (CPU, not NIC) and the multi-path/durability framing\n\nTwo accuracy fixes prompted by review: (1) the single-generator 1.09 GB/s is BELOW the 1.49 GB/s raw single-path iperf rate, so one generator is CPU-bound on QUIC/TLS crypto, not NIC-bound — the doc had called it 'the NIC'. (2) The 1.63 GB/s aggregate exceeds any single 1.49 GB/s path because it fans two generator NICs across three broker NICs in parallel (each broker ~0.55 GB/s); and it was measured on the NON-durable stream, so durable-at-1.63 is a stated inference (durable=in-memory was measured at one generator), not a measured number.\n\n* docs(perf): add a control-plane section — off the data path, on the auth path\n\nThe control plane was only in the topology table and a buried exchange latency line. Give it its own section making the load-bearing architectural point: brokers cache metadata from it and the data path never calls it, so every latency/throughput number is CP-independent; its one hot-path role is the token exchange (686us, amortized per-session), tokens are then verified locally at the broker; and it ran the v0.3.1-candidate build. Notes what its own perf study would cover (sustained exchange load, registration/assignment/watch latency, failover).\n\n* docs(perf): add a scannable headline-numbers box up top\n\nSurface the eye-popping figures in the first screen — 1.63 GB/s / 3.68M msg/s aggregate ingest at zero loss, 181us acked publish, 190us delivery (30x knob), durable=in-memory, ~73% of raw line rate while encrypting, 686us real-Entra exchange, and 1.1M/1.1M watch fanout — plus the ~136 MB/s-per-broker-vCPU efficiency framing. All measured, on three 4-vCPU brokers.\n\n* docs: cross-link the benchmarks page to the real-network results\n\nThe benchmarks page holds the loopback numbers the Azure page reads as its baseline; add a note at the top pointing readers to Real-Network Performance so the new page is reachable from the existing perf content, not just the sidebar.",
+          "timestamp": "2026-09-15T21:08:11-07:00",
+          "tree_id": "e37b306023fe787522ca1eeecf2c3517ed4b4c51",
+          "url": "https://github.com/gabloe/felix/commit/3c8cb198f8e3b613568e19ea541ab056631e1895"
+        },
+        "date": 1789531808510,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 400741,
+            "range": "9819.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 400741.00\nmean: 404323.07\nstdev: 9819.10\ncv: 2.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 400741,
+            "range": "9819.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 400741.00\nmean: 404323.07\nstdev: 9819.10\ncv: 2.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94324.99,
+            "range": "843.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94324.99\nmean: 94395.40\nstdev: 843.57\ncv: 0.89%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 943249.85,
+            "range": "8435.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 943249.85\nmean: 943953.99\nstdev: 8435.74\ncv: 0.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
