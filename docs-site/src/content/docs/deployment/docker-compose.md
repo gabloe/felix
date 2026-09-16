@@ -2,7 +2,7 @@
 title: "Docker Compose Deployment"
 ---
 
-This guide demonstrates how to deploy Felix using Docker Compose for local development, testing, and small-scale production scenarios.
+Running Felix under Docker Compose, for local development and testing. There are no pre-built images; the compose files here build from the Dockerfiles in `docker/`.
 
 ## Overview
 

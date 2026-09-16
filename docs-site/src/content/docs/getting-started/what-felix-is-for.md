@@ -271,8 +271,8 @@ whether you could build it on the current release.
 | Distributed live-state synchronization | Strong | **No** | Needs gap-free snapshot + change stream; drops corrupt local state |
 | Infrastructure / control-plane state distribution | Strong | **No** | Same gap, plus needs multi-node |
 | AI-agent coordination and shared state | Strong | Partly | Ephemeral coordination works now; durable task state works on one node. Records replicate to followers and a lost leader fails over to one that holds the log |
-| Edge and disconnected operation | Strong | **No** | Durability and resumable subscriptions exist. Replication does, and retention does not |
-| Durable event log, replay, event sourcing | Weak | Partly | A durable log with offset replay exists, and records now replicate to followers. No retention and no tiering, — use Kafka for anything that needs history to outlive one machine today |
+| Edge and disconnected operation | Strong | **No** | Durability, resumable subscriptions, and replication exist; retention is available but bounded by one machine's disk, and there is no store-and-forward between sites |
+| Durable event log, replay, event sourcing | Weak | Partly | A durable log with offset replay exists, records replicate to followers, and retention can bound growth. No tiering — use Kafka for anything that needs history to outlive one machine today |
 | Primary datastore | Weak | No | Use a database |
 | General-purpose key-value store | Weak | No | Use Redis or Valkey |
 | Complex broker routing, workflow messaging | Weak | No | Use RabbitMQ |
@@ -328,8 +328,9 @@ The second of those now exists for durable streams: a subscriber that records
 the offsets it handles can resume from them, and — because offsets are
 contiguous — can *detect* a drop rather than diverging silently. That narrows
 the case rather than closing it. It does not help a non-durable stream, it
-requires the application to checkpoint, and without retention there is no
-statement yet about how far back a resume can reach. "Distributed live-state
+requires the application to checkpoint, and a resume reaches only as far back
+as retention keeps — unbounded when retention is unset, and no further than
+the configured bound when it is. "Distributed live-state
 synchronization" remains a direction, not a supported use case.
 
 ---

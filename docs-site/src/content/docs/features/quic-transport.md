@@ -2,228 +2,76 @@
 title: "QUIC Transport"
 ---
 
-Felix uses QUIC as its exclusive transport protocol, providing modern networking features that enable low-latency, secure, and reliable communication between clients and brokers. This document explores QUIC's features, benefits, and how Felix leverages them for optimal performance.
+Felix speaks QUIC and nothing else. Every connection is encrypted (TLS 1.3 is
+part of the protocol, not a layer bolted on top), and many independent streams
+multiplex over one connection without blocking each other. This page explains
+what that buys Felix, how Felix uses QUIC's streams, and which knobs matter.
 
-## Why QUIC?
+## Why QUIC
 
-QUIC (Quick UDP Internet Connections) is a modern transport protocol designed by Google and standardized as IETF RFC 9000. Felix chose QUIC over traditional TCP+TLS for several compelling reasons:
+Two properties do most of the work.
 
-### 1. Encryption by Default
+**No head-of-line blocking between streams.** TCP delivers one ordered byte
+stream, so when a packet is lost, everything behind it waits — even bytes that
+belong to unrelated traffic and have already arrived. QUIC orders each stream
+independently: a lost packet stalls only the stream whose data it carried.
 
-QUIC integrates TLS 1.3 directly into the protocol:
+![The same lost packet under TCP and under QUIC. Three logical streams share one connection and a packet belonging to stream 2 is lost. Under TCP all three streams stop being delivered until the retransmission arrives, because they share one ordered byte stream. Under QUIC only stream 2 stops, because each stream is ordered on its own.](/felix/diagrams/head-of-line.svg)
 
-- **No unencrypted mode**: All QUIC connections are encrypted
-- **Faster handshake**: 0-RTT or 1-RTT connection establishment
-- **Modern cipher suites**: ChaCha20-Poly1305, AES-GCM
-- **Forward secrecy**: Perfect forward secrecy built-in
+Nothing was lost for streams 1 and 3 in either case. Under TCP their bytes had
+already arrived and simply could not be handed over, because the transport has
+no way to say which bytes belong to which stream. That is the difference the
+whole comparison rests on — and it is why one Felix connection can carry many
+subscriptions without a retransmission on one delaying the others.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Server
-    
-    Note over C,S: QUIC 1-RTT Handshake
-    C->>S: Initial (ClientHello + Crypto)
-    S->>C: Initial (ServerHello + Crypto)
-    C->>S: Handshake (Finished)
-    S->>C: Handshake (Finished)
-    Note over C,S: Connection ready
-    
-    Note over C,S: Compare to TCP+TLS: 2-3 RTTs
-```
+**Encryption and the handshake are one thing.** A new QUIC connection is ready
+in one round trip, versus two or three for TCP plus TLS, and there is no
+unencrypted mode to misconfigure. In practice this matters less than it
+sounds for Felix, because clients pool and reuse connections — the hot path
+never pays connection setup at all.
 
-### 2. Multiplexing Without Head-of-Line Blocking
+QUIC also gives Felix per-stream *and* per-connection flow control (the
+backpressure story below), and connection IDs that survive an IP change.
+Felix does not currently do anything special with connection migration.
 
-Traditional TCP suffers from head-of-line (HOL) blocking: packet loss on one stream blocks all streams. QUIC eliminates this:
+## How Felix uses streams
 
-```mermaid
-graph LR
-    subgraph "TCP (HTTP/2)"
-        S1[Stream 1: blocked]
-        S2[Stream 2: blocked]
-        S3[Stream 3: blocked]
-        Loss[Packet Loss] -->|blocks| S1
-        Loss -->|blocks| S2
-        Loss -->|blocks| S3
-    end
-    
-    subgraph "QUIC"
-        Q1[Stream 1: continues]
-        Q2[Stream 2: blocked]
-        Q3[Stream 3: continues]
-        Loss2[Packet Loss] -->|blocks only| Q2
-    end
-    
-    style S1 fill:#ffccbc,stroke:#334155,color:#111827
-    style S2 fill:#ffccbc,stroke:#334155,color:#111827
-    style S3 fill:#ffccbc,stroke:#334155,color:#111827
-    style Q1 fill:#c8e6c9,stroke:#334155,color:#111827
-    style Q2 fill:#ffccbc,stroke:#334155,color:#111827
-    style Q3 fill:#c8e6c9,stroke:#334155,color:#111827
-```
+**Bidirectional streams** carry request/response traffic:
 
-**Felix benefit**: Slow subscribers on one stream don't impact other subscribers' event delivery.
+- The *control stream*: publish, subscribe, and acknowledgements. A client
+  authenticates once on the stream, then multiplexes requests down it.
+- *Cache streams*: `cache_get`/`cache_put` requests tagged with a
+  `request_id`, several in flight per stream, answered on the same stream.
+  Reusing streams this way is what keeps cache tail latency flat under
+  concurrency — no per-request stream setup.
 
-### 3. Connection Migration
-
-QUIC connections survive network changes:
-
-- IP address changes (mobile networks, VPN switches)
-- Network interface changes (WiFi → cellular)
-- Load balancer re-routing
-
-**Connection ID**: Each QUIC connection has a unique identifier independent of IP/port tuple.
-
-```rust
-use felix_client::{Client, ClientConfig};
-use felix_wire::AckMode;
-use std::net::SocketAddr;
-
-// QUIC connection survives IP change
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig::optimized_defaults(quinn);
-let addr: SocketAddr = "127.0.0.1:5000".parse()?;
-let client = Client::connect(addr, "localhost", config).await?;
-let publisher = client.publisher().await?;
-
-// Network switches from WiFi to cellular
-// Connection automatically migrates to new IP
-
-// Publish continues without interruption
-publisher
-    .publish("tenant", "ns", "stream", data.to_vec(), AckMode::None)
-    .await?;
-```
-
-:::note[Future Enhancement]
-Felix will leverage connection migration for seamless client mobility and zero-downtime broker migrations.
-:::
-### 4. Built-in Flow Control
-
-QUIC provides multi-level flow control:
-
-**Connection-level flow control**:
-- Prevents receiver buffer overflow at connection level
-- Configurable receive window per connection
-
-**Stream-level flow control**:
-- Independent flow control per stream
-- Prevents one stream from consuming all connection capacity
-
-**Felix configuration**:
-
-```yaml
-# Broker config
-event_conn_recv_window: 268435456    # 256 MiB per connection
-event_stream_recv_window: 67108864   # 64 MiB per stream
-event_send_window: 268435456         # 256 MiB send window
-```
-
-### 5. Reduced Latency
-
-**0-RTT resumption**:
-
-For returning clients, QUIC can send application data in the first packet:
-
-```mermaid
-sequenceDiagram
-    participant C as Client (returning)
-    participant S as Server
-    
-    Note over C: Has resumption token
-    C->>S: Initial (0-RTT data + publish)
-    S->>C: Process publish immediately
-    S->>C: Handshake (Finished)
-    Note over C,S: No wait for handshake!
-```
-
-**Faster connection establishment**:
-
-| Protocol | Handshake RTTs | TLS Version |
-|----------|----------------|-------------|
-| TCP + TLS 1.2 | 3 RTTs | 1.2 |
-| TCP + TLS 1.3 | 2 RTTs | 1.3 |
-| QUIC | 1 RTT | 1.3 (integrated) |
-| QUIC (0-RTT) | 0 RTTs | 1.3 (resumption) |
-
-## QUIC Streams in Felix
-
-Felix leverages QUIC's stream model for different traffic patterns:
-
-### Bidirectional Streams
-
-Used for request/response patterns:
-
-**Control streams**:
-- Client initiates publish, subscribe, cache operations
-- Server responds with acknowledgements
-- Long-lived or short-lived depending on usage
-
-**Cache streams**:
-- Client sends cache_get/cache_put with request_id
-- Server responds on same stream
-- Multiple requests multiplexed per stream
+**Unidirectional streams** carry one-way event delivery. After a subscribe,
+the broker opens a fresh uni stream to the client and sends events down it —
+one stream per subscription, so each subscription gets its own flow-control
+window and its own backpressure. A slow subscription fills its own window; it
+cannot touch another subscription's.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant B as Broker
-    
-    Note over C,B: Bidirectional stream
-    C->>B: publish_batch (request)
-    B->>C: ok (response)
-    C->>B: cache_put (request)
-    B->>C: ok (response)
-    C->>B: cache_get (request)
-    B->>C: cache_value (response)
-```
 
-### Unidirectional Streams
-
-Used for one-way data flow:
-
-**Event streams** (server → client):
-- Broker opens stream after successful subscribe
-- Streams events continuously
-- One stream per subscription for isolation
-- Client cannot send data on these streams
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant B as Broker
-    
-    C->>B: subscribe (on bidirectional control stream)
+    C->>B: subscribe (on the bidirectional control stream)
     B-->>C: ok
-    Note over B: Open unidirectional stream
+    Note over B: Broker opens a unidirectional stream
     B->>C: event_stream_hello
     loop Event delivery
-        B->>C: event
-        B->>C: event
+        B->>C: event_batch
         B->>C: event_batch
     end
 ```
 
-**Benefits of unidirectional streams**:
+## Measured behavior
 
-1. **Performance**: No reverse path overhead
-2. **Isolation**: Each subscription has dedicated stream
-3. **Flow control**: Independent per-subscription backpressure
-4. **Simplicity**: Clear data flow direction
+All measured figures live on one page — [Benchmarks](/felix/features/benchmarks/)
+— so they cannot drift page to page. Two summaries worth repeating here:
 
-## Performance Characteristics
-
-### Latency
-
-**Connection establishment** (localhost, cold start):
-
-| Scenario | Latency |
-|----------|---------|
-| First connection | 1-2 ms |
-| TLS resumption | 500-800 µs |
-| 0-RTT (future) | 0 µs (data in first packet) |
-
-**Single message round-trip** (publish + ack, macOS loopback, median of 5–10
+**Single message round trip** (publish + ack, macOS loopback, median of 5–10
 trials):
 
 | Workload | p50 | p99 |
@@ -233,11 +81,7 @@ trials):
 | 1 KiB | 111 µs | 140 µs |
 | 4 KiB | 136 µs | 176 µs |
 
-### Throughput
-
-Measured figures live in one place — [Benchmarks](/felix/features/benchmarks/) —
-so they cannot drift page to page. Summarising the sustained pub/sub rates at
-fanout 1:
+**Sustained pub/sub at fanout 1**:
 
 | Payload | Delivered | Payload rate |
 |---|---:|---:|
@@ -258,155 +102,42 @@ Add connections to isolate workloads and avoid head-of-line blocking, not to
 multiply throughput. Measure your own shape with `latency-demo` before sizing.
 :::
 
-### Packet Loss Resilience
+## Tuning
 
-QUIC handles packet loss better than TCP:
+### Connection pools
 
-**TCP behavior**:
-- Packet loss triggers retransmission
-- All streams blocked until retransmission completes (HOL blocking)
-- RTT spike affects all traffic
-
-**QUIC behavior**:
-- Packet loss only affects streams with data in lost packet
-- Other streams continue normally
-- Faster recovery via improved congestion control
-
-![The same lost packet under TCP and under QUIC. Three logical streams share one connection and a packet belonging to stream 2 is lost. Under TCP all three streams stop being delivered until the retransmission arrives, because they share one ordered byte stream. Under QUIC only stream 2 stops, because each stream is ordered on its own.](/felix/diagrams/head-of-line.svg)
-
-Nothing was lost for streams 1 and 3 in either case. Under TCP their bytes had
-already arrived and simply could not be handed over, because the transport has
-no way to say which bytes belong to which stream. That is the difference the
-whole comparison rests on.
-
-**Measured impact** (1% packet loss, fanout=10):
-
-| Metric | TCP + TLS | QUIC |
-|--------|-----------|------|
-| p50 latency | +15% | +5% |
-| p99 latency | +120% | +25% |
-| Throughput | -40% | -8% |
-
-## Security Features
-
-### Transport Layer Security
-
-QUIC provides comprehensive transport security:
-
-**Encryption**:
-- All packets encrypted (header + payload)
-- Only connection ID visible to network observers
-- No plaintext data ever transmitted
-
-**Authentication**:
-- Server certificate validation (X.509)
-- Optional client certificates (mTLS)
-- Certificate pinning supported
-
-**Cipher suites**:
-```
-TLS_AES_128_GCM_SHA256
-TLS_AES_256_GCM_SHA384
-TLS_CHACHA20_POLY1305_SHA256
-```
-
-### Connection Security
-
-**Amplification attack prevention**:
-- QUIC requires address validation before sending large responses
-- Prevents using Felix as DDoS amplification vector
-
-**Connection ID obfuscation**:
-- Connection IDs are opaque, random identifiers
-- No correlation possible from network observation
-
-**Retry mechanism**:
-- Stateless retry tokens prevent resource exhaustion
-- Broker can validate clients before allocating resources
-
-### Future Security Features
-
-**End-to-end encryption** (planned):
-
-```yaml
-stream:
-  name: sensitive-data
-  encryption: end_to_end
-  key_id: stream-key-v1
-```
-
-Data encrypted by publisher, broker routes ciphertext only, decrypted by subscriber.
-
-**mTLS for broker-to-broker**:
-
-```yaml
-broker:
-  mtls_enabled: true
-  client_cert_path: /certs/broker.crt
-  client_key_path: /certs/broker.key
-```
-
-## Configuration and Tuning
-
-### Connection Pooling
-
-Configure pools based on workload:
-
-**Client configuration**:
+The client keeps separate pools for publishing, events, and cache traffic, so
+one kind of load cannot starve another of connections:
 
 ```rust
 let quinn = quinn::ClientConfig::with_platform_verifier();
 let config = ClientConfig {
-    event_conn_pool: 8,        // For pub/sub
-    cache_conn_pool: 8,        // For cache
-    publish_conn_pool: 4,      // For publishing
+    event_conn_pool: 8,
+    cache_conn_pool: 8,
+    publish_conn_pool: 4,
     ..ClientConfig::optimized_defaults(quinn)
 };
 ```
 
-**Tuning guidance**:
+Start with `optimized_defaults` and change pool sizes only off a measurement.
+Each connection holds buffers and flow-control state, so pools trade memory
+for isolation.
 
-- **Light workload**: 2-4 connections per type
-- **Medium workload**: 4-8 connections per type
-- **Heavy workload**: 8-16 connections per type
-- **Very heavy workload**: 16-32 connections per type
+### Flow-control windows
 
-:::caution[Connection Limits]
-Each connection consumes memory (buffers, state). Monitor broker memory usage when scaling connection pools. A broker can typically handle 10,000+ concurrent connections with 16 GB RAM.
-:::
-### Flow Control Windows
+Windows bound how much data may be in flight, per connection and per stream.
+Bigger windows favor throughput (more in flight); smaller ones bound memory
+and keep latency predictable. They are set as client config fields or
+environment variables — `FELIX_EVENT_CONN_RECV_WINDOW`,
+`FELIX_EVENT_STREAM_RECV_WINDOW`, `FELIX_EVENT_SEND_WINDOW`, and the
+`FELIX_CACHE_*` equivalents. The full list, with defaults, is in the
+[environment variable reference](/felix/reference/environment-variables/).
 
-Tune window sizes for workload characteristics:
+The memory bound is roughly what you would expect: the sum of each
+connection's window plus each open stream's window. Size them against the
+memory you are willing to spend on in-flight data.
 
-**Latency-optimized** (minimize buffering):
-
-```yaml
-event_conn_recv_window: 67108864     # 64 MiB
-event_stream_recv_window: 16777216   # 16 MiB
-event_send_window: 67108864          # 64 MiB
-```
-
-**Throughput-optimized** (maximize buffers):
-
-```yaml
-event_conn_recv_window: 536870912    # 512 MiB
-event_stream_recv_window: 134217728  # 128 MiB
-event_send_window: 536870912         # 512 MiB
-```
-
-**Memory impact**:
-
-```
-Total memory ≈ (conn_window × conn_pool) + (stream_window × streams × conn_pool)
-```
-
-For `conn_pool=8`, `stream_window=64MB`, `streams_per_conn=10`:
-
-```
-Memory ≈ (256MB × 8) + (64MB × 10 × 8) = 2GB + 5.1GB = 7.1GB
-```
-
-### Congestion Control
+### Congestion control and ACK cadence
 
 Felix uses quinn's default congestion controller, **CUBIC** (RFC 8312),
 loss-based and safe on shared networks. Two Felix-level knobs sit on top:
@@ -428,176 +159,35 @@ driver tasks execute on dedicated single-threaded I/O runtimes
 scheduler re-poll latency — not congestion control — was the measured
 throughput ceiling. See
 [Concurrency internals](/felix/development/internals-concurrency/#the-quic-io-runtime).
-## Monitoring and Observability
 
-### QUIC Metrics
+### Per-connection path stats
 
-Key metrics to monitor:
-
-**Connection metrics**:
-- Active connections
-- Connection establishment rate
-- Connection errors
-- TLS handshake failures
-
-**Stream metrics**:
-- Active streams per connection
-- Stream creation rate
-- Stream close rate
-- Stream errors
-
-**Flow control metrics**:
-- Blocked time per stream
-- Window updates frequency
-- Credit exhaustion events
-
-**Packet loss metrics**:
-- Loss rate
-- Retransmission rate
-- RTT variance
-
-### Example Metrics Collection
-
-```rust
-// Hypothetical metrics API (not yet implemented)
-let metrics = client.quic_metrics().await?;
-println!("Active connections: {}", metrics.active_connections);
-println!("Packet loss rate: {:.2}%", metrics.loss_rate * 100.0);
-println!("Average RTT: {:?}", metrics.avg_rtt);
-```
+Set `FELIX_CONN_STATS_MS` on the broker to log path statistics (MTU, cwnd,
+RTT, loss, flow-control blocking) for healthy connections on an interval.
+This is the data that says whether a throughput problem is transport-side or
+above it; it is off by default and costs nothing when unset.
 
 ## Troubleshooting
 
-### Common Issues
+**Connection timeout.** QUIC is UDP; the most common cause is a firewall that
+passes TCP and silently drops UDP on the broker port. Check that the UDP port
+is open and the broker is bound where you think it is.
 
-**Connection timeout**:
+**Certificate validation failure** (`UnknownIssuer`). The client verifies the
+broker's certificate against the platform trust store by default
+(`quinn::ClientConfig::with_platform_verifier()`). A self-signed development
+certificate needs its CA added to the client's root store — the demos and the
+cluster harness show how.
 
-```
-Error: Connection timeout after 5000ms
-```
+**A stream blocked on flow control.** The receiver is not draining. For a
+subscription, that usually means the application's receive loop is stuck;
+for larger burst tolerance, raise the stream window. Non-zero
+`stream_data_blocked` counts in the `FELIX_CONN_STATS_MS` output confirm
+flow control is the constraint, and zero rules it out.
 
-**Causes**:
-- Network firewall blocking UDP
-- Broker not listening on expected port
-- Incorrect server address
+## What is deliberately not here
 
-**Resolution**:
-- Verify UDP port 5000 is open
-- Check broker is running and bound to correct interface
-- Test connectivity with `netcat -u broker-ip 5000`
-
-**TLS certificate validation failure**:
-
-```
-Error: Certificate validation failed: UnknownIssuer
-```
-
-**Causes**:
-- Self-signed certificate without CA trust
-- Certificate expired
-- Hostname mismatch
-
-**Resolution**:
-
-```rust
-// Production: validate certificates using the platform verifier
-let quinn = quinn::ClientConfig::with_platform_verifier();
-let config = ClientConfig::optimized_defaults(quinn);
-
-// Development: configure Quinn with a test CA or custom verifier if needed
-```
-
-**Flow control deadlock**:
-
-```
-Warning: Stream blocked on flow control for >1s
-```
-
-**Causes**:
-- Receiver not consuming data fast enough
-- Window sizes too small for workload
-- Application not reading from stream
-
-**Resolution**:
-- Increase `stream_recv_window`
-- Ensure subscription loop is not blocked
-- Check for application-level backpressure
-
-## Best Practices
-
-### Connection Management
-
-1. **Reuse connections**: Connection establishment is expensive
-2. **Pool appropriately**: Balance memory vs parallelism
-3. **Monitor health**: Track connection failures and latency
-4. **Handle disconnections**: Implement automatic reconnection
-
-### Stream Management
-
-1. **Close unused streams**: Free resources when done
-2. **Avoid stream exhaustion**: QUIC has stream limits (configurable)
-3. **Use unidirectional streams**: When only one-way data flow needed
-4. **Multiplex on same stream**: For cache operations, reuse streams
-
-### Security
-
-1. **Always validate certificates**: Never skip verification in production
-2. **Use strong cipher suites**: AES-256-GCM or ChaCha20-Poly1305
-3. **Rotate certificates**: Before expiration
-4. **Monitor for TLS errors**: May indicate security issues
-
-### Performance
-
-1. **Tune flow control windows**: Match your workload burst characteristics
-2. **Enable 0-RTT**: For latency-sensitive resumption (when available)
-3. **Use connection pooling**: Scale parallelism with multiple connections
-4. **Monitor packet loss**: High loss indicates network issues
-
-## Comparison with Other Transports
-
-| Feature | QUIC | TCP + TLS | gRPC (HTTP/2) |
-|---------|------|-----------|---------------|
-| Encryption | Built-in | Separate TLS | Separate TLS |
-| Multiplexing | Yes, no HOL blocking | No | Yes, but with HOL blocking |
-| Connection migration | Yes | No | No |
-| 0-RTT resumption | Yes | Partial (TLS 1.3) | Partial (TLS 1.3) |
-| Flow control | Connection + Stream | Connection only | Connection + Stream |
-| Congestion control | Modern (BBR) | CUBIC | CUBIC |
-| Handshake RTTs | 1 (0 with resumption) | 2-3 | 2-3 |
-| UDP firewall issues | Possible | No | No |
-
-## Future Enhancements
-
-### Planned QUIC Features
-
-**Unreliable datagram extension** (RFC 9221):
-- Send unreliable messages over QUIC
-- Use case: Real-time gaming, video streaming
-- Lower latency than reliable streams
-
-**Multipath QUIC**:
-- Use multiple network paths simultaneously
-- Aggregate bandwidth
-- Improve reliability
-
-**Connection migration enhancements**:
-- Seamless broker failover
-- Zero-downtime client mobility
-
-### Felix-Specific Improvements
-
-**Adaptive flow control**:
-- Automatically tune windows based on measured RTT and throughput
-- Reduce configuration burden
-
-**Quality of Service (QoS)**:
-- Priority streams for critical messages
-- Bandwidth allocation per tenant
-
-**Connection affinity**:
-- Route specific tenants/streams to dedicated connections
-- Better isolation and resource management
-
-:::tip[QUIC is the Future]
-Major platforms (Google, Facebook, Cloudflare) have moved to QUIC. HTTP/3 is built on QUIC. Felix is positioned to benefit from continued QUIC ecosystem improvements.
-:::
+Felix does not use QUIC's unreliable datagrams, multipath, or 0-RTT
+resumption today, and does not act on connection migration. Nothing in the
+design forecloses them; they are simply not built, and this page only
+describes what is.

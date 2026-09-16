@@ -2,637 +2,180 @@
 title: "Frequently Asked Questions"
 ---
 
-Common questions about Felix, its design, and usage.
+Answers here are kept consistent with the
+[status table](/felix/getting-started/what-felix-is-for/), which is the page
+to trust when any two disagree.
 
-## General Questions
+## What is Felix?
 
-### What is Felix?
+A distributed data backend that serves streams (pub/sub), work queues
+(consumer groups), and a key-value cache — all as readings of one replicated
+append-only log, reached over QUIC. The design optimizes for predictable
+tail latency, high fanout, and strict slow-consumer isolation. The
+[overview](/felix/getting-started/overview/) is the ten-minute version.
 
-Felix is a low-latency, QUIC-based pub/sub and distributed cache system designed for high fanout, high throughput, and predictable tail latency. It unifies event streaming (publish/subscribe) and request/response caching (put/get with TTL) over a single transport protocol.
+## Is Felix production-ready?
 
-Key features:
+No. Felix is in early active development and has not been run in production
+by anyone. Quite a lot works — multi-broker clusters, durable replicated
+streams, quorum acknowledgement, failover, consumer groups, the log-backed
+cache, OIDC auth with RBAC — and it is tested hard, including fault-injection
+suites. But there are no releases, no second implementation of anything, and
+the faults it is proven against are the ones a single machine can produce.
+Use it for prototyping, benchmarking, and contributing.
 
-- **QUIC transport**: Modern, multiplexed, encrypted by default
-- **Unified protocol**: Single wire protocol for streams, cache, and queues —
-  all three are semantics over one log
-- **Predictable latency**: Optimized for p99/p999, not just throughput
-- **Replicated**: Shards are placed across brokers, replicated by leader leases
-  and log shipping, and survive losing a leader; a publish can wait for a quorum
-- **Cloud-native in design, not yet in packaging**: readiness and liveness
-  endpoints, a bounded drain on SIGTERM, and stateless control-plane instances
-  over Postgres — but there are no published Helm charts or manifests
-  ([#131](https://github.com/gabloe/felix/issues/131))
-- **Region-aware routing** *(planned)*: `felix-router` has a basic region-bridge allowlist today; enforced data-residency guarantees are not yet implemented — see [System Design: Multi-Region Architecture](/felix/architecture/system-design/#multi-region-architecture-planned)
+## How is Felix different from Kafka?
 
-### How is Felix different from Kafka?
+Different centre of gravity. Kafka is a durable log first: everything is
+persisted, consumers pull, latency is a throughput trade-off, and the
+ecosystem is enormous. Felix is latency-and-fanout first: streams can be
+ephemeral (no disk on the hot path), each subscriber is isolated, and the
+same log also serves cache and queue semantics so you run one system instead
+of three.
 
-Felix is **not** a Kafka replacement but serves different use cases:
+Use Kafka when you need long retention, stream processing, or its connector
+ecosystem. Felix keeps durable logs and replays by offset, but there is no
+tiered storage and retention is bounded by one machine's disk — it is built
+for live distribution, not for being your system of record.
 
-| Feature | Felix | Kafka |
-|---------|-------|-------|
-| **Transport** | QUIC (UDP) | TCP |
-| **Encryption** | Built-in (TLS 1.3) | Optional (TLS/SASL) |
-| **Latency focus** | p99/p999 optimization | Throughput optimization |
-| **Primitives** | Streams, cache, and queues over one log | Log-based streaming |
-| **Persistence** | Optional per stream | Always durable |
-| **Fanout** | Native high fanout | Consumer groups |
-| **Use case** | Low-latency streaming, real-time cache | High-throughput log processing |
+## How is Felix different from Redis?
 
-**Use Felix when**:
-- You need ultra-low latency (sub-millisecond to low-millisecond p99)
-- High fanout with many concurrent subscribers
-- Combined streaming, caching and work-queue requirements over one system
-- QUIC transport benefits (multiplexing, better loss recovery)
+Redis is a data-structure server with basic pub/sub bolted on; Felix is a
+log with a cache reading. If you need sorted sets, Lua, or transactions,
+that's Redis. If you need high-fanout delivery with per-subscriber isolation,
+a cache whose changes you can *watch* (with offsets, so reconnects are
+gapless), and durable counters — and you'd rather not operate a broker and a
+cache separately — that's what Felix is for.
 
-**Use Kafka when**:
-- You need guaranteed durability and replay
-- Processing historical data with consumer groups
-- Existing Kafka ecosystem integrations
-- Traditional log-based semantics
+## Why QUIC instead of TCP?
 
-### How is Felix different from Redis?
+Mostly for one property: streams multiplex over a connection without
+head-of-line blocking, so a retransmission for one subscription never stalls
+another. Beyond that: TLS 1.3 is part of the protocol (no unencrypted mode
+to misconfigure), handshakes are one round trip, and flow control exists per
+stream as well as per connection, which is where Felix's backpressure story
+starts. The trade-off is real but small: some networks still block UDP, and
+TCP has better debugging tooling. Details in
+[QUIC Transport](/felix/features/quic-transport/).
 
-Felix complements Redis rather than replacing it:
+## How does Felix handle backpressure?
 
-| Feature | Felix | Redis |
-|---------|-------|-------|
-| **Primary use** | Pub/sub + cache | Cache + data structures |
-| **Transport** | QUIC | TCP (RESP protocol) |
-| **Streaming** | First-class pub/sub | Basic pub/sub |
-| **Batching** | Native batch delivery | Individual messages |
-| **Persistence** | Optional, log-based | RDB/AOF snapshots |
-| **Fanout** | Optimized for high fanout | Basic pub/sub fanout |
+At every level, and always bounded: QUIC flow-control windows per connection
+and per stream; a bounded publish queue whose overflow is a visible error
+rather than unbounded buffering; and a bounded per-subscription queue whose
+overflow policy (drop-new by default) is the isolation mechanism — a slow
+subscriber loses its own events instead of slowing anyone else. See
+[Publish/Subscribe](/felix/features/pubsub/) for the full story and the
+policy trade-off.
 
-**Use Felix for**:
-- High-fanout real-time event distribution
-- Streaming with batching and flow control
-- Combined streaming and caching workloads
+## What is ephemeral vs durable storage?
 
-**Use Redis for**:
-- Rich data structures (sets, sorted sets, etc.)
-- Lua scripting and transactions
-- Existing Redis ecosystem tools
+Per stream. An **ephemeral** stream lives in memory: lowest latency, lost on
+restart, right for data whose old values are worthless. A **durable** stream
+(`durable: true`, and the broker must run with `FELIX_DURABLE_STORAGE_DIR`)
+writes every record to a segmented, CRC-checked, crash-safe log before
+acknowledging, and subscribers can replay from any retained offset. A stream
+marked durable on a broker without a storage dir is rejected, not silently
+downgraded.
 
-### Is Felix production-ready?
+Retention is available and **off by default** — set
+`FELIX_DURABLE_RETENTION_BYTES` / `FELIX_DURABLE_RETENTION_SECONDS`, or a
+log grows until the disk ends. See
+[Durable Storage](/felix/architecture/durable-storage/).
 
-**No, Felix is in early active development.** Current status:
+## How does clustering work?
 
-- ✅ Core protocol stabilizing
-- ✅ Single-node broker working
-- ✅ Rust client SDK functional
-- ⏳ Multi-node clustering in progress
-- ⏳ Control plane under development
-- ❌ Production hardening incomplete
-- ❌ No official releases yet
+Streams and caches are split into shards; the control plane assigns each
+shard a leader (and replicas) by rendezvous hashing, and brokers follow its
+assignment feed. One leader accepts a shard's writes; a broker that receives
+a request for a shard it doesn't lead forwards it or redirects the client.
+Leaders ship log records to followers — deliberately *not* per-shard Raft;
+`docs/replication-design.md` records why leases plus log shipping were chosen
+— and a lost leader is replaced only by a replica that provably holds the
+log. A `Quorum` stream's publishes wait for a majority before acknowledging.
 
-**Use Felix for**:
-- Research and prototyping
-- Performance benchmarking
-- Contributing to development
+Not built: follower reads (every read goes to the leader) and rebalancing (a
+shard whose leader is alive is never moved, however uneven that leaves the
+cluster).
 
-**Do not use Felix for**:
-- Production workloads requiring high availability
-- Scenarios requiring data durability guarantees
-- Mission-critical applications
+## What about exactly-once?
 
-## Architecture Questions
+Not implemented, and not planned as a delivery guarantee. Felix offers
+at-most-once (plain subscriptions) and at-least-once (durable streams and
+consumer groups). Deduplication has to live in the application anyway —
+only it knows what makes two records "the same" — so put it there, keyed on
+something the record carries.
 
-### Can I grant stream access by IdP group instead of per-user?
+## What latency should I expect?
+
+Measured numbers live in one place, [Benchmarks](/felix/features/benchmarks/),
+with methodology. The shape of it: single-message publish-and-ack round
+trips are low hundreds of microseconds on loopback, cache operations
+similar, and batched throughput runs trade per-message latency for rate.
+Always benchmark release builds (`--release`); debug builds are 10–100x
+slower and tell you nothing.
+
+## What's the most important tuning knob?
+
+For latency, `FELIX_EVENT_BATCH_MAX_DELAY_US` — the longest an event waits
+for its batch to fill, and therefore the latency floor batching adds. For
+throughput, `FELIX_EVENT_BATCH_MAX_EVENTS` and its byte sibling. For memory,
+the flow-control windows (`FELIX_*_RECV_WINDOW`), since window × connections
+bounds in-flight data. The
+[environment variable reference](/felix/reference/environment-variables/)
+has the full list with defaults; change things off a measurement.
+
+## Can I run Felix in Docker or Kubernetes?
+
+Yes to both — see [Docker Compose](/felix/deployment/docker-compose/) and
+[Kubernetes](/felix/deployment/kubernetes/). There are no pre-built images
+or published Helm charts yet; you build from the provided Dockerfiles. The
+broker ships what an orchestrator expects: `/live` and `/ready` that answer
+different questions, and a bounded drain on SIGTERM
+([graceful shutdown](/felix/deployment/graceful-shutdown/)).
+
+## How do I monitor Felix?
+
+Prometheus metrics on the metrics endpoint (`/metrics`), structured logs via
+`RUST_LOG`, and optional OTLP tracing. Which metrics answer which operational
+questions is the whole point of the
+[observability page](/felix/features/observability/).
+
+## How is Felix secured?
+
+TLS 1.3 on every connection; OIDC token exchange at the control plane;
+tenant-scoped EdDSA tokens; RBAC enforced at the broker with delegation
+rules that prevent privilege escalation. Not built: encryption at rest,
+broker-to-broker mTLS, audit logging. The [security page](/felix/features/security/)
+states each plainly.
+
+## Can I grant stream access by IdP group instead of per-user?
 
 Yes. Configure `groups_claim` for the tenant issuer, then bind RBAC roles to
-`group:<name>` subjects. During token exchange, Felix maps incoming group claims
-to those group subjects and evaluates role permissions.
+`group:<name>` subjects. During token exchange, Felix maps incoming group
+claims to those subjects and evaluates role permissions:
 
-Example:
 - grouping: `g, group:g1, role:reader, tenant-a`
 - policy: `p, role:reader, tenant-a, stream:tenant-a/payments/*, stream.subscribe`
 
-### Why QUIC instead of TCP?
-
-QUIC provides several advantages for Felix's use case:
-
-**Benefits**:
-
-1. **Multiplexing without head-of-line blocking**: Multiple streams share one connection without one slow stream blocking others
-2. **Built-in encryption**: TLS 1.3 integrated, no separate TLS handshake
-3. **Connection migration**: Survive IP changes (mobile, load balancer updates)
-4. **Fast connection establishment**: 0-RTT for resumed connections
-5. **Better loss recovery**: Stream-level retransmits instead of connection-level
-6. **Modern congestion control**: BBR and other advanced algorithms
-
-**Trade-offs**:
-
-- UDP may be blocked by some networks (though increasingly rare)
-- Requires newer network infrastructure for optimal performance
-- Limited debugging tools compared to TCP
-
-### What is the wire protocol?
-
-Felix uses `felix-wire`, a framed protocol with:
-
-- **Binary event frames**: Efficient `EventBatch` delivery for subscriptions
-- **Binary fast paths**: Zero-copy binary frames for high-throughput data
-- **Versioned envelope**: Forward/backward compatibility
-- **Type-specific framing**: Different frame types for pub/sub, cache, control
-
-This hybrid approach balances observability with performance.
-
-### How does Felix handle backpressure?
-
-Felix implements backpressure at multiple levels:
-
-1. **QUIC flow control**: Built-in connection and stream-level credit
-2. **Publish queues**: Bounded queues with timeout-based blocking
-3. **Event queues**: Per-subscription buffering with depth limits
-4. **Batching delays**: Implicit batching creates natural flow smoothing
-5. **Subscriber isolation**: Slow subscribers don't block fast ones
-
-When backpressure triggers:
-- Publishers receive timeout errors if queues full
-- Subscribers drop behind but don't impact others (future: disconnect slow subscribers)
-- Flow control credit exhaustion blocks at QUIC layer
-
-### What is ephemeral vs durable storage?
-
-**Ephemeral streams**:
-- In-memory only
-- Ultra-low latency (no disk I/O)
-- Data lost on broker restart
-- Suitable for real-time data, metrics, logs
-
-**Durable streams** (`durable: true`):
-- Segmented, checksummed append-only log on persistent storage
-- Survive restarts, including an abrupt kill
-- Replay from disk by offset
-- Higher latency when `fsync_mode` is `on_commit` (one device flush per commit,
-  amortised across concurrent publishers by group commit); effectively free
-  under `periodic`
-- Suitable for business events, audit logs
-
-Both are available today. Durable storage is opt-in per stream and requires the
-broker to be started with `FELIX_DURABLE_STORAGE_DIR`; without it, a stream
-marked durable is rejected rather than silently downgraded.
-
-Retention and tiered storage are **not** implemented yet: nothing deletes
-segments on age or size. See
-[Durable Storage](/felix/architecture/durable-storage/).
-
-### How does clustering work?
-
-**Built**:
-- **Sharding**: streams and caches are divided into shards and distributed
-  across brokers by rendezvous hashing
-- **One leader per shard** accepts writes; a broker that receives a request for
-  a shard it does not lead forwards it or refuses
-- **Replication**: the leader ships log records to its followers. **Not Raft** —
-  per-shard Raft was considered and rejected, because a consensus group per
-  shard multiplies its cost by the shard count for a problem leader leases plus
-  log shipping already solve. See `docs/replication-design.md`.
-- **Failover**: only a replica that actually holds the log is promoted. A shard
-  whose leader is gone and whose replicas are behind is left unavailable rather
-  than reopened empty, because a silently empty shard *is* the data loss
-- **Metadata service**: the control plane tracks topology and placement
-
-**Not built**:
-- **Follower reads.** Every read goes to the leader
-- **Rebalancing.** A shard whose leader is alive is never moved, however uneven
-  that leaves the cluster
-
-See [Control Plane documentation](/felix/api/control-plane-api/) for details.
-
-## Configuration Questions
-
-### What's the most important configuration parameter?
-
-**For latency**: `FELIX_EVENT_BATCH_MAX_DELAY_US`
-
-This controls the maximum time events wait in a batch before being sent. Lower values reduce latency but may decrease throughput.
-
-```bash
-# Ultra-low latency
-export FELIX_EVENT_BATCH_MAX_DELAY_US="50"
-
-# Balanced
-export FELIX_EVENT_BATCH_MAX_DELAY_US="250"
-
-# High throughput
-export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
-```
-
-**For throughput**: `FELIX_EVENT_BATCH_MAX_EVENTS`
-
-```bash
-# Small batches
-export FELIX_EVENT_BATCH_MAX_EVENTS="16"
-
-# Large batches
-export FELIX_EVENT_BATCH_MAX_EVENTS="256"
-```
-
-### Should I enable binary encoding?
-
-Subscription event delivery is already binary `EventBatch` by default.
-
-### How do I tune for high fanout?
-
-High fanout (100+ subscribers):
-
-```bash
-# Increase fanout batch size
-export FELIX_FANOUT_BATCH="128"
-
-# Increase per-subscriber buffering
-export FELIX_SUBSCRIBER_QUEUE_CAPACITY="256"
-export FELIX_SUB_WRITER_LANES="4"
-
-# Enable batching
-export FELIX_EVENT_BATCH_MAX_EVENTS="128"
-export FELIX_EVENT_BATCH_MAX_DELAY_US="500"
-
-# Consider disabling timings
-export FELIX_DISABLE_TIMINGS="1"
-```
-
-Monitor for:
-- CPU saturation (scale horizontally)
-- Memory pressure (adjust windows)
-- Slow subscribers (may need to disconnect)
-
-### How much memory does Felix need?
-
-Memory usage depends on configuration:
-
-**Minimal setup**: ~100-200 MB base
-
-**Per connection memory** (approximate):
-```
-conn_memory = cache_conn_recv_window + (cache_stream_recv_window × streams_per_conn)
-```
-
-**Example (default config)**:
-```
-256 MiB + (64 MiB × 4) = 512 MiB per connection
-
-With FELIX_CACHE_CONN_POOL=8:
-8 × 512 MiB = 4 GiB potential max
-```
-
-**Recommendations**:
-- **Development**: 2-4 GB
-- **Production**: 4-8 GB base, adjust based on workload
-- **High throughput**: 8-16 GB
-
-Monitor actual RSS usage and adjust windows accordingly.
-
-## Performance Questions
-
-### What latency can I expect?
-
-**Localhost benchmarks** (release build, timings disabled):
-
-**Pub/sub (fanout=1, batch=1)**:
-- p50: 0.5-2 ms
-- p99: 2-10 ms
-- p999: 10-50 ms
-
-**Pub/sub (fanout=10, batch=64)**:
-- p50: 30-50 ms
-- p99: 60-100 ms
-- Throughput: 100-200k msgs/s
-
-**Cache operations** (concurrency=32):
-- `get_hit` p50: 160-240 µs
-- `get_miss` p50: 160-180 µs
-- `put` p50: 160-260 µs
-
-**Network latency adds**:
-- Same datacenter: +0.5-2 ms
-- Cross-region: +20-200 ms
-
-These are reference points. Actual performance depends on hardware, network, configuration, and workload.
-
-### Why is debug build so slow?
-
-Debug builds include:
-- No optimizations
-- Debug assertions
-- Symbol information
-- Bounds checking
-
-**Performance impact**: 10-100x slower than release builds.
-
-**Always use release builds for benchmarking**:
-```bash
-cargo build --release
-cargo run --release -p broker
-```
-
-### How do I reduce memory usage?
-
-1. **Reduce flow-control windows**:
-```bash
-export FELIX_CACHE_CONN_RECV_WINDOW="134217728"    # 128 MiB
-export FELIX_CACHE_STREAM_RECV_WINDOW="33554432"   # 32 MiB
-export FELIX_EVENT_CONN_RECV_WINDOW="134217728"
-```
-
-2. **Reduce connection pools** (client-side):
-```bash
-export FELIX_CACHE_CONN_POOL="4"
-export FELIX_EVENT_CONN_POOL="4"
-```
-
-3. **Reduce queue depths**:
-```bash
-export FELIX_BROKER_PUB_QUEUE_DEPTH="512"
-export FELIX_SUBSCRIBER_QUEUE_CAPACITY="64"
-```
-
-4. **Limit concurrent connections**: Configure client connection limits.
-
-### How do I maximize throughput?
-
-1. **Increase batch sizes**:
-```bash
-export FELIX_EVENT_BATCH_MAX_EVENTS="256"
-export FELIX_EVENT_BATCH_MAX_BYTES="1048576"
-export FELIX_EVENT_BATCH_MAX_DELAY_US="1000"
-```
-
-2. **Disable timings**:
-```bash
-export FELIX_DISABLE_TIMINGS="1"
-```
-
-3. **Increase parallelism**:
-```bash
-export FELIX_EVENT_CONN_POOL="16"
-export FELIX_FANOUT_BATCH="128"
-```
-
-4. **Scale horizontally**: Run multiple broker instances.
-
-## Deployment Questions
-
-### Can I run Felix in Docker?
-
-Yes! See [Docker Compose guide](/felix/deployment/docker-compose/).
-
-```bash
-docker compose up -d felix-broker
-```
-
-Pre-built images are not yet available; build from source using the provided `docker/broker.Dockerfile`.
-
-### Can I run Felix on Kubernetes?
-
-Yes! Felix is designed for Kubernetes. See [Kubernetes guide](/felix/deployment/kubernetes/).
-
-Use StatefulSets for stable identity and persistent storage:
-
-```bash
-kubectl apply -f deploy/kubernetes/statefulset.yaml
-```
-
-### How do I monitor Felix?
-
-**Metrics endpoint**:
-```bash
-curl http://broker:8080/healthz
-curl http://broker:8080/metrics  # If telemetry enabled
-```
-
-**Structured logs**:
-```bash
-export RUST_LOG="info"
-# Or debug for verbose logging
-export RUST_LOG="felix_broker=debug"
-```
-
-**Prometheus** (when telemetry enabled):
-- Scrape `/metrics` endpoint
-- Use provided Grafana dashboards (future)
-
-**Observability guide**: [Observability](/felix/features/observability/)
-
-### How do I secure Felix?
-
-**Current state**: Transport security only (QUIC/TLS 1.3).
-
-**Planned**:
-- mTLS authentication
-- Token-based authorization
-- Tenant isolation
-- Encryption at rest
-- Audit logging
-
-**Best practices** (now):
-- Run in private networks
-- Use network policies (Kubernetes)
-- Limit exposed ports
-- Monitor access logs
-
-See [Security guide](/felix/features/security/) for details.
-
-## Development Questions
-
-### How do I contribute?
-
-See [Contributing guide](/felix/development/contributing/).
-
-Quick start:
-1. Fork repository
-2. Create feature branch
-3. Make changes with tests
-4. Run `task lint` and `task test`
-5. Submit pull request
-
-Felix welcomes contributions!
-
-### How do I run tests?
-
-```bash
-# All tests
-cargo test --workspace
-
-# Specific crate
-cargo test -p felix-broker
-
-# With output
-cargo test -- --nocapture
-
-# Using Task
-task test
-```
-
-### How do I build the documentation?
-
-```bash
-# Install dependencies
-cd docs-site
-npm install
-
-# Serve locally
-npm run dev
-
-# Build static site
-npm run build
-```
-
-### What's the project structure?
-
-```
-crates/           # Rust crates
-  felix-broker/   # Broker core logic
-  felix-wire/     # Protocol framing
-  felix-client/   # Client SDK
-  ...
-services/         # Runnable binaries
-  broker/         # Broker service
-docs/             # Design docs
-docs-site/        # User documentation (Astro Starlight)
-```
-
-See [Project Structure](/felix/development/project-structure/) for details.
-
-## Roadmap Questions
-
-### Does Felix have durability?
-
-Yes, per stream. A stream registered with `durable: true` writes every record to
-a log-structured segment store before acknowledging the publish, and a
-subscriber can replay from any retained offset.
-
-- Segmented storage, with sparse indexes rebuilt from the segments rather than
-  trusted from disk
-- Torn-tail repair at startup; interior corruption refuses to start rather than
-  silently losing acknowledged records
-- Replay from offset, joining live delivery with no gap and no duplicate
-
-**Retention is the gap**: a policy is accepted and recorded, and nothing deletes
-segments on age or size yet. A stream grows until the disk does.
-
-### Is clustering available?
-
-Yes. Sharding, replication, and the control plane are built:
-
-- **Sharding**: every stream and cache is split into shards, each with one
-  owning broker chosen by rendezvous hashing
-- **Replication**: leaders ship log records to followers; `Quorum` streams wait
-  for a majority before acknowledging
-- **Failover**: a lost leader is replaced by a replica that holds the log, in
-  about a second on a local three-node cluster
-- **Control plane**: REST over Raft, Postgres, or memory, placing shards on a
-  timer
-
-What is missing is **rebalancing** — a shard whose leader is alive is never
-moved, however uneven that leaves the cluster — and **mTLS between brokers**.
-
-See [Control Plane docs](/felix/api/control-plane-api/).
-
-### Will there be clients for other languages?
-
-Planned client SDKs:
-
-- ✅ **Rust**: Available (in progress)
-- ⏳ **Go**: Planned
-- ⏳ **Python**: Planned
-- ⏳ **Java**: Planned
-- ⏳ **JavaScript/TypeScript**: Planned
-
-Community contributions welcome! The wire protocol is language-agnostic.
-
-### What about exactly-once semantics?
-
-Exactly-once delivery is extremely difficult in distributed systems and often misleading. Felix focuses on **at-least-once** with idempotency support:
-
-**Current**: At-least-once delivery with acks (when `ack_on_commit=true`)
-
-**Future**:
-- Deduplication based on message IDs
-- Idempotent producer semantics
-- Transaction support (under research)
-
-For exactly-once processing, implement idempotent consumers.
-
-## Troubleshooting Questions
-
-### Why won't the broker start?
-
-Common causes:
-
-1. **Port in use**: Change `FELIX_QUIC_BIND`
-2. **Invalid config**: Check YAML syntax
-3. **Missing dependencies**: Run `cargo build`
-4. **Wrong Rust version**: Update to 1.97.1+
-
-See [Troubleshooting guide](/felix/reference/troubleshooting/).
-
-### Why is latency so high?
-
-Check:
-
-1. **Debug vs release build**: Use `--release`
-2. **Timings enabled**: Disable with `FELIX_DISABLE_TIMINGS=1`
-3. **Batch delay**: Reduce `FELIX_EVENT_BATCH_MAX_DELAY_US`
-4. **Network latency**: Test localhost first
-5. **System load**: Check CPU/memory usage
-
-### How do I debug connection issues?
-
-```bash
-# Enable debug logging
-export RUST_LOG="felix_transport=debug,felix_broker=debug"
-
-# Check broker is listening
-lsof -i UDP:5000
-
-# Test connectivity
-nc -zvu <broker-ip> 5000
-
-# Capture traffic
-sudo tcpdump -i any -w felix.pcap udp port 5000
-```
-
-## Comparison Questions
-
-### Felix vs NATS?
-
-| Feature | Felix | NATS |
-|---------|-------|------|
-| **Transport** | QUIC | TCP |
-| **Persistence** | Planned | JetStream |
-| **Maturity** | Early development | Production-ready |
-| **Language** | Rust | Go |
-| **Focus** | Low-latency, high fanout | Lightweight messaging |
-
-Use NATS for production workloads today. Felix is experimental.
-
-### Felix vs Pulsar?
-
-| Feature | Felix | Pulsar |
-|---------|-------|--------|
-| **Transport** | QUIC | TCP |
-| **Storage** | Planned | BookKeeper |
-| **Maturity** | Early development | Production-ready |
-| **Complexity** | Simple | Complex (multiple components) |
-
-Pulsar is production-ready with many features. Felix is simpler and focused on latency.
-
-### Felix vs RabbitMQ?
-
-| Feature | Felix | RabbitMQ |
-|---------|-------|----------|
-| **Protocol** | QUIC/felix-wire | AMQP |
-| **Routing** | Topic-based | Exchange/queue patterns |
-| **Persistence** | Planned | Built-in |
-| **Maturity** | Early development | Production-ready |
-
-RabbitMQ is mature with rich routing. Felix focuses on simple, fast pub/sub.
-
-## Next Steps
-
-- **Quick start**: [Quickstart Guide](/felix/getting-started/quickstart/)
-- **Detailed configuration**: [Configuration Reference](/felix/reference/configuration/)
-- **Troubleshooting**: [Troubleshooting Guide](/felix/reference/troubleshooting/)
-- **Contributing**: [Contributing Guide](/felix/development/contributing/)
+## Will there be clients for other languages?
+
+The Rust SDK is the only client today. Others are planned but not started.
+The wire protocol is language-neutral and documented precisely for this
+reason — see [Wire Protocol](/felix/architecture/wire-protocol/) — and a
+conformance runner exists to check an implementation against it.
+
+## Why won't the broker start? / Why is latency high? / Connection issues?
+
+The [troubleshooting guide](/felix/reference/troubleshooting/) covers these
+with commands. The three most common answers: you're running a debug build
+(use `--release`), a firewall is dropping UDP on the broker port, or
+`FELIX_EVENT_BATCH_MAX_DELAY_US` is set high and you're measuring the batch
+delay.
+
+## How do I contribute?
+
+Fork, branch, make the change with tests, run `task lint` and `task test`,
+open a PR. The [contributing guide](/felix/development/contributing/) has
+the details, and [How Felix Works](/felix/development/how-felix-works/) is
+the fastest way to build a mental model of the codebase.

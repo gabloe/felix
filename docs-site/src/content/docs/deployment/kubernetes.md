@@ -2,21 +2,16 @@
 title: "Kubernetes Deployment"
 ---
 
-This guide covers deploying Felix on Kubernetes with high availability, persistence, and production-grade configurations.
+Running Felix on Kubernetes: StatefulSets for stable broker identity,
+headless services for direct addressing, persistent volumes for durable
+storage, and the probes and drain behavior the broker already ships.
 
-## Overview
-
-Felix is designed as a Kubernetes-native system. This guide demonstrates:
-
-- **StatefulSet deployment** for stable network identity
-- **Headless Services** for direct broker addressing
-- **Persistent storage** with StatefulSet volumes
-- **Resource management** and limits
-- **Health checks** and readiness probes
-- **Horizontal scaling** for high availability
-
-:::note[Kubernetes Version]
-Felix requires Kubernetes 1.24 or later. Tested on 1.27+.
+:::caution[You write the manifests]
+Felix does not ship Kubernetes manifests or a Helm chart yet
+([#131](https://github.com/gabloe/felix/issues/131)). The YAML on this page
+is a working starting point to copy and adapt — every environment variable
+and probe path in it is real — but nothing here is packaged, and none of it
+has run in production.
 :::
 
 The control plane's availability story — how many instances to run, what the
@@ -40,21 +35,17 @@ kubectl get nodes
 
 ### Basic Deployment
 
-Deploy a single Felix broker:
+Build and push an image first (`docker/broker.Dockerfile`), then save the
+manifest below as `broker.yaml` and:
 
 ```bash
-# Create namespace
 kubectl create namespace felix
-
-# Apply manifests
-kubectl apply -f deploy/kubernetes/broker.yaml -n felix
-
-# Check status
+kubectl apply -f broker.yaml -n felix
 kubectl get pods -n felix
 kubectl logs -f deployment/felix-broker -n felix
 ```
 
-**Minimal broker deployment** (`deploy/kubernetes/broker.yaml`):
+**Minimal broker deployment** (`broker.yaml`):
 
 ```yaml
 apiVersion: v1
@@ -857,23 +848,6 @@ cat backup.tar.gz | kubectl exec -i felix-broker-0 -n felix -- tar xzf - -C /
 ```
 
 ## Complete Production Example
-
-Full production-ready manifest:
-
-```bash
-# Clone repository
-git clone https://github.com/gabloe/felix.git
-cd felix/deploy/kubernetes
-
-# Review and customize
-$EDITOR production/values.yaml
-
-# Apply with kustomize
-kubectl apply -k production/
-
-# Or use Helm (when available)
-helm install felix ./charts/felix -n felix --create-namespace
-```
 
 ## Troubleshooting
 

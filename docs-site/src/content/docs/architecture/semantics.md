@@ -2,7 +2,7 @@
 title: "Delivery Semantics and Consistency Model"
 ---
 
-Felix provides explicit, tunable delivery guarantees and consistency semantics. This document defines the behavioral contract that applications can rely on when building systems with Felix.
+The behavioral contract: exactly what Felix promises about delivery, ordering, durability, and consistency — and, just as deliberately, what it does not. Applications should rely on what is written here and nothing stronger.
 
 ## Philosophy: Explicit Over Implicit
 
@@ -440,17 +440,6 @@ client.cache_put_scoped("tenant2", "prod", "sessions", "user123", data).await?;
 - Eviction is opportunistic
 - Applications should not rely on specific eviction order
 
-**Capacity configuration** (future):
-
-```yaml
-caches:
-  - tenant: tenant1
-    namespace: prod
-    cache: sessions
-    max_entries: 100000
-    max_bytes: 1GB
-    eviction_policy: lru
-```
 
 ### Concurrency and Race Conditions
 
@@ -646,19 +635,11 @@ In a clustered deployment:
 2. **Buffer fills**: New events start getting dropped for that subscriber
 3. **Other subscribers unaffected**: Fast subscribers continue normally
 
-**Detection** (future):
-
-- Lag metrics exposed per subscription
-- Configurable alerts for subscribers falling behind
-- Optional disconnect of chronically slow subscribers
-
-```rust
-// Future API
-let lag = subscription.lag_metric().await?;
-if lag.messages_behind > 1000 {
-    warn!("Subscription falling behind: {} messages", lag.messages_behind);
-}
-```
+**Detection, today**: the broker counts drops per subscriber queue
+(`felix_sub_queue_dropped_total`) and logs when a subscriber falls behind.
+On a durable stream the subscriber itself can detect loss from an offset gap
+and resume. There is no per-subscription lag API and no automatic disconnect
+of chronically slow subscribers.
 
 ## Testing Semantics
 

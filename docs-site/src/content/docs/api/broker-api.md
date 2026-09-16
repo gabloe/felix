@@ -2,7 +2,10 @@
 title: "Broker API Reference"
 ---
 
-The Felix broker exposes a QUIC-based data plane API for publish/subscribe and cache operations. This document provides a comprehensive reference for interacting with the broker, including operation semantics, parameters, error handling, and usage examples.
+The broker's data-plane API: what each operation does on the wire, what it
+returns, and how it fails. Message shapes are shown as JSON control messages;
+the binary framing that carries the hot paths is in the
+[wire protocol](/felix/architecture/wire-protocol/).
 
 ## Connection Model
 
@@ -49,14 +52,10 @@ let addr: SocketAddr = "127.0.0.1:5000".parse()?;
 let client = Client::connect(addr, "localhost", config).await?;
 ```
 
-**Pool sizing guidance**:
-- **Event pool**: 4-8 connections for typical workloads
-- **Cache pool**: 8-16 connections for high-concurrency cache access
-- **Publish pool**: 2-4 connections for publisher applications
+Connection setup costs a TLS handshake, so the client keeps long-lived
+pools and the hot paths never pay it. Pool sizes are workload-dependent;
+start with the defaults and resize off a measurement.
 
-:::tip[Connection Reuse]
-Establishing QUIC connections has significant overhead (TLS handshake, key exchange). Reuse connections aggressively by maintaining long-lived pools.
-:::
 ## Authentication (Felix Tokens)
 
 Brokers require a tenant-scoped Felix token for authorization. Tokens are obtained from the control plane using an upstream OIDC JWT.
@@ -1010,40 +1009,8 @@ cache_streams_per_conn: 2
 cache_conn_recv_window: 134217728  # Smaller windows for lower memory
 ```
 
-## Best Practices
-
-### Connection Management
-
-1. **Pool connections**: Don't create per-request connections
-2. **Reuse streams**: Keep streams alive for multiple operations
-3. **Handle disconnections**: Implement automatic reconnection
-4. **Monitor health**: Track connection failures and latency
-
-### Publish Patterns
-
-1. **Batch when possible**: 10-100x throughput improvement
-2. **Tune batch thresholds for payload size**: Better throughput/latency balance
-3. **Don't block on acks for high throughput**: Use `ack: none`
-4. **Spread across connections**: Use connection pooling for parallelism
-
-### Subscribe Patterns
-
-1. **Process events quickly**: Avoid blocking subscription loop
-2. **Use async processing**: Spawn tasks for slow operations
-3. **Monitor lag**: Track processing delays
-4. **Handle reconnection**: Re-subscribe on connection loss
-
-### Cache Patterns
-
-1. **Pipeline requests**: Send multiple requests concurrently
-2. **Use appropriate TTLs**: Match data staleness tolerance
-3. **Handle misses gracefully**: Cache is best-effort
-4. **Don't cache huge values**: Keep values < 1 MB
-
-:::tip[Profile Your Workload]
-Use broker telemetry and client metrics to identify bottlenecks. Common issues:
-- Too few workers → high queue depth
-- Too many workers → contention
-- Small buffers → dropped events
-- Large buffers → high memory usage
-:::
+One general rule for the tuning sections above: change knobs off a
+measurement, not a hunch. High queue depth means too few workers; contention
+means too many; dropped events mean buffers too small for the workload's
+bursts; high memory means the opposite. Broker telemetry and client metrics
+(see [Observability](/felix/features/observability/)) tell you which.

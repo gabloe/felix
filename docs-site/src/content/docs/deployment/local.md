@@ -2,7 +2,7 @@
 title: "Local Development Deployment"
 ---
 
-This guide walks you through setting up Felix for local development, running the broker on your machine, and configuring it for different development scenarios.
+Running Felix directly on your machine: build it, start a broker, point clients at it, and switch between the configurations development actually needs.
 
 ## Prerequisites
 

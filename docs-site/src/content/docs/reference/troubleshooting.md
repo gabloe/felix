@@ -2,7 +2,7 @@
 title: "Troubleshooting Guide"
 ---
 
-Common issues and solutions when running Felix.
+The failures people actually hit, what each one means, and the command that confirms it.
 
 ## Build and Compilation Issues
 

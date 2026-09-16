@@ -2,7 +2,7 @@
 title: "Quickstart"
 ---
 
-Get Felix up and running in under 5 minutes.
+The shortest path to a running broker and something happening on it.
 
 ## Prerequisites
 

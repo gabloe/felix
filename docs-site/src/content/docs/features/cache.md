@@ -2,7 +2,10 @@
 title: "Cache Features"
 ---
 
-Felix provides a low-latency distributed cache built on top of the same QUIC transport and wire protocol used for pub/sub. The cache is designed for session management, configuration storage, and high-concurrency read/write workloads where sub-millisecond latency matters.
+The Felix cache is a key-value store served over the same QUIC transport and
+wire protocol as everything else. It exists for the workloads a sidecar Redis
+usually gets deployed for — sessions, configuration, hot lookups — without
+running a second system.
 
 ## Overview
 
@@ -57,16 +60,10 @@ Felix cache is optimized for microsecond-level latency:
 | get (hit) | 256 B | 177 µs | 360 µs | 166k ops/sec |
 | get (miss) | - | 165 µs | 340 µs | 179k ops/sec |
 
-**Comparison with other systems** (approximate, localhost):
-
-| System | get p50 | put p50 | Notes |
-|--------|---------|---------|-------|
-| Felix | 165 µs | 165 µs | QUIC, in-memory |
-| Redis | 100 µs | 110 µs | TCP, in-memory |
-| Memcached | 90 µs | 95 µs | TCP, in-memory |
-| etcd | 2-5 ms | 3-8 ms | RAFT consistency |
-
-Felix trades ~50-70 µs for QUIC's benefits (encryption, multiplexing, flow control).
+Methodology and current figures live in
+[Benchmarks](/felix/features/benchmarks/). Compared to a plain-TCP cache,
+Felix pays some latency for always-on TLS and QUIC framing; what it buys is
+multiplexing, per-stream flow control, and one system instead of two.
 
 ### 2. Time-to-Live (TTL)
 
@@ -170,19 +167,10 @@ let results: Vec<Option<Vec<u8>>> = join_all(futures).await
     .collect::<Result<Vec<_>>>()?;
 ```
 
-**Performance benefit**:
-
-| Pattern | Latency (10 ops) | Throughput |
-|---------|------------------|------------|
-| Sequential | 1.7 ms | 5.9k ops/sec |
-| Pipelined | 350 µs | 28.6k ops/sec |
-
-**Pipelining works because**:
-
-- Each request has unique `request_id`
-- Broker may respond out of order
-- Client correlates responses using `request_id`
-- QUIC multiplexing eliminates HOL blocking
+Ten sequential gets cost ten round trips; ten pipelined gets cost roughly
+one. It works because each request carries a `request_id`, the broker may
+answer out of order, and the client correlates replies — so nothing waits on
+anything it doesn't have to.
 
 ### 5. Stream Pooling
 
@@ -202,19 +190,10 @@ Without pooling (single stream):
 - HOL blocking if any request is slow
 - Limited throughput
 
-With pooling:
-- Requests distributed across streams
-- Independent flow control per stream
-- 10-20x throughput improvement
-
-**Performance comparison**:
-
-| Config | Concurrency | p50 | p99 | Throughput |
-|--------|-------------|-----|-----|------------|
-| 1 conn, 1 stream | 1 | 165 µs | 320 µs | 6k ops/sec |
-| 4 conn, 2 streams | 8 | 170 µs | 380 µs | 45k ops/sec |
-| 8 conn, 4 streams | 32 | 175 µs | 400 µs | 180k ops/sec |
-| 16 conn, 8 streams | 128 | 190 µs | 480 µs | 650k ops/sec |
+With pooling, requests spread across streams with independent flow control,
+so concurrency scales until the transport or broker saturates — not a fixed
+multiplier. Measure your own workload's shape; the concurrency sweep in
+[Benchmarks](/felix/features/benchmarks/) is the reference point.
 
 ### 6. Consistency Model
 
@@ -421,30 +400,10 @@ from:
 
 ### 10. Eviction (in-memory only: best-effort)
 
-**Current eviction policy**: Best-effort under memory pressure.
-
-- No guaranteed LRU or LFU
-- Eviction is opportunistic
-- Applications should not rely on specific eviction order
-
-**Planned eviction policies** (future):
-
-```yaml
-caches:
-  - tenant: acme
-    namespace: prod
-    cache: sessions
-    max_entries: 100000
-    max_bytes: 1GB
-    eviction_policy: lru  # or lfu, random, ttl_only
-```
-
-**Eviction strategies**:
-
-- **LRU** (Least Recently Used): Evict oldest accessed entry
-- **LFU** (Least Frequently Used): Evict least accessed entry
-- **TTL-only**: Never evict, rely on expiration
-- **Random**: Random eviction (fastest, good for large caches)
+The in-memory backend evicts opportunistically under memory pressure — no
+guaranteed LRU or LFU, so don't rely on a specific eviction order. The
+log-backed cache does not evict at all; it compacts. Configurable eviction
+policies are a possible future, not a present.
 
 ## API Reference
 
@@ -764,45 +723,6 @@ Shipped: [counters](#8-counters) are the atomic increment this note used to
 promise — `counter_add` is one durable, routed round trip and replaces the
 read-modify-write above.
 :::
-### 4. Temporary Data Storage
-
-Store temporary computation results:
-
-```rust
-async fn expensive_computation(
-    client: &Client,
-    input: &str
-) -> Result<String> {
-    let cache_key = format!("computation:{}", hash(input));
-    
-    // Check cache
-    if let Some(cached) = client
-        .cache_get("acme", "prod", "temp", &cache_key)
-        .await?
-    {
-        return Ok(String::from_utf8(cached)?);
-    }
-    
-    // Perform computation
-    let result = perform_expensive_work(input)?;
-    
-    // Cache for 5 minutes
-    use bytes::Bytes;
-    client
-        .cache_put(
-            "acme",
-            "prod",
-            "temp",
-            &cache_key,
-            Bytes::from(result.as_bytes().to_vec()),
-            Some(300_000),
-        )
-        .await?;
-    
-    Ok(result)
-}
-```
-
 ## Performance Tuning
 
 ### Client Configuration
@@ -832,14 +752,11 @@ let config = ClientConfig {
 ### Broker Configuration
 
 ```yaml
-# QUIC flow control
+# QUIC flow control (see the environment variable reference for the
+# FELIX_CACHE_* names and defaults)
 cache_conn_recv_window: 268435456    # 256 MiB per connection
 cache_stream_recv_window: 67108864   # 64 MiB per stream
 cache_send_window: 268435456         # Send window
-
-# Capacity (future)
-cache_max_entries: 10000000          # 10M entries
-cache_max_bytes: 10737418240         # 10 GB
 ```
 
 ## Limitations and Planned Features
@@ -894,37 +811,12 @@ client.cache_transaction()
 Watch-and-notify and explicit delete used to be listed here; both shipped —
 see [Keyed Watch](#7-keyed-watch) and [cache_delete](#cache_delete).
 
-## Best Practices
+## One design rule worth keeping
 
-1. **Choose appropriate TTLs**: Match data staleness tolerance
-2. **Use namespaces**: Organize by data type and lifetime
-3. **Handle misses gracefully**: Cache is best-effort, not guaranteed
-4. **Don't cache huge values**: Keep values < 1 MB for best performance
-5. **Pipeline requests**: Send multiple requests concurrently
-6. **Monitor hit rates**: Track effectiveness of caching strategy
-7. **Design for cache failures**: Always have fallback to source of truth
-
-## Monitoring
-
-**Key metrics to track**:
-
-- Hit rate (gets that return data / total gets)
-- Miss rate (gets that return None / total gets)
-- Put rate (puts per second)
-- Get rate (gets per second)
-- Average latency (p50, p99, p999)
-- Cache size (entries, bytes)
-- Eviction rate
-
-**Example monitoring** (future API):
-
-```rust
-let stats = client.cache_stats("sessions").await?;
-println!("Hit rate: {:.2}%", stats.hit_rate * 100.0);
-println!("Size: {} entries, {} MB", stats.entry_count, stats.size_bytes / 1_000_000);
-println!("p99 get latency: {:?}", stats.get_p99);
-```
-
-:::tip[Cache as Acceleration, Not Truth]
-Design systems to work without the cache (loading from database). Use cache purely for performance improvement. This makes failures and evictions non-critical.
-:::
+Treat the cache as acceleration, not as the source of truth: design the read
+path to fall back to wherever the data really lives. That keeps a miss, an
+eviction, or a broker restart a performance event instead of a correctness
+event — and it is why the in-memory cache's best-effort nature is acceptable
+at all. (For state the cache *is* the truth of — presence, rosters, counters
+— use the log-backed cache with watches and counters, which is built for
+exactly that.)

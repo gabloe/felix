@@ -2,7 +2,11 @@
 title: "Performance Tuning"
 ---
 
-Felix is designed for predictable low-latency performance with tunable trade-offs between latency, throughput, and memory usage. This guide provides comprehensive performance tuning guidance based on real benchmarks and production-tested configurations.
+Felix trades between latency, throughput, and memory with explicit knobs.
+This page explains which knob moves which needle, gives three starting-point
+profiles, and points at the measured numbers. Nothing here has seen
+production — the configurations are benchmark-tested starting points, and
+your own measurement outranks all of them.
 
 ## Understanding Felix Performance
 
@@ -587,13 +591,8 @@ Performance tuning without measurement leads to worse performance. Always benchm
 - Dropped event count
 - Slow subscriber count
 
-**Alerting thresholds**:
-
-- p99 latency > 2× baseline
-- Queue depth > 80% of max
-- Dropped events > 0.1% of published
-- CPU usage > 80%
-- Memory usage > 85%
+Alert against your own measured baseline (say, p99 above twice it) rather
+than absolute numbers — the useful thresholds are workload-shaped.
 
 ## Hardware Recommendations
 
@@ -644,19 +643,11 @@ QUIC benefits from:
   budget are in
   [storage-performance.md](https://github.com/gabloe/felix/blob/main/docs/storage-performance.md).
 
-## Best Practices Summary
+## The whole method in one paragraph
 
-1. ✓ Start with balanced profile, measure, then tune
-2. ✓ Size connection pools for your parallelism needs
-3. ✓ Use batching for throughput, minimize batching for latency
-4. ✓ Validate binary `EventBatch` decode performance in clients
-5. ✓ Monitor queue depths - they reveal backpressure
-6. ✓ Disable telemetry in production for maximum throughput
-7. ✓ Profile before optimizing - don't guess
-8. ✓ Test with realistic workloads, not synthetic benchmarks
-9. ✓ Plan for 2-3× headroom above expected load
-10. ✓ Document your tuning decisions and benchmark results
-
-:::tip[Predictable Performance]
-Felix is designed for predictable p99/p999 latency under load. Tuning trades off between latency, throughput, and memory—but tail latency remains controlled with proper configuration.
-:::
+Start from the balanced profile, run a realistic workload, and change one
+knob at a time off a measurement. Queue depths tell you where pressure is;
+batching buys throughput at the price of per-message latency; pools buy
+isolation at the price of memory. Leave telemetry off in production, keep
+2–3× headroom above expected load, and write down what you changed and what
+it measured — the next person tuning this will be you, six months out.
