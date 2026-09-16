@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789598945873,
+  "lastUpdate": 1789601760128,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10824,6 +10824,72 @@ window.BENCHMARK_DATA = {
             "range": "614.71",
             "unit": "us",
             "extra": "trials: 5\nmedian: 535.00\nmean: 828.80\nstdev: 614.71\ncv: 74.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e565892121d6114fad560dd183f2de328aebe711",
+          "message": "perf(storage): group-commit the cache write path (#390)\n\nConcurrent cache writes did not scale: put_checked held the shard lock\nacross an atomic append-and-fsync, so 8 writers to one shard got the\nsame ~230 puts/s as one (1/fsync_time), while the stream append path\namortised the same fsync to >1 GB/s on the same disk.\n\nThe cache write path now has the stream publish path's shape. A short\nlock stages the write — append_pending claims the offset, a\nCommitSequencer turn claims the record's place in the apply order — the\nfsync runs outside any lock and group-commits across concurrent\nwriters, and the index mutation plus watch notification apply strictly\nin disk-offset order after the turn arrives.\n\nCommitSequencer moved from felix-broker to felix-storage: it is storage\nordering, not broker logic, and the cache now needs it too. Same code,\nsame tests, one copy.\n\nCompaction is gated on an apply whose record is the newest in the log\nwith nothing staged behind it — the shard-directory swap would silently\ndrop a staged-but-uncommitted record otherwise. The sequencer realigns\nitself in ensure_index when records arrive outside the write path\n(recovery, compaction, shipped records on a follower).\n\nInvariants preserved and tested: durability before visibility (a staged\nwrite is invisible to get and to watchers until commit + turn), watch\norder = disk order under 8-writer contention, no strand from an\nabandoned mid-flight writer, and compaction under concurrent load. The\nregression test counts device flushes per log instance: 32 acked\nOnCommit puts from 8 writers must share flushes; with the commit moved\nback under the lock it fails at exactly one flush per put\n(revert-verified).\n\nOn-disk format and recovery are untouched. Docs updated where they\ndescribed the serialised path; demo lockfiles refreshed (stale from the\n0.4.0-preview bump). Plan: docs/cache-put-group-commit-plan.md.",
+          "timestamp": "2026-09-16T16:33:24-07:00",
+          "tree_id": "9f99460bcaf302d1c89569977ba1cc3aa5bb86e2",
+          "url": "https://github.com/gabloe/felix/commit/e565892121d6114fad560dd183f2de328aebe711"
+        },
+        "date": 1789601758516,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 126.80\nstdev: 0.84\ncv: 0.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 172,
+            "range": "4.66",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 172.00\nmean: 173.80\nstdev: 4.66\ncv: 2.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 219,
+            "range": "17.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 219.00\nmean: 227.20\nstdev: 17.58\ncv: 7.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 168.60\nstdev: 1.14\ncv: 0.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 342,
+            "range": "58.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 342.00\nmean: 367.20\nstdev: 58.06\ncv: 15.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 483,
+            "range": "815.56",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 483.00\nmean: 849.60\nstdev: 815.56\ncv: 95.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
