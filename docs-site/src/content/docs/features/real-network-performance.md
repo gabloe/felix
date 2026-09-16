@@ -11,12 +11,14 @@ cost of TLS and real fsync, and flatters throughput. This page is the first set
 of numbers taken on **real hardware, over a real network, with a real identity
 provider on the hot path**.
 
-The short version: on three 4-vCPU brokers, Felix sustains **~1.09 GB/s** (or
-**3.68 M messages/s**) of aggregate ingest — **~73 % of the raw TCP line rate of
-the network**, while encrypting every byte and fanning it across twelve shards
-— at **~181 µs** p50 acknowledged-publish latency, and **durability is free for
-throughput**. The throughput ceiling we hit was the *load generator*, not the
-brokers.
+The short version: on three 4-vCPU brokers, **Felix's aggregate ingest scales
+linearly with offered load to ~1.63 GB/s (13 Gbit/s) with zero loss — and only
+there do the brokers' own CPUs become the limit.** A single load generator
+already moves **1.09 GB/s** (or **3.68 M messages/s**), ~73 % of the raw network
+line rate while encrypting every byte, before *its* NIC caps out; a second one
+lifts the total to 1.63 GB/s with the first undegraded. Acknowledged-publish
+latency is **~181 µs** p50, and **durability is free for throughput**. Nothing
+here bottlenecks on Felix until the brokers are genuinely saturated.
 
 ## How this was measured
 
@@ -150,7 +152,7 @@ false-bottleneck it — Felix's write ceiling is:
 | 3 | 852 MB/s |
 | 6 | **1,091 MB/s** |
 | 12 | 1,040 MB/s |
-| 24 | 1,099 MB/s |
+| 24 | 1,073 MB/s |
 
 **256 B (the msg/s ceiling):**
 
