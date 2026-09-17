@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789674202246,
+  "lastUpdate": 1789676409049,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12210,6 +12210,72 @@ window.BENCHMARK_DATA = {
             "range": "555.36",
             "unit": "us",
             "extra": "trials: 5\nmedian: 607.00\nmean: 941.20\nstdev: 555.36\ncv: 59.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0589f92f78fb8608842dbf003b85d35f648b0dd",
+          "message": "fix(controlplane): the leader stamps a heartbeat, not the instance that got it (#475)\n\nLiveness is a comparison between two clock readings: the time on a heartbeat,\nand the cutoff the expiry sweep computes. Under Postgres both come from\n`clock_timestamp()`, which is why `now_millis` exists on the store trait.\n\nThe Raft backend never overrode it, so it inherited the process-clock default\nand the two readings came from different machines. The sweep is leader-gated,\nso its cutoff is the leader's clock; a heartbeat, though, is stamped wherever\nthe load balancer happened to send it. A follower whose clock runs ahead of\nthe leader's keeps its brokers alive past the timeout; one running behind\nexpires brokers that are answering fine. Both fail at the difference between\ntwo wall clocks, which NTP steps can move in one jump — a far stronger\nassumption than the bound on drift *rate* the design actually makes.\n\nNow the leader stamps it. `client_write` succeeds on the leader alone, so\nrewriting the command just before that call is rewriting it at the moment of\nacceptance, and only the leader's reading is ever appended. The command the\ncaller handed in is left untouched, so an instance that turns out to be\ndeposed between the check and the write forwards bytes carrying no reading of\nits own, and the real leader stamps its own.\n\nThe rewrite goes through the state-machine seam (`AppStateMachine::restamp`)\nrather than into raft.rs, which holds commands as opaque bytes and should keep\ndoing so. It edits the JSON instead of round-tripping through `MetaCommand`,\nbecause a rolling upgrade can hand a leader a command from a build it does not\nfully know, and decoding to a struct would silently drop the fields it cannot\nsee. Only a raw \"what time is it\" is rewritten: `ExpireStaleNodes` carries\n`now - timeout`, and substituting `now` there would expire the cluster.\n\nTwo store-contract cases asserted the exact timestamp they passed in, which is\nnow only true of the backends that do not restamp. They assert the property\ninstead — a late heartbeat does not move the recorded time backwards — which\nstill fails a backend that honours a stale reading.\n\nThe regression test gives each member a `restamp` that writes its own node id\ninstead of a clock, since members sharing a process share a wall clock and a\nreal timestamp could not say which one produced it. A heartbeat sent through\na follower comes back carrying the leader's id. Without the fix it carries the\nvalue the caller passed.\n\nThat test made `losing_quorum_fails_writes_loudly_not_silently` fail every\nrun: it waits for a leader to notice it has not heard a quorum in five\nseconds, and three live groups in one process delay that past its window.\nThe file is serialized now, which costs no wall clock — that one case is\nnearly all of its ten seconds.\n\nWhat this does not fix: `TakeRefreshToken`'s `now_secs` is a proposer clock\ntoo, but the `expires_at` it is compared against was stamped by a proposer as\nwell, so restamping one half would not make that comparison single-clock.",
+          "timestamp": "2026-09-17T13:17:29-07:00",
+          "tree_id": "d5b494361767c6aea58f557f77348e164bc562d9",
+          "url": "https://github.com/gabloe/felix/commit/e0589f92f78fb8608842dbf003b85d35f648b0dd"
+        },
+        "date": 1789676406737,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 86,
+            "range": "2.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 86.00\nmean: 86.80\nstdev: 2.95\ncv: 3.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 122,
+            "range": "5.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 123.00\nstdev: 5.52\ncv: 4.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 150,
+            "range": "14.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 150.00\nmean: 149.80\nstdev: 14.70\ncv: 9.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 117,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 117.00\nmean: 117.00\nstdev: 0.71\ncv: 0.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 259,
+            "range": "8.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 259.00\nmean: 258.60\nstdev: 8.14\ncv: 3.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 371,
+            "range": "222.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 371.00\nmean: 458.80\nstdev: 222.45\ncv: 48.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
