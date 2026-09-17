@@ -7,6 +7,17 @@ tasks:
     cmds:
       - "cargo fmt -- --check"
       - "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+      # Each crate with optional features, alone and on its defaults — which
+      # is how a consumer takes it off crates.io.
+      #
+      # Per package, not `--workspace`: within the workspace cargo unifies
+      # features across members, so the broker asking for `lifecycle` switches
+      # it on for everyone and a wrong gate compiles anyway. That is how a
+      # misplaced `#[cfg]` on felix-common's modules reached main past a lint
+      # that only ever ran `--all-features`.
+      - "cargo check -p felix-common"
+
+
   clippy:
     cmds: ["cargo clippy --workspace --all-targets --all-features -- -D warnings"]
   test:

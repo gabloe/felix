@@ -1252,8 +1252,8 @@ version = "0.4.0-preview"
 dependencies = [
  "metrics",
  "serde",
- "thiserror 2.0.20",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "utoipa",
