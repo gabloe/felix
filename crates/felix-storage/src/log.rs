@@ -268,6 +268,29 @@ pub trait AppendOnlyLog: Send + Sync {
     fn read_range(&self, range: ReadRange) -> BoxFuture<'_, Result<Vec<LogRecord>>>;
     fn tail_offset(&self) -> BoxFuture<'_, Result<Offset>>;
     fn truncate(&self, offset: Offset) -> BoxFuture<'_, Result<()>>;
+    /// Note that `generation` begins at `start_offset`, and persist it.
+    ///
+    /// Returns whether anything was recorded: a generation at or below the
+    /// newest already held is ignored, since a leader re-reporting its own is
+    /// ordinary and an older one is stale.
+    ///
+    /// Default: not recorded. An in-memory log has no divergence to repair,
+    /// because it has no follower.
+    fn record_generation(&self, _generation: u64, _start_offset: Offset) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// The generation history, oldest first.
+    fn generations(&self) -> Vec<crate::disk_log::epochs::Epoch> {
+        Vec::new()
+    }
+
+    /// Where `generation` stops, given `tail`. `None` if it is not in the
+    /// history — the case that must refuse rather than guess, because the
+    /// answer becomes a truncation point.
+    fn generation_end(&self, _generation: u64, _tail: Offset) -> Option<Offset> {
+        None
+    }
     fn seal(&self) -> BoxFuture<'_, Result<SealedSegment>>;
 }
 
