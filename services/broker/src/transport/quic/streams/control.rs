@@ -544,18 +544,20 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // than guessing 1: "I do not know" and "exactly one shard" are
                 // different answers, and a client that assumed the latter would
                 // silently read a fraction of a stream.
-                let shards = publish_ctx
-                    .ingress
-                    .as_deref()
-                    .map(|ingress| {
-                        ingress.shards_for(
+                let shards = match publish_ctx.ingress.as_deref() {
+                    Some(ingress) => ingress
+                        .placed_shards_for(
                             crate::shard_watch::ShardKind::Stream,
                             &tenant_id,
                             &namespace,
                             &stream,
                         )
-                    })
-                    .unwrap_or(1);
+                        .unwrap_or(0),
+                    // No routing snapshot to consult, so the registry is the
+                    // only thing that knows whether the stream exists. It is
+                    // served here and unplaced, which is one shard.
+                    None => u32::from(broker.stream_exists(&tenant_id, &namespace, &stream).await),
+                };
                 handle_ack_enqueue_result(
                     send_outgoing_critical(
                         &out_ack_tx,

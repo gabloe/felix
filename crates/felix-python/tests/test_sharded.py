@@ -40,14 +40,16 @@ def test_a_client_can_ask_how_many_shards(client, fixture):
         "cannot mean anything against a single-shard stream"
     )
 
-    # The protocol says an unknown stream answers zero, so it is
-    # distinguishable from a real single-shard one. The broker reports one
-    # either way today (#394), so this asserts only that the call answers
-    # rather than what it answers — tightening it is that issue's job.
+    # Zero, not one: an unknown stream has to be distinguishable from a real
+    # single-shard one, or subscribing to a stream that does not exist reads
+    # shard 0 and calls it the stream.
     absent = client.stream_shards(
         fixture["tenant_id"], fixture["namespace"], fixture["missing_stream"]
     )
-    assert isinstance(absent, int)
+    assert absent == 0, (
+        f"an unknown stream reported {absent} shards, so a client cannot tell "
+        "it from a stream that really has that many"
+    )
 
 
 @pytest.mark.scenario("sharded.delivers_every_shard")

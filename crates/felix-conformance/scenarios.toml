@@ -511,11 +511,11 @@ detail = """
 A consumer cannot open one subscription per shard without knowing how many
 there are, and guessing is not available.
 
-The protocol also says a broker that does not know the stream answers zero
-rather than one, so an unknown stream is distinguishable from a single-shard
-one. That half is deliberately not required here yet: the broker reports one
-either way (#394), and a catalogue must not demand behaviour the server does
-not have.
+A stream the broker does not know answers zero, not one. That distinction is
+what a sharded subscription refuses on: told "one shard" for a stream that does
+not exist, a client opens one subscription, reports success, and reads nothing
+— reading shard 0 and calling it the stream. The caller discovers it later, as
+missing data, with no error anywhere to point at.
 """
 
 [[scenario]]
