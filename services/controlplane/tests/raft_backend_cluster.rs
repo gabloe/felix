@@ -152,15 +152,46 @@ async fn a_follower_serves_writes_by_forwarding_and_reads_locally() {
         }
     }
 
-    // Exactly one member holds the leadership gate, and it is the leader:
-    // the sweep and placement run once per cluster, not once per instance.
-    let mut holders = Vec::new();
-    for node in &nodes {
-        if LeadershipGate::Leader(node.handle.clone()).holds().await {
-            holders.push(node.handle.status().id);
+    // Exactly one member holds the leadership gate, and it is the leader: the
+    // sweep and placement run once per cluster, not once per instance.
+    //
+    // Retried within a bound, and the two halves are not equally urgent. The
+    // gate is a *linearizable* check — openraft's read-index — so a leader that
+    // has not heard from a quorum in the last instant fails it. That is
+    // ordinary and passes, and asserting once caught the group mid-blink. What
+    // must never happen is **two** holders, so that is checked on every attempt
+    // rather than only at the end.
+    //
+    // The leader is re-read here rather than compared against the one sampled
+    // before the writes: an election in between moves it, and the gate is right
+    // to follow it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut holders = Vec::new();
+        for node in &nodes {
+            if LeadershipGate::Leader(node.handle.clone()).holds().await {
+                holders.push(node.handle.status().id);
+            }
         }
+        assert!(
+            holders.len() <= 1,
+            "two members held the leadership gate at once, so the sweep would \
+             run twice: {holders:?}",
+        );
+        if let [holder] = holders[..] {
+            assert_eq!(
+                Some(holder),
+                nodes.iter().find_map(|node| node.handle.status().leader),
+                "the gate is held by a member nobody believes is the leader",
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no member ever held the leadership gate, so nothing would sweep",
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert_eq!(holders, vec![leader_id]);
 
     for node in &nodes {
         let _ = node.handle.shutdown().await;
