@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789682575628,
+  "lastUpdate": 1789684532571,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12606,6 +12606,72 @@ window.BENCHMARK_DATA = {
             "range": "323.78",
             "unit": "us",
             "extra": "trials: 5\nmedian: 466.00\nmean: 683.60\nstdev: 323.78\ncv: 47.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3854e782330167243bc3de6d5ad6ba2847de479",
+          "message": "feat(broker): name the replicas replication has stopped for (#485)\n\n`felix_broker_replication_halted` is a bare count, and has to stay one — a\nlabel per shard is a label per stream per tenant, which is unbounded by design\nin a multi-tenant broker. So it can say three replicas have stopped and nothing\nmore, and the only way to learn which was to grep the broker's logs for the\nwarning that accompanied each halt.\n\nThat is a poor position to be in, because a halt does not resolve on its own.\nThe follower is out of every quorum until an operator acts, and acting means\nknowing which replica of which shard on which node, and whether it diverged or\nmerely needs history this leader no longer holds — which decides whether a\nrebuild is the right move at all.\n\nSo the broker serves a listing beside the metrics, at `GET\n/replication/halted`. A listing rather than a metric is exactly what lets it\ncarry the identity: it is read on demand and its size is the number of halted\nreplicas, normally zero. It names the shard, the node, the generation, how far\nthe follower had got, a stable reason a runbook can key off, and a remedy in\nprose. A healthy broker answers `[]` rather than 404, because \"nothing is\nhalted\" and \"this broker does not answer that question\" are different things to\na dashboard.\n\nRead-only, deliberately. Discarding a halted replica's log so the leader's\nstanding bootstrap offer is accepted is the obvious next step, and that\nlistener has no authentication (#125, #126) — it carries what is worth knowing\nand nothing worth doing. The supervised rebuild stays #424.\n\nThe listing is replaced wholesale each pass rather than accumulated, so a halt\nthat has resolved stops being reported instead of sending someone after a\nreplica that is already shipping again.\n\n`spawn` crossed clippy's argument limit, so the two things a pass publishes are\none `Published` now. They belong together anyway: the mark is what a `Quorum`\npublish waits on, and the listing is what an operator reads when a replica\nstops contributing to one.",
+          "timestamp": "2026-09-17T15:32:59-07:00",
+          "tree_id": "8f725dc912fa2ef715b89181c4a5a7cbdcbf75f1",
+          "url": "https://github.com/gabloe/felix/commit/b3854e782330167243bc3de6d5ad6ba2847de479"
+        },
+        "date": 1789684530072,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.40\nstdev: 0.55\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "2.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 207.60\nstdev: 2.30\ncv: 1.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 250,
+            "range": "85.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 250.00\nmean: 281.00\nstdev: 85.00\ncv: 30.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "2.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 201.60\nstdev: 2.07\ncv: 1.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 429,
+            "range": "132.23",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 429.00\nmean: 480.00\nstdev: 132.23\ncv: 27.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1524,
+            "range": "568.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1524.00\nmean: 1186.20\nstdev: 568.89\ncv: 47.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
