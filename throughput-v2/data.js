@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789682414918,
+  "lastUpdate": 1789682578020,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9880,6 +9880,58 @@ window.BENCHMARK_DATA = {
             "range": "12972.97",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 560801.20\nmean: 556359.79\nstdev: 12972.97\ncv: 2.33%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4c05c6c28ec8e03f6452409fb4c1c8192985f728",
+          "message": "fix(controlplane): judge a replica report on the clock that stamped it (#484)\n\nFreshness is a subtraction, and the two sides came from different clocks. A\nreplica-status report was stamped with `ControlPlaneStore::now_millis` and its\nTTL judged against this process's own clock in `placement.rs`. Under memory and\nRaft those are the same reading; under Postgres they are the database host's\nclock and the control plane's.\n\nA stamp from a clock behind the reader's reads as older than it is, so a\nreplica that is level with its leader is called stale and is not considered for\npromotion — which is the opposite of what the report exists to establish.\n\nThe store's clock was the wrong reach. A heartbeat needs it because it is\nstamped on one instance and judged by an expiry sweep that may run on another,\nso the two need a clock they share. Replica positions never leave the instance:\nthey live in `AppState`, and the placement pass that reads them back runs in\nthis process. One process, one clock, and `placement.rs` already had it right.\n\nStill not the caller's clock, which would let a broker keep its own report\nalive.\n\nThe end-to-end case needs a Postgres host whose clock is skewed from the\ncontrol plane's, which no test here can arrange. The unit test demonstrates\nwhat that costs instead: a report stamped a minute behind the reader reads as\nstale while it is fresh, and the same report judged on the clock that wrote it\ndoes not. The skew is held above the TTL by a `const` assertion, so widening\nthe window cannot leave the test quietly proving nothing.",
+          "timestamp": "2026-09-17T14:57:37-07:00",
+          "tree_id": "279ee134eb1ef37af81722fe7a3cd8110d7b829b",
+          "url": "https://github.com/gabloe/felix/commit/4c05c6c28ec8e03f6452409fb4c1c8192985f728"
+        },
+        "date": 1789682577406,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 249837.47,
+            "range": "4400.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 249837.47\nmean: 250741.02\nstdev: 4400.49\ncv: 1.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 249837.47,
+            "range": "4400.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 249837.47\nmean: 250741.02\nstdev: 4400.49\ncv: 1.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 58102.52,
+            "range": "994.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 58102.52\nmean: 57643.50\nstdev: 994.86\ncv: 1.73%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 581025.2,
+            "range": "9948.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 581025.20\nmean: 576435.04\nstdev: 9948.58\ncv: 1.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
