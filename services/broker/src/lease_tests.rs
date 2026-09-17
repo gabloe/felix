@@ -139,3 +139,61 @@ async fn the_refresh_task_invalidates_the_cached_flag() {
     shutdown.cancel();
     let _ = task.await;
 }
+
+/// A stall between sending a heartbeat and handling its answer must not
+/// lengthen the lease. Anchored at arrival, a stalled broker holds authority
+/// for the lease *plus* the stall — past what the control plane granted.
+#[tokio::test(start_paused = true)]
+async fn a_pause_between_sending_and_handling_does_not_extend_the_lease() {
+    let lease = LeaseState::new(LEASE);
+
+    // The heartbeat goes out, and the control plane records it here.
+    let sent = Instant::now();
+
+    // The broker then stalls for most of the usable lease before it gets round
+    // to handling the response.
+    tokio::time::advance(Duration::from_millis(2_500)).await;
+    lease.renew_at(sent);
+
+    // Half a second of the 3s usable window is left, measured from when the
+    // control plane started counting.
+    assert!(
+        lease.is_valid_now(),
+        "the lease should still have time on it"
+    );
+    tokio::time::advance(Duration::from_millis(499)).await;
+    assert!(lease.is_valid_now());
+
+    tokio::time::advance(Duration::from_millis(2)).await;
+    assert!(
+        !lease.is_valid_now(),
+        "the lease outlived the window the control plane granted: it was \
+         anchored when the answer was handled rather than when the heartbeat \
+         was sent, so a stalled broker keeps serving past its expiry",
+    );
+}
+
+/// An out-of-order response cannot shorten the lease. Anchoring at send makes
+/// this reachable — two heartbeats in flight carry different anchors, and the
+/// older one must not win.
+#[tokio::test(start_paused = true)]
+async fn an_older_heartbeat_handled_late_does_not_move_the_anchor_back() {
+    let lease = LeaseState::new(LEASE);
+
+    let first = Instant::now();
+    tokio::time::advance(Duration::from_millis(1_000)).await;
+    let second = Instant::now();
+
+    // The later heartbeat is handled first, then the earlier one arrives.
+    lease.renew_at(second);
+    lease.renew_at(first);
+
+    // Still anchored at the later one: 3s of usable lease from `second`.
+    tokio::time::advance(Duration::from_millis(2_999)).await;
+    assert!(
+        lease.is_valid_now(),
+        "a late-arriving older heartbeat shortened the lease",
+    );
+    tokio::time::advance(Duration::from_millis(2)).await;
+    assert!(!lease.is_valid_now());
+}
