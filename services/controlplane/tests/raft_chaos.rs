@@ -268,6 +268,7 @@ fn traffic_loop(
         let call = |method: &str, path: &str, body: Option<&[u8]>, expect: &[u16]| -> Option<u16> {
             stats.calls.fetch_add(1, Ordering::Relaxed);
             let mut outcome = http(ready[0], method, path, Some(&bearer), body);
+            let mut retried = false;
             if outcome.is_none() {
                 // The connection died before an answer. As in the rolling
                 // restart's harness: retry against what is ready *now*, not
@@ -294,11 +295,27 @@ fn traffic_loop(
                     });
                 if let Some(addr) = retry {
                     stats.failovers.fetch_add(1, Ordering::Relaxed);
+                    retried = true;
                     outcome = http(addr, method, path, Some(&bearer), body);
                 }
             }
             match outcome {
                 Some((status, _)) if expect.contains(&status) => Some(status),
+                // The one ambiguous outcome in the harness, and it is a
+                // *success*.
+                //
+                // The retry above only happens when the first attempt's
+                // connection died before an answer — which does not mean it
+                // did not land. A create that committed and then lost its
+                // answer comes back from the retry as `409 already exists`,
+                // and that conflict is the first attempt reporting itself.
+                //
+                // Every id here is used once (`t-chaos-N`, counting up), so a
+                // conflict cannot be anyone else's write. Counting it as a
+                // failure made the chaos assertion fail whenever a fault
+                // landed in the window between commit and reply, which is
+                // precisely the window the faults are injected to open.
+                Some((409, _)) if retried && method == "POST" => Some(409),
                 other => {
                     stats.failures.fetch_add(1, Ordering::Relaxed);
                     eprintln!(
@@ -347,6 +364,8 @@ fn traffic_loop(
         if tenant_counter.is_multiple_of(4) {
             let tenant_id = format!("t-chaos-{}", tenant_counter / 4);
             let body = format!(r#"{{"tenant_id": "{tenant_id}", "display_name": "Chaos"}}"#);
+            // A 409 from a retry counts as acknowledged, not merely tolerated:
+            // the tenant is in the log, so the final state has to still hold it.
             if call("POST", "/v1/tenants", Some(body.as_bytes()), &[201]).is_some() {
                 acked_tenants.lock().expect("acked lock").push(tenant_id);
             }
