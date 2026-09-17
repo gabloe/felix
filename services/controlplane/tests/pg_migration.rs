@@ -29,7 +29,19 @@ fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
-async fn postgres_store() -> Option<(controlplane::store::postgres::PostgresStore, String)> {
+/// The container a test started, held so it is removed when the test ends.
+///
+/// `None` when `FELIX_TEST_DATABASE_URL` pointed at an existing database, in
+/// which case there is nothing here to clean up.
+type PgGuard =
+    Option<testcontainers::Container<'static, testcontainers_modules::postgres::Postgres>>;
+
+async fn postgres_store() -> Option<(
+    controlplane::store::postgres::PostgresStore,
+    String,
+    PgGuard,
+)> {
+    let mut container: PgGuard = None;
     let base_url = match std::env::var("FELIX_TEST_DATABASE_URL") {
         Ok(url) if !url.trim().is_empty() => url,
         _ => {
@@ -37,14 +49,20 @@ async fn postgres_store() -> Option<(controlplane::store::postgres::PostgresStor
                 eprintln!("skipping pg_migration: docker not available");
                 return None;
             }
-            let docker = Box::leak(Box::new(Cli::default()));
+            // The client is leaked on purpose — it is a docker CLI wrapper
+            // holding no container — so the container below can be `'static`
+            // and travel back to the caller. The *container* is not leaked:
+            // that is what removes it, and its anonymous volume, on drop.
+            let docker: &'static Cli = Box::leak(Box::new(Cli::default()));
             // The module's default tag is Postgres 11; pin what `task pg:up` runs.
             let image = testcontainers::RunnableImage::from(
                 testcontainers_modules::postgres::Postgres::default(),
             )
-            .with_tag("16-alpine");
-            let container = Box::leak(Box::new(docker.run(image)));
-            let port = container.get_host_port_ipv4(5432);
+            .with_tag("16-alpine")
+            .with_container_name(felix_test_container_name());
+            let started = docker.run(image);
+            let port = started.get_host_port_ipv4(5432);
+            container = Some(started);
             format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres")
         }
     };
@@ -96,7 +114,7 @@ async fn postgres_store() -> Option<(controlplane::store::postgres::PostgresStor
     )
     .await
     .expect("connect and migrate");
-    Some((store, url))
+    Some((store, url, container))
 }
 
 /// A control plane's worth of state, with enough churn that the sequence
@@ -193,7 +211,7 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
 
 #[tokio::test]
 async fn a_postgres_control_plane_migrates_into_a_raft_group() {
-    let Some((pg, _url)) = postgres_store().await else {
+    let Some((pg, _url, _container)) = postgres_store().await else {
         return;
     };
     seed(&pg).await;
@@ -308,7 +326,7 @@ async fn a_postgres_control_plane_migrates_into_a_raft_group() {
 /// The tool's export half, run as the real binary against the real database.
 #[tokio::test]
 async fn the_cli_exports_a_snapshot_the_import_side_accepts() {
-    let Some((pg, url)) = postgres_store().await else {
+    let Some((pg, url, _container)) = postgres_store().await else {
         return;
     };
     seed(&pg).await;
@@ -331,4 +349,21 @@ async fn the_cli_exports_a_snapshot_the_import_side_accepts() {
     let state: controlplane::store::memory::ExportedState =
         serde_json::from_slice(&bytes).expect("the file parses as an exported state");
     assert!(state.summary().contains("1 streams"), "{}", state.summary());
+}
+
+/// A name a cleanup can recognise as ours.
+///
+/// testcontainers sets no labels, so without this the only thing separating a
+/// leftover test database from one an operator is running is the image tag —
+/// which is not enough to delete on. Unique per container, since a fixed name
+/// would collide between concurrent runs.
+fn felix_test_container_name() -> String {
+    format!(
+        "felix-test-pg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }

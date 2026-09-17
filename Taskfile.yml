@@ -19,12 +19,31 @@ tasks:
       # Build it up front (the felix-broker bin needs no such help: services/broker
       # has its own integration tests, so cargo builds it).
       - "cargo build -p felix-loadgen"
-      - "cargo test --workspace"
+      # One managed Postgres, torn down afterwards. Without it the Postgres
+      # tests start their own through testcontainers, and pg_store_e2e holds
+      # that one in a `static` — which never drops, so every run of the suite
+      # leaves a container and its volume behind.
+      - |
+        if [ -z "${CI:-}" ]; then
+          task pg:up
+        fi
+      - |
+        if [ -n "${FELIX_TEST_DATABASE_URL:-}" ]; then
+          cargo test --workspace
+        elif docker version >/dev/null 2>&1; then
+          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo test --workspace
+        else
+          cargo test --workspace
+        fi
       # Run separately (not --all-features on the whole workspace): felix-client's
       # `in-process` feature only affects felix-client itself, and keeping it out of
       # the main workspace run avoids adding unrelated concurrent test load that can
       # perturb timing-sensitive tests elsewhere in the suite.
       - "cargo test -p felix-client --features in-process"
+      - |
+        if [ -z "${CI:-}" ]; then
+          task pg:down
+        fi
   pg:up:
     cmds:
       - |
@@ -36,7 +55,29 @@ tasks:
           echo "task: [pg:up] skipping postgres container (docker unavailable)"
         fi
   pg:down:
-    cmds: ["docker rm -f felix-pg-tests >/dev/null 2>&1 || true"]
+    # `-v` so the anonymous data volume goes with it. Without that the volumes
+    # accumulate even though the containers do not.
+    cmds: ["docker rm -f -v felix-pg-tests >/dev/null 2>&1 || true"]
+  pg:sweep:
+    desc: Remove Postgres test containers and volumes an interrupted run left behind.
+    cmds:
+      - |
+        # By name, because testcontainers sets no labels — the tests name what
+        # they start `felix-test-pg-*` precisely so this can tell them from a
+        # Postgres someone is running themselves. `-v` takes the data volume
+        # with the container; those are what actually accumulate.
+        stray="$(docker ps -aq --filter name=felix-test-pg- 2>/dev/null || true)"
+        if [ -n "$stray" ]; then
+          echo "removing $(echo "$stray" | wc -l | tr -d ' ') stray test container(s)"
+          echo "$stray" | xargs docker rm -f -v >/dev/null 2>&1 || true
+        else
+          echo "no stray test containers"
+        fi
+        # Volumes already orphaned by containers removed without -v. Dangling
+        # only, so nothing in use is in scope — but this is the one step that
+        # can touch a volume Felix did not create, so it is opt-in rather than
+        # part of `task test`.
+        docker volume ls -qf dangling=true 2>/dev/null | head -100 | xargs -r docker volume rm >/dev/null 2>&1 || true
   coverage:
     cmds:
       # Same reason as `test`: felix-cluster's loadgen integration test shells
