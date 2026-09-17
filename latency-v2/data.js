@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789687895313,
+  "lastUpdate": 1789688875267,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12936,6 +12936,72 @@ window.BENCHMARK_DATA = {
             "range": "98.39",
             "unit": "us",
             "extra": "trials: 5\nmedian: 420.00\nmean: 440.60\nstdev: 98.39\ncv: 22.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "47b57dae9995c1bf8dd47100133bb2a382559278",
+          "message": "perf(replication): a pass's replica reports share one control-plane request (#494)\n\nA report has to reach the control plane before the shard's quorum mark moves,\nso it sits on the path of every `Quorum` publish. One POST per shard per pass\nmeant a broker leading many shards spent that path on round trips differing\nonly in which shard they named — and the endpoint has always taken a list, so\nthey were single-element batches by habit rather than by need.\n\nGroup commit, not a window. A flush takes everything queued at that moment and\nsends it; reports arriving while that request is in flight go together in the\nnext one. Batches grow under load, which is when they are worth having, and a\npass with one shard to report waits for nothing — which matters, because the\ndeployment least able to spare added latency on a `Quorum` publish is the small\none. `disk_log/sync.rs` makes the same trade for the same reason.\n\nA timer was the obvious alternative and is the wrong one: any window is added\nto the common case to help the loaded one.\n\nThe endpoint already walks the list and skips a shard it will not accept\nwithout failing the request, so batching does not couple one shard's rejection\nto another's. What it does couple is transport failure — a refused request is\nrefused for everyone in it — and every caller is told, because each is a shard\nabout to publish its mark and a report that did not land must leave the mark\nwhere it was.\n\nShutdown answers everyone still waiting rather than letting them sit until\ntheir publish timeout during a drain.\n\n`felix_broker_replica_reports_per_request` says whether it is working: one, on\na broker leading hundreds of shards, means it is not.",
+          "timestamp": "2026-09-17T16:45:19-07:00",
+          "tree_id": "4db4deb3e833d2b87437a7f91fc46b55a3e0b7e9",
+          "url": "https://github.com/gabloe/felix/commit/47b57dae9995c1bf8dd47100133bb2a382559278"
+        },
+        "date": 1789688872854,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 86,
+            "range": "4.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 86.00\nmean: 87.40\nstdev: 4.34\ncv: 4.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 125,
+            "range": "5.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 127.20\nstdev: 5.26\ncv: 4.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 156,
+            "range": "157.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 156.00\nmean: 229.00\nstdev: 157.25\ncv: 68.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 116,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 116.00\nmean: 116.20\nstdev: 0.84\ncv: 0.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 253,
+            "range": "12.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 253.00\nmean: 257.00\nstdev: 12.29\ncv: 4.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 397,
+            "range": "866.73",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 397.00\nmean: 957.20\nstdev: 866.73\ncv: 90.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
