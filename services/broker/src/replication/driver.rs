@@ -10,6 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use felix_broker::Broker;
+use felix_common::membership::{
+    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
+};
 use felix_router::{Route, ShardKey, ShardRouter};
 use felix_wire::internal::ShardRef;
 use tokio_util::sync::CancellationToken;
@@ -441,36 +444,39 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
     if reports.is_empty() {
         return true;
     }
-    let body = serde_json::json!({
-        "incarnation": to.incarnation,
-        "shards": reports
+    // The shared type, not a `json!` literal: the control plane parses this
+    // same definition, so a field renamed on one side stops compiling instead
+    // of quietly arriving as a missing one.
+    let body = ReplicaStatusRequest {
+        incarnation: to.incarnation,
+        shards: reports
             .iter()
-            .map(|report| serde_json::json!({
-                "tenant_id": report.key.tenant_id,
-                "namespace": report.key.namespace,
-                "stream": report.key.stream,
-                "shard": report.key.shard,
+            .map(|report| ShardReplicaStatus {
+                tenant_id: report.key.tenant_id.clone(),
+                namespace: report.key.namespace.clone(),
+                stream: report.key.stream.clone(),
+                shard: report.key.shard,
                 // Without the kind the control plane files a cache's report
                 // under the stream of the same name, so placement finds no
                 // caught-up replica for the cache and its shard is never
                 // promoted -- the contents are unreachable after a failover.
-                "kind": match report.key.kind {
-                    felix_router::ShardKind::Cache => "cache",
-                    felix_router::ShardKind::Stream => "stream",
+                kind: match report.key.kind {
+                    felix_router::ShardKind::Cache => WireShardKind::Cache,
+                    felix_router::ShardKind::Stream => WireShardKind::Stream,
                 },
-                "generation": report.generation,
-                "caught_up": report.caught_up,
-                "replica_offsets": report
+                generation: report.generation,
+                caught_up: report.caught_up.to_vec(),
+                replica_offsets: report
                     .offsets
                     .iter()
-                    .map(|(node_id, durable_offset)| serde_json::json!({
-                        "node_id": node_id,
-                        "durable_offset": durable_offset,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-            .collect::<Vec<_>>(),
-    });
+                    .map(|(node_id, durable_offset)| ReplicaOffset {
+                        node_id: node_id.clone(),
+                        durable_offset: *durable_offset,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
     let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
     let mut request = to.client.post(&url).json(&body);
     if let Some(token) = &to.token {

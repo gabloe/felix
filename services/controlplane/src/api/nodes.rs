@@ -131,7 +131,7 @@ pub(crate) async fn report_replica_status(
             namespace: shard.namespace,
             stream: shard.stream,
             shard: shard.shard,
-            kind: shard.kind,
+            kind: shard.kind.into(),
         };
 
         // Being authorised to speak for yourself is not the same as leading

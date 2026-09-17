@@ -178,51 +178,16 @@ pub struct NodeHeartbeatRequest {
     pub incarnation: u64,
 }
 
-/// A leader's account of which replicas hold a shard's log.
-///
-/// Sent by the shard's leader, because it is the only party that knows both
-/// ends of the comparison: its own tail, and how far each follower has
-/// acknowledged. A follower knows where it is, not whether that is caught up.
-#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-pub struct ReplicaStatusRequest {
-    /// The reporting process's own incarnation, from its last registration.
-    pub incarnation: u64,
-    pub shards: Vec<ShardReplicaStatus>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-pub struct ShardReplicaStatus {
-    pub tenant_id: String,
-    pub namespace: String,
-    pub stream: String,
-    pub shard: u32,
-    /// Whether `stream` names a stream or a cache. Omitted means a stream,
-    /// which is what every broker that predates cache placement reports.
-    #[serde(default)]
-    pub kind: crate::model::ShardKind,
-    /// The assignment generation the reporting broker held. A report from an
-    /// older generation is dropped: the replica set may have changed with it.
-    pub generation: u64,
-    /// Replicas within the catch-up bound, as this leader last saw them.
-    pub caught_up: Vec<String>,
-    /// How far each replica had got, as this leader last saw it.
-    ///
-    /// Carried as well as `caught_up` because "caught up" is only true of the
-    /// tail it was measured against: a leader that reports and then writes more
-    /// before dying leaves a report that says every replica was level, without
-    /// saying level *with what*. The offsets let promotion prefer the replica
-    /// that actually holds the most, which is the one a quorum-acknowledged
-    /// record is guaranteed to be on.
-    #[serde(default)]
-    pub replica_offsets: Vec<ReplicaOffset>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
-pub struct ReplicaOffset {
-    pub node_id: String,
-    /// One past the last record this replica had stored.
-    pub durable_offset: u64,
-}
+// A leader's account of which replicas hold a shard's log.
+//
+// The shapes a broker sends live in felix-common, so a field renamed here and
+// not there cannot be a silent mismatch — both sides compile against one
+// definition. Re-exported rather than mirrored, for the same reason.
+//
+// A report is sent by the shard's *leader*, because it is the only party that
+// knows both ends of the comparison: its own tail, and how far each follower
+// has acknowledged. A follower knows where it is, not whether that is caught up.
+pub use felix_common::membership::{ReplicaOffset, ReplicaStatusRequest, ShardReplicaStatus};
 
 /// What the control plane tells a broker in return.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

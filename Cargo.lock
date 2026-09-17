@@ -1252,9 +1252,11 @@ version = "0.4.0-preview"
 dependencies = [
  "metrics",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "utoipa",
  "uuid",
 ]
 
