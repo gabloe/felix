@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789615923717,
+  "lastUpdate": 1789617462612,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -10956,6 +10956,72 @@ window.BENCHMARK_DATA = {
             "range": "770.30",
             "unit": "us",
             "extra": "trials: 5\nmedian: 290.00\nmean: 629.20\nstdev: 770.30\ncv: 122.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1bfe5746a2503b19d0a6346392f9238ed705557a",
+          "message": "feat(python): a Python client, and a conformance kit to gate the next one (#392)\n\nTwo pieces, and the second is the one that matters for language three.\n\nThe binding (crates/felix-python) wraps felix-client rather than\nreimplementing the protocol. Reconnection, redirect-following, retry\nclassification and offset bookkeeping exist once, in Rust, and Python\ngets them as they are. Both surfaces are there: a synchronous one that\nblocks with the GIL released, and a native asyncio one whose methods are\nawaitable and whose subscriptions are 'async for' -- Python realtime\nbackends are asyncio backends, and a thread-only client would not serve\nthem. Typed exceptions let an application branch on why something failed\nrather than parsing message text.\n\nThe conformance kit (crates/felix-conformance) turns client semantics\ninto a specification every language can be checked against: a catalogue\nof 29 scenarios keyed by stable id, a verifier that reports a required\nsemantic with no passing result by name, and a fixture command in\nfelix-cluster that stands up something to run against. The catalogue is\nweighted toward the semantics a second client approximates rather than\nimplements -- reconnect, redirect carrying the start offset through\nevery hop, retry classification, what each ack mode promises -- because\nthose are the divergences that get debugged as broker bugs.\n\nThe split is licensing-driven: the catalogue and verifier are\nApache-2.0, so a third party can vendor them for a client written\nsomewhere nobody here is looking, while the fixture server needs a\nbroker and stays AGPL.\n\nAlso adds FELIX_TLS_CERT_EXPORT: the broker writes the certificate it\ngenerated where a client can trust it. Without it the only way for a\nnon-Rust client to reach a dev broker is to skip verification, and the\nPython binding deliberately offers no switch for that.",
+          "timestamp": "2026-09-16T20:55:08-07:00",
+          "tree_id": "5b426e43e0bba9f4d0a11862bc1f80a2f8a7b014",
+          "url": "https://github.com/gabloe/felix/commit/1bfe5746a2503b19d0a6346392f9238ed705557a"
+        },
+        "date": 1789617460246,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "4.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 156.60\nstdev: 4.39\ncv: 2.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "6.62",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 203.40\nstdev: 6.62\ncv: 3.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 233,
+            "range": "319.97",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 233.00\nmean: 382.40\nstdev: 319.97\ncv: 83.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "2.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.20\nstdev: 2.28\ncv: 1.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 400,
+            "range": "85.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 400.00\nmean: 433.40\nstdev: 85.36\ncv: 19.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 630,
+            "range": "1123.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 630.00\nmean: 1151.40\nstdev: 1123.64\ncv: 97.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
