@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789688875267,
+  "lastUpdate": 1789689012353,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13002,6 +13002,72 @@ window.BENCHMARK_DATA = {
             "range": "866.73",
             "unit": "us",
             "extra": "trials: 5\nmedian: 397.00\nmean: 957.20\nstdev: 866.73\ncv: 90.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eba1f1ac96bb4d4527936013d7aa80a157fbfa3e",
+          "message": "test(cluster): bound convergence by a deadline, not an attempt count (#497)\n\n`a_moved_shard_converges_on_the_new_owner` failed the coverage job while\npassing the same suite in an eighth of the wall clock without instrumentation.\n\nTwo hundred attempts with a 50ms sleep looks like ten seconds and is not. An\nattempt costs whatever it costs, and the cheap ones are exactly the ones that\nhappen while the thing being waited for has not happened yet: a publish the old\nowner refuses, because it has not seen the new assignment, returns far faster\nthan one it forwards. So the count ran out early on a machine where the\nassignment feed needed longer than the budget it was supposed to provide —\nwhich is the machine that needs the budget most.\n\nA deadline says what was meant. Sixty seconds is wide around something that\nnormally takes one feed interval, and it still fails if convergence never\nhappens rather than if it merely took a while.\n\nThe lease-expiry case below it has the same shape with the sign flipped — there\nthe attempts that cost time are the ones that *succeed*, while the lease is\nstill valid — so it gets the same treatment.",
+          "timestamp": "2026-09-17T16:47:46-07:00",
+          "tree_id": "71d4783fb9d56ab76212f243cd4ef520e0edf220",
+          "url": "https://github.com/gabloe/felix/commit/eba1f1ac96bb4d4527936013d7aa80a157fbfa3e"
+        },
+        "date": 1789689010207,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 95,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 95.00\nmean: 94.60\nstdev: 0.55\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 129,
+            "range": "3.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 129.40\nstdev: 3.21\ncv: 2.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 199,
+            "range": "106.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 237.60\nstdev: 106.37\ncv: 44.77%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 127.40\nstdev: 0.55\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 255,
+            "range": "4.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 255.00\nmean: 255.00\nstdev: 4.95\ncv: 1.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 334,
+            "range": "22.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 334.00\nmean: 349.20\nstdev: 22.65\ncv: 6.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
