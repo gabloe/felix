@@ -1195,3 +1195,126 @@ async fn a_slow_follower_does_not_cost_one_delay_per_shard() {
          shards; the shards were shipped one after another",
     );
 }
+
+/// Answers at once for everyone but one node, which it keeps waiting.
+struct OneSlowFollower {
+    slow: &'static str,
+    delay: Duration,
+}
+
+impl PeerRequester for OneSlowFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        if node_id == self.slow {
+            tokio::time::sleep(self.delay).await;
+        }
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+/// **The mark advances at the majority, not at the last follower.**
+///
+/// With three replicas a record is on a majority the moment one follower has
+/// it; the second is a durability margin, not a precondition. Waiting for every
+/// follower put one dead or slow replica's whole timeout in front of every
+/// acknowledgement on the shard, every pass — the failure `Quorum` exists to
+/// tolerate, turned into the thing that stalls it (#411).
+///
+/// The clock is the assertion: the mark has to reach the tail long before the
+/// slow follower answers at all.
+#[tokio::test(start_paused = true)]
+async fn the_mark_advances_at_the_majority_not_at_the_slowest_follower() {
+    const SLOW: Duration = Duration::from_secs(60);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = OneSlowFollower {
+        slow: "broker-c",
+        delay: SLOW,
+    };
+    let marks = QuorumMarks::new();
+    let watched = watch_key(&key());
+    let started = tokio::time::Instant::now();
+
+    let observe = async {
+        loop {
+            if marks.offset(&watched, 4) == Some(3) {
+                return tokio::time::Instant::now().duration_since(started);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    let (mut cursors, mut group, mut dead, mut counters) = (
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    );
+    let (_, reached) = tokio::join!(
+        replicate_once(
+            &follower,
+            &broker,
+            &router,
+            &marks,
+            None,
+            &mut cursors,
+            &mut group,
+            &mut dead,
+            &mut counters,
+        ),
+        observe,
+    );
+
+    assert!(
+        reached < SLOW,
+        "the majority held every record after {reached:?}, but the mark waited \
+         {SLOW:?} for the slowest follower",
+    );
+}
+
+/// The slow follower is still shipped to and still ends the pass at the tail.
+/// Publishing at the majority is about when the mark moves, not about giving up
+/// on the rest of the replica set.
+#[tokio::test(start_paused = true)]
+async fn the_slower_follower_is_still_caught_up_by_the_end_of_the_pass() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = OneSlowFollower {
+        slow: "broker-c",
+        delay: Duration::from_secs(60),
+    };
+    let marks = QuorumMarks::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let mut caught_up = pass.reports[0].caught_up.clone();
+    caught_up.sort();
+    assert_eq!(
+        caught_up,
+        vec!["broker-b".to_string(), "broker-c".to_string()],
+        "the slow follower was abandoned rather than waited for",
+    );
+    let offsets: Map<String, u64> = pass.reports[0].offsets.iter().cloned().collect();
+    assert_eq!(offsets.get("broker-c"), Some(&3));
+}
