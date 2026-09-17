@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789666849921,
+  "lastUpdate": 1789672755706,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12078,6 +12078,72 @@ window.BENCHMARK_DATA = {
             "range": "220.92",
             "unit": "us",
             "extra": "trials: 5\nmedian: 560.00\nmean: 660.40\nstdev: 220.92\ncv: 33.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c5e5dba545c60cefadfe01a98f25c49b641d293e",
+          "message": "perf(replication): ship shards at the same time, not one after another (#471)\n\nA pass walked every led shard in sequence. A follower is slow for every\nshard it holds, so its latency was multiplied by the shard count — and each\nof those shards' quorum marks, and so every Quorum publish waiting on them,\nsat behind the sum. One tenant's unlucky replica became every tenant's\nlatency.\n\nThe per-shard body moves into replicate_shard, which owns the cursors for\nits shard rather than borrowing them from the maps — that is what lets the\nshards run at once. They are taken out before the pass and put back after,\nso nothing is shared and there is no lock.\n\nBounded at 16 in flight. Each shard holds a peer request and may hold an\nHTTP report, and a broker leading thousands of shards must not open\nthousands of those.\n\nNothing changes within a shard: batches are still ordered, followers are\nstill waited on together, and the report still gates the mark as #434 left\nit.\n\nThe first version of the test had one slow shard out of four, which passes\nwhether the shards run in sequence or not — serialising costs the same total\nwhen only one is slow. Making the follower slow for every shard is the real\nscenario and distinguishes them: 120s serialised against 60s concurrent.\n\nRefs #411",
+          "timestamp": "2026-09-17T12:15:12-07:00",
+          "tree_id": "e65f24559991373efc72f8eef606e0b41ebccf2c",
+          "url": "https://github.com/gabloe/felix/commit/c5e5dba545c60cefadfe01a98f25c49b641d293e"
+        },
+        "date": 1789672752955,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 157,
+            "range": "1.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 157.00\nmean: 157.60\nstdev: 1.82\ncv: 1.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 201.80\nstdev: 1.92\ncv: 0.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 230,
+            "range": "4.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 230.00\nmean: 231.00\nstdev: 4.80\ncv: 2.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "3.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 199.20\nstdev: 3.49\ncv: 1.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 400,
+            "range": "60.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 400.00\nmean: 433.40\nstdev: 60.22\ncv: 13.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 742,
+            "range": "822.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 742.00\nmean: 1092.80\nstdev: 822.68\ncv: 75.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
