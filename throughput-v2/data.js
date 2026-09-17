@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789686998545,
+  "lastUpdate": 1789687897494,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10140,6 +10140,58 @@ window.BENCHMARK_DATA = {
             "range": "8732.26",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 771984.22\nmean: 767124.92\nstdev: 8732.26\ncv: 1.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6355c69470dbdbfb1c1e21421648d45106374fc",
+          "message": "feat(internal-protocol): an unknown frame kind is refused, not fatal (#496)\n\n* feat(internal-protocol): an unknown frame kind is refused, not fatal\n\nThe protocol's own documentation says additive change happens by adding a\n`Kind`, \"which an older peer already rejects as unknown\", and one message\ndescribes that rejection as \"a typed refusal\". Neither was true. `Kind::from_u16`\nfailed inside the header decode, `read_frame` returned an error, and the server\ndropped the stream.\n\nThose streams are long-lived and multiplex every in-flight request to a peer.\nDropping one turned \"the peer is newer than me\" into \"every request in flight to\nthat peer failed\" — which made adding a kind a cutover rather than an upgrade,\nand is why a position probe for #412 was not worth its cost.\n\nA frame that is *ours* — right magic, a version this build speaks — can be\nstepped over: the frozen header says how long the body is. So the body is read,\nthe stream stays on a frame boundary, and the sender is answered\n`UnsupportedKind` against its correlation id.\n\nThat rests on an invariant worth naming: **every body begins with its\ncorrelation id, and nothing may be added before it.** Without it a refusal could\nnot be matched to the request and closing the connection would be the only\noption left. All thirteen encode arms already did this; there is now a test that\nkeeps it true.\n\nA frame that is *not* ours stays fatal. A wrong magic or an unknown version\nmeans the bytes are not laid out the way the reader assumes, so its length field\nmeans nothing and there is no boundary to skip to.\n\nThis helps only from here on — an older build still drops the stream on a kind\nit does not know. What it buys is that every future addition is additive, which\nis what the design said it already was.\n\nReverted the step-over and watched the new test fail with \"expected a typed\nrefusal, got something else\".\n\n* docs(replication): a probe is no longer prohibitive, just unnecessary\n\nThe design note argued the follower repairs divergence without an exchange\npartly because a new message kind could not be sent at all — an unknown kind\nended the stream. That is no longer so.\n\nThe conclusion is unchanged and the reason is narrower: a probe is a round trip\nthe self-repair does not need, rather than something that would cost a lane.\nAn older peer predating the refusal still drops the stream, so a probe would\nalso have to wait out a deployment.",
+          "timestamp": "2026-09-17T16:29:04-07:00",
+          "tree_id": "618eac6c5056b3be21e77ccd7433cffa92958c83",
+          "url": "https://github.com/gabloe/felix/commit/c6355c69470dbdbfb1c1e21421648d45106374fc"
+        },
+        "date": 1789687896981,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 296428.8,
+            "range": "8202.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 296428.80\nmean: 296607.56\nstdev: 8202.75\ncv: 2.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 296428.8,
+            "range": "8202.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 296428.80\nmean: 296607.56\nstdev: 8202.75\ncv: 2.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 66174.38,
+            "range": "713.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 66174.38\nmean: 66464.06\nstdev: 713.90\ncv: 1.07%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 661743.76,
+            "range": "7139.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 661743.76\nmean: 664640.58\nstdev: 7139.01\ncv: 1.07%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
