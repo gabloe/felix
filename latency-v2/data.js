@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789676409049,
+  "lastUpdate": 1789677298285,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12276,6 +12276,72 @@ window.BENCHMARK_DATA = {
             "range": "222.45",
             "unit": "us",
             "extra": "trials: 5\nmedian: 371.00\nmean: 458.80\nstdev: 222.45\ncv: 48.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b37e34b3918a147afe620a0b77fee55cd86f56b9",
+          "message": "fix(replication): resume a follower at the generation boundary, not at zero (#477)\n\nA cursor is a belief about where a follower stood under one leadership, so a\ngeneration change discards it. What replaced it was offset zero.\n\nThat means every follower of every shard the failed broker led byte-compares\nthe whole log before anything new moves: the leader reads its own log off disk\nand ships records the follower already has, and the follower compares each one\nagainst what it already stored. Every shard at once, on the pass that follows a\nfailover. On a log of any size that is the difference between a failover and an\noutage, and it is also half of how RF erodes — a follower still catching up is\nnot caught up, so it is not eligible for promotion.\n\nThe generation history added for #406 already answers where to start, but only\none side was recording it. A follower records where each generation began as it\naccepts batches; a leader recorded nothing, so a broker's own history had a hole\nover exactly the stretch it led. That also left the demotion case reasoning from\na stale predecessor — the newest generation such a broker knew of was whatever\nit last accepted as a follower, not the one it went on to lead.\n\nSo a leader records it too, when the shard is taken and while it is still\n`Opening`. That is the only moment the tail *is* the generation's start: the\nphase exists to hold writes back until recovery finishes, so nothing has been\nwritten under the new leadership yet. Recording it on the first replication pass\ninstead would be too late by however many records arrived in between, and a base\npast the real boundary skips comparing records that can genuinely differ.\n\nBelow that offset, this broker's records came from earlier leaders while it was\na follower, and so did the follower's — two prefixes of the same log agree. At\nor above it is where they can differ: what this leadership wrote, and what a\npredecessor left on the follower alone.\n\nComparison starts one record below the boundary rather than exactly on it, so\nthe first batch overlaps something the follower already holds and the boundary\nis checked rather than assumed. That is the check Raft makes at `prevLogIndex`,\nfor one record's cost.\n\nA follower further behind than the boundary still says so with a `LogGap` and\nthe leader rewinds in that one exchange, so a replica added mid-generation is\nnot assumed caught up. Without a history entry for the generation it falls back\nto zero, which is slow rather than wrong, and is what a shard written by an\nolder build does. A shard's group cursors, dead letters and counters stay at\nzero too: those logs are written only when group state changes, so there is\nalmost nothing to compare, and the leader does not open them at takeover.\n\nThe history is read only when a cursor actually has to be created — a generation\nchange, or a replica added — since the usual pass creates none and the map is a\nfew hundred entries to clone.\n\nReverted the bound and watched both new driver tests fail while the\nno-history-falls-back-to-zero one kept passing.",
+          "timestamp": "2026-09-17T13:32:16-07:00",
+          "tree_id": "9022bc05d6850c7af83b97a5f97ff67ae8388209",
+          "url": "https://github.com/gabloe/felix/commit/b37e34b3918a147afe620a0b77fee55cd86f56b9"
+        },
+        "date": 1789677296475,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 162.20\nstdev: 0.45\ncv: 0.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 209,
+            "range": "2.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 209.20\nstdev: 2.39\ncv: 1.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 246,
+            "range": "18.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 246.00\nmean: 252.60\nstdev: 18.04\ncv: 7.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "6.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 203.40\nstdev: 6.50\ncv: 3.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 414,
+            "range": "544.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 414.00\nmean: 650.80\nstdev: 544.10\ncv: 83.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 649,
+            "range": "1158.54",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 649.00\nmean: 1270.60\nstdev: 1158.54\ncv: 91.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
