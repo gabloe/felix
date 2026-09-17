@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789674205718,
+  "lastUpdate": 1789676411790,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9620,6 +9620,58 @@ window.BENCHMARK_DATA = {
             "range": "7274.36",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 528665.38\nmean: 529226.15\nstdev: 7274.36\ncv: 1.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0589f92f78fb8608842dbf003b85d35f648b0dd",
+          "message": "fix(controlplane): the leader stamps a heartbeat, not the instance that got it (#475)\n\nLiveness is a comparison between two clock readings: the time on a heartbeat,\nand the cutoff the expiry sweep computes. Under Postgres both come from\n`clock_timestamp()`, which is why `now_millis` exists on the store trait.\n\nThe Raft backend never overrode it, so it inherited the process-clock default\nand the two readings came from different machines. The sweep is leader-gated,\nso its cutoff is the leader's clock; a heartbeat, though, is stamped wherever\nthe load balancer happened to send it. A follower whose clock runs ahead of\nthe leader's keeps its brokers alive past the timeout; one running behind\nexpires brokers that are answering fine. Both fail at the difference between\ntwo wall clocks, which NTP steps can move in one jump — a far stronger\nassumption than the bound on drift *rate* the design actually makes.\n\nNow the leader stamps it. `client_write` succeeds on the leader alone, so\nrewriting the command just before that call is rewriting it at the moment of\nacceptance, and only the leader's reading is ever appended. The command the\ncaller handed in is left untouched, so an instance that turns out to be\ndeposed between the check and the write forwards bytes carrying no reading of\nits own, and the real leader stamps its own.\n\nThe rewrite goes through the state-machine seam (`AppStateMachine::restamp`)\nrather than into raft.rs, which holds commands as opaque bytes and should keep\ndoing so. It edits the JSON instead of round-tripping through `MetaCommand`,\nbecause a rolling upgrade can hand a leader a command from a build it does not\nfully know, and decoding to a struct would silently drop the fields it cannot\nsee. Only a raw \"what time is it\" is rewritten: `ExpireStaleNodes` carries\n`now - timeout`, and substituting `now` there would expire the cluster.\n\nTwo store-contract cases asserted the exact timestamp they passed in, which is\nnow only true of the backends that do not restamp. They assert the property\ninstead — a late heartbeat does not move the recorded time backwards — which\nstill fails a backend that honours a stale reading.\n\nThe regression test gives each member a `restamp` that writes its own node id\ninstead of a clock, since members sharing a process share a wall clock and a\nreal timestamp could not say which one produced it. A heartbeat sent through\na follower comes back carrying the leader's id. Without the fix it carries the\nvalue the caller passed.\n\nThat test made `losing_quorum_fails_writes_loudly_not_silently` fail every\nrun: it waits for a leader to notice it has not heard a quorum in five\nseconds, and three live groups in one process delay that past its window.\nThe file is serialized now, which costs no wall clock — that one case is\nnearly all of its ten seconds.\n\nWhat this does not fix: `TakeRefreshToken`'s `now_secs` is a proposer clock\ntoo, but the `expires_at` it is compared against was stamped by a proposer as\nwell, so restamping one half would not make that comparison single-clock.",
+          "timestamp": "2026-09-17T13:17:29-07:00",
+          "tree_id": "d5b494361767c6aea58f557f77348e164bc562d9",
+          "url": "https://github.com/gabloe/felix/commit/e0589f92f78fb8608842dbf003b85d35f648b0dd"
+        },
+        "date": 1789676411005,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 295687.91,
+            "range": "7022.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 295687.91\nmean: 296565.41\nstdev: 7022.50\ncv: 2.37%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 295687.91,
+            "range": "7022.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 295687.91\nmean: 296565.41\nstdev: 7022.50\ncv: 2.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 67329.99,
+            "range": "1030.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 67329.99\nmean: 67357.95\nstdev: 1030.85\ncv: 1.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 673299.94,
+            "range": "10308.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 673299.94\nmean: 673579.51\nstdev: 10308.53\ncv: 1.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
