@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789601762499,
+  "lastUpdate": 1789615925921,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8580,6 +8580,58 @@ window.BENCHMARK_DATA = {
             "range": "5900.46",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 590089.89\nmean: 592061.65\nstdev: 5900.46\ncv: 1.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "15c92fa3f40dbca67161c91eaafb175d83925d06",
+          "message": "refactor: workspace organization to Rust conventions (#391)\n\nFour themes, each enforced so it cannot drift back.\n\nPlaceholder crates removed. felix-crypto ('no actual crypto operations\nyet'), felix-metadata (an in-memory KV superseded by the control plane's\nstores) and services/agent (hello-world) had zero dependents and existed\nonly as intentions. Their rows in LICENSING.md, the publish-readiness\ngate, and project-structure.md go with them -- that page documented key\ntypes for felix-metadata that never existed. felix-authz's casbin_model\nmodule goes too: nothing used it, the control plane embeds its own\nmodel.conf, and dropping it removes the casbin dependency tree from the\nbroker binary. Two more unused deps fell out of the scan.\n\nOne source of truth for dependency versions. 27 dependencies declared\nwith literal versions in up to eight manifests now live in\n[workspace.dependencies] and are inherited; three stray tokio pins and\nredundant serde feature re-declarations normalized.\n\nOne module style. 17 foo/mod.rs converted to foo.rs + foo/ (git mv, so\nhistory follows; three relative #[path] attributes re-anchored), and\nclippy's mod_module_files keeps it that way. tests/common/mod.rs stays --\nthat is the Cargo pattern for helpers shared between test binaries.\n\npub means public. unreachable_pub, enforced through [workspace.lints],\ndemotes what was never reachable. One exception is annotated rather than\ndemoted: services/broker's start_sync has a consumer outside the\nworkspace (demos/rbac-live), which no workspace-scoped lint can see --\ntask demo:check is what catches that, and did.\n\nAlso folds controlplane's tests/http_helpers.rs into tests/common: it was\ncompiling as its own empty test target while four siblings included it\ntextually.",
+          "timestamp": "2026-09-16T20:29:30-07:00",
+          "tree_id": "95e4e288afe59fbdaafb2dc730b44972ee20d004",
+          "url": "https://github.com/gabloe/felix/commit/15c92fa3f40dbca67161c91eaafb175d83925d06"
+        },
+        "date": 1789615925386,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 396953.57,
+            "range": "26753.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396953.57\nmean: 386390.62\nstdev: 26753.42\ncv: 6.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 396953.57,
+            "range": "26753.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396953.57\nmean: 386390.62\nstdev: 26753.42\ncv: 6.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 88604.83,
+            "range": "1471.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 88604.83\nmean: 88077.96\nstdev: 1471.39\ncv: 1.67%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 886048.29,
+            "range": "14713.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 886048.29\nmean: 880779.58\nstdev: 14713.91\ncv: 1.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
