@@ -3,7 +3,7 @@
 //! **Peer connections are encrypted but not authenticated yet.** Brokers
 //! generate a self-signed certificate at startup and the peer client accepts
 //! any certificate, because there is no way for one broker to learn another's
-//! today. mTLS between brokers is M8.1 (#136); until it lands, the internal
+//! today. mTLS between brokers is #125; until it lands, the internal
 //! listener must be on a network only brokers can reach.
 //!
 //! What is enforced now is *role separation*: both ends negotiate
