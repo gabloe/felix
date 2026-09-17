@@ -100,7 +100,7 @@ crc32fast = "1.5"
 dashmap = "6"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 hashbrown = { version = "0.16", features = ["equivalent"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 libc = "0.2"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
