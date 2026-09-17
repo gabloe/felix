@@ -123,6 +123,10 @@ pub const OUTCOME_BEHIND: &str = "behind";
 pub const OUTCOME_GAP: &str = "gap";
 /// The batch disagrees with bytes already stored.
 pub const OUTCOME_CONFLICT: &str = "conflict";
+/// A divergent suffix from a previous generation was dropped and replication
+/// resumed. Not an error — but worth watching, because a steady rate means
+/// leadership is changing more often than it should.
+pub const OUTCOME_TRUNCATED: &str = "truncated";
 /// The batch did not survive the trip.
 pub const OUTCOME_CORRUPT: &str = "corrupt";
 /// This broker placed a shard log to begin where the leader's surviving log
