@@ -38,6 +38,11 @@ env:
   # Measured net effect on these runners was a regression. Thread-per-core is worth
   # evaluating on dedicated many-core hardware, not a shared 4-vCPU runner.
 
+# Read-only by default: nothing here writes to the repo. A job that needs more
+# (publishing, commenting) asks for it explicitly rather than inheriting it.
+permissions:
+  contents: read
+
 jobs:
   comprehensive-sweep:
     runs-on: ubuntu-latest

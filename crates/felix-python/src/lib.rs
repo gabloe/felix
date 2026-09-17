@@ -151,9 +151,9 @@ impl SubscriptionHandle {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)
@@ -181,7 +181,7 @@ pub struct CacheWatchHandle {
 impl CacheWatchHandle {
     /// The next change, or `None` once the watch ends.
     #[pyo3(signature = (timeout=None))]
-    fn recv(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<PyObject>> {
+    fn recv(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<Py<PyAny>>> {
         let inner = Arc::clone(&self.inner);
         let item = block_on(py, async move {
             let mut guard = inner.lock().await;
@@ -222,7 +222,7 @@ impl CacheWatchHandle {
         slf
     }
 
-    fn __next__(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.recv(py, None)
     }
 
@@ -234,9 +234,9 @@ impl CacheWatchHandle {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)
@@ -260,7 +260,7 @@ pub struct ShardedSubscriptionHandle {
 impl ShardedSubscriptionHandle {
     /// The next event from any shard, or `None` once every shard has ended.
     #[pyo3(signature = (timeout=None))]
-    fn next_event(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<PyObject>> {
+    fn next_event(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<Py<PyAny>>> {
         let inner = Arc::clone(&self.inner);
         let event = block_on(py, async move {
             let mut guard = inner.lock().await;
@@ -317,7 +317,7 @@ impl ShardedSubscriptionHandle {
         slf
     }
 
-    fn __next__(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.next_event(py, None)
     }
 
@@ -329,9 +329,9 @@ impl ShardedSubscriptionHandle {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)
@@ -376,7 +376,7 @@ impl Client {
     ))]
     fn new(
         py: Python<'_>,
-        addrs: PyObject,
+        addrs: Py<PyAny>,
         tenant_id: &str,
         token: &str,
         server_name: &str,
@@ -490,7 +490,7 @@ impl Client {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-        start: Option<PyObject>,
+        start: Option<Py<PyAny>>,
     ) -> PyResult<SubscriptionHandle> {
         let start = parse_start(py, start)?;
         let inner = Arc::clone(&self.inner);
@@ -930,7 +930,7 @@ impl Client {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-        start: Option<PyObject>,
+        start: Option<Py<PyAny>>,
         resume: Option<std::collections::BTreeMap<u32, u64>>,
     ) -> PyResult<ShardedSubscriptionHandle> {
         let start = parse_start(py, start)?;
@@ -975,9 +975,9 @@ impl Client {
     #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
     fn __exit__(
         &self,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> bool {
         false
     }
@@ -987,7 +987,7 @@ impl Client {
     }
 }
 
-pub(crate) fn parse_addrs(py: Python<'_>, addrs: &PyObject) -> PyResult<Vec<SocketAddr>> {
+pub(crate) fn parse_addrs(py: Python<'_>, addrs: &Py<PyAny>) -> PyResult<Vec<SocketAddr>> {
     let bound = addrs.bind(py);
     let items: Vec<String> = if let Ok(single) = bound.extract::<String>() {
         vec![single]
@@ -1029,7 +1029,7 @@ pub(crate) fn parse_ack(ack: &str) -> PyResult<AckMode> {
 
 pub(crate) fn parse_start(
     py: Python<'_>,
-    start: Option<PyObject>,
+    start: Option<Py<PyAny>>,
 ) -> PyResult<Option<StartPosition>> {
     let Some(start) = start else {
         return Ok(None);
