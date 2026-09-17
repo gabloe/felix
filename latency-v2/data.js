@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789686996286,
+  "lastUpdate": 1789687895313,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12870,6 +12870,72 @@ window.BENCHMARK_DATA = {
             "range": "1000.66",
             "unit": "us",
             "extra": "trials: 5\nmedian: 523.00\nmean: 1026.60\nstdev: 1000.66\ncv: 97.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6355c69470dbdbfb1c1e21421648d45106374fc",
+          "message": "feat(internal-protocol): an unknown frame kind is refused, not fatal (#496)\n\n* feat(internal-protocol): an unknown frame kind is refused, not fatal\n\nThe protocol's own documentation says additive change happens by adding a\n`Kind`, \"which an older peer already rejects as unknown\", and one message\ndescribes that rejection as \"a typed refusal\". Neither was true. `Kind::from_u16`\nfailed inside the header decode, `read_frame` returned an error, and the server\ndropped the stream.\n\nThose streams are long-lived and multiplex every in-flight request to a peer.\nDropping one turned \"the peer is newer than me\" into \"every request in flight to\nthat peer failed\" — which made adding a kind a cutover rather than an upgrade,\nand is why a position probe for #412 was not worth its cost.\n\nA frame that is *ours* — right magic, a version this build speaks — can be\nstepped over: the frozen header says how long the body is. So the body is read,\nthe stream stays on a frame boundary, and the sender is answered\n`UnsupportedKind` against its correlation id.\n\nThat rests on an invariant worth naming: **every body begins with its\ncorrelation id, and nothing may be added before it.** Without it a refusal could\nnot be matched to the request and closing the connection would be the only\noption left. All thirteen encode arms already did this; there is now a test that\nkeeps it true.\n\nA frame that is *not* ours stays fatal. A wrong magic or an unknown version\nmeans the bytes are not laid out the way the reader assumes, so its length field\nmeans nothing and there is no boundary to skip to.\n\nThis helps only from here on — an older build still drops the stream on a kind\nit does not know. What it buys is that every future addition is additive, which\nis what the design said it already was.\n\nReverted the step-over and watched the new test fail with \"expected a typed\nrefusal, got something else\".\n\n* docs(replication): a probe is no longer prohibitive, just unnecessary\n\nThe design note argued the follower repairs divergence without an exchange\npartly because a new message kind could not be sent at all — an unknown kind\nended the stream. That is no longer so.\n\nThe conclusion is unchanged and the reason is narrower: a probe is a round trip\nthe self-repair does not need, rather than something that would cost a lane.\nAn older peer predating the refusal still drops the stream, so a probe would\nalso have to wait out a deployment.",
+          "timestamp": "2026-09-17T16:29:04-07:00",
+          "tree_id": "618eac6c5056b3be21e77ccd7433cffa92958c83",
+          "url": "https://github.com/gabloe/felix/commit/c6355c69470dbdbfb1c1e21421648d45106374fc"
+        },
+        "date": 1789687893774,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 87,
+            "range": "4.97",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 87.00\nmean: 89.20\nstdev: 4.97\ncv: 5.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 122,
+            "range": "10.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 126.00\nstdev: 10.22\ncv: 8.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 154,
+            "range": "160.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 154.00\nmean: 222.40\nstdev: 160.92\ncv: 72.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 118,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 118.00\nmean: 118.40\nstdev: 1.14\ncv: 0.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 255,
+            "range": "3.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 255.00\nmean: 254.80\nstdev: 3.11\ncv: 1.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 420,
+            "range": "98.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 420.00\nmean: 440.60\nstdev: 98.39\ncv: 22.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
