@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789652868058,
+  "lastUpdate": 1789657815020,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11484,6 +11484,72 @@ window.BENCHMARK_DATA = {
             "range": "303.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 765.00\nmean: 624.20\nstdev: 303.04\ncv: 48.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92679f2cd0dbd32d5a36ba62aabe0b0c2b485b17",
+          "message": "build: container images for the broker and control plane (#405)\n\n* build: container images for the broker and control plane\n\nThe deployment docs named `felix/broker:latest`, which never existed. The\nDockerfiles under docker/ did exist, but could not build: they copy\n`crates/broker/Cargo.toml` and `crates/controlplane/Cargo.toml`, paths that\nhave not been there since the workspace reorganisation moved both under\nservices/, and they pin rust 1.85 against a 1.97 workspace and name the\nbinaries `broker` and `controlplane` rather than `felix-broker` and\n`felix-controlplane`.\n\nBoth are rewritten around copying the workspace and letting BuildKit cache\nmounts do the work. The manifest-first trick they used needs every member's\nmanifest listed by hand, and a missed one fails confusingly — which is\nexactly how they came to reference a directory that no longer exists.\n\nA .dockerignore comes with them, and is not optional: without it the context\nis the repository including target/, which on a developer machine is tens of\ngigabytes. It also keeps *.pem, *.key and the perf session files out of the\nbuild, so nothing that holds a credential can be baked in.\n\nCorrections to what was there, each found by checking rather than assuming:\n\n- The healthcheck asked for /healthz with wget. Neither exists — the servers\n  serve /ready on the metrics port, and debian-slim ships no wget. Both are\n  fixed, and /ready rather than /live is deliberate: /live stays up on a\n  process that is draining correctly.\n- EXPOSE named 7000 and 9090. The real defaults are 5001 for the internal\n  peer listener and 8080 for metrics.\n- The broker image declares a volume at /var/lib/felix as somewhere to point\n  FELIX_DURABLE_STORAGE_DIR, rather than implying a default path it does not\n  have. The control plane declares none, for the same reason.\n\ntini, strip and the syntax directive are kept from the originals.\n\nRelease builds both on every tag, so a release is proof the Dockerfiles\nstill work, and pushes only when vars.PUBLISH_IMAGES is set — the same gate\nas the PyPI job, off until Felix is meant to be publicly pullable. Multi-arch\namd64 and arm64, SBOM and max provenance attached to the image rather than\nbeside it, and keyless cosign signing over the digest: a tag can be moved,\nand a signature over a tag would follow it. `latest` is only applied to a tag\nwith no pre-release suffix.\n\nRegistry is GHCR under the repository owner — no credential beyond the\nworkflow's own token, a namespace that follows the repository, and what the\ndocs already half-referenced.\n\nRefs #335\n\n* ci: build and smoke-test the container images on every change\n\nThe release workflow builds these, but only on a tag — which means finding\nout a Dockerfile is broken at the moment of a release. This builds both on\nevery push and PR instead. amd64 only: arm64 is emulated and slow, and what\na PR needs to know is whether the file still describes a working build. The\nmulti-arch build stays on the tag.\n\nThe smoke test is the part worth having. A successful build says nothing\nabout whether the image runs, so it starts the container, waits, and\nrequires it to still be up — which is what catches a missing shared library,\na bad entrypoint, or a binary that exits on startup. Then it asks for\n/ready, because that is what the HEALTHCHECK and every probe in the\ndeployment docs depend on, and checks the uid is the non-root 65532 those\ndocs tell operators to set.\n\nNeither binary takes --help — both are env-driven, and the control plane\nonly recognises `migrate` — so starting one and looking is the only honest\ncheck. Neither needs anything external: the broker skips membership without\nFELIX_CONTROLPLANE_URL, and the control plane runs on its in-memory store.\n\n* fix(ci,docs): give the broker what it needs to start, and fix the examples\n\nThe smoke test I added failed on the broker, and it was right to: I had\nassumed the broker runs standalone without a control plane. It does not.\nFELIX_CONTROLPLANE_URL is required for *auth* — the broker fetches the keys\nthat verify client tokens from there — so without one it exits at startup.\nAn unreachable URL is tolerated, which is what lets the smoke test give it a\nplaceholder instead of standing a control plane up beside it.\n\nThe second mistake was the variable name: the broker reads\nFELIX_BROKER_METRICS_BIND, not FELIX_METRICS_BIND, so the metrics server was\nnever bound where the test looked for it. Verified both by running the\nbinary rather than by reading it again.\n\nThe same two assumptions were already in the deployment docs, along with a\nthird:\n\n- The minimal compose example sets no FELIX_CONTROLPLANE_URL, so the\n  documented quick start exits immediately.\n- Every healthcheck asks for /healthz. That path does not exist; the servers\n  serve /ready on the metrics port. Seven of them.\n- Four build blocks pass `PROFILE: release`, an argument the Dockerfiles do\n  not take — the release build is unconditional.",
+          "timestamp": "2026-09-17T08:07:36-07:00",
+          "tree_id": "a7b5114b02087061341064eb3cb172c72425673d",
+          "url": "https://github.com/gabloe/felix/commit/92679f2cd0dbd32d5a36ba62aabe0b0c2b485b17"
+        },
+        "date": 1789657813358,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 160.60\nstdev: 0.89\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "2.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 202.80\nstdev: 2.05\ncv: 1.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "9.56",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 239.60\nstdev: 9.56\ncv: 3.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 198.60\nstdev: 1.14\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 396,
+            "range": "14.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 396.00\nmean: 400.20\nstdev: 14.84\ncv: 3.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 552,
+            "range": "168.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 552.00\nmean: 641.80\nstdev: 168.33\ncv: 26.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
