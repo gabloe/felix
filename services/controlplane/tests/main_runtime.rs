@@ -8,11 +8,28 @@ struct RunningControlplane {
     bootstrap_addr: Option<SocketAddr>,
 }
 
-fn available_addr() -> SocketAddr {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("reserve test port")
-        .local_addr()
-        .expect("read test port")
+/// Two free ports, both held while they are chosen.
+///
+/// Binding port 0 and reading the address back is the only way to find a free
+/// port, and it is a reservation the process gives up the moment the listener
+/// drops. Holding both at once makes the two distinct by construction rather
+/// than by the OS happening not to repeat itself.
+///
+/// **This does not make the port safe.** Between the drop here and the child's
+/// bind, any other process — another test binary in the same cargo run — can
+/// take it, and the child exits. Closing that would mean the child choosing its
+/// own port and reporting it back, which is a bigger change than this harness
+/// justifies. What matters is that when it does happen, the failure now says
+/// so: see `child_stderr`.
+fn reserve_two_addrs() -> (SocketAddr, SocketAddr) {
+    let first = TcpListener::bind("127.0.0.1:0").expect("reserve test port");
+    let second = TcpListener::bind("127.0.0.1:0").expect("reserve test port");
+    let addrs = (
+        first.local_addr().expect("read test port"),
+        second.local_addr().expect("read test port"),
+    );
+    assert_ne!(addrs.0, addrs.1, "two reservations returned one port");
+    addrs
 }
 
 fn spawn_controlplane(bootstrap_enabled: bool) -> RunningControlplane {
@@ -25,8 +42,7 @@ fn spawn_controlplane_with_predrain(
     bootstrap_enabled: bool,
     predrain_ms: u64,
 ) -> RunningControlplane {
-    let main_addr = available_addr();
-    let bootstrap_addr = available_addr();
+    let (main_addr, bootstrap_addr) = reserve_two_addrs();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_felix-controlplane"));
     cmd.env("FELIX_CONTROLPLANE_BIND", main_addr.to_string())
         .env("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:0")
@@ -39,7 +55,10 @@ fn spawn_controlplane_with_predrain(
         .env("FELIX_BOOTSTRAP_BIND_ADDR", bootstrap_addr.to_string())
         .env("FELIX_BOOTSTRAP_TOKEN", "bootstrap-token")
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        // Kept, not discarded. When the child exits before listening, this is
+        // the only thing that says why — and "it exited" with no reason is how
+        // a bind collision reads as an unexplained flake.
+        .stderr(Stdio::piped());
     RunningControlplane {
         child: cmd.spawn().expect("spawn controlplane"),
         main_addr,
@@ -54,13 +73,33 @@ fn wait_for_listener(child: &mut std::process::Child, addr: SocketAddr, timeout:
             return;
         }
         if let Some(status) = child.try_wait().expect("check controlplane status") {
-            panic!("controlplane exited before listening on {addr}: {status}");
+            panic!(
+                "controlplane exited before listening on {addr}: {status}\n{}",
+                child_stderr(child),
+            );
         }
         assert!(
             Instant::now() < deadline,
             "controlplane did not listen on {addr} within {timeout:?}"
         );
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Whatever the child wrote to stderr before it died.
+///
+/// Read only on the failure path, because taking the pipe closes it for
+/// anything after — and on the failure path there is nothing after.
+fn child_stderr(child: &mut std::process::Child) -> String {
+    use std::io::Read;
+    let Some(mut stderr) = child.stderr.take() else {
+        return "(stderr already taken)".to_string();
+    };
+    let mut buffer = String::new();
+    match stderr.read_to_string(&mut buffer) {
+        Ok(_) if buffer.trim().is_empty() => "(the child wrote nothing to stderr)".to_string(),
+        Ok(_) => buffer,
+        Err(err) => format!("(could not read stderr: {err})"),
     }
 }
 
