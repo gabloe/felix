@@ -121,6 +121,7 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
 /// - `/metrics`: Prometheus metrics endpoint.
 /// - `/live`: liveness probe returning "ok".
 /// - `/ready`: readiness probe, gated on `readiness`.
+/// - `/replication/halted`: replicas replication has stopped for.
 ///
 /// Runs until `shutdown` resolves, then stops accepting new requests and lets
 /// in-flight ones finish. Returns an I/O error if binding or serving fails.
@@ -128,6 +129,7 @@ pub(crate) async fn serve_metrics<F>(
     handle: PrometheusHandle,
     addr: SocketAddr,
     readiness: Readiness,
+    halted: std::sync::Arc<crate::replication::halted::HaltedReplicas>,
     shutdown: F,
 ) -> std::io::Result<()>
 where
@@ -136,7 +138,7 @@ where
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
         listener,
-        health_router(handle, readiness).into_make_service(),
+        health_router(handle, readiness, halted).into_make_service(),
     )
     .with_graceful_shutdown(shutdown)
     .await
@@ -148,7 +150,11 @@ where
 /// alive and working, and reporting otherwise would make Kubernetes restart a pod
 /// that is shutting down correctly. `/ready` is the one that flips, which is what
 /// removes the instance from load-balancer rotation.
-fn health_router(handle: PrometheusHandle, readiness: Readiness) -> axum::Router {
+fn health_router(
+    handle: PrometheusHandle,
+    readiness: Readiness,
+    halted: std::sync::Arc<crate::replication::halted::HaltedReplicas>,
+) -> axum::Router {
     axum::Router::new()
         .route(
             "/metrics",
@@ -164,6 +170,14 @@ fn health_router(handle: PrometheusHandle, readiness: Readiness) -> axum::Router
                     (axum::http::StatusCode::SERVICE_UNAVAILABLE, "draining")
                 }
             }),
+        )
+        // Read-only, and deliberately so: this listener has no authentication
+        // (#125, #126), so it may carry things worth knowing and nothing worth
+        // doing. Discarding a replica's log is the obvious next step from here
+        // and does not belong on an unauthenticated port.
+        .route(
+            "/replication/halted",
+            axum::routing::get(move || async move { axum::Json(halted.snapshot()) }),
         )
 }
 
@@ -333,6 +347,82 @@ mod tests {
         // Just ensure the handle works without panicking
         // (metrics content may be empty on first render)
         let _ = metrics;
+    }
+
+    /// The halted listing is served by the *real* router, and says which
+    /// replica rather than how many.
+    ///
+    /// `felix_broker_replication_halted` is a bare count and has to stay one,
+    /// so this is the only place an operator can learn which replica of which
+    /// shard stopped and why. Read-only on purpose: this listener has no
+    /// authentication, so it may carry things worth knowing and nothing worth
+    /// doing.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn the_halted_listing_names_each_stopped_replica() {
+        use crate::replication::halted::{HaltedReplica, HaltedReplicas};
+
+        let handle = init_observability("test-halted-service");
+        let halted = std::sync::Arc::new(HaltedReplicas::new());
+        halted.publish(vec![HaltedReplica {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            shard: 3,
+            kind: "stream",
+            node_id: "broker-b".to_string(),
+            generation: 7,
+            next_offset: 120,
+            reason: "diverged",
+            remedy: "rebuild it",
+        }]);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+            .await
+            .unwrap();
+        let bound_addr = listener.local_addr().unwrap();
+        let (shutdown_tx, server_handle) = spawn_axum_with_shutdown(
+            listener,
+            health_router(handle, Readiness::ready(), std::sync::Arc::clone(&halted)),
+        );
+        wait_for_listen(bound_addr).await.expect("ready");
+
+        let client = build_test_client().expect("client");
+        let url = format!("http://{bound_addr}/replication/halted");
+        let body = get_with_context(&client, &url, "halted listing")
+            .await
+            .expect("request")
+            .text()
+            .await
+            .expect("body");
+
+        for expected in [
+            "\"stream\":\"orders\"",
+            "\"shard\":3",
+            "\"node_id\":\"broker-b\"",
+            "\"generation\":7",
+            "\"reason\":\"diverged\"",
+        ] {
+            assert!(
+                body.contains(expected),
+                "the listing left out {expected}, so an operator cannot act on it: {body}",
+            );
+        }
+
+        // A healthy broker answers with an empty list, not a 404: "nothing is
+        // halted" and "this broker does not answer that question" are different
+        // things to a dashboard.
+        halted.publish(Vec::new());
+        let body = get_with_context(&client, &url, "empty listing")
+            .await
+            .expect("request")
+            .text()
+            .await
+            .expect("body");
+        assert_eq!(body, "[]");
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -40,6 +40,7 @@ use felix_wire::internal::{
 use crate::peer::{PeerError, PeerRequester};
 
 pub mod driver;
+pub mod halted;
 pub mod metrics;
 pub mod quorum;
 

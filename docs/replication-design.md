@@ -471,6 +471,28 @@ how far the slowest follower is behind, across every shard this broker leads. A
 halted follower is excluded from it — it has stopped rather than fallen behind,
 and `felix_broker_replication_halted` is where that shows.
 
+That gauge is a bare **count**, and has to stay one: a label per shard is a
+label per stream per tenant, which is unbounded by design in a multi-tenant
+broker. So it answers "is replication healthy here" and nothing more, and the
+only way to learn *which* replica had stopped was to grep for the warning
+logged at the halt.
+
+A halt does not resolve on its own — the follower is out of every quorum until
+someone acts — so the broker also serves a listing beside the metrics, at
+`GET /replication/halted` on `FELIX_BROKER_METRICS_BIND`. It names the shard,
+the node, the generation, how far the follower had got, why it stopped, and
+what to do about it, because the reason alone does not say whether the
+follower's data is wrong or merely incomplete. It is a listing rather than a
+metric, which is what lets it carry an identity: it is read on demand and its
+size is the number of halted replicas, normally zero. A healthy broker answers
+`[]` rather than 404 — "nothing is halted" and "this broker does not answer
+that question" are different things to a dashboard.
+
+Read-only, deliberately. Discarding a halted replica's log so the leader's
+bootstrap offer is accepted is the obvious next step from here, and that
+listener has no authentication (#125, #126), so it carries what is worth
+knowing and nothing worth doing. The supervised rebuild is #424.
+
 The rule and its refusals are in `docs/internal-protocol.md`.
 
 ## What this does to the other M5 issues
