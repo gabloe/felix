@@ -358,13 +358,14 @@ fn report_replay(acknowledged: bool, survived: bool, record: &str) {
 /// can verify properly instead of skipping verification. This starts all of
 /// that and writes it where the suite can read it.
 ///
-/// One node on purpose. Every broker exports its generated certificate to the
-/// same path, so a second would overwrite the first and leave the suite
-/// trusting a certificate the broker it reaches is not using. The scenarios
-/// this fixture serves are about client semantics, not failover — the cluster
-/// tests already cover that in Rust.
+/// Three nodes by default, because the semantics that matter most to a client
+/// only exist in a cluster: a redirect needs a broker that does not own the
+/// shard, and reconnection needs somewhere to reconnect *to*. Each broker
+/// exports its own certificate and they are concatenated into one PEM bundle,
+/// which is what a trust store is allowed to be.
 async fn client_fixture(args: &[String]) -> Result<()> {
     init_tracing(false);
+    let node_count = flag_usize(args, "--nodes")?.unwrap_or(3);
     let out = flag_value(args, "--out")?.unwrap_or_else(|| {
         std::env::temp_dir()
             .join("felix-client-fixture.json")
@@ -384,21 +385,44 @@ async fn client_fixture(args: &[String]) -> Result<()> {
     // distinguishably needs a name the broker will genuinely refuse.
     const MISSING_STREAM: &str = "conformance-absent";
 
-    // Brokers inherit this, and it is what lets a non-Rust client trust the
-    // self-signed certificate rather than turning verification off.
-    unsafe {
-        std::env::set_var("FELIX_TLS_CERT_EXPORT", &ca_file);
-    }
-
-    eprintln!("starting a 1-node cluster for a client conformance suite...");
+    eprintln!("starting a {node_count}-node cluster for a client conformance suite...");
     let cluster = Cluster::start(ClusterConfig {
-        nodes: 1,
-        streams: vec![StreamSpec::new(DURABLE_STREAM, 1)],
-        caches: vec![CacheSpec::new(CACHE, 1)],
+        nodes: node_count,
+        // Several shards so the stream is spread across brokers: a redirect
+        // scenario needs a shard whose owner is not the broker the client
+        // reached, and one shard on one node cannot produce that.
+        //
+        // Replicated across the whole cluster because the reconnect scenario
+        // asks whether the *client* survives losing a broker — and with one
+        // copy per shard the answer would be confounded by the shard not
+        // surviving either. A client cannot reconnect its way to data that is
+        // gone.
+        streams: vec![StreamSpec::replicated(DURABLE_STREAM, 4, node_count as u32)],
+        caches: vec![CacheSpec::replicated(CACHE, 4, node_count as u32)],
         inherit_output: std::env::var("FELIX_CLUSTER_VERBOSE").is_ok(),
         ..Default::default()
     })
     .await?;
+
+    // Each broker wrote its own certificate; a client needs to trust all of
+    // them, and a PEM bundle holding several is exactly how that is spelled.
+    let mut bundle = String::new();
+    for node in &cluster.nodes {
+        let path = node.data_dir.join("broker-cert.pem");
+        let pem = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "read the certificate {} exported to {}",
+                node.node_id,
+                path.display()
+            )
+        })?;
+        bundle.push_str(&pem);
+        if !bundle.ends_with('\n') {
+            bundle.push('\n');
+        }
+    }
+    std::fs::write(&ca_file, &bundle)
+        .with_context(|| format!("write the certificate bundle to {ca_file}"))?;
 
     let fixture = felix_conformance::kit::Fixture {
         addrs: cluster
@@ -423,7 +447,26 @@ async fn client_fixture(args: &[String]) -> Result<()> {
     println!("ca        {ca_file}");
     eprintln!("\nholding the fixture. press Ctrl-C to tear it down.");
 
+    // A placement pass on a timer, which is what makes the reconnect scenario
+    // answerable from outside. When a broker dies its shards need a new
+    // leader, and in this harness placement is driven rather than swept — the
+    // Rust tests call `place_shards` themselves while they wait. A suite in
+    // another language has no such handle, so the fixture does it here: an
+    // unowned shard is reassigned within a second or so, exactly as a
+    // control plane's own sweep would.
+    let cluster = std::sync::Arc::new(cluster);
+    let placement = tokio::spawn({
+        let held = std::sync::Arc::clone(&cluster);
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                held.place_shards().await;
+            }
+        }
+    });
+
     stop_signal().await?;
+    placement.abort();
     eprintln!("\ntearing down...");
     let _ = std::fs::remove_file(&out);
     drop(cluster);

@@ -1787,6 +1787,12 @@ fn spawn_broker(
         .env("FELIX_CLIENT_ADVERTISE_ADDR", client_addr.to_string())
         // Test-only peer severing, off until a test writes the file.
         .env("FELIX_PEER_PARTITION_FILE", partition_file(&data_dir))
+        // Each broker generates its own certificate, so each needs its own
+        // file: one shared path would leave every broker but the last
+        // exporting a certificate nobody can read. The client fixture
+        // concatenates them into one PEM bundle, which is a thing a trust
+        // store is allowed to be.
+        .env("FELIX_TLS_CERT_EXPORT", data_dir.join("broker-cert.pem"))
         .env("FELIX_INTERNAL_BIND", internal_addr.to_string())
         .env("FELIX_BROKER_METRICS_BIND", metrics_addr.to_string())
         .env("FELIX_DURABLE_STORAGE_DIR", &data_dir)

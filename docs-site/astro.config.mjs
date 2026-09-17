@@ -96,6 +96,7 @@ export default defineConfig({
             { label: 'Broker API', slug: 'api/broker-api' },
             { label: 'Control Plane API', slug: 'api/control-plane-api' },
             { label: 'Client SDK', slug: 'api/client-sdk' },
+            { label: 'Clients in Other Languages', slug: 'api/clients' },
           ],
         },
         {

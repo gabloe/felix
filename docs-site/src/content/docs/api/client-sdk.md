@@ -7,6 +7,10 @@ and the cluster client, over pooled QUIC connections. This page is the
 working reference — setup, configuration, and the patterns that matter in
 practice.
 
+It is also what every other language binds to rather than reimplementing —
+see [Clients in Other Languages](/felix/api/clients/) for Python and for how
+new languages are gated on a conformance suite.
+
 ## Installation
 
 Add Felix client to your `Cargo.toml`:
