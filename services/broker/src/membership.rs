@@ -239,6 +239,8 @@ pub async fn run_heartbeat(
             _ = tokio::time::sleep(jittered(delay)) => {}
         }
 
+        // Before the request, not after the answer: see `LeaseState::renew_at`.
+        let sent = tokio::time::Instant::now();
         // Read per heartbeat, so a refresh between beats is picked up without
         // this loop knowing refresh exists.
         match send_heartbeat(
@@ -259,7 +261,7 @@ pub async fn run_heartbeat(
                     if let Some(expiry) = response.expiry_timeout_ms {
                         lease.adopt(Duration::from_millis(expiry.max(1)));
                     }
-                    lease.renew();
+                    lease.renew_at(sent);
                 }
                 mm::record_heartbeat_success();
                 // The control plane owns the cadence, so a change to it takes

@@ -140,6 +140,13 @@ The leader stops at `t + L − ε` by its own clock. The gap between those two
 instants is the safety interval, and it is why leases are safe without
 synchronized clocks.
 
+The broker cannot observe `t`, so it anchors at the instant it **sent** the
+heartbeat — always at or before `t`, so the round trip comes out of its own
+lease rather than out of the margin. Anchoring at the instant the *response* was
+handled runs the other way: a buffered read or a VM pause in between would push
+the lease past `t + L`, which is the safety interval being spent by the same
+kind of stall the twice-checked conditions above exist to survive.
+
 The safety interval is the whole mechanism, so it is worth seeing:
 
 <p align="center">

@@ -135,6 +135,8 @@ broker does not accept traffic for streams it does not yet know about.
     pointer from the code.
   - `///` on public items is documentation and is held to a different standard: say what the
     thing does and what it guarantees, and keep it accurate.
+  - Comments should not be verbose. Keep it succinct.
+  - Comments should be written in a human-voice, not in an AI-slop voice.
 - **Prefer `pub(crate)`.** Reach for `pub` only when something outside the crate uses it.
   Most of the workspace's public surface is only used internally, which makes the real API
   hard to see and every item look load-bearing. `unreachable_pub` and clippy's

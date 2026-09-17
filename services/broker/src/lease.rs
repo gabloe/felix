@@ -99,14 +99,25 @@ impl LeaseState {
         Duration::from_millis(self.usable_millis.load(Ordering::Acquire))
     }
 
-    /// Record an accepted heartbeat.
-    pub fn renew(&self) {
-        let stamp = self.base.elapsed().as_millis() as u64 + 1;
+    /// Record an accepted heartbeat, anchored at the moment it was **sent**.
+    ///
+    /// Anchoring at arrival instead would add the round trip — and any pause in
+    /// it — to a lease the control plane already started counting, which is the
+    /// safety interval being spent.
+    pub fn renew_at(&self, sent: Instant) {
+        let stamp = sent.saturating_duration_since(self.base).as_millis() as u64 + 1;
         // `fetch_max`, not `store`: two heartbeat responses can race, and an
         // out-of-order one must not move the anchor backwards and shorten the
         // lease.
         self.renewed_at_millis.fetch_max(stamp, Ordering::Release);
         self.looks_valid.store(true, Ordering::Release);
+    }
+
+    /// [`LeaseState::renew_at`] anchored at now. Tests only — the heartbeat
+    /// path has a send instant, and using it is the point.
+    #[cfg(test)]
+    pub fn renew(&self) {
+        self.renew_at(Instant::now());
     }
 
     /// Give up the lease immediately.
