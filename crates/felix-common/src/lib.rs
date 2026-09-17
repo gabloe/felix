@@ -4,8 +4,10 @@ use uuid::Uuid;
 
 // Process lifecycle helpers shared by the service binaries. Feature-gated so that
 // library consumers which never run a process (felix-router) do not pull in tokio.
-pub mod lifecycle;
 #[cfg(feature = "lifecycle")]
+pub mod lifecycle;
+// The broker-to-control-plane shapes. Not gated: they are serde types, and the
+// two ends need them whether or not either runs a process.
 pub mod membership;
 
 pub type Result<T> = std::result::Result<T, Error>;
