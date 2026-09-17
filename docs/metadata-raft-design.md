@@ -307,7 +307,7 @@ are rare, and one less listener is one less thing to secure in M8.
 | Instance loses its volume | Rejoins empty, snapshot-installed, promoted back; no operator data surgery |
 | Network partition, leader in minority | Old leader steps down (cannot commit), majority elects; minority instances fail readiness rather than serve writes that cannot commit |
 | Quorum lost (2 of 3 down) | Writes and readiness fail on survivors; brokers keep serving on catalogs and leases as during any control-plane outage; recovery = restore instances, or restore-from-snapshot ceremony documented with appropriately loud warnings |
-| Clock skew between instances | Irrelevant to Raft safety (term-based); lease arithmetic keeps the same drift-rate assumption it has today |
+| Clock skew between instances | Irrelevant to Raft safety (term-based). Liveness expiry does not depend on it either: heartbeats are stamped and judged by one clock — the store's, which under Postgres is `clock_timestamp()` — so two instances comparing their own `SystemTime` is not a thing that can happen |
 | Disk full on one instance | That instance fails writes → falls out of quorum participation → fails readiness; group continues on the majority |
 
 ## Testing
