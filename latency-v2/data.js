@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789644527097,
+  "lastUpdate": 1789644968883,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11352,6 +11352,72 @@ window.BENCHMARK_DATA = {
             "range": "940.08",
             "unit": "us",
             "extra": "trials: 5\nmedian: 512.00\nmean: 914.80\nstdev: 940.08\ncv: 102.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f14cf99244c0039666974421abfa7ae1f500fcb",
+          "message": "fix(broker): an unknown stream reports zero shards, not one (#400)\n\nThe wire protocol and the client both document zero as \"the broker knows\nnothing of this stream\". The broker never sent it.\n\nShardTable::shards_for ends `unwrap_or(1)`, which is right for routing — a\npublish to a stream the snapshot has not caught up on should hash to shard 0\nrather than fail — and wrong for an answer that leaves the broker. It makes\nan unknown stream indistinguishable from a genuine single-shard one, so\nClusterClient::subscribe_sharded could not do what its own documentation\nsays: asked for a stream that does not exist it opened one subscription on\nshard 0, reported success, and read nothing. The client's `shards > 0` guard\nwas unreachable.\n\nSo the routing default stays where it belongs and a separate accessor,\nplaced_shards_for, returns None for a stream the table has never heard of.\nThe StreamShardsView handler uses that. Its comment already said it answers\nzero rather than guessing one, which is what pointed at this.\n\nIts other branch was wrong the same way: with no routing snapshot to\nconsult it answered 1 unconditionally, including for streams that do not\nexist. The registry knows whether the stream is there, so it asks.\n\nThe conformance catalogue required the count but deliberately left the\nzero-for-unknown half out, because it must not demand behaviour the broker\nlacks. That half is now required, and the Python suite asserts it rather\nthan just checking the call answers.\n\nFixes #394",
+          "timestamp": "2026-09-17T04:33:39-07:00",
+          "tree_id": "9ef6209e7658d6366829737f91f0331363d581f4",
+          "url": "https://github.com/gabloe/felix/commit/9f14cf99244c0039666974421abfa7ae1f500fcb"
+        },
+        "date": 1789644967728,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 159.80\nstdev: 1.30\ncv: 0.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 204,
+            "range": "2.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 204.60\nstdev: 2.88\ncv: 1.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 242,
+            "range": "23.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 242.00\nmean: 251.00\nstdev: 23.63\ncv: 9.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "6.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 200.20\nstdev: 6.65\ncv: 3.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 400,
+            "range": "165.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 400.00\nmean: 469.80\nstdev: 165.12\ncv: 35.15%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 549,
+            "range": "741.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 549.00\nmean: 933.00\nstdev: 741.45\ncv: 79.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
