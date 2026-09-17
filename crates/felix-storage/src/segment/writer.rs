@@ -66,9 +66,17 @@ pub struct SegmentWriter {
     /// A duplicate descriptor used only for flushing, so a sync never has to
     /// hold the lock that guards `file`.
     sync_handle: Arc<File>,
-    /// Set when a failed append could not be rolled back. The segment's real
-    /// length is then unknown, so further appends are refused.
+    /// Set when this writer can no longer make truthful claims about the
+    /// segment: an append that could not be rolled back, so its real length is
+    /// unknown, or a failed sync.
+    ///
+    /// A failed sync counts because Linux may drop the dirty pages it could not
+    /// write, and the *next* fsync then returns success having flushed nothing.
+    /// Carrying on would report durability for bytes that are gone.
     poisoned: bool,
+    /// Test-only: make the next `sync` take the failure path.
+    #[cfg(test)]
+    fail_next_sync: bool,
     /// Set when an index write has failed. Purely informational: the index is
     /// rebuilt from the segment on the next open, so the log stays correct.
     index_degraded: bool,
@@ -171,6 +179,8 @@ impl BlankSegment {
             staging: Vec::new(),
             sync_handle,
             poisoned: false,
+            #[cfg(test)]
+            fail_next_sync: false,
             index_degraded: false,
         })
     }
@@ -258,6 +268,8 @@ impl SegmentWriter {
             staging: Vec::new(),
             sync_handle,
             poisoned: false,
+            #[cfg(test)]
+            fail_next_sync: false,
             index_degraded: false,
         })
     }
@@ -425,12 +437,30 @@ impl SegmentWriter {
     /// Cheap and idempotent when nothing has changed since the last call, which
     /// matters because the periodic syncer polls on a timer regardless of load.
     pub fn sync(&mut self) -> Result<()> {
+        if self.poisoned {
+            return Err(StorageError::Unsupported(
+                "segment writer is poisoned; durability cannot be vouched for",
+            ));
+        }
         if self.is_synced() {
             return Ok(());
         }
         let pending = self.size_bytes;
         let started = std::time::Instant::now();
-        sync_data(&self.file).map_err(|err| StorageError::SyncFailed(err.to_string()))?;
+        #[cfg(test)]
+        let result = if std::mem::take(&mut self.fail_next_sync) {
+            Err(std::io::Error::other("injected"))
+        } else {
+            sync_data(&self.file)
+        };
+        #[cfg(not(test))]
+        let result = sync_data(&self.file);
+        if let Err(err) = result {
+            // Poisoned rather than merely reported: the pages may be gone, and
+            // a later sync would return success having flushed nothing.
+            self.poisoned = true;
+            return Err(StorageError::SyncFailed(err.to_string()));
+        }
         // The index is rebuildable, so it gets a flush but not a device sync.
         self.index.flush()?;
         self.synced_bytes = pending;
@@ -469,6 +499,9 @@ impl SegmentWriter {
     /// The log-level syncer flushes through a cloned descriptor so it can do so
     /// without holding the writer lock; this is how the result gets back.
     pub fn mark_synced(&mut self, bytes: u64) {
+        if self.poisoned {
+            return;
+        }
         self.synced_bytes = self.synced_bytes.max(bytes.min(self.size_bytes));
     }
 
@@ -486,7 +519,10 @@ impl SegmentWriter {
         self.sync()?;
         self.index.sync()?;
         self.file.set_len(self.size_bytes)?;
-        sync_data(&self.file).map_err(|err| StorageError::SyncFailed(err.to_string()))?;
+        if let Err(err) = sync_data(&self.file) {
+            self.poisoned = true;
+            return Err(StorageError::SyncFailed(err.to_string()));
+        }
         Ok(self.descriptor())
     }
 }
@@ -806,6 +842,56 @@ mod tests {
             writer.append(&[record("b")]).expect_err("poisoned"),
             StorageError::Unsupported(_)
         ));
+    }
+
+    /// A failed sync poisons the writer, so nothing afterwards can claim
+    /// durability.
+    ///
+    /// Linux may drop the dirty pages an fsync could not write. The next fsync
+    /// then returns success having flushed nothing, and the log would report
+    /// records durable that are gone — "fsyncgate". Refusing to carry on is the
+    /// same answer the log already gives to interior corruption.
+    #[test]
+    fn a_failed_sync_poisons_the_writer() {
+        let dir = tempdir().expect("dir");
+        let mut writer = new_writer(&dir, 0);
+        writer.append(&[record("a")]).expect("append");
+
+        writer.fail_next_sync = true;
+        assert!(matches!(
+            writer.sync().expect_err("the sync should fail"),
+            StorageError::SyncFailed(_)
+        ));
+        assert!(writer.poisoned, "a failed sync left the writer usable");
+
+        // The second sync would have succeeded on its own — that is the whole
+        // danger — so it has to be refused rather than believed.
+        assert!(matches!(
+            writer.sync().expect_err("poisoned"),
+            StorageError::Unsupported(_)
+        ));
+        assert!(matches!(
+            writer.append(&[record("b")]).expect_err("poisoned"),
+            StorageError::Unsupported(_)
+        ));
+    }
+
+    /// The log-level syncer reports durability through `mark_synced`, which a
+    /// poisoned writer must not accept either.
+    #[test]
+    fn a_poisoned_writer_does_not_accept_a_durability_mark() {
+        let dir = tempdir().expect("dir");
+        let mut writer = new_writer(&dir, 0);
+        writer.append(&[record("a")]).expect("append");
+        let synced_before = writer.synced_bytes;
+
+        writer.poisoned = true;
+        writer.mark_synced(writer.size_bytes);
+
+        assert_eq!(
+            writer.synced_bytes, synced_before,
+            "a poisoned writer accepted a durability mark from the log syncer",
+        );
     }
 
     #[test]
