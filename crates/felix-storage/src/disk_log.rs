@@ -29,6 +29,7 @@
 // * `read_range` may touch cold blocks, so it runs entirely on `spawn_blocking`.
 //   It is a replay and catch-up path, not the publish hot path.
 
+pub mod epochs;
 pub mod layout;
 pub mod recovery;
 pub mod retention;
@@ -80,6 +81,15 @@ struct LogInner {
     /// `None` unless the fsync policy is `Periodic`. Taken on shutdown.
     syncer: Mutex<Option<PeriodicSyncer>>,
     retention: Mutex<Option<retention::RetentionTask>>,
+    /// Where each leadership generation began, for repairing a divergence.
+    ///
+    /// Its own lock rather than living under `segments`: it is read and written
+    /// on the replication path, not the append path, and the append path is
+    /// where lock contention costs something.
+    epochs: Mutex<epochs::EpochMap>,
+    /// Where `epochs` is persisted, kept because the log needs it on truncation
+    /// and nothing else hands it a directory.
+    dir: PathBuf,
     /// Where the background rollover is in its lifecycle. At most one runs at
     /// a time, and a failure is terminal for the log.
     roll_state: AtomicU8,
@@ -482,6 +492,9 @@ impl DiskLog {
                 "recovered log after an unclean shutdown"
             );
         }
+        // Read before the directory is handed to the segment set.
+        let epochs = epochs::load(&dir);
+        let epochs_dir = dir.clone();
         let segments = SegmentSet::new(
             dir,
             label.clone(),
@@ -501,6 +514,8 @@ impl DiskLog {
             durability: Durability::new(config.fsync_mode, durable_upto),
             syncer: Mutex::new(None),
             retention: Mutex::new(None),
+            epochs: Mutex::new(epochs),
+            dir: epochs_dir,
             roll_state: AtomicU8::new(RollState::Idle as u8),
             roll_failure: Mutex::new(None),
             #[cfg(test)]
@@ -884,6 +899,23 @@ impl AppendOnlyLog for DiskLog {
         Box::pin(async move { Ok(inner.segments.read().tail_offset()) })
     }
 
+    fn record_generation(&self, generation: u64, start_offset: Offset) -> Result<bool> {
+        let mut epochs = self.inner.epochs.lock();
+        if !epochs.record(generation, start_offset) {
+            return Ok(false);
+        }
+        epochs::store(&self.inner.dir, &epochs)?;
+        Ok(true)
+    }
+
+    fn generations(&self) -> Vec<epochs::Epoch> {
+        self.inner.epochs.lock().entries().to_vec()
+    }
+
+    fn generation_end(&self, generation: u64, tail: Offset) -> Option<Offset> {
+        self.inner.epochs.lock().end_of(generation, tail)
+    }
+
     fn truncate(&self, offset: Offset) -> BoxFuture<'_, Result<()>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
@@ -895,6 +927,11 @@ impl AppendOnlyLog for DiskLog {
                 segments.active_mut().sync()?;
                 let tail = segments.tail_offset();
                 operation.durability.reset_after_truncate(tail);
+                // The history cannot outlive the records it describes, or it
+                // would answer with a start offset the log no longer holds.
+                let mut epochs = operation.epochs.lock();
+                epochs.truncate_from(offset);
+                epochs::store(&operation.dir, &epochs)?;
                 Ok(())
             })
             .await
