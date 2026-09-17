@@ -701,3 +701,79 @@ impl PeerRequester for RefusingFollower {
         })
     }
 }
+
+/// A quorum mark is not published when the replica report did not land.
+///
+/// The mark is what releases a `Quorum` publish, and promotion reads the
+/// report. Releasing on a report that never arrived is the same window the
+/// report-then-publish ordering exists to close, reached by a different route:
+/// a client is told its record is on a majority while the control plane knows
+/// nothing about which replica holds it.
+#[tokio::test]
+async fn a_failed_replica_report_holds_the_quorum_mark_back() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    // A control plane that refuses every report.
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let report_to = ReportTo {
+        client: reqwest::Client::new(),
+        base_url: format!("http://{addr}"),
+        node_id: LOCAL.to_string(),
+        token: None,
+        incarnation: 0,
+    };
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        Some(&report_to),
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    // Replication itself succeeded — the follower took every record — so this
+    // is specifically about the report, not about shipping.
+    assert_eq!(
+        follower.batches().len(),
+        1,
+        "the records should still have been shipped: {:?}",
+        follower.batches(),
+    );
+    // TimedOut, not Reached: the publish waits and the client is told a
+    // timeout, which is the honest answer when this broker cannot make the
+    // acknowledgement good at failover.
+    assert!(
+        matches!(
+            marks
+                .wait_for(&watch_key(&key()), 4, 1, Duration::from_millis(50))
+                .await,
+            crate::replication::quorum::QuorumWait::TimedOut
+                | crate::replication::quorum::QuorumWait::NotLeading
+        ),
+        "the mark was published on a report the control plane never took, so a \
+         client would be told its record is on a majority the control plane \
+         cannot find at failover",
+    );
+
+    server.abort();
+}
