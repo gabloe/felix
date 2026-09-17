@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789685251968,
+  "lastUpdate": 1789686998545,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10088,6 +10088,58 @@ window.BENCHMARK_DATA = {
             "range": "5975.28",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 562595.10\nmean: 560200.10\nstdev: 5975.28\ncv: 1.07%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a58427c84ef6155ac76f513012c88327d1ce9a68",
+          "message": "test(replication): the quorum mark does not pass a record the follower disagrees with (#491)\n\n#406 asked for this case before the fix, and the fix landed without it. The\nfollower-side links are covered next door on a real log —\n`a_batch_wholly_overlapping_does_not_confirm_past_itself` and\n`an_orphan_at_a_reused_offset_is_reported_as_a_conflict` — but nothing asserted\nthe end of the chain, which is the part that decides whether a client is told\nyes.\n\nA follower keeps an orphan from a dead leader, the new leader reuses that\noffset for its own record, and if the mark moved past it anyway `Quorum` would\nacknowledge a record no majority holds — with the follower, looking level, then\npromoted over it.\n\nWhat the test guards is that the mark is derived from where followers actually\nare. Taking it from the leader's own tail instead fails with \"the quorum mark\nreached Some(3) with the only follower in disagreement\", which is what\nacknowledging on the leader's word alone looks like.\n\nRemoving the halted-follower filter does *not* fail it, and the comment says\nso rather than implying more than it checks: this follower never gets past its\nfirst batch, so its position protects the case whether or not it is excluded.\nThe filter matters for a different one, covered in `replication_tests.rs`.",
+          "timestamp": "2026-09-17T16:14:34-07:00",
+          "tree_id": "5628c613bf1a0fd57a99556ef74d3d9d288a6db2",
+          "url": "https://github.com/gabloe/felix/commit/a58427c84ef6155ac76f513012c88327d1ce9a68"
+        },
+        "date": 1789686998064,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 322838.42,
+            "range": "3574.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 322838.42\nmean: 322794.47\nstdev: 3574.91\ncv: 1.11%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 322838.42,
+            "range": "3574.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 322838.42\nmean: 322794.47\nstdev: 3574.91\ncv: 1.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 77198.42,
+            "range": "873.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 77198.42\nmean: 76712.49\nstdev: 873.23\ncv: 1.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 771984.22,
+            "range": "8732.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 771984.22\nmean: 767124.92\nstdev: 8732.26\ncv: 1.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
