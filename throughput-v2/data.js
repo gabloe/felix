@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789677791056,
+  "lastUpdate": 1789680275771,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9776,6 +9776,58 @@ window.BENCHMARK_DATA = {
             "range": "12362.39",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 556375.16\nmean: 548614.08\nstdev: 12362.39\ncv: 2.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffa5d5ef425ab1d41d44bb30098ba7c108785bea",
+          "message": "build(deps): clear the open security alerts (#482)\n\npyo3 0.24 -> 0.29 (GHSA-36hh-v3qg-5jq4, an out-of-bounds read in the PyList\nand PyTuple iterators' nth/nth_back, plus GHSA-chgr-c6px-7xpp) and rand to\n0.8.6 / 0.9.3 (GHSA-cq8v-f236-94qc) in the workspace and the two demo locks.\n\nThe pyo3 jump crosses five releases and renames three things the binding\nuses: PyObject is gone in favour of Py<PyAny>, Python::allow_threads is now\nPython::detach, and the automatic FromPyObject derive for a #[pyclass] that\nimplements Clone is becoming opt-in. CacheWatchFilter takes from_py_object\nexplicitly rather than skipping it, so what Python can pass is unchanged.\n\nNothing in CI builds this crate -- release.yml is the only place it appears,\nand only on a tag -- so the binding was checked by hand: maturin develop for\nthe abi3 wheel, then the full pytest suite against a real cluster, 39 passed.\n\nThe demo lockfiles pick up more than rand: they were behind the workspace on\ned25519-dalek, jsonwebtoken and redb, and refreshing one entry re-resolves\nthe rest. Both demos build.\n\nperf-comprehensive.yml and soak.yml also get an explicit read-only token,\nwhich is what CodeQL's actions/missing-workflow-permissions was flagging.\nNeither writes anything; artifact upload does not go through GITHUB_TOKEN.\nci.yml already got its block in #480.",
+          "timestamp": "2026-09-17T14:22:27-07:00",
+          "tree_id": "7bb195aead94c7fe954f8423a65ce4bbdd4db81e",
+          "url": "https://github.com/gabloe/felix/commit/ffa5d5ef425ab1d41d44bb30098ba7c108785bea"
+        },
+        "date": 1789680275265,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 394088.73,
+            "range": "15336.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394088.73\nmean: 388162.18\nstdev: 15336.86\ncv: 3.95%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 394088.73,
+            "range": "15336.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394088.73\nmean: 388162.18\nstdev: 15336.86\ncv: 3.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 87413.59,
+            "range": "4198.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 87413.59\nmean: 85321.87\nstdev: 4198.38\ncv: 4.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 874135.92,
+            "range": "41983.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 874135.92\nmean: 853218.75\nstdev: 41983.86\ncv: 4.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
