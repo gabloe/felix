@@ -12,6 +12,10 @@
 //! command and prior state, which is the property the determinism harness in
 //! `state_machine_tests.rs` enforces.
 //!
+//! That leaves the question of *whose* clock a carried timestamp is. For the
+//! ones that get compared against a reading taken elsewhere, the answer has
+//! to be the leader's, and [`restamp`] is how it becomes so.
+//!
 //! The wire form is a versioned JSON envelope. A follower that does not
 //! understand a command must fail loudly rather than misparse it: skipping a
 //! committed command it cannot read would silently fork its state from the
@@ -80,8 +84,16 @@ pub enum MetaCommand {
     DeleteNode {
         node_id: String,
     },
-    /// `at_millis` is the proposer's clock — the leader's, under Raft —
-    /// preserving the rule that a broker cannot supply its own liveness time.
+    /// `at_millis` is the leader's clock, whichever instance the broker's
+    /// heartbeat happened to land on: the proposer fills in its own reading
+    /// and the leader overwrites it at acceptance (see [`restamp`]). Never
+    /// the broker's own, which would let it postpone its own timeout.
+    ///
+    /// It has to be the leader's specifically, because expiry compares it
+    /// against a cutoff the leader-gated sweep computes. Two instances'
+    /// readings would make liveness depend on their wall clocks agreeing to
+    /// within the timeout, rather than on the much weaker bound on drift
+    /// *rate* the design assumes.
     RecordNodeHeartbeat {
         node_id: String,
         incarnation: u64,
@@ -295,6 +307,37 @@ pub fn encode_command(command: &MetaCommand) -> Vec<u8> {
     .expect("commands serialize by construction")
 }
 
+/// The `op` of the one command whose clock the leader replaces.
+///
+/// A literal because [`restamp`] works on the JSON rather than on
+/// [`MetaCommand`]; `a_heartbeat_is_restamped` is what keeps it honest if the
+/// variant is ever renamed.
+const HEARTBEAT_OP: &str = "record_node_heartbeat";
+
+/// Replace the proposer's clock reading in `command` with `now_millis`.
+///
+/// `None` for every other command, so the caller proposes the original bytes.
+///
+/// Only a raw "what time is it" is rewritten, and right now that is only a
+/// heartbeat's `at_millis`. Cutoffs are not: `ExpireStaleNodes` carries
+/// `now - timeout`, and substituting `now` for it would expire the cluster.
+/// The other proposer clock, `TakeRefreshToken`'s `now_secs`, is left alone
+/// because the `expires_at` it is compared against was stamped by a proposer
+/// too — fixing one half would not make that comparison single-clock.
+///
+/// Edits the JSON rather than round-tripping through [`MetaCommand`]: a
+/// command from a newer build may carry fields this one does not know, and
+/// decoding to a struct would drop them on the way back out.
+pub fn restamp(command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
+    let object = value.as_object_mut()?;
+    if object.get("op").and_then(serde_json::Value::as_str) != Some(HEARTBEAT_OP) {
+        return None;
+    }
+    object.insert("at_millis".to_string(), now_millis.into());
+    serde_json::to_vec(&value).ok()
+}
+
 /// Decode a committed command. An unreadable command is an error *response*,
 /// not a skip: every replica answers it identically, and the caller sees
 /// exactly what the log holds that this build cannot honour.
@@ -319,3 +362,7 @@ pub fn decode_result(bytes: &[u8]) -> Result<MetaResult, MetaError> {
     serde_json::from_slice(bytes)
         .map_err(|err| MetaError::Internal(format!("undecodable result: {err}")))
 }
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod tests;

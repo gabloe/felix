@@ -277,6 +277,10 @@ impl AppStateMachine for MetadataStateMachine {
             .await
             .expect("snapshot version produced by this cluster");
     }
+
+    fn restamp(&self, command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
+        crate::store::command::restamp(command, now_millis)
+    }
 }
 
 #[cfg(test)]
