@@ -149,6 +149,10 @@ fn build_publish_context(
         client_endpoints,
     } = cluster;
     let quorum_timeout = std::time::Duration::from_millis(config.publish_quorum_timeout_ms.max(1));
+    // Copied per worker below. A forward that outlasts this is cut off with its
+    // own answer rather than the waiter's, which is the whole point -- see
+    // `BrokerConfig::forward_budget`.
+    let forward_budget = config.forward_budget();
     // NOTE: This is intentionally global for the process (not per-connection).
     // With per-connection worker pools, adding more publisher connections multiplied
     // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
@@ -251,6 +255,7 @@ fn build_publish_context(
                                 key,
                                 *ack,
                                 job.payloads.clone(),
+                                forward_budget,
                             )
                             .await
                             .map(|_| ())

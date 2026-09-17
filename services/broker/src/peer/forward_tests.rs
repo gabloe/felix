@@ -111,6 +111,10 @@ async fn forward(owner: &ScriptedOwner) -> std::result::Result<Option<(u64, u64)
         &key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"an order")],
+        // Generous: the cases here are about what the owner answered, not about
+        // running out of time. `a_forward_answers_within_its_budget` is where
+        // the budget itself is under test.
+        Duration::from_secs(30),
     )
     .await
 }
@@ -306,5 +310,97 @@ fn the_pause_between_attempts_grows_but_stays_short() {
     assert!(
         retry_delay(u32::MAX) <= Duration::from_millis(100),
         "the backoff outgrew the request the client is waiting on",
+    );
+}
+
+/// An owner that never answers, which is what a killed broker's peers see: the
+/// connection looks open because nothing was left to tear it down.
+struct SilentOwner {
+    asked: Mutex<usize>,
+}
+
+impl PeerRequester for SilentOwner {
+    async fn request(
+        &self,
+        _node_id: &str,
+        _addr: SocketAddr,
+        _message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        *self.asked.lock().expect("lock") += 1;
+        std::future::pending().await
+    }
+}
+
+/// A forward that outlasts its budget answers anyway.
+///
+/// This is what a publish through a broker whose routing view still names a
+/// dead owner runs into. The peer stack's own budget — up to `MAX_ATTEMPTS`
+/// requests, each able to dial first — is far longer than the ack waiter's, so
+/// without a bound here the waiter gives up first and the client is told
+/// "publish commit timeout": an answer that says nothing about why and that a
+/// client cannot act on, in place of one that does.
+#[tokio::test]
+async fn a_forward_answers_within_its_budget() {
+    let owner = SilentOwner {
+        asked: Mutex::new(0),
+    };
+    let budget = Duration::from_millis(150);
+
+    let started = std::time::Instant::now();
+    let err = forward_publish(
+        &owner,
+        &target(),
+        &key(),
+        AckMode::OnCommit,
+        vec![Bytes::from_static(b"an order")],
+        budget,
+    )
+    .await
+    .expect_err("a silent owner cannot have accepted anything");
+    let took = started.elapsed();
+
+    assert!(
+        took < budget * 4,
+        "the forward ran for {took:?} against a {budget:?} budget, so the ack \
+         waiter answers first and the client never sees this error",
+    );
+    // Indeterminate, not refused: the request went out, and this broker cannot
+    // tell whether the owner applied it before going quiet. Calling it a
+    // refusal would invite a re-send that duplicates the record.
+    assert!(
+        matches!(err, ForwardError::Indeterminate { .. }),
+        "a batch that was sent and never answered was reported as {err}",
+    );
+    assert_eq!(
+        *owner.asked.lock().expect("lock"),
+        1,
+        "the budget was spent re-sending a batch that may already have landed",
+    );
+}
+
+/// A budget already spent is refused rather than sent.
+///
+/// The distinction matters: nothing has gone out, so this is the one
+/// budget-exhausted outcome a caller may safely act on by trying elsewhere.
+#[tokio::test]
+async fn a_spent_budget_sends_nothing() {
+    let owner = ScriptedOwner::new([Ok(accepted(1, 1))]);
+
+    let err = forward_publish(
+        &owner,
+        &target(),
+        &key(),
+        AckMode::OnCommit,
+        vec![Bytes::from_static(b"an order")],
+        Duration::ZERO,
+    )
+    .await
+    .expect_err("a spent budget cannot accept anything");
+
+    assert!(matches!(err, ForwardError::Refused { .. }), "{err}");
+    assert_eq!(
+        owner.attempts(),
+        0,
+        "a batch went out on a budget that was already spent",
     );
 }

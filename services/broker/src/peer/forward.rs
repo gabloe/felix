@@ -23,7 +23,7 @@
 //! Retries are bounded by [`MAX_ATTEMPTS`] so a shard being reassigned converges
 //! or fails explicitly, rather than chasing `NotLeader` around a cluster.
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use felix_wire::internal::{
@@ -112,13 +112,21 @@ impl PeerRequester for PeerPool {
 /// Forward one batch and wait for the owner's answer.
 ///
 /// Returns the log offsets the owner assigned, when the stream has a log.
+///
+/// `budget` bounds the whole loop, retries included. Without it the attempt
+/// budget is the only bound, and it is far larger than the client's patience:
+/// the waiter gives up first and replaces whatever this concluded with
+/// "publish commit timeout", which is both less informative and less
+/// actionable than every answer below. See `BrokerConfig::forward_budget`.
 pub async fn forward_publish(
     pool: &impl PeerRequester,
     target: &ForwardTarget,
     key: &ForwardKey,
     ack: AckMode,
     payloads: Vec<Bytes>,
+    budget: Duration,
 ) -> Result<Option<(u64, u64)>, ForwardError> {
+    let deadline = Instant::now() + budget;
     let mut target = target.clone();
     let mut last = String::new();
     // Every (node, generation) this batch has already been sent to. A redirect
@@ -134,6 +142,15 @@ pub async fn forward_publish(
         if attempt > 0 {
             metrics::record_forward_retry();
         }
+        // Nothing has been sent on this attempt yet, so running out here is
+        // still "nothing was sent" and the caller may re-send.
+        let Some(remaining) = remaining(deadline) else {
+            metrics::record_forward(metrics::OUTCOME_EXHAUSTED);
+            return Err(ForwardError::Refused {
+                stream: key.stream.clone(),
+                detail: budget_spent(&target.node_id, budget, attempt, &last),
+            });
+        };
         let request = InternalMessage::ForwardPublish(ForwardPublish {
             // The pool assigns the real id; it owns the connection this lands on.
             correlation_id: 0,
@@ -148,7 +165,21 @@ pub async fn forward_publish(
             payloads: payloads.clone(),
         });
 
-        match PeerRequester::request(pool, &target.node_id, target.advertise_addr, request).await {
+        let answer = tokio::time::timeout(
+            remaining,
+            PeerRequester::request(pool, &target.node_id, target.advertise_addr, request),
+        )
+        .await;
+        let Ok(answer) = answer else {
+            // The request went out and the budget ran out waiting for it. The
+            // owner may have applied the batch, so this is not a refusal.
+            metrics::record_forward(metrics::OUTCOME_INDETERMINATE);
+            return Err(ForwardError::Indeterminate {
+                node_id: target.node_id,
+                detail: format!("no answer within the publish budget of {budget:?}"),
+            });
+        };
+        match answer {
             Ok(InternalMessage::ForwardPublishOk(ok)) => {
                 metrics::record_forward(metrics::OUTCOME_OK);
                 return Ok(Some((ok.first_offset, ok.last_offset)));
@@ -204,7 +235,7 @@ pub async fn forward_publish(
                 }
                 // `StorageFailed` is not retryable and lands above; every code
                 // that reaches here refused before writing.
-                tokio::time::sleep(retry_delay(attempt)).await;
+                sleep_within(retry_delay(attempt), deadline).await;
             }
             Ok(other) => {
                 metrics::record_forward(metrics::OUTCOME_REFUSED);
@@ -215,7 +246,7 @@ pub async fn forward_publish(
             }
             Err(err) if err.is_retryable() => {
                 last = err.to_string();
-                tokio::time::sleep(retry_delay(attempt)).await;
+                sleep_within(retry_delay(attempt), deadline).await;
             }
             Err(err @ (PeerError::Disconnected { .. } | PeerError::Timeout { .. })) => {
                 // The batch is out there. Retrying would duplicate it, and this
@@ -248,6 +279,25 @@ pub async fn forward_publish(
 /// and the attempt budget is the real bound.
 fn retry_delay(attempt: u32) -> Duration {
     Duration::from_millis(5 << attempt.min(4))
+}
+
+/// What is left of the budget, or `None` once it is spent.
+fn remaining(deadline: Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    (!left.is_zero()).then_some(left)
+}
+
+/// Pause between attempts without sleeping past the deadline — the next attempt
+/// checks what is left, and a sleep that overshot would make that check the
+/// thing that fails rather than the request it was waiting to retry.
+async fn sleep_within(delay: Duration, deadline: Instant) {
+    tokio::time::sleep(delay.min(deadline.saturating_duration_since(Instant::now()))).await;
+}
+
+fn budget_spent(node_id: &str, budget: Duration, attempts: u32, last: &str) -> String {
+    format!(
+        "owner {node_id} did not accept the batch within {budget:?} ({attempts} attempts): {last}"
+    )
 }
 
 #[cfg(test)]
