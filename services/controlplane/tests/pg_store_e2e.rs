@@ -266,7 +266,9 @@ async fn pg_container() -> Result<Option<&'static PgContainer>> {
             // supported deployment path (`task pg:up`) runs.
             let container = std::panic::catch_unwind(|| {
                 docker.run(
-                    testcontainers::RunnableImage::from(Postgres::default()).with_tag("16-alpine"),
+                    testcontainers::RunnableImage::from(Postgres::default())
+                        .with_tag("16-alpine")
+                        .with_container_name(felix_test_container_name()),
                 )
             })
             .map_err(|_| sqlx::Error::Protocol("docker run panicked".into()))?;
@@ -1938,4 +1940,21 @@ async fn pg_bootstrap_tenant_auth_is_atomic_and_exactly_once() -> Result<()> {
     assert_eq!(store.list_rbac_policies("t1").await?.len(), 1);
     assert_eq!(store.list_rbac_groupings("t1").await?.len(), 1);
     Ok(())
+}
+
+/// A name a cleanup can recognise as ours.
+///
+/// testcontainers sets no labels, so without this the only thing separating a
+/// leftover test database from one an operator is running is the image tag —
+/// which is not enough to delete on. Unique per container, since a fixed name
+/// would collide between concurrent runs.
+fn felix_test_container_name() -> String {
+    format!(
+        "felix-test-pg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }

@@ -148,31 +148,6 @@ impl ReplicaHandler {
         };
 
         let base = log.base_offset();
-        if base != request.base_offset {
-            // A log is already here and it starts somewhere else. Placing the
-            // leader's base over it would leave a hole between the two.
-            metrics::record_replicated(metrics::OUTCOME_CONFLICT);
-            let tail = log.tail_offset().await.unwrap_or(base);
-            tracing::error!(
-                stream = %key.stream,
-                shard = key.shard,
-                held_from = base,
-                held_to = tail,
-                offered_from = request.base_offset,
-                "refusing to bootstrap: this broker already holds records for that shard",
-            );
-            return refused(
-                correlation_id,
-                ErrorCode::LogConflict,
-                tail,
-                format!(
-                    "this broker holds {base}..{tail} for that shard and cannot be \
-                     re-based at {}",
-                    request.base_offset
-                ),
-            );
-        }
-
         let tail = match log.tail_offset().await {
             Ok(tail) => tail,
             Err(err) => {
@@ -180,6 +155,42 @@ impl ReplicaHandler {
                 return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
             }
         };
+
+        // What matters is whether the two logs meet, not whether they start in
+        // the same place. Retention and cache compaction trim brokers at their
+        // own pace, so bases differing is ordinary — and demanding they match
+        // refused bootstraps that had no gap in them, which is how a replica
+        // set quietly shrinks over successive failovers.
+        //
+        // They meet when this broker's records span the leader's base: it holds
+        // everything from there up to `tail`, and the leader ships on from
+        // `tail`. Either side of that is a real hole.
+        let covers_base = base <= request.base_offset && tail >= request.base_offset;
+        if !covers_base {
+            metrics::record_replicated(metrics::OUTCOME_CONFLICT);
+            let why = if tail < request.base_offset {
+                "its records end before the leader's begin"
+            } else {
+                "its records begin after the leader's"
+            };
+            tracing::error!(
+                stream = %key.stream,
+                shard = key.shard,
+                held_from = base,
+                held_to = tail,
+                offered_from = request.base_offset,
+                "refusing to bootstrap: {why}",
+            );
+            return refused(
+                correlation_id,
+                ErrorCode::LogConflict,
+                tail,
+                format!(
+                    "this broker holds {base}..{tail} and the leader offers from {}: {why}",
+                    request.base_offset
+                ),
+            );
+        }
         tracing::info!(
             stream = %key.stream,
             shard = key.shard,
