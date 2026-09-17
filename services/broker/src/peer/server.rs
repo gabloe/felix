@@ -20,7 +20,7 @@ use felix_transport::{QuicConnection, QuicServer};
 use felix_wire::internal::{ErrorCode, ForwardPublishError, HelloOk, InternalMessage};
 use tokio_util::sync::CancellationToken;
 
-use super::codec::{read_frame, write_frame};
+use super::codec::{Incoming, read_frame, write_frame};
 use super::config::{INTERNAL_ALPN, PeerTransportConfig};
 use super::metrics;
 use super::tls;
@@ -163,13 +163,31 @@ async fn serve_connection(
                 let request = tokio::select! {
                     _ = shutdown.cancelled() => break,
                     frame = read_frame(&mut recv) => match frame {
-                        Ok(Some(request)) => request,
-                        Ok(None) => break,
+                        Ok(Incoming::Message(request)) => request,
+                        // A kind from a later build. The body has been read, so
+                        // the stream is still on a frame boundary — refuse this
+                        // one and carry on, rather than dropping a lane every
+                        // other in-flight request is sharing. This is what makes
+                        // "add a kind" an additive change rather than a cutover.
+                        Ok(Incoming::UnknownKind { kind, correlation_id }) => {
+                            tracing::debug!(kind, "refusing a frame kind this broker does not know");
+                            metrics::record_served(metrics::OUTCOME_UNSUPPORTED);
+                            let refusal = InternalMessage::ForwardPublishError(ForwardPublishError {
+                                correlation_id,
+                                code: ErrorCode::UnsupportedKind,
+                                detail: format!("this broker does not know frame kind {kind}"),
+                            });
+                            if write_frame(&mut send, &refusal).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                        Ok(Incoming::Eof) => break,
                         Err(err) => {
-                            // A frame this broker cannot decode means the peer
-                            // is wrong about the protocol, not about this
-                            // message, so the stream ends rather than skipping
-                            // ahead to a boundary it cannot find.
+                            // Not a frame of ours at all — wrong magic, a
+                            // version this build does not speak, or a body that
+                            // stopped short. The bytes are not laid out the way
+                            // this assumes, so there is no boundary to skip to.
                             tracing::debug!(error = %err, "internal stream ended");
                             metrics::record_served(metrics::OUTCOME_ERROR);
                             break;

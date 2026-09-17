@@ -41,9 +41,26 @@ Big-endian throughout, matching the client protocol.
 *bits* because they modify one payload layout; here each kind **is** a layout, and
 an enum makes "unknown kind" a single unambiguous check.
 
-**An unknown kind is rejected, never skipped.** Same reasoning as the client
+**An unknown kind is refused, never interpreted.** Same reasoning as the client
 protocol's unknown flag bits: the kind selects how to read the body, so ignoring
 one means confidently misparsing it.
+
+Refused, though, not fatal. The receiver reads the body — the frozen header says
+how long it is — and answers `UnsupportedKind` against the correlation id, then
+carries on with the next frame. That distinction is what makes *adding a kind*
+an additive change: these streams are long-lived and multiplex every in-flight
+request to a peer, so dropping one on an unrecognised frame would turn "the peer
+is newer than me" into "every request in flight to that peer failed", and make
+every protocol addition a cutover.
+
+It rests on one invariant: **every body begins with its correlation id, and
+nothing may be added before it.** Without that the refusal could not be matched
+to the request that caused it, and closing the connection would be the only
+option left. `every_body_begins_with_its_correlation_id` holds every kind to it.
+
+A frame that is not *ours* is still fatal — a wrong magic, or a version this
+build does not speak. There is nothing to step over, because the bytes are not
+laid out the way the reader assumes, so its length field means nothing.
 
 ### Handshake
 

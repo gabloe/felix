@@ -46,7 +46,7 @@ use parking_lot::Mutex;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::codec::read_frame;
+use super::codec::{Incoming, read_frame};
 use super::config::PeerTransportConfig;
 use super::metrics;
 use super::tls;
@@ -582,7 +582,7 @@ impl PeerConnection {
             tasks.push(connection.spawn_pump(async move {
                 loop {
                     match read_frame(&mut recv).await {
-                        Ok(Some(message)) => {
+                        Ok(Incoming::Message(message)) => {
                             let waiter = responses.lock().waiters.remove(&message.correlation_id());
                             // A response with no waiter is one whose request
                             // already timed out. Dropping it is correct; the
@@ -591,7 +591,19 @@ impl PeerConnection {
                                 let _ = waiter.send(message);
                             }
                         }
-                        Ok(None) => break,
+                        // A *response* kind this build does not know. Nothing
+                        // here sends a request whose answer it cannot read, so
+                        // this means the peer is from a later build that
+                        // answers differently — the waiter is left to time out
+                        // rather than given something that cannot be parsed,
+                        // and the lane survives for every other request on it.
+                        Ok(Incoming::UnknownKind { kind, .. }) => {
+                            tracing::debug!(
+                                kind,
+                                "peer answered with a kind this build does not know"
+                            );
+                        }
+                        Ok(Incoming::Eof) => break,
                         Err(err) => {
                             tracing::debug!(error = %err, "peer response stream ended");
                             break;

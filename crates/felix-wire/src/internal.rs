@@ -20,8 +20,11 @@ pub const INTERNAL_MAGIC: u32 = 0x464C_5849;
 
 /// This protocol's version, independent of the client protocol's.
 ///
-/// Additive change happens by adding a [`Kind`], which an older peer already
-/// rejects as unknown. This exists for the change that cannot cover: the header,
+/// Additive change happens by adding a [`Kind`]. An older peer steps over a
+/// frame whose kind it does not know — the frozen header says how long the body
+/// is — and answers [`ErrorCode::UnsupportedKind`] against the correlation id
+/// every body starts with, so the stream survives and the sender is told
+/// plainly. This version exists for the change that cannot cover: the header,
 /// or an existing body layout.
 pub const INTERNAL_VERSION: u16 = 1;
 
@@ -38,6 +41,52 @@ pub const MAX_BATCH_PAYLOADS: usize = 65_536;
 /// Every payload is a 4-byte length prefix plus its bytes, so a body can never
 /// hold more payloads than it has 4-byte groups left.
 const LEN_PREFIX: usize = 4;
+
+/// The frame envelope, decoded without resolving the kind.
+///
+/// [`InternalHeader::decode`] refuses a kind it does not know, which is right
+/// for deciding how to read a body and wrong for deciding whether to keep the
+/// stream. This says only what the frozen header says: the framing is ours, the
+/// version is one we speak, and the body is this many bytes — enough to step
+/// over a frame this build cannot interpret and answer for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameEnvelope {
+    /// The raw discriminant, whether or not [`Kind`] knows it.
+    pub kind: u16,
+    pub length: u32,
+}
+
+impl FrameEnvelope {
+    pub fn decode(buf: &Bytes) -> Result<Self> {
+        if buf.len() < InternalHeader::LEN {
+            return Err(Error::Incomplete);
+        }
+        let mut head = buf.slice(0..InternalHeader::LEN);
+        if head.get_u32() != INTERNAL_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        let version = head.get_u16();
+        if version != INTERNAL_VERSION {
+            return Err(Error::UnsupportedVersion(version));
+        }
+        Ok(Self {
+            kind: head.get_u16(),
+            length: head.get_u32(),
+        })
+    }
+}
+
+/// Every body begins with its correlation id, and nothing may be added before
+/// it.
+///
+/// That is what lets a responder answer a frame whose *kind* it does not know:
+/// without the correlation id the refusal could not be matched to the request,
+/// and the only remaining option would be to drop the connection.
+/// `every_body_begins_with_its_correlation_id` holds every kind to it.
+pub fn correlation_id_in(body: &[u8]) -> Option<u64> {
+    body.get(..8)
+        .map(|head| u64::from_be_bytes(head.try_into().expect("eight bytes")))
+}
 
 /// Message discriminant.
 ///
@@ -136,6 +185,10 @@ pub enum ErrorCode {
     /// stored: it may have written them after losing the shard. Not retryable —
     /// the fence does not lift.
     FencedEpoch = 10,
+    /// The responder does not know the kind that was sent, because it predates
+    /// it. Not retryable against this peer, and not an error in the request:
+    /// the feature simply is not there yet on the other side.
+    UnsupportedKind = 11,
 }
 
 impl ErrorCode {
@@ -151,6 +204,7 @@ impl ErrorCode {
             8 => Ok(ErrorCode::LogGap),
             9 => Ok(ErrorCode::LogConflict),
             10 => Ok(ErrorCode::FencedEpoch),
+            11 => Ok(ErrorCode::UnsupportedKind),
             other => Err(Error::UnknownInternalErrorCode(other)),
         }
     }
