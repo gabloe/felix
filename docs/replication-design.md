@@ -299,6 +299,37 @@ knows needs no negotiation and no rolling-upgrade order.
 What it gives up is the case where the follower's history is absent or does not
 reach back far enough. Those halt, which is exactly today's behaviour.
 
+The same map answers a second question, on the leader's side: **where a fresh
+cursor starts.**
+
+A cursor is a belief about a follower's position under one leadership, so a
+generation change discards it. What replaced it was offset zero, which meant
+every follower of every shard the failed broker led byte-compared the whole log
+before anything new could move — the leader reading its own log off disk and
+pushing records the follower already had. On a log of any size that turns a
+failover into an outage, and it happened for every shard at once.
+
+The leader records where *its own* generation begins, which until then only
+followers did — leaving a broker's history with a hole over exactly the stretch
+it led. It is recorded when the shard is taken, while it is still `Opening`:
+that is the one moment the tail *is* the generation's start, because the phase
+exists precisely to hold writes back until recovery finishes.
+
+Below that offset, this broker's records were taken from earlier leaders while
+it was a follower, and so were the follower's — two prefixes of the same log
+agree. At or above it is where they can differ: what this leadership wrote, and
+what a predecessor left on the follower alone. So comparison starts one record
+below the boundary, so the first batch overlaps something the follower already
+holds and the boundary is checked rather than assumed — the same check Raft
+makes at `prevLogIndex`. A follower further behind than that still says so with
+a `LogGap`, and the leader rewinds in that one exchange.
+
+Without a history entry for the generation it falls back to zero, which is slow
+rather than wrong. A shard's consumer-group cursors, dead letters and counters
+still start there: those logs are written only when group state changes, so the
+comparison is over almost nothing, and the leader does not open them at takeover
+to record against.
+
 Three things this deliberately does not do:
 
 - **It does not go in the record format.** A generation per record would mean a

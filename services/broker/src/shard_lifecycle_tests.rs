@@ -330,7 +330,7 @@ mod driver {
 
     #[async_trait::async_trait]
     impl ShardStore for RecordingStore {
-        async fn open(&self, key: &ShardKey) -> anyhow::Result<()> {
+        async fn open(&self, key: &ShardKey, _generation: u64) -> anyhow::Result<()> {
             if self.fail_open.load(Ordering::Acquire) {
                 return Err(anyhow::anyhow!("injected open failure"));
             }
@@ -493,5 +493,98 @@ mod driver {
         assert!(own.may_serve_at(&key(1), 9));
         assert!(!own.may_serve(&key(2)));
         assert_eq!(own.active().count(), 2);
+    }
+}
+
+/// Where a leadership begins, recorded against the real storage.
+///
+/// The offset is only correct at this one moment: recovery has finished, and
+/// the shard is still `Opening`, so nothing this broker leads has been written
+/// yet. Replication resumes followers from it rather than from zero.
+mod recording_where_a_leadership_begins {
+    use super::*;
+    use felix_storage::log::{FsyncMode, LogConfig};
+
+    async fn storage(
+        records: usize,
+    ) -> (
+        std::sync::Arc<felix_broker::DurableStorage>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = felix_broker::DurableStorage::open(
+            dir.path(),
+            LogConfig {
+                segment_size_bytes: 4 * 1024,
+                index_spacing_bytes: 256,
+                fsync_mode: FsyncMode::None,
+                preallocate_segments: false,
+                ..LogConfig::default()
+            },
+        )
+        .expect("storage");
+        let log = storage
+            .open_stream(&key(0).tenant_id, &key(0).namespace, &key(0).stream, 0)
+            .expect("open");
+        for i in 0..records {
+            log.append(&[bytes::Bytes::from(format!("v{i}"))])
+                .await
+                .expect("append");
+        }
+        (std::sync::Arc::new(storage), dir)
+    }
+
+    #[tokio::test]
+    async fn taking_a_shard_records_the_tail_as_this_generations_start() {
+        let (storage, _dir) = storage(7).await;
+        let store = DurableShardStore::new(std::sync::Arc::clone(&storage));
+
+        store.open(&key(0), 4).await.expect("open");
+
+        let log = storage
+            .open_stream(&key(0).tenant_id, &key(0).namespace, &key(0).stream, 0)
+            .expect("reopen");
+        assert_eq!(
+            log.generations()
+                .last()
+                .map(|epoch| (epoch.generation, epoch.start_offset)),
+            Some((4, 7)),
+        );
+    }
+
+    /// A restart takes the same shard at the same generation. The start offset
+    /// must not move to wherever the tail has since reached, or a later repair
+    /// would be bounded by a point this leadership did not begin at.
+    #[tokio::test]
+    async fn retaking_the_same_generation_does_not_move_its_start() {
+        let (storage, _dir) = storage(7).await;
+        let store = DurableShardStore::new(std::sync::Arc::clone(&storage));
+        store.open(&key(0), 4).await.expect("open");
+
+        let log = storage
+            .open_stream(&key(0).tenant_id, &key(0).namespace, &key(0).stream, 0)
+            .expect("reopen");
+        log.append(&[bytes::Bytes::from("led")])
+            .await
+            .expect("append");
+        store.open(&key(0), 4).await.expect("reopen");
+
+        assert_eq!(
+            log.generations().last().map(|epoch| epoch.start_offset),
+            Some(7),
+        );
+    }
+
+    /// A cache shard's log is opened lazily on first use, not here, so there is
+    /// nothing to record against — and replication falls back to comparing from
+    /// zero for it.
+    #[tokio::test]
+    async fn a_cache_shard_records_nothing() {
+        let (storage, _dir) = storage(3).await;
+        let store = DurableShardStore::new(storage);
+        let mut cache_key = key(0);
+        cache_key.kind = crate::shard_watch::ShardKind::Cache;
+
+        store.open(&cache_key, 4).await.expect("open");
     }
 }
