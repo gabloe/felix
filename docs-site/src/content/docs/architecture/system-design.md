@@ -45,7 +45,9 @@ Three things carry most of the design.
 
 That rejection is specific to *replicating records*. Making the control plane's own metadata highly available is a separate problem, and Raft is the answer there: the instances embed a Raft group and hold the metadata themselves, with no external database. See [Metadata Raft](/felix/architecture/metadata-raft/); Postgres remains fully supported for deployments that prefer it.
 
-The control plane is not on the data path. A publish, a subscribe, or a cache operation never calls it; brokers read it in the background and serve from what they already hold.
+The control plane is off the data path for reads, subscribes, and `Leader` publishes: brokers read it in the background and serve from what they already hold.
+
+A **`Quorum`** publish is the exception, and a deliberate one. It is released by the shard's quorum mark, and the leader sends its replica report to the control plane *before* moving that mark, awaiting the answer — otherwise a leader could tell a client its record is on a majority while the control plane still knows nothing about which replica holds it, and a leader dying in that window is replaced by whichever replica scores highest, possibly the one without the record. So a quorum acknowledgement costs one control-plane round trip, and an unreachable control plane stalls `Quorum` publishes rather than acknowledging on a report that never landed.
 
 ### Control plane
 

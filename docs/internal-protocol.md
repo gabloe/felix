@@ -297,9 +297,19 @@ resplit batch is a different set of records, which is exactly the divergence the
 checksum is there to catch. `felix_wire::internal::batch_checksum` is the single
 definition, so the two sides cannot compute it differently.
 
-`LogConflict` has no repair. Records are never rewritten, so two logs that
-disagree at an offset do not converge by retrying; progress stops and the
-condition is surfaced.
+`LogConflict` does not converge by *retrying* — the same batch meets the same
+bytes. It can be repaired, and the follower does it without an exchange: a
+conflict from a **newer** generation than the one this follower last accepted,
+at or after where that older generation began, is a suffix a dead leader left
+behind and no majority adopted. The follower truncates it and replication
+resumes.
+
+Both conditions matter. A leader disagreeing with *itself* is an inconsistency
+rather than a predecessor's leftovers, and a divergence reaching further back
+than the older generation's start is not that generation's to discard. Anything
+else halts, as before, and is surfaced. See `docs/replication-design.md`,
+"Divergence and truncation"; the invariant the storage layer actually needs is
+narrower than "never rewritten", and stated there.
 
 ### Bootstrapping a follower
 
