@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789659443155,
+  "lastUpdate": 1789659683644,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9256,6 +9256,58 @@ window.BENCHMARK_DATA = {
             "range": "15232.65",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 598285.32\nmean: 596505.90\nstdev: 15232.65\ncv: 2.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "126ed315fb3dfe0180bbd762eeba6d761fe39fea",
+          "message": "fix(storage): make the compaction directory swap crash-safe (#429)\n\nCompaction renames the shard directory to .retired, renames the compacted\none into its place, then deletes the retired copy — three steps with no\nparent-directory sync between them. A crash in the middle leaves the shard\ndirectory missing and all its data in .retired. The shard then opens empty,\nand the next compaction deletes .retired: total loss for that shard, from a\ncrash in a one-rename window.\n\nEach rename is now synced before the next, so a crash lands on one of two\nreadable states rather than on whatever order the renames happened to reach\ndisk. Opening a shard checks for the interrupted one — directory missing,\nretired copy present — and moves the retired copy back. That is the\npre-compaction state, so it loses the compaction and nothing else.\n\nRemoving the recovery call fails\na_shard_interrupted_mid_compaction_is_recovered_from_its_retired_copy, which\nreads the shard back as empty.\n\nFixes #414",
+          "timestamp": "2026-09-17T08:38:54-07:00",
+          "tree_id": "588a97799597e700bb60d734728629bb56d5f95b",
+          "url": "https://github.com/gabloe/felix/commit/126ed315fb3dfe0180bbd762eeba6d761fe39fea"
+        },
+        "date": 1789659682471,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 367386.56,
+            "range": "8145.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 367386.56\nmean: 368248.96\nstdev: 8145.04\ncv: 2.21%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 367386.56,
+            "range": "8145.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 367386.56\nmean: 368248.96\nstdev: 8145.04\ncv: 2.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 82338.64,
+            "range": "3320.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 82338.64\nmean: 81839.61\nstdev: 3320.22\ncv: 4.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 823386.4,
+            "range": "33202.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 823386.40\nmean: 818396.14\nstdev: 33202.17\ncv: 4.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
