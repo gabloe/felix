@@ -43,7 +43,7 @@ Three things carry most of the design.
 
 **No consensus protocol runs between brokers.** Placement is a pure function of a metadata snapshot, so two control-plane instances reading the same catalog reach the same answer without having to agree on one. Durability across a leader change comes from log shipping and leader leases: per-shard Raft was considered and rejected, for reasons set out in [`docs/replication-design.md`](https://github.com/gabloe/felix/blob/main/docs/replication-design.md).
 
-That rejection is specific to *replicating records*. Making the control plane's own metadata highly available is a separate problem, and Raft remains the intended answer there — it is not implemented yet, and until it is, control-plane availability rests on Postgres.
+That rejection is specific to *replicating records*. Making the control plane's own metadata highly available is a separate problem, and Raft is the answer there: the instances embed a Raft group and hold the metadata themselves, with no external database. See [Metadata Raft](/felix/architecture/metadata-raft/); Postgres remains fully supported for deployments that prefer it.
 
 The control plane is not on the data path. A publish, a subscribe, or a cache operation never calls it; brokers read it in the background and serve from what they already hold.
 

@@ -1,23 +1,7 @@
 ---
 title: "Metadata Raft"
-description: "The decided design for making control-plane metadata highly available without an external database: a Raft group inside the control-plane instances."
+description: "Control-plane metadata made highly available without an external database, by embedding a Raft group in the control-plane instances."
 ---
-
-:::note[Available, and proven against faults]
-Every control-plane instance can hold metadata itself, with no external
-database. What that survives has been tested rather than asserted: three
-instances under continuous broker traffic come through rolling restarts, a
-leader killed with SIGKILL, a leader frozen past several elections and then
-thawed, and a member whose volume is wiped — with **zero failed calls and
-every acknowledged write present on every member afterwards**.
-
-The faults injected are the ones a single machine can produce; multi-machine
-fault injection is not covered here. Postgres remains a fully supported
-backend, and [Control-plane HA](/felix/deployment/control-plane-ha/) covers
-how to choose. The design record, with the alternatives considered and the
-problems found while building it, is
-[`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
-:::
 
 ## What it is
 
@@ -25,8 +9,18 @@ Every control-plane instance embeds a Raft node; three instances form a
 group. Metadata — tenants, streams, shard assignments, membership, auth
 configuration — becomes a Raft-replicated state machine, persisted as a log
 and snapshots on each instance's own volume. The external database
-disappears; Postgres remains a supported backend for deployments that prefer
-it.
+disappears; Postgres remains a fully supported backend, and
+[Control-plane HA](/felix/deployment/control-plane-ha/) covers how to choose.
+
+What that survives is tested rather than asserted: three instances under
+continuous broker traffic come through rolling restarts, a leader killed with
+SIGKILL, a leader frozen past several elections and then thawed, and a member
+whose volume is wiped — with **zero failed calls, and every acknowledged write
+present on every member afterwards**. The faults injected are the ones a single
+machine can produce; multi-machine fault injection is not covered. The design
+record, with the alternatives considered and the problems found while building
+it, is
+[`docs/metadata-raft-design.md`](https://github.com/gabloe/felix/blob/main/docs/metadata-raft-design.md).
 
 ```mermaid
 flowchart LR
