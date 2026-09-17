@@ -279,10 +279,25 @@ brokers hold is the last one they cannot disagree within, and its end offset on
 the leader is the furthest point the follower can keep.
 
 So a follower records where each generation began in its log, as a small map
-beside the segments. On a conflict it names its newest generation and the
-offset it started at; the leader answers with its own end offset for that
-generation; the follower truncates there and resumes. That is the shape Kafka
-arrived at without Raft (KIP-101, KIP-279), for the same reason.
+beside the segments. It then repairs itself, with no exchange at all: a
+conflict is droppable when the batch that found it comes from a **newer**
+generation than the one this follower last accepted, and the divergence sits at
+or after where that older generation began. Both conditions matter — a leader
+disagreeing with *itself* is an inconsistency rather than a predecessor's
+leftovers, and repairing that would let a leader rewrite its own history.
+
+Anything else halts, as before. That is the same shape Kafka arrived at without
+Raft (KIP-101, KIP-279), reached without adding a message: the generation is
+already on every batch, and the follower's own history supplies the rest.
+
+Not exchanging it is deliberate. A new internal message kind cannot be sent to
+a peer that might not understand it — an undecodable frame ends the stream, and
+those streams are long-lived lanes multiplexing every in-flight request, so a
+probe costs far more than it learns. Repairing from what a follower already
+knows needs no negotiation and no rolling-upgrade order.
+
+What it gives up is the case where the follower's history is absent or does not
+reach back far enough. Those halt, which is exactly today's behaviour.
 
 Three things this deliberately does not do:
 

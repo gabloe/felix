@@ -485,3 +485,178 @@ mod bootstrap {
         assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
     }
 }
+
+/// Dropping a divergent suffix, and refusing to when it is not one.
+///
+/// The repair #406 asks for. A follower holding an uncommitted record from a
+/// leader that died rejoins instead of halting until an operator notices — but
+/// only when the generation history says the divergence is inside the
+/// generation it last accepted. Without that bound, truncating on a conflict
+/// would discard records nothing has established are safe to lose.
+mod divergence {
+    use super::*;
+
+    /// Advance the router to `generation`, the way a reassignment would.
+    ///
+    /// `check_role` fences a batch whose generation is behind the router's, so
+    /// a follower cannot be walked through a leadership change without this.
+    fn advance_to(router: &ShardRouter, generation: u64) {
+        let nodes: HashMap<String, NodeRef> = [
+            ("broker-a".to_string(), node("broker-a", 7001)),
+            (LOCAL.to_string(), node(LOCAL, 7002)),
+            ("broker-c".to_string(), node("broker-c", 7003)),
+        ]
+        .into_iter()
+        .collect();
+        let table = RoutingTable::build(
+            [(
+                key(),
+                "broker-a".to_string(),
+                vec![LOCAL.to_string()],
+                generation,
+            )],
+            &nodes,
+        );
+        router.publish(table, &nodes);
+    }
+
+    /// The reviewer's scenario, from the follower's side: it holds an extra
+    /// record from the old leader, and the new leader writes its own at that
+    /// offset.
+    #[tokio::test]
+    async fn a_suffix_from_the_previous_generation_is_dropped_and_replication_resumes() {
+        let (broker, _dir) = broker_with_storage().await;
+        let router = router_with(&[LOCAL], 4);
+        let handler = ReplicaHandler::new(Arc::clone(&broker), Arc::clone(&router));
+
+        // Generation 4: two records both leaders agree on, then an orphan the
+        // old leader never got acknowledged.
+        handler
+            .apply(batch(4, 0, &["a", "b"]), felix_broker::LogKind::Stream)
+            .await;
+        handler
+            .apply(batch(4, 2, &["orphan"]), felix_broker::LogKind::Stream)
+            .await;
+
+        // The old leader dies and generation 5 reuses offset 2.
+        advance_to(&router, 5);
+        let answer = handler
+            .apply(batch(5, 2, &["committed"]), felix_broker::LogKind::Stream)
+            .await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, 3),
+            other => panic!(
+                "the follower should have dropped its orphan and stored the \
+                 leader's record, got {:?}",
+                other.kind()
+            ),
+        }
+
+        let log = broker
+            .durable_storage()
+            .expect("storage")
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        let stored: Vec<String> = log
+            .read_from(0, 1024 * 1024)
+            .await
+            .expect("read")
+            .into_iter()
+            .map(|record| String::from_utf8(record.payload.to_vec()).expect("utf8"))
+            .collect();
+        assert_eq!(
+            stored,
+            vec!["a", "b", "committed"],
+            "the orphan is still there, so this broker would serve it if promoted",
+        );
+    }
+
+    /// A divergence reaching below the generation this follower last accepted
+    /// is not a repairable suffix, and it halts rather than guessing.
+    #[tokio::test]
+    async fn a_divergence_before_the_last_generation_still_halts() {
+        let (broker, _dir) = broker_with_storage().await;
+        let router = router_with(&[LOCAL], 4);
+        let handler = ReplicaHandler::new(Arc::clone(&broker), Arc::clone(&router));
+
+        handler
+            .apply(batch(4, 0, &["a", "b", "c"]), felix_broker::LogKind::Stream)
+            .await;
+        // Generation 5 starts cleanly at 3, so the history says 5 begins there.
+        advance_to(&router, 5);
+        handler
+            .apply(batch(5, 3, &["d"]), felix_broker::LogKind::Stream)
+            .await;
+
+        // Now a batch disagreeing at offset 1 — well before generation 5.
+        let answer = handler
+            .apply(batch(5, 1, &["different"]), felix_broker::LogKind::Stream)
+            .await;
+
+        let refused = refusal(&answer);
+        assert_eq!(
+            refused.code,
+            ErrorCode::LogConflict,
+            "a divergence below the last accepted generation was repaired \
+             anyway, which discards records nothing says are uncommitted",
+        );
+    }
+
+    /// A leader disagreeing with *itself* is not a repairable suffix.
+    ///
+    /// Same generation on both batches, so nothing has been deposed and there
+    /// is no uncommitted suffix to drop. Repairing here would let a leader
+    /// rewrite its own history — which is what the invariant forbids, and what
+    /// an earlier version of this bound allowed until
+    /// `a_conflict_is_reported_as_divergence` caught it.
+    #[tokio::test]
+    async fn a_leader_disagreeing_with_itself_is_not_repaired() {
+        let (broker, _dir) = broker_with_storage().await;
+        let router = router_with(&[LOCAL], 4);
+        let handler = ReplicaHandler::new(Arc::clone(&broker), Arc::clone(&router));
+
+        handler
+            .apply(batch(4, 0, &["a", "b"]), felix_broker::LogKind::Stream)
+            .await;
+
+        let answer = handler
+            .apply(
+                batch(4, 0, &["a", "DIFFERENT"]),
+                felix_broker::LogKind::Stream,
+            )
+            .await;
+
+        assert_eq!(
+            refusal(&answer).code,
+            ErrorCode::LogConflict,
+            "a leader was allowed to rewrite records it wrote itself",
+        );
+    }
+
+    /// With no generation history there is no bound, so nothing is truncated.
+    ///
+    /// Every shard written before the history existed is in this state, and a
+    /// broker that truncated on a bare conflict would be repairing on a guess.
+    #[tokio::test]
+    async fn a_conflict_with_no_history_halts() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+
+        // Written straight to the log, so no generation is ever recorded.
+        let log = broker
+            .durable_storage()
+            .expect("storage")
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        log.append(&[Bytes::from_static(b"a")])
+            .await
+            .expect("append");
+
+        let answer = handler
+            .apply(batch(4, 0, &["different"]), felix_broker::LogKind::Stream)
+            .await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::LogConflict);
+    }
+}
