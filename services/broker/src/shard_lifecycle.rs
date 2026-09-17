@@ -306,8 +306,13 @@ impl ShardLifecycle {
 /// open, and saying so is cheaper than branching everywhere.
 #[async_trait::async_trait]
 pub trait ShardStore: Send + Sync {
-    /// Open and recover local state for a shard.
-    async fn open(&self, key: &ShardKey) -> anyhow::Result<()>;
+    /// Open and recover local state for a shard this broker now leads at
+    /// `generation`.
+    ///
+    /// Runs before the shard goes `Active`, so the log's tail here is exactly
+    /// where this leadership begins — the one moment that is true, since the
+    /// next thing to touch the log is a write under this generation.
+    async fn open(&self, key: &ShardKey, generation: u64) -> anyhow::Result<()>;
     /// Flush everything accepted for a shard, before ownership is given up.
     ///
     /// This is the point at which "no accepted write is unaccounted for" is
@@ -332,7 +337,7 @@ impl DurableShardStore {
 
 #[async_trait::async_trait]
 impl ShardStore for DurableShardStore {
-    async fn open(&self, key: &ShardKey) -> anyhow::Result<()> {
+    async fn open(&self, key: &ShardKey, generation: u64) -> anyhow::Result<()> {
         // A cache's log lives under the cache root, not this one, so opening a
         // stream log here would create an empty directory nothing ever reads
         // while leaving the real log untouched. It is opened lazily instead, on
@@ -346,10 +351,35 @@ impl ShardStore for DurableShardStore {
         }
         // Recovery happens here: validating the tail and rebuilding indexes is
         // exactly the cost the `Opening` phase is holding writes back for.
-        self.storage
+        let log = self
+            .storage
             .open_stream(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-            .map(|_| ())
-            .map_err(|err| anyhow::anyhow!("open shard log: {err}"))
+            .map_err(|err| anyhow::anyhow!("open shard log: {err}"))?;
+
+        // Where this leadership begins. Followers record what they accept, and
+        // until now a leader recorded nothing — so a broker's history had a
+        // hole exactly over the stretch it led, and replication had no bound to
+        // resume a follower from other than offset zero.
+        //
+        // Here and nowhere later: the tail stops being the generation's start
+        // the instant this broker serves its first write, which is what the
+        // `Opening` phase is still holding back.
+        let tail = log
+            .tail_offset()
+            .await
+            .map_err(|err| anyhow::anyhow!("read shard tail: {err}"))?;
+        if let Err(err) = log.record_generation(generation, tail) {
+            // Not fatal. Replication falls back to comparing from the start of
+            // the log, which is slow rather than wrong.
+            tracing::warn!(
+                stream = %key.stream,
+                shard = key.shard,
+                generation,
+                error = %err,
+                "could not record where this leadership begins",
+            );
+        }
+        Ok(())
     }
 
     async fn release(&self, key: &ShardKey) -> anyhow::Result<()> {
@@ -375,7 +405,7 @@ pub struct EphemeralShardStore;
 
 #[async_trait::async_trait]
 impl ShardStore for EphemeralShardStore {
-    async fn open(&self, _key: &ShardKey) -> anyhow::Result<()> {
+    async fn open(&self, _key: &ShardKey, _generation: u64) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -392,7 +422,7 @@ pub async fn apply(
 ) {
     match action {
         Action::None => {}
-        Action::Open { key, generation } => match store.open(&key).await {
+        Action::Open { key, generation } => match store.open(&key, generation).await {
             Ok(()) => {
                 let activated = lifecycle.lock().await.opened(&key, generation);
                 if activated {

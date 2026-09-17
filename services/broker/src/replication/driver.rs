@@ -26,6 +26,8 @@ use crate::peer::PeerRequester;
 /// Cursors for one shard, valid only at `generation`.
 pub struct ShardCursors {
     generation: u64,
+    /// Where a follower with no cursor yet starts. See [`compare_from`].
+    base: u64,
     followers: Vec<FollowerCursor>,
 }
 
@@ -36,9 +38,37 @@ impl ShardCursors {
     fn at(generation: u64) -> Self {
         Self {
             generation,
+            base: 0,
             followers: Vec::new(),
         }
     }
+}
+
+/// Where to start comparing with a follower whose position is unknown.
+///
+/// Offset zero re-reads the whole log — a batch per pass, per shard, at the
+/// sweep's interval — which after a failover is minutes to hours of shipping
+/// records the follower already has. The generation history bounds it.
+///
+/// `generations` says where each leadership began *here*. Below the current
+/// one, this broker's records were taken from earlier leaders as a follower,
+/// and so were the follower's; two prefixes of the same log agree. At or above
+/// it is where they can differ: records this leadership wrote, and records a
+/// predecessor left on the follower alone.
+///
+/// One record earlier than that, so the first batch overlaps something the
+/// follower already holds and the boundary itself gets compared rather than
+/// assumed — the same check Raft makes at `prevLogIndex`.
+///
+/// Zero when the history has no entry for this generation: a shard written
+/// before the history existed, or a log that could not record it. Slow, and
+/// the behaviour that was there before.
+fn compare_from(generations: &[felix_storage::disk_log::epochs::Epoch], generation: u64) -> u64 {
+    generations
+        .iter()
+        .find(|epoch| epoch.generation == generation)
+        .map(|epoch| epoch.start_offset.saturating_sub(1))
+        .unwrap_or(0)
 }
 
 /// How many shards a pass ships at the same time.
@@ -134,6 +164,20 @@ async fn replicate_shard<R: PeerRequester>(
             return ShardPass::quiet(shard_key, entry, aux);
         }
     };
+
+    // Read only when a cursor has to be created — a generation change, or a
+    // replica added to the set. The usual pass creates none, and the history
+    // is a few hundred entries to clone.
+    let needs_base = route.replicas.iter().any(|replica| {
+        !entry
+            .followers
+            .iter()
+            .any(|cursor| cursor.node_id == replica.node_id)
+    });
+    if needs_base {
+        entry.base = compare_from(&log.generations(), route.generation);
+    }
+    reconcile_followers(&mut entry, route);
 
     let shard = ShardRef {
         tenant_id: key.tenant_id.clone(),
@@ -346,7 +390,6 @@ pub async fn replicate_once<R: PeerRequester>(
         if entry.generation != route.generation {
             entry = ShardCursors::at(route.generation);
         }
-        reconcile_followers(&mut entry, route);
         let aux = AuxCursors {
             group: group_cursors
                 .remove(key)
@@ -443,6 +486,9 @@ async fn ship_aux_log<R: PeerRequester>(
     if entry.generation != route.generation {
         *entry = ShardCursors::at(route.generation);
     }
+    // Base stays zero here. These logs are written only when group state
+    // changes, so comparing from the start costs almost nothing, and the
+    // leader does not open them at takeover to record a generation against.
     reconcile_followers(entry, route);
 
     let shard = ShardRef {
@@ -507,10 +553,12 @@ pub struct ShardReport {
 
 /// Add cursors for new replicas and drop those no longer in the set.
 ///
-/// A follower added mid-generation starts at zero rather than at the tail: the
-/// leader does not know what it holds, and starting at the tail would silently
-/// declare it caught up. Starting at zero lets the follower's first `LogGap`
-/// say where it actually is.
+/// A new follower starts at `entry.base`, never at the tail: the leader does
+/// not know what it holds, and starting at the tail would declare it caught up
+/// without comparing anything. One behind that point it either agrees — and
+/// the first batch appends — or conflicts, which is the answer worth having.
+/// A follower further behind still says so with a `LogGap`, and the leader
+/// rewinds to it in that one exchange.
 fn reconcile_followers(entry: &mut ShardCursors, route: &Route) {
     entry
         .followers
@@ -524,7 +572,7 @@ fn reconcile_followers(entry: &mut ShardCursors, route: &Route) {
             entry.followers.push(FollowerCursor::new(
                 replica.node_id.clone(),
                 replica.advertise_addr,
-                0,
+                entry.base,
             ));
         }
     }

@@ -219,6 +219,169 @@ async fn leader_with(count: usize) -> (Arc<Broker>, TempDir) {
     (Arc::new(broker), dir)
 }
 
+/// A leader with `count` records whose log says generation `generation` began
+/// at `began_at` — what `DurableShardStore::open` records when this broker
+/// takes the shard.
+async fn leader_led_from(count: usize, generation: u64, began_at: u64) -> (Arc<Broker>, TempDir) {
+    let (broker, dir) = leader_with(count).await;
+    broker
+        .shard_log(felix_broker::LogKind::Stream, TENANT, NAMESPACE, STREAM, 0)
+        .await
+        .expect("log")
+        .record_generation(generation, began_at)
+        .expect("record");
+    (broker, dir)
+}
+
+/// **A failover does not re-ship the whole log.**
+///
+/// Cursors used to start at zero, so every follower of every shard the failed
+/// broker led byte-compared the entire log — records it already held, read off
+/// the leader's disk and pushed across the network, before anything new could
+/// move. On a log of any size that is the difference between a failover and an
+/// outage.
+///
+/// The generation history is the bound: below where this leadership began, both
+/// logs came from the same predecessor. One record earlier than that, so the
+/// boundary is compared rather than assumed.
+#[tokio::test]
+async fn a_fresh_cursor_starts_at_the_generation_boundary() {
+    let (broker, _dir) = leader_led_from(20, 4, 12).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(
+        follower.batches().first().map(|(_, first, _)| *first),
+        Some(11),
+        "the follower was re-sent records from before this leadership began",
+    );
+}
+
+/// Without a history there is nothing to bound the comparison with, so it
+/// starts at zero — slow, and what every shard did before generations were
+/// recorded. Worth pinning: the fallback is what keeps a shard written by an
+/// older build replicating at all.
+#[tokio::test]
+async fn a_shard_with_no_generation_history_still_starts_at_zero() {
+    let (broker, _dir) = leader_with(20).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(
+        follower.batches().first().map(|(_, first, _)| *first),
+        Some(0),
+    );
+}
+
+/// The boundary bounds a replica added mid-generation too. It is not assumed
+/// caught up — it starts below where this leadership began, and a `LogGap`
+/// still rewinds the leader if it turns out to hold less than that.
+#[tokio::test]
+async fn a_replica_added_later_starts_at_the_boundary_too() {
+    let (broker, _dir) = leader_led_from(20, 4, 12).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+    publish(&router, LOCAL, &["broker-b", "broker-c"], 4);
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let from_c: Vec<(String, u64, usize)> = follower
+        .batches()
+        .into_iter()
+        .filter(|(node, _, _)| node == "broker-c")
+        .collect();
+    assert_eq!(
+        from_c.first().map(|(_, first, _)| *first),
+        Some(11),
+        "a newly added replica was sent the whole log",
+    );
+}
+
+#[test]
+fn the_comparison_point_is_one_below_where_the_generation_began() {
+    use felix_storage::disk_log::epochs::Epoch;
+    let history = [
+        Epoch {
+            generation: 3,
+            start_offset: 40,
+        },
+        Epoch {
+            generation: 7,
+            start_offset: 90,
+        },
+    ];
+
+    assert_eq!(compare_from(&history, 7), 89);
+    assert_eq!(compare_from(&history, 3), 39);
+    // A generation this log never recorded cannot bound anything, and neither
+    // can one that began at zero.
+    assert_eq!(compare_from(&history, 8), 0);
+    assert_eq!(compare_from(&[], 7), 0);
+    assert_eq!(
+        compare_from(
+            &[Epoch {
+                generation: 1,
+                start_offset: 0
+            }],
+            1
+        ),
+        0,
+    );
+}
+
 /// **Unreachable followers cost one handshake timeout, not one each.** A pass
 /// that visited them one after another paid for every dead replica in turn,
 /// with the quorum mark -- and so every `Quorum` publish waiting on this shard
