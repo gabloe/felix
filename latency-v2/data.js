@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789625352533,
+  "lastUpdate": 1789644360122,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11220,6 +11220,72 @@ window.BENCHMARK_DATA = {
             "range": "521.58",
             "unit": "us",
             "extra": "trials: 5\nmedian: 692.00\nmean: 951.20\nstdev: 521.58\ncv: 54.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c079b52192e1faff562b5dad4a3eda537d64c91",
+          "message": "test(controlplane): say why the controlplane exited before listening (#403)\n\nmain_runtime.rs failed once in CI with \"controlplane exited before\nlistening on 127.0.0.1:53912: exit status: 1\" and nothing else, because\nthe child's stderr was sent to /dev/null. A harness that spawns a process\nand discards its output cannot tell you why the process died, so the\nfailure reads as an unexplained flake and the next one will too.\n\nstderr is piped and read on the failure path, where there is nothing after\nit to keep the pipe open for.\n\nPort reservation is tightened while here: both listeners are held while the\ntwo addresses are chosen, so they are distinct by construction rather than\nby the OS happening not to repeat itself. This is hygiene, not the fix — I\nchecked, and back-to-back bind/release does not return the same port. The\nreal race is between releasing a port and the child binding it, where any\nother test binary in the same cargo run can take it. Closing that needs the\nchild to choose its own port and report it back, which is more than this\nharness justifies; what it gets instead is a failure that names the cause.",
+          "timestamp": "2026-09-17T04:23:48-07:00",
+          "tree_id": "1e8a3e4ff4cd30f46427e3417c3742a10eb97bcf",
+          "url": "https://github.com/gabloe/felix/commit/5c079b52192e1faff562b5dad4a3eda537d64c91"
+        },
+        "date": 1789644357341,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 97,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 97.00\nmean: 97.40\nstdev: 0.55\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 131,
+            "range": "2.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 131.00\nmean: 130.80\nstdev: 2.17\ncv: 1.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 177,
+            "range": "74.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 177.00\nmean: 206.00\nstdev: 74.68\ncv: 36.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 129,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 129.40\nstdev: 0.55\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 258,
+            "range": "4.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 259.20\nstdev: 4.76\ncv: 1.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 372,
+            "range": "423.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 372.00\nmean: 648.60\nstdev: 423.82\ncv: 65.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
