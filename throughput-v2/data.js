@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789661908102,
+  "lastUpdate": 1789663613157,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9412,6 +9412,58 @@ window.BENCHMARK_DATA = {
             "range": "15654.71",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553446.25\nmean: 549513.35\nstdev: 15654.71\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6593d868857d3111763c964fa088e5809041bf93",
+          "message": "fix(controlplane): judge liveness expiry by one clock, not one per instance (#439)\n\nA heartbeat recorded a time and the expiry sweep compared against another,\neach read from whichever instance happened to handle it. With several\nstateless instances over one Postgres those are different processes, so\nsafety rested on their wall clocks agreeing to within the margin — much\nstronger than the bound on drift rate the design assumes, and something a\nsingle NTP step breaks.\n\nBoth sides now read ControlPlaneStore::now_millis. The Postgres backend\nanswers with clock_timestamp(), so the database is the clock and every\ninstance judges expiry by the same one. The default is the process clock,\nwhich is right for a single-process store.\n\nclock_timestamp() rather than now(): now() is the transaction's start time\nand is identical for every call inside one, which is not a clock.\n\nThe callers still do not take the time from the request — a broker must not\nbe able to postpone its own timeout — so this changes which of the control\nplane's clocks is authoritative, not who owns it.\n\nrecord_node_heartbeat and expire_stale_nodes keep their timestamp\nparameters. Contract tests drive them at exact times, and the raft backend\nneeds the proposer to decide the time so every replica applies the same one.\n\nThe new contract case runs against both backends, so a backend answering\nfrom its own process clock is caught rather than assumed away.\n\nFixes #408",
+          "timestamp": "2026-09-17T09:15:20-07:00",
+          "tree_id": "97eaa7dd31888076974cfeca5dbe8bdb0836a77c",
+          "url": "https://github.com/gabloe/felix/commit/6593d868857d3111763c964fa088e5809041bf93"
+        },
+        "date": 1789663612376,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 321344,
+            "range": "5245.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 321344.00\nmean: 324412.54\nstdev: 5245.47\ncv: 1.62%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 321344,
+            "range": "5245.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 321344.00\nmean: 324412.54\nstdev: 5245.47\ncv: 1.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 76126.87,
+            "range": "2062.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 76126.87\nmean: 75943.52\nstdev: 2062.69\ncv: 2.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 761268.7,
+            "range": "20626.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 761268.70\nmean: 759435.21\nstdev: 20626.94\ncv: 2.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
