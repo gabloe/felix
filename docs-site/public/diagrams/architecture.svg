@@ -104,7 +104,7 @@
   <text class="sub" x="214" y="539">owns tenants, namespaces, streams, caches, nodes, shard assignments</text>
   <text class="sub" x="214" y="555">places every shard by rendezvous hashing</text>
 
-  <text class="edgelb" x="730" y="504">no Raft, no election:</text>
+  <text class="edgelb" x="730" y="504">nothing is negotiated:</text>
   <text class="edgelb" x="730" y="521">placement is a pure</text>
   <text class="edgelb" x="730" y="538">function of the snapshot</text>
 
