@@ -52,6 +52,7 @@ pub(crate) async fn run_node_contract(store: Arc<dyn ControlPlaneStore>) {
     delete_removes_and_publishes(store).await;
     a_snapshot_and_the_changes_after_it_lose_nothing(store).await;
     changes_are_ordered_and_monotonic(store).await;
+    a_heartbeat_and_the_sweep_read_one_clock(store).await;
 }
 
 /// Run the cases that need to share the store across tasks.
@@ -648,5 +649,41 @@ async fn expiry_is_idempotent_across_instances(store: &dyn ControlPlaneStore) {
             .len(),
         1,
         "a repeated sweep must not publish a change per pass",
+    );
+}
+
+/// The clock a heartbeat is stamped with is the clock expiry is judged against.
+///
+/// Both sides call `now_millis`, so what this pins is that the store answers
+/// with a usable clock — one that advances, and that sits in the same era as
+/// the timestamps it stores. With several stateless instances over one
+/// database, a backend answering from each process's own `SystemTime` would
+/// make safety rest on their wall clocks agreeing rather than on a bound on
+/// drift rate.
+async fn a_heartbeat_and_the_sweep_read_one_clock(store: &dyn ControlPlaneStore) {
+    let _ = store.register_node(node("clock-node", 7400)).await;
+
+    let before = store.now_millis().await.expect("store clock");
+    store
+        .record_node_heartbeat("clock-node", 0, before)
+        .await
+        .expect("heartbeat");
+    let after = store.now_millis().await.expect("store clock");
+
+    assert!(
+        after >= before,
+        "the store clock went backwards: {before} then {after}",
+    );
+
+    // A heartbeat stamped at the store's own clock must not be stale by that
+    // same clock. If the two came from different sources, a cluster could
+    // expire a node that had just heartbeated.
+    let expired = store
+        .expire_stale_nodes(before.saturating_sub(1))
+        .await
+        .expect("sweep");
+    assert!(
+        !expired.iter().any(|node| node.node_id == "clock-node"),
+        "a node was expired by the same clock that had just stamped its heartbeat",
     );
 }

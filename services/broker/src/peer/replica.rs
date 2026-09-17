@@ -148,31 +148,6 @@ impl ReplicaHandler {
         };
 
         let base = log.base_offset();
-        if base != request.base_offset {
-            // A log is already here and it starts somewhere else. Placing the
-            // leader's base over it would leave a hole between the two.
-            metrics::record_replicated(metrics::OUTCOME_CONFLICT);
-            let tail = log.tail_offset().await.unwrap_or(base);
-            tracing::error!(
-                stream = %key.stream,
-                shard = key.shard,
-                held_from = base,
-                held_to = tail,
-                offered_from = request.base_offset,
-                "refusing to bootstrap: this broker already holds records for that shard",
-            );
-            return refused(
-                correlation_id,
-                ErrorCode::LogConflict,
-                tail,
-                format!(
-                    "this broker holds {base}..{tail} for that shard and cannot be \
-                     re-based at {}",
-                    request.base_offset
-                ),
-            );
-        }
-
         let tail = match log.tail_offset().await {
             Ok(tail) => tail,
             Err(err) => {
@@ -180,6 +155,42 @@ impl ReplicaHandler {
                 return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
             }
         };
+
+        // What matters is whether the two logs meet, not whether they start in
+        // the same place. Retention and cache compaction trim brokers at their
+        // own pace, so bases differing is ordinary — and demanding they match
+        // refused bootstraps that had no gap in them, which is how a replica
+        // set quietly shrinks over successive failovers.
+        //
+        // They meet when this broker's records span the leader's base: it holds
+        // everything from there up to `tail`, and the leader ships on from
+        // `tail`. Either side of that is a real hole.
+        let covers_base = base <= request.base_offset && tail >= request.base_offset;
+        if !covers_base {
+            metrics::record_replicated(metrics::OUTCOME_CONFLICT);
+            let why = if tail < request.base_offset {
+                "its records end before the leader's begin"
+            } else {
+                "its records begin after the leader's"
+            };
+            tracing::error!(
+                stream = %key.stream,
+                shard = key.shard,
+                held_from = base,
+                held_to = tail,
+                offered_from = request.base_offset,
+                "refusing to bootstrap: {why}",
+            );
+            return refused(
+                correlation_id,
+                ErrorCode::LogConflict,
+                tail,
+                format!(
+                    "this broker holds {base}..{tail} and the leader offers from {}: {why}",
+                    request.base_offset
+                ),
+            );
+        }
         tracing::info!(
             stream = %key.stream,
             shard = key.shard,
@@ -246,8 +257,88 @@ impl ReplicaHandler {
             );
         };
 
-        match replication::apply(&log, batch.first_offset, batch.checksum, &batch.payloads).await {
+        // A generation this follower has not seen before starts here. Recorded
+        // before the apply, because the apply is what may need it: the divergent
+        // suffix it finds belongs to whatever generation was newest until now.
+        let generation_start = batch.first_offset;
+        let previous_generation = log.generations().last().copied();
+
+        let mut outcome =
+            replication::apply(&log, batch.first_offset, batch.checksum, &batch.payloads).await;
+
+        // A divergent suffix left by a leader that is gone is droppable: no
+        // majority acknowledged it, and dropping it lets this follower rejoin
+        // instead of halting until an operator notices (#406).
+        //
+        // Two conditions decide that, and neither is optional:
+        //
+        // - The sender's generation is newer than the one this follower last
+        //   accepted. A leader disagreeing with *itself* is an inconsistency,
+        //   not a predecessor's leftovers, and repairing it would let a leader
+        //   rewrite its own history.
+        // - The divergence is at or after where that older generation began, so
+        //   what is dropped belongs to it.
+        //
+        // Anything else halts. Without the generation history there is no way
+        // to tell a suffix from a divergence reaching further back, and
+        // truncating on a bare conflict would discard records nothing has
+        // established are safe to lose.
+        if let Ok(Err(Divergence::Conflict { offset, .. })) = &outcome {
+            let diverged_at = *offset;
+            let repairable = previous_generation.filter(|previous| {
+                batch.shard.generation > previous.generation && diverged_at >= previous.start_offset
+            });
+            match repairable {
+                Some(previous) => match log.truncate(diverged_at).await {
+                    Ok(()) => {
+                        tracing::warn!(
+                            stream = %key.stream,
+                            shard = key.shard,
+                            diverged_at,
+                            dropped_generation = previous.generation,
+                            "dropped a divergent suffix from a previous \
+                             generation and resumed replication",
+                        );
+                        metrics::record_replicated(metrics::OUTCOME_TRUNCATED);
+                        outcome = replication::apply(
+                            &log,
+                            batch.first_offset,
+                            batch.checksum,
+                            &batch.payloads,
+                        )
+                        .await;
+                    }
+                    Err(err) => tracing::error!(
+                        stream = %key.stream,
+                        shard = key.shard,
+                        error = %err,
+                        "could not drop a divergent suffix; replication stops here",
+                    ),
+                },
+                None => tracing::error!(
+                    stream = %key.stream,
+                    shard = key.shard,
+                    diverged_at,
+                    sender_generation = batch.shard.generation,
+                    last_accepted = ?previous_generation.map(|epoch| epoch.generation),
+                    "this divergence is not a previous generation's suffix; \
+                     replication stops here",
+                ),
+            }
+        }
+
+        match outcome {
             Ok(Ok(applied)) => {
+                // Now that the batch is stored, note where this generation
+                // began here — so a later divergence can be bounded the same
+                // way this one was.
+                if let Err(err) = log.record_generation(batch.shard.generation, generation_start) {
+                    tracing::warn!(
+                        stream = %key.stream,
+                        error = %err,
+                        "stored a replicated batch but could not record its generation",
+                    );
+                }
                 // The records went straight to the log, so the stream's own view
                 // of its tail has to be told. Without this the first publish
                 // this broker accepts once promoted waits on commit turns that

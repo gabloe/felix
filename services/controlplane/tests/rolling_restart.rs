@@ -255,7 +255,8 @@ async fn a_rolling_restart_serves_every_watch_and_heartbeat() {
             let image = testcontainers::RunnableImage::from(
                 testcontainers_modules::postgres::Postgres::default(),
             )
-            .with_tag("16-alpine");
+            .with_tag("16-alpine")
+            .with_container_name(felix_test_container_name());
             let container = docker.run(image);
             let port = container.get_host_port_ipv4(5432);
             (
@@ -413,4 +414,21 @@ async fn a_rolling_restart_serves_every_watch_and_heartbeat() {
     terminate(&b.child);
     wait_for_exit(&mut a.child, Duration::from_secs(30));
     wait_for_exit(&mut b.child, Duration::from_secs(30));
+}
+
+/// A name a cleanup can recognise as ours.
+///
+/// testcontainers sets no labels, so without this the only thing separating a
+/// leftover test database from one an operator is running is the image tag —
+/// which is not enough to delete on. Unique per container, since a fixed name
+/// would collide between concurrent runs.
+fn felix_test_container_name() -> String {
+    format!(
+        "felix-test-pg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }

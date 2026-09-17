@@ -289,7 +289,7 @@ fn truncated(needed: u64, available: u64) -> Corruption {
     Corruption::new(CorruptionKind::Truncated { needed, available })
 }
 
-fn crc32(parts: &[&[u8]]) -> u32 {
+pub(crate) fn crc32(parts: &[&[u8]]) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     for part in parts {
         hasher.update(part);

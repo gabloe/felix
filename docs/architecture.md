@@ -33,7 +33,7 @@ What each of the three stores, keeps in memory, and rebuilds from the log — an
 the test behind every claim about them — is in
 [`projections.md`](projections.md). Claims about a semantic belong there, where
 `scripts/check_doc_evidence.py` checks that the tests cited still exist.
-- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache operations are not yet routed across brokers — see `docs/cache-on-log.md`
+- **Cache:** key → latest value with TTL, written to the same log as records and read back through an index rebuilt from it. Compaction reclaims superseded and expired entries. Cache operations route across brokers like a stream's do: a key hashes to a shard, and a broker that does not own it forwards — see `docs/cache-on-log.md`
 
 This drastically reduces operational complexity and consistency bugs compared to running Kafka,
 Redis, and a queueing system side-by-side.
@@ -93,7 +93,7 @@ The wire protocol is versioned and explicitly framed to allow forward compatibil
 - **Durable:** a segmented, checksummed append-only log on persistent volumes,
   selected per stream by `durable: true`. See
   [Durable Storage](durable-storage.md).
-- **Retention:** not yet implemented. `truncate` exists for replication's
+- **Retention:** implemented per broker via `FELIX_DURABLE_RETENTION_BYTES` / `_SECONDS`, and off unless set. A *per-stream* policy is recorded and not yet read, so a stream's declared retention is not the one enforced. `truncate` exists for replication's
   benefit; nothing deletes segments on age or size.
 - **Tiering:** not yet implemented. `TieredStore` is declared and unimplemented;
   tracked as [#172](https://github.com/gabloe/felix/issues/172).
@@ -142,9 +142,15 @@ Delivery guarantees:
 ## Security Architecture
 
 ### Transport Security
-- mTLS between brokers
-- TLS for client connections
+- TLS 1.3 for client connections, with no unencrypted mode — QUIC has none
+- Broker-to-broker QUIC is encrypted but **not** mutually authenticated. mTLS
+  between brokers is #125, and until it lands the internal listener accepts any
+  client certificate
 - All encryption uses modern, configurable cipher suites
+
+The rest of this section is the intended design, not what ships today. The
+[status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/)
+is per capability and is the page to trust when another disagrees.
 
 ### Data Encryption
 - Envelope encryption per region and per tenant

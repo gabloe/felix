@@ -165,3 +165,20 @@ and is kept here as the record of why it was taken up:
 Until then, Postgres HA is the better trade: it is the most operationally
 understood HA component that exists, and every line of consensus code Felix
 does not carry is one it cannot get wrong.
+
+## One clock, not one per instance
+
+Node liveness is a comparison: a heartbeat records a time, and the expiry sweep
+checks it against another. Those two run on different instances, so reading
+each process's own `SystemTime` would make safety depend on their wall clocks
+agreeing to within the margin — much stronger than a bound on how fast they
+drift, and something a single NTP step breaks.
+
+Both sides read `ControlPlaneStore::now_millis` instead. The Postgres backend
+answers with `clock_timestamp()`, so the database is the clock and every
+instance judges expiry by the same one. No clock synchronisation between
+control-plane instances is assumed or required.
+
+`clock_timestamp()` rather than `now()`: `now()` is the transaction's start
+time and is identical for every call within one, which is not what a clock
+means.
