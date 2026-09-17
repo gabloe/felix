@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789677298285,
+  "lastUpdate": 1789677788337,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12342,6 +12342,72 @@ window.BENCHMARK_DATA = {
             "range": "1158.54",
             "unit": "us",
             "extra": "trials: 5\nmedian: 649.00\nmean: 1270.60\nstdev: 1158.54\ncv: 91.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5377f339741e4fa4b2c486f908cef7524e98967d",
+          "message": "test(wire): fuzz the protocol decoders, and run every target in CI (#480)\n\n* test(wire): fuzz the protocol decoders, and run every target in CI\n\nOnly storage was fuzzed, which is the wrong place to stop. Segment bytes are\nwritten by Felix; wire bytes are written by whoever connects, and the frame\ndecoder is reached before authentication. A malformed frame is the one input\nan attacker fully controls.\n\nFour libFuzzer targets over the decoders that parse input from outside the\nprocess: the client frame, the broker-to-broker message, the binary payload\nlayouts, and the JSON control message. The properties are about refusing\nrather than recovering — no panic, no allocation from an unchecked length, no\nsilent acceptance of an unknown flag bit or kind, and a round trip that\nreproduces the bytes it came from. That last one is what holds \"trailing bytes\nare refused rather than ignored\" true: a body with slack re-encodes shorter\nthan it arrived.\n\nFlags get their own property because the design turns on it. A flag bit\nselects the payload *layout*, so a bit that is neither known nor reported is\none the dispatch would ignore — and ignoring it means confidently misparsing\nthe body rather than refusing it.\n\nThe deterministic subset runs in the normal suite as `tests/wire_fuzz.rs`,\nseeded xorshift like `format_fuzz.rs` next door, so a regression in the obvious\ncases fails a plain `cargo test` instead of waiting for a fuzz budget. It\nmutates and truncates real encodings as well as generating noise, because the\ninteresting failures are one bit away from something valid.\n\n`seeds/` is a committed input per layout so a run starts from structure rather\nthan guessing four magic bytes; `corpus/` is libFuzzer's working directory,\ngit-ignored, and passed first on the command line so its thousands of files\nnever land in `seeds/`.\n\n`task fuzz` runs all seven targets on a budget, and a CI job runs it on thirty\nseconds each, uploading the crashing input when a target dies — without that\nthe bytes go with the runner. Nightly, so it is its own job rather than in\nfront of the suite everything waits on.\n\nRunning it found that `segment_recovery` had not compiled since `scan_segment`\ngained `repair_checksum_tail`. The fuzz crates are outside the workspace, so\n`task lint` never saw it. It now exercises both policies, chosen by a byte of\nthe input, and CI would have caught the rot.\n\n18M executions across the four new targets found nothing, which is the\nresult worth having from a first run.\n\n* Potential fix for pull request finding 'CodeQL / Workflow does not contain permissions'\n\nCo-authored-by: Copilot Autofix powered by AI <62310815+github-advanced-security[bot]@users.noreply.github.com>\n\n---------\n\nCo-authored-by: Copilot Autofix powered by AI <62310815+github-advanced-security[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-17T13:39:59-07:00",
+          "tree_id": "79a0916e9c18e14ea4e4320586833345577b4c01",
+          "url": "https://github.com/gabloe/felix/commit/5377f339741e4fa4b2c486f908cef7524e98967d"
+        },
+        "date": 1789677786196,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.40\nstdev: 1.14\ncv: 0.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 205.20\nstdev: 1.92\ncv: 0.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 250,
+            "range": "51.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 250.00\nmean: 266.80\nstdev: 51.30\ncv: 19.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 199,
+            "range": "6.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 199.00\nmean: 201.20\nstdev: 6.06\ncv: 3.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 408,
+            "range": "245.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 408.00\nmean: 511.00\nstdev: 245.05\ncv: 47.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 592,
+            "range": "830.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 592.00\nmean: 950.40\nstdev: 830.22\ncv: 87.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
