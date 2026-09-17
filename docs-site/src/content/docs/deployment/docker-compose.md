@@ -2,7 +2,22 @@
 title: "Docker Compose Deployment"
 ---
 
-Running Felix under Docker Compose, for local development and testing. There are no pre-built images; the compose files here build from the Dockerfiles in `docker/`.
+Running Felix under Docker Compose, for local development and testing.
+
+:::caution[The images are not published yet]
+The examples here name `ghcr.io/gabloe/felix-broker` and
+`ghcr.io/gabloe/felix-controlplane`, which is where releases will publish them
+— but publishing is off until Felix is meant to be publicly pullable, so
+`docker pull` will not find them today. Build locally in the meantime:
+
+```bash
+docker build -f docker/broker.Dockerfile -t ghcr.io/gabloe/felix-broker:latest .
+docker build -f docker/controlplane.Dockerfile -t ghcr.io/gabloe/felix-controlplane:latest .
+```
+
+Both build from the repository root — the binaries are workspace members, so
+cargo needs the workspace to resolve them.
+:::
 
 ## Overview
 
@@ -44,22 +59,25 @@ version: '3.8'
 
 services:
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
-      args:
-        PROFILE: release
     ports:
       - "5000:5000/udp"  # QUIC data plane
       - "8080:8080"      # Metrics HTTP
     environment:
       - FELIX_QUIC_BIND=0.0.0.0:5000
       - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
+      # Required, even for a single broker with no cluster to join: this is
+      # where the broker fetches the keys that verify client tokens, so it
+      # refuses to start without it. An unreachable one is tolerated — the
+      # broker warns on each poll and carries on — but an absent one is not.
+      - FELIX_CONTROLPLANE_URL=http://felix-controlplane:8443
       - RUST_LOG=info
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
       interval: 10s
       timeout: 2s
       retries: 3
@@ -82,7 +100,7 @@ docker compose logs -f felix-broker
 **Test connectivity:**
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:8080/ready
 ```
 
 ### Broker + Control Plane (Local)
@@ -101,12 +119,10 @@ services:
       - "55432:5432"
 
   felix-controlplane:
-    image: felix/controlplane:latest
+    image: ghcr.io/gabloe/felix-controlplane:latest
     build:
       context: .
       dockerfile: docker/controlplane.Dockerfile
-      args:
-        PROFILE: release
     environment:
       - FELIX_CONTROLPLANE_POSTGRES_URL=postgres://postgres:postgres@postgres:5432/postgres
       - RUST_LOG=info
@@ -116,12 +132,10 @@ services:
       - postgres
 
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
-      args:
-        PROFILE: release
     ports:
       - "5000:5000/udp"  # QUIC data plane
       - "8080:8080"      # Metrics HTTP
@@ -151,12 +165,10 @@ version: '3.8'
 
 services:
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
-      args:
-        PROFILE: release
         CARGO_FEATURES: "--features telemetry"
     ports:
       - "5000:5000/udp"
@@ -173,7 +185,7 @@ services:
       - felix-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
       interval: 10s
       timeout: 2s
       retries: 3
@@ -334,7 +346,7 @@ version: '3.8'
 
 services:
   felix-broker-1:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
@@ -350,7 +362,7 @@ services:
       - felix-net
 
   felix-broker-2:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     ports:
       - "5002:5000/udp"
       - "8082:8080"
@@ -363,7 +375,7 @@ services:
       - felix-net
 
   felix-broker-3:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     ports:
       - "5003:5000/udp"
       - "8083:8080"
@@ -384,13 +396,13 @@ networks:
 
 ```bash
 # Broker 1
-curl http://localhost:8081/healthz
+curl http://localhost:8081/ready
 
 # Broker 2
-curl http://localhost:8082/healthz
+curl http://localhost:8082/ready
 
 # Broker 3
-curl http://localhost:8083/healthz
+curl http://localhost:8083/ready
 ```
 
 ## Building Images
@@ -521,7 +533,7 @@ Configure health checks for automatic restart:
 services:
   felix-broker:
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
       interval: 10s
       timeout: 2s
       retries: 3

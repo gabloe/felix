@@ -6,6 +6,20 @@ Running Felix on Kubernetes: StatefulSets for stable broker identity,
 headless services for direct addressing, persistent volumes for durable
 storage, and the probes and drain behavior the broker already ships.
 
+:::caution[The images are not published yet]
+The manifests here name `ghcr.io/gabloe/felix-broker` and
+`ghcr.io/gabloe/felix-controlplane`, which is where releases will publish
+them. Publishing is off until Felix is meant to be publicly pullable, so
+those tags do not resolve today — build from `docker/` and push to a registry
+your cluster can reach. See the
+[Docker Compose page](/felix/deployment/docker-compose/) for the build
+commands.
+
+When they are published, **pin by digest rather than by tag**. Images are
+signed by digest, and a tag can be moved to point at something else; a
+deployment that names a tag inherits whatever it points at next.
+:::
+
 :::caution[You write the manifests]
 Felix does not ship Kubernetes manifests or a Helm chart yet
 ([#131](https://github.com/gabloe/felix/issues/131)). The YAML on this page
@@ -93,7 +107,7 @@ spec:
     spec:
       containers:
       - name: broker
-        image: felix/broker:latest
+        image: ghcr.io/gabloe/felix-broker:latest
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
@@ -205,7 +219,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: broker
-        image: felix/broker:latest
+        image: ghcr.io/gabloe/felix-broker:latest
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
@@ -806,7 +820,7 @@ kubectl rollout status statefulset/felix-broker -n felix
 ```bash
 # Update image
 kubectl set image statefulset/felix-broker \
-  broker=felix/broker:v0.2.0 -n felix
+  broker=ghcr.io/gabloe/felix-broker:v0.2.0 -n felix
 
 # Watch rollout
 kubectl rollout status statefulset/felix-broker -n felix

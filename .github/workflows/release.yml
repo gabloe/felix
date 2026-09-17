@@ -99,6 +99,111 @@ jobs:
   # get debugged as broker bugs. The gate is what makes "the Python client
   # behaves like the Rust one" a checked claim rather than an intention.
   # ---------------------------------------------------------------------------
+  # --- Container images ----------------------------------------------------
+  #
+  # Built on every tag so a release is proof the Dockerfiles still work, and
+  # pushed only when the registry is meant to have them. Same gate as the PyPI
+  # job below: `vars.PUBLISH_IMAGES`, off until Felix is meant to be publicly
+  # pullable.
+  #
+  # Registry: GHCR under the repository owner. It needs no credential beyond
+  # the workflow's own token, the namespace follows the repository rather than
+  # being claimed separately, and it is what the docs already referenced.
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      REGISTRY: ghcr.io
+    permissions:
+      contents: read
+      packages: write
+      # Signing below is keyless: cosign gets a short-lived certificate from
+      # this token's OIDC identity, so there is no private key to store or
+      # rotate, and the signature names the workflow that produced the image.
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: felix-broker
+            dockerfile: docker/broker.Dockerfile
+          - image: felix-controlplane
+            dockerfile: docker/controlplane.Dockerfile
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # arm64 is emulated here. It is slow, and it is the difference between
+      # "runs on a developer's laptop" and "does not".
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Install cosign
+        if: vars.PUBLISH_IMAGES == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        if: vars.PUBLISH_IMAGES == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          # `latest` only on a tag with no pre-release suffix, so a v0.4.0-preview
+          # never becomes what `docker pull` gives someone by default.
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ !contains(env.RELEASE_TAG, '-') }}
+
+      - name: Build${{ vars.PUBLISH_IMAGES == 'true' && ' and push' || ' (not pushed)' }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ vars.PUBLISH_IMAGES == 'true' }}
+          # Loading a multi-arch result into the local daemon is not possible,
+          # so an unpushed build proves it compiles and nothing more. That is
+          # the point of running it anyway.
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Provenance and SBOM travel with the image rather than beside it, so
+          # a puller can ask what is in it without trusting a separate file.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Sign the image
+        if: vars.PUBLISH_IMAGES == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+        run: |
+          # Signed by digest, never by tag: a tag can be moved to point at
+          # something else, and a signature over a tag would follow it.
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: What was published
+        if: vars.PUBLISH_IMAGES == 'true'
+        run: |
+          echo "### Images" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "digest: ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
   python-conformance:
     name: Python client conformance
     runs-on: ubuntu-latest
