@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789659202396,
+  "lastUpdate": 1789659443155,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9204,6 +9204,58 @@ window.BENCHMARK_DATA = {
             "range": "9464.26",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557472.41\nmean: 558131.24\nstdev: 9464.26\ncv: 1.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d5dfa242d673465d015bcdae4f99551e1c20c31",
+          "message": "fix(storage): a failed fsync poisons the segment writer (#428)\n\nAn fsync error on the active segment returned Err and left the writer\nusable. Linux may drop the dirty pages a failed writeback could not write,\nso the next fsync returns success having flushed nothing — and the log then\nreports durability for records that are gone. That is fsyncgate, and it is\nthe same silent loss the checksum rule already refuses to risk.\n\nsync() and seal() now set the poison flag on failure, and sync() refuses\nonce poisoned, as append() already did. mark_synced ignores a durability\nmark from the log syncer on a poisoned writer, since that is the other way\nsynced_bytes advances.\n\nThe flag's meaning widens from \"a failed append could not be rolled back\"\nto \"this writer can no longer make truthful claims\", which covers both.\n\nRemoving the poison assignment fails a_failed_sync_poisons_the_writer: the\nsecond sync succeeds, which is exactly the behaviour being guarded against.\n\nFixes #413",
+          "timestamp": "2026-09-17T08:34:47-07:00",
+          "tree_id": "5cd6b4169c194fdd318bae6d1f3b264860d40116",
+          "url": "https://github.com/gabloe/felix/commit/2d5dfa242d673465d015bcdae4f99551e1c20c31"
+        },
+        "date": 1789659442065,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 256598.24,
+            "range": "4406.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 256598.24\nmean: 255316.43\nstdev: 4406.97\ncv: 1.73%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 256598.24,
+            "range": "4406.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 256598.24\nmean: 255316.43\nstdev: 4406.97\ncv: 1.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59828.53,
+            "range": "1523.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59828.53\nmean: 59650.59\nstdev: 1523.27\ncv: 2.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 598285.32,
+            "range": "15232.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 598285.32\nmean: 596505.90\nstdev: 15232.65\ncv: 2.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
