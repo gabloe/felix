@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789617462612,
+  "lastUpdate": 1789621632328,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11022,6 +11022,72 @@ window.BENCHMARK_DATA = {
             "range": "1123.64",
             "unit": "us",
             "extra": "trials: 5\nmedian: 630.00\nmean: 1151.40\nstdev: 1123.64\ncv: 97.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "644053dec81dedffcea7177ee1e9f9befd7731ba",
+          "message": "feat(python): consumer groups, cache watches, multi-shard subscriptions (#395)\n\nBoth Python surfaces now cover the three parts of Felix that a client can\nonly approximate: queues, cache watches, and reading a sharded stream.\nSync and async return the same types, so switching surfaces does not mean\nswitching isinstance checks — hence the shared types module.\n\nTwo gaps in the Rust cluster client turned up while wiring this and are\nfixed here rather than worked around in the binding:\n\n- ClusterClient had no keyed publish at all, so every record from a Python\n  publisher landed on shard 0 and a multi-shard stream behaved like a\n  single-shard one. publish_keyed threads the routing key through.\n- Cache watches went through the inner Client, which stops at a NotLeader\n  redirect. watch_following_redirects mirrors the subscribe path, loop\n  detection included, so a watch against a sharded cache works in a\n  cluster.\n\nThe conformance catalogue gains queue.*, watch.*, and sharded.* sections\nand promotes eight scenarios from optional to required now that a client\nclaims them. The Python suite (39 tests) satisfies all 35 required\nscenarios; the two still unclaimed are at_least_once with a routing key,\nwhich the client refuses rather than silently dropping the key, and a\nprefix watch over a multi-shard cache, which needs one watch per shard.\n\nThe fixture grows a single-shard cache, because a prefix or retained\nwatch reads one shard and there was no way to exercise either.",
+          "timestamp": "2026-09-16T22:04:59-07:00",
+          "tree_id": "bdfb6eef13916e7aa7cc5fa027b31ca021837292",
+          "url": "https://github.com/gabloe/felix/commit/644053dec81dedffcea7177ee1e9f9befd7731ba"
+        },
+        "date": 1789621629791,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 80,
+            "range": "3.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 80.00\nmean: 81.00\nstdev: 3.61\ncv: 4.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 115,
+            "range": "3.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 115.00\nmean: 112.60\nstdev: 3.78\ncv: 3.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 140,
+            "range": "920.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 140.00\nmean: 543.00\nstdev: 920.18\ncv: 169.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 97,
+            "range": "5.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 97.00\nmean: 100.40\nstdev: 5.13\ncv: 5.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 213,
+            "range": "13.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 217.20\nstdev: 13.63\ncv: 6.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 358,
+            "range": "193.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 358.00\nmean: 446.80\nstdev: 193.49\ncv: 43.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
