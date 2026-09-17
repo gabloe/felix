@@ -146,6 +146,9 @@ async fn leader_log(values: &[&str]) -> (StreamLog, TempDir) {
 }
 
 const BATCH_BYTES: usize = 1024 * 1024;
+/// Small enough that a batch carries one record, so a cursor that jumped is
+/// visible as a gap in what was sent rather than needing a size calculation.
+const ONE_RECORD_BYTES: usize = 1;
 
 /// The ordinary case: ship from where the follower is, and move the cursor to
 /// where the follower says it got to.
@@ -191,6 +194,49 @@ async fn the_cursor_follows_the_follower_rather_than_the_batch_size() {
     .await;
 
     assert_eq!(cursor.next_offset, 2, "the leader trusted its own count");
+}
+
+/// **A follower cannot confirm more than it was sent.** The leader compared
+/// nothing past the batch, so a higher answer would resume past records neither
+/// side has checked — which is how an orphaned record from a dead leader
+/// survives at an offset the new leader is about to reuse (#406).
+#[tokio::test]
+async fn the_cursor_does_not_follow_a_follower_past_the_batch() {
+    let (log, _dir) = leader_log(&["a", "b", "c", "d"]).await;
+    // Sent two, and the follower claims to hold four.
+    let follower = ScriptedFollower::new([Ok(stored(4)), Ok(stored(4))]);
+    let mut cursor = cursor(0);
+
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        ONE_RECORD_BYTES,
+    )
+    .await;
+
+    assert_eq!(
+        cursor.next_offset, 1,
+        "the cursor took the follower's word for records it was never sent",
+    );
+
+    ship_once(
+        &follower,
+        &log,
+        &shard(),
+        felix_broker::LogKind::Stream,
+        &mut cursor,
+        ONE_RECORD_BYTES,
+    )
+    .await;
+
+    assert_eq!(
+        follower.sent(),
+        vec![(0, vec_of(&["a"])), (1, vec_of(&["b"]))],
+        "records were skipped: the leader resumed past what it had compared",
+    );
 }
 
 /// **A gap rewinds the cursor.** A follower that lost records, or was rebuilt,

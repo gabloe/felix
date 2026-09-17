@@ -127,10 +127,14 @@ pub async fn apply(
 
     let fresh = &payloads[overlap..];
     if fresh.is_empty() {
-        // Wholly a retry of records already held. Acknowledging the tail is
-        // what makes a lost acknowledgement cost nothing.
+        // Wholly a retry of records already held. Answer with the end of the
+        // batch, not the tail: the leader resumes from this, and a tail past
+        // the batch would skip records nothing has compared. A follower that
+        // kept an uncommitted record from a dead leader has exactly that shape,
+        // and the skip is what lets the new leader reuse the offset without
+        // ever noticing they disagree.
         return Ok(Ok(Applied {
-            durable_offset: tail,
+            durable_offset: first_offset + payloads.len() as u64,
             appended: 0,
         }));
     }
