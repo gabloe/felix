@@ -607,16 +607,22 @@ where
                     // Only a broker that is a cluster member reports: the
                     // report is about shards the control plane assigned, and a
                     // broker it has never registered leads none of them.
-                    config
-                        .membership
-                        .as_ref()
-                        .map(|membership| replication::driver::ReportTo {
-                            client: membership_client.clone(),
-                            base_url: base_url.clone(),
-                            node_id: membership.node_id.clone(),
-                            token: credential.clone(),
-                            incarnation: 0,
-                        }),
+                    //
+                    // Reports from every shard in a pass share one request —
+                    // see `replication::reporter`.
+                    config.membership.as_ref().map(|membership| {
+                        let (reporter, _task) = replication::reporter::Reporter::spawn(
+                            replication::driver::ReportTo {
+                                client: membership_client.clone(),
+                                base_url: base_url.clone(),
+                                node_id: membership.node_id.clone(),
+                                token: credential.clone(),
+                                incarnation: 0,
+                            },
+                            sync_shutdown.clone(),
+                        );
+                        reporter
+                    }),
                     Duration::from_millis(config.controlplane_sync_interval_ms),
                     sync_shutdown.clone(),
                 );
