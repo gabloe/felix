@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789660216459,
+  "lastUpdate": 1789661908102,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9360,6 +9360,58 @@ window.BENCHMARK_DATA = {
             "range": "28955.81",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 745855.10\nmean: 733249.73\nstdev: 28955.81\ncv: 3.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3aebc0e7e7f4508334de6f428df68066afea49a",
+          "message": "fix(controlplane): a broker may only report positions for shards it leads (#430)\n\nThe handler's own doc said a broker \"may speak for itself and no one else\",\nand the identity check backed that up. It did not check which *shards* it\nspoke about, so any node credential could list itself as caught up for any\nshard — and promotion is gated on exactly that list. Speaking for yourself\nabout someone else's shard is still nominating yourself for promotion.\n\nA report is now dropped unless the reporter is the shard's current leader.\n\nThe generation is checked too. record() drops any report older than the one\nheld, so a single claim of u64::MAX blocked every genuine report for that\nshard from then on. A generation past the assignment's is not one the broker\ncould have read, so it is refused.\n\nBoth refusals skip the shard rather than failing the request: a broker\nreporting a shard it lost mid-reassignment is ordinary, and should be\nignored rather than turned into an error that discards the rest of the\nreport. Both are counted, since neither should happen in a healthy cluster.\n\nThe incarnation stays unenforced, and now says why: brokers send 0 because\nthe replication driver is spawned before registration returns one. The\nleadership check is the stronger bound anyway — the incarnation would only\ncatch a stale report from the same broker's previous life.\n\nThe tests assert through CaughtUpAt, which is what promotion actually\nconsults, rather than through a reader added for the test.\n\nFixes #410",
+          "timestamp": "2026-09-17T08:48:03-07:00",
+          "tree_id": "e32f48c1a63f997a5ee10f6eef8c4af5ecb77704",
+          "url": "https://github.com/gabloe/felix/commit/b3aebc0e7e7f4508334de6f428df68066afea49a"
+        },
+        "date": 1789661907154,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 227405.01,
+            "range": "2157.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227405.01\nmean: 228204.25\nstdev: 2157.67\ncv: 0.95%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 227405.01,
+            "range": "2157.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227405.01\nmean: 228204.25\nstdev: 2157.67\ncv: 0.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55344.62,
+            "range": "1565.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55344.62\nmean: 54951.33\nstdev: 1565.47\ncv: 2.85%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553446.25,
+            "range": "15654.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553446.25\nmean: 549513.35\nstdev: 15654.71\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
