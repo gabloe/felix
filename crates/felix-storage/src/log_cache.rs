@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use crate::commit_order::CommitSequencer;
 use crate::disk_log::{DiskLog, layout};
 use crate::log::{AppendOnlyLog, AppendRecord, LogConfig, Offset, ReadRange, ShardKey};
+use crate::segment::io::sync_dir;
 use crate::{CacheChange, CacheObserver, CacheSnapshotEntry, Result, StorageApi, StorageError};
 
 mod record;
@@ -233,6 +234,7 @@ impl LogCache {
         };
         let dir = layout::shard_dir(&self.root, &key);
         let label = layout::shard_label(&key);
+        recover_interrupted_swap(&dir)?;
         let log = match base_offset {
             Some(base) => DiskLog::open_at(dir.clone(), label.clone(), self.config.clone(), base)?,
             None => DiskLog::open(dir.clone(), label.clone(), self.config.clone())?,
@@ -559,12 +561,24 @@ impl CacheShard {
         fresh.shutdown().await?;
         state.log.shutdown().await?;
 
+        // Each rename is synced before the next, so a crash lands on one of
+        // the two states `recover_interrupted_swap` knows how to read. Without
+        // the syncs the renames can reach disk in either order, or not at all,
+        // and the window in between is total loss for the shard: the directory
+        // is missing, and an unguarded open would create it empty.
         let retired = self.dir.with_extension("retired");
         if retired.exists() {
             std::fs::remove_dir_all(&retired).map_err(StorageError::Io)?;
         }
+        let parent = self.dir.parent().map(Path::to_path_buf);
         std::fs::rename(&self.dir, &retired).map_err(StorageError::Io)?;
+        if let Some(parent) = &parent {
+            sync_dir(parent).map_err(StorageError::Io)?;
+        }
         std::fs::rename(&staging, &self.dir).map_err(StorageError::Io)?;
+        if let Some(parent) = &parent {
+            sync_dir(parent).map_err(StorageError::Io)?;
+        }
         std::fs::remove_dir_all(&retired).map_err(StorageError::Io)?;
 
         state.log = DiskLog::open(self.dir.clone(), self.label.clone(), self.config.clone())?;
@@ -572,6 +586,32 @@ impl CacheShard {
         state.index = index;
         Ok(())
     }
+}
+
+/// Finish a compaction swap that a crash interrupted.
+///
+/// Compaction renames the shard directory aside to `.retired`, renames the
+/// compacted one into its place, then deletes the retired copy. A crash
+/// between the first two leaves the shard directory missing and all of its
+/// data in `.retired` — and an open that ignored that would create the
+/// directory empty and the next compaction would delete the only copy.
+///
+/// The retired directory is the pre-compaction state, so restoring it loses
+/// the compaction and nothing else.
+fn recover_interrupted_swap(dir: &Path) -> Result<()> {
+    let retired = dir.with_extension("retired");
+    if dir.exists() || !retired.exists() {
+        return Ok(());
+    }
+    tracing::warn!(
+        dir = %dir.display(),
+        "a compaction was interrupted; restoring the shard from its retired copy",
+    );
+    std::fs::rename(&retired, dir).map_err(StorageError::Io)?;
+    if let Some(parent) = dir.parent() {
+        sync_dir(parent).map_err(StorageError::Io)?;
+    }
+    Ok(())
 }
 
 #[async_trait]

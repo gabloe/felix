@@ -992,3 +992,55 @@ async fn compaction_under_concurrent_writers_loses_nothing() {
         state.index.log_bytes,
     );
 }
+
+/// A crash between compaction's two renames must not lose the shard.
+///
+/// Compaction moves the shard directory to `.retired`, moves the compacted one
+/// into its place, then deletes the retired copy. Crash in between and the
+/// shard directory is gone while all its data sits in `.retired`. An open that
+/// ignored that would start the shard empty, and the next compaction would
+/// delete the only copy.
+#[tokio::test]
+async fn a_shard_interrupted_mid_compaction_is_recovered_from_its_retired_copy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shard_dir = {
+        let cache = cache(dir.path()).await;
+        cache
+            .put(T, NS, C, 0, "a", Bytes::from_static(b"1"), None)
+            .await;
+        cache
+            .put(T, NS, C, 0, "b", Bytes::from_static(b"2"), None)
+            .await;
+        let shard_dir = layout::shard_dir(
+            cache.root(),
+            &crate::log::ShardKey {
+                tenant: T.to_string(),
+                namespace: NS.to_string(),
+                stream: C.to_string(),
+                shard: 0,
+            },
+        );
+        cache.shutdown().await.expect("shutdown");
+        shard_dir
+    };
+
+    // Exactly the state a crash between the renames leaves behind.
+    std::fs::rename(&shard_dir, shard_dir.with_extension("retired")).expect("retire");
+    assert!(!shard_dir.exists());
+
+    let reopened = cache(dir.path()).await;
+    assert_eq!(
+        reopened.get(T, NS, C, 0, "a").await.as_deref(),
+        Some(&b"1"[..]),
+        "the shard came back empty, so the retired copy is now unreferenced and \
+         the next compaction deletes it",
+    );
+    assert_eq!(
+        reopened.get(T, NS, C, 0, "b").await.as_deref(),
+        Some(&b"2"[..]),
+    );
+    assert!(
+        !shard_dir.with_extension("retired").exists(),
+        "the retired copy should have been moved back, not copied",
+    );
+}
