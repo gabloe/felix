@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789680275771,
+  "lastUpdate": 1789682414918,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9828,6 +9828,58 @@ window.BENCHMARK_DATA = {
             "range": "41983.86",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 874135.92\nmean: 853218.75\nstdev: 41983.86\ncv: 4.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f21d88a9bb6b35bb4765c1877cddc5f3336fde76",
+          "message": "fix(storage): a sparse index entry may not point inside the segment header (#483)\n\nThe fuzz job added in #480 found this on its first run on main, in\n`sparse_index` — a target that has existed for a while and had never run\nanywhere automated. CI is red on every open pull request until this lands.\n\n`SparseIndex::push` checked that offsets ascend and said nothing about\npositions. An index file is bytes on disk like any other, so a corrupt or\nhostile one can pair ascending offsets with a position of zero, and\n`seek_position` hands that straight back as somewhere to decode forward from.\nIts doc comment promises \"always a valid record boundary\"; inside the header\nthe next thing read is a header field parsed as a record.\n\nThe consequence is not memory unsafety — the scan finds nonsense and errors —\nbut it is a shard refusing to open because of a file the design says is derived\nand rebuildable. \"Indexes are derived, never trusted\" is the rule; the position\nnobody checked was the part still being trusted.\n\nPositions now have to ascend with offsets, which is what a real index always\ndoes: records occupy distinct ascending byte ranges after the header, so\nposition moves exactly when offset does. An entry that breaks it is dropped and\nthe entries before it stay usable — the same bargain the torn-tail case already\nstrikes.\n\nReverted the guard and watched both new cases fail. The 50-byte input from CI,\nkept here rather than in the tree since the deterministic tests cover it:\n\n    464c 5349 0002 0049 0000 0000 0000 0000\n    0000 464c 5349 0002 0000 464c 5349 0000\n    0000 0000 0000 0000 0000 0000 464c 5349\n    0000",
+          "timestamp": "2026-09-17T14:57:29-07:00",
+          "tree_id": "d3fc1ca94d22c379ca0039b0e9fce5a3225253c8",
+          "url": "https://github.com/gabloe/felix/commit/f21d88a9bb6b35bb4765c1877cddc5f3336fde76"
+        },
+        "date": 1789682414046,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 229918.94,
+            "range": "3401.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229918.94\nmean: 230900.55\nstdev: 3401.85\ncv: 1.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 229918.94,
+            "range": "3401.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229918.94\nmean: 230900.55\nstdev: 3401.85\ncv: 1.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56080.12,
+            "range": "1297.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56080.12\nmean: 55635.98\nstdev: 1297.30\ncv: 2.33%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 560801.2,
+            "range": "12972.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 560801.20\nmean: 556359.79\nstdev: 12972.97\ncv: 2.33%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
