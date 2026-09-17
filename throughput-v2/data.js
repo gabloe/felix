@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789663613157,
+  "lastUpdate": 1789666853621,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9464,6 +9464,58 @@ window.BENCHMARK_DATA = {
             "range": "20626.94",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 761268.70\nmean: 759435.21\nstdev: 20626.94\ncv: 2.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cffa24bca44d40275f835ad22e6288f29951d8b9",
+          "message": "feat(storage): record where each leadership generation began (#466)\n\nThe foundation for repairing a divergence (#406). Offsets alone cannot say\nwhere two logs part company — both have an offset 100, and \"they differ at\n100\" says nothing about how far back they agree. A generation does say,\nbecause it belongs to exactly one leader.\n\nEach shard keeps a short list of (generation, start offset) beside its\nsegments. One entry per leadership change rather than per record, which is\nwhat keeps it out of the record format: a generation per record means a\nsegment version bump, and SegmentHeader::decode rejects an unknown version\noutright rather than guess.\n\nThree properties the tests are mostly about, because each answer here\nbecomes a truncation point:\n\n- A generation not in the history has no end. Interpolating between\n  neighbours would be a plausible-looking answer with nothing behind it.\n- An older generation never rewrites where a later one started, so a stale\n  message from a deposed leader cannot move the mark.\n- Two histories with nothing in common share nothing, which is a refusal to\n  repair rather than a repair to offset zero.\n\nAbsent, short, or corrupt reads as empty rather than failing the open: every\nshard written before this existed has none, and refusing to start over it\nwould trade an outage for a convenience. What is lost is automatic repair,\nnever a record. The checksum is what keeps a corrupt file from being read\nback as a confident answer.\n\nTruncation takes the history with it, or it would answer with offsets the\nlog no longer holds. Removing that fails\ntruncating_forgets_the_generations_it_removed.\n\nNothing consumes this yet. The wire exchange and the follower-side\ntruncation follow.\n\nRefs #406",
+          "timestamp": "2026-09-17T09:44:21-07:00",
+          "tree_id": "8106a2a98a0ed97e2fcebb28f756305ada90ec8b",
+          "url": "https://github.com/gabloe/felix/commit/cffa24bca44d40275f835ad22e6288f29951d8b9"
+        },
+        "date": 1789666852203,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 236438.22,
+            "range": "2800.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236438.22\nmean: 236847.53\nstdev: 2800.46\ncv: 1.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 236438.22,
+            "range": "2800.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236438.22\nmean: 236847.53\nstdev: 2800.46\ncv: 1.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55990.58,
+            "range": "364.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55990.58\nmean: 55938.79\nstdev: 364.48\ncv: 0.65%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 559905.82,
+            "range": "3644.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 559905.82\nmean: 559387.93\nstdev: 3644.75\ncv: 0.65%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
