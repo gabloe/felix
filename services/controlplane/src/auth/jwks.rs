@@ -92,6 +92,9 @@ fn alg_to_string(alg: jsonwebtoken::Algorithm) -> String {
         jsonwebtoken::Algorithm::HS384 => "HS384",
         jsonwebtoken::Algorithm::HS512 => "HS512",
         jsonwebtoken::Algorithm::EdDSA => "EdDSA",
+        // Algorithm is #[non_exhaustive]; every variant so far debug-prints as its
+        // JWA name, so a future one is labelled correctly rather than guessed at.
+        other => return format!("{other:?}"),
     }
     .to_string()
 }
