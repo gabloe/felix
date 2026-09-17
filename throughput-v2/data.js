@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789617466514,
+  "lastUpdate": 1789621635019,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8684,6 +8684,58 @@ window.BENCHMARK_DATA = {
             "range": "12051.56",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 568899.50\nmean: 572416.96\nstdev: 12051.56\ncv: 2.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "644053dec81dedffcea7177ee1e9f9befd7731ba",
+          "message": "feat(python): consumer groups, cache watches, multi-shard subscriptions (#395)\n\nBoth Python surfaces now cover the three parts of Felix that a client can\nonly approximate: queues, cache watches, and reading a sharded stream.\nSync and async return the same types, so switching surfaces does not mean\nswitching isinstance checks — hence the shared types module.\n\nTwo gaps in the Rust cluster client turned up while wiring this and are\nfixed here rather than worked around in the binding:\n\n- ClusterClient had no keyed publish at all, so every record from a Python\n  publisher landed on shard 0 and a multi-shard stream behaved like a\n  single-shard one. publish_keyed threads the routing key through.\n- Cache watches went through the inner Client, which stops at a NotLeader\n  redirect. watch_following_redirects mirrors the subscribe path, loop\n  detection included, so a watch against a sharded cache works in a\n  cluster.\n\nThe conformance catalogue gains queue.*, watch.*, and sharded.* sections\nand promotes eight scenarios from optional to required now that a client\nclaims them. The Python suite (39 tests) satisfies all 35 required\nscenarios; the two still unclaimed are at_least_once with a routing key,\nwhich the client refuses rather than silently dropping the key, and a\nprefix watch over a multi-shard cache, which needs one watch per shard.\n\nThe fixture grows a single-shard cache, because a prefix or retained\nwatch reads one shard and there was no way to exercise either.",
+          "timestamp": "2026-09-16T22:04:59-07:00",
+          "tree_id": "bdfb6eef13916e7aa7cc5fa027b31ca021837292",
+          "url": "https://github.com/gabloe/felix/commit/644053dec81dedffcea7177ee1e9f9befd7731ba"
+        },
+        "date": 1789621633957,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 385000.78,
+            "range": "7692.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 385000.78\nmean: 382783.89\nstdev: 7692.96\ncv: 2.01%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 385000.78,
+            "range": "7692.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 385000.78\nmean: 382783.89\nstdev: 7692.96\ncv: 2.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 84882.3,
+            "range": "2567.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 84882.30\nmean: 83960.37\nstdev: 2567.01\ncv: 3.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 848822.99,
+            "range": "25670.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 848822.99\nmean: 839603.71\nstdev: 25670.11\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
