@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789676411790,
+  "lastUpdate": 1789677301478,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9672,6 +9672,58 @@ window.BENCHMARK_DATA = {
             "range": "10308.53",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 673299.94\nmean: 673579.51\nstdev: 10308.53\ncv: 1.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b37e34b3918a147afe620a0b77fee55cd86f56b9",
+          "message": "fix(replication): resume a follower at the generation boundary, not at zero (#477)\n\nA cursor is a belief about where a follower stood under one leadership, so a\ngeneration change discards it. What replaced it was offset zero.\n\nThat means every follower of every shard the failed broker led byte-compares\nthe whole log before anything new moves: the leader reads its own log off disk\nand ships records the follower already has, and the follower compares each one\nagainst what it already stored. Every shard at once, on the pass that follows a\nfailover. On a log of any size that is the difference between a failover and an\noutage, and it is also half of how RF erodes — a follower still catching up is\nnot caught up, so it is not eligible for promotion.\n\nThe generation history added for #406 already answers where to start, but only\none side was recording it. A follower records where each generation began as it\naccepts batches; a leader recorded nothing, so a broker's own history had a hole\nover exactly the stretch it led. That also left the demotion case reasoning from\na stale predecessor — the newest generation such a broker knew of was whatever\nit last accepted as a follower, not the one it went on to lead.\n\nSo a leader records it too, when the shard is taken and while it is still\n`Opening`. That is the only moment the tail *is* the generation's start: the\nphase exists to hold writes back until recovery finishes, so nothing has been\nwritten under the new leadership yet. Recording it on the first replication pass\ninstead would be too late by however many records arrived in between, and a base\npast the real boundary skips comparing records that can genuinely differ.\n\nBelow that offset, this broker's records came from earlier leaders while it was\na follower, and so did the follower's — two prefixes of the same log agree. At\nor above it is where they can differ: what this leadership wrote, and what a\npredecessor left on the follower alone.\n\nComparison starts one record below the boundary rather than exactly on it, so\nthe first batch overlaps something the follower already holds and the boundary\nis checked rather than assumed. That is the check Raft makes at `prevLogIndex`,\nfor one record's cost.\n\nA follower further behind than the boundary still says so with a `LogGap` and\nthe leader rewinds in that one exchange, so a replica added mid-generation is\nnot assumed caught up. Without a history entry for the generation it falls back\nto zero, which is slow rather than wrong, and is what a shard written by an\nolder build does. A shard's group cursors, dead letters and counters stay at\nzero too: those logs are written only when group state changes, so there is\nalmost nothing to compare, and the leader does not open them at takeover.\n\nThe history is read only when a cursor actually has to be created — a generation\nchange, or a replica added — since the usual pass creates none and the map is a\nfew hundred entries to clone.\n\nReverted the bound and watched both new driver tests fail while the\nno-history-falls-back-to-zero one kept passing.",
+          "timestamp": "2026-09-17T13:32:16-07:00",
+          "tree_id": "9022bc05d6850c7af83b97a5f97ff67ae8388209",
+          "url": "https://github.com/gabloe/felix/commit/b37e34b3918a147afe620a0b77fee55cd86f56b9"
+        },
+        "date": 1789677300725,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228441.69,
+            "range": "5121.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228441.69\nmean: 229313.81\nstdev: 5121.61\ncv: 2.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228441.69,
+            "range": "5121.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228441.69\nmean: 229313.81\nstdev: 5121.61\ncv: 2.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55337.85,
+            "range": "2489.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55337.85\nmean: 54626.31\nstdev: 2489.65\ncv: 4.56%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553378.52,
+            "range": "24896.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553378.52\nmean: 546263.11\nstdev: 24896.53\ncv: 4.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
