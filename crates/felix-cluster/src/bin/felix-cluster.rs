@@ -19,9 +19,9 @@
 //! differently from a single broker.
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use felix_cluster::session::{self, Session};
-use felix_cluster::{Cluster, ClusterConfig, StreamSpec, wait};
+use felix_cluster::{CacheSpec, Cluster, ClusterConfig, StreamSpec, wait};
 
 const STREAM: &str = "orders";
 
@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
         "subscribe" => subscribe(&args).await,
         "publish" => publish(&args).await,
         "owners" => owners().await,
+        "client-fixture" => client_fixture(&args[1..]).await,
         "nodes" => nodes(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -63,6 +64,7 @@ felix-cluster — a local multi-node Felix cluster
   demo [--pace SECONDS]           the whole cross-broker story, start to finish
   failover [--pace SECONDS]       replicate, kill the leader, keep publishing
   consistency [--pace SECONDS]    what Quorum buys, and what Leader costs, under one fault
+  client-fixture [--out PATH]     a cluster for a client conformance suite to run against
   nodes                           every broker in a running cluster, one per line
   owners                          who leads each shard of a running cluster
   subscribe STREAM [--on NODE]    stream events from a running cluster
@@ -347,6 +349,86 @@ fn report_replay(acknowledged: bool, survived: bool, record: &str) {
 }
 
 // ---------------------------------------------------------------- lifecycle
+
+/// A cluster for a client conformance suite, in any language, to run against.
+///
+/// The suite needs more than an address: a durable stream to observe offsets
+/// on, a cache, a credential that may publish and one that may not, a stream
+/// name that is deliberately absent, and the broker's certificate so a client
+/// can verify properly instead of skipping verification. This starts all of
+/// that and writes it where the suite can read it.
+///
+/// One node on purpose. Every broker exports its generated certificate to the
+/// same path, so a second would overwrite the first and leave the suite
+/// trusting a certificate the broker it reaches is not using. The scenarios
+/// this fixture serves are about client semantics, not failover — the cluster
+/// tests already cover that in Rust.
+async fn client_fixture(args: &[String]) -> Result<()> {
+    init_tracing(false);
+    let out = flag_value(args, "--out")?.unwrap_or_else(|| {
+        std::env::temp_dir()
+            .join("felix-client-fixture.json")
+            .display()
+            .to_string()
+    });
+    let ca_file = flag_value(args, "--ca-file")?.unwrap_or_else(|| {
+        std::env::temp_dir()
+            .join("felix-client-fixture-ca.pem")
+            .display()
+            .to_string()
+    });
+
+    const DURABLE_STREAM: &str = "conformance";
+    const CACHE: &str = "conformance";
+    // Never registered. A client proving it reports "unknown stream"
+    // distinguishably needs a name the broker will genuinely refuse.
+    const MISSING_STREAM: &str = "conformance-absent";
+
+    // Brokers inherit this, and it is what lets a non-Rust client trust the
+    // self-signed certificate rather than turning verification off.
+    unsafe {
+        std::env::set_var("FELIX_TLS_CERT_EXPORT", &ca_file);
+    }
+
+    eprintln!("starting a 1-node cluster for a client conformance suite...");
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 1,
+        streams: vec![StreamSpec::new(DURABLE_STREAM, 1)],
+        caches: vec![CacheSpec::new(CACHE, 1)],
+        inherit_output: std::env::var("FELIX_CLUSTER_VERBOSE").is_ok(),
+        ..Default::default()
+    })
+    .await?;
+
+    let fixture = felix_conformance::kit::Fixture {
+        addrs: cluster
+            .nodes
+            .iter()
+            .map(|node| node.client_addr.to_string())
+            .collect(),
+        tenant_id: cluster.tenant_id.clone(),
+        namespace: cluster.namespace.clone(),
+        token: cluster.client_token.clone(),
+        unauthorized_token: cluster.subscribe_only_token.clone(),
+        ca_file: ca_file.clone(),
+        durable_stream: DURABLE_STREAM.to_string(),
+        cache: CACHE.to_string(),
+        missing_stream: MISSING_STREAM.to_string(),
+    };
+    let body = serde_json::to_vec_pretty(&fixture).context("encode the fixture")?;
+    std::fs::write(&out, body).with_context(|| format!("write the fixture to {out}"))?;
+
+    println!("fixture   {out}");
+    println!("broker    {}", fixture.addrs.join(", "));
+    println!("ca        {ca_file}");
+    eprintln!("\nholding the fixture. press Ctrl-C to tear it down.");
+
+    stop_signal().await?;
+    eprintln!("\ntearing down...");
+    let _ = std::fs::remove_file(&out);
+    drop(cluster);
+    Ok(())
+}
 
 async fn up(args: &[String]) -> Result<()> {
     init_tracing(true);
@@ -941,6 +1023,17 @@ fn flag(args: &[String], name: &str) -> Result<Option<String>> {
         )),
         None => Ok(None),
     }
+}
+
+/// A `--flag value` pair, or `None` when the flag is absent.
+fn flag_value(args: &[String], name: &str) -> Result<Option<String>> {
+    let Some(position) = args.iter().position(|arg| arg == name) else {
+        return Ok(None);
+    };
+    args.get(position + 1)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| anyhow!("{name} needs a value"))
 }
 
 fn flag_usize(args: &[String], name: &str) -> Result<Option<usize>> {

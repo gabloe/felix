@@ -781,10 +781,43 @@ fn build_server_config() -> Result<ServerConfig> {
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = cert.cert.der().clone();
     let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+
+    // A generated certificate nothing can name is a certificate only a client
+    // that skips verification can use, which is how "just disable TLS
+    // verification in dev" becomes a habit. Writing it out gives every client
+    // -- including the ones that are not Rust and cannot reach into this
+    // process -- a real CA file to trust.
+    if let Ok(path) = std::env::var("FELIX_TLS_CERT_EXPORT")
+        && !path.trim().is_empty()
+    {
+        export_certificate(&cert.cert.pem(), &path)?;
+    }
+
     Ok(ServerConfig::with_single_cert(
         vec![cert_der],
         key_der.into(),
     )?)
+}
+
+/// Write the broker's certificate where a client can trust it from.
+///
+/// Fails startup rather than warning: a deployment that asked for the export
+/// is a deployment whose clients are configured to read it, and coming up
+/// without it produces connection failures whose cause is nowhere near the
+/// symptom.
+fn export_certificate(pem: &str, path: &str) -> Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create the directory for FELIX_TLS_CERT_EXPORT {path}"))?;
+    }
+    std::fs::write(path, pem).with_context(|| format!("write the broker certificate to {path}"))?;
+    tracing::info!(
+        path,
+        "wrote the broker's self-signed certificate for clients to trust"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

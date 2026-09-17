@@ -312,3 +312,37 @@ tasks:
     cmds: ["cargo test -p felix-cluster"]
   conformance:
     cmds: ["cargo run -p felix-conformance"]
+
+  python:check:
+    desc: Build and lint the Python binding (its own workspace, like the demos).
+    dir: crates/felix-python
+    cmds:
+      - cargo fmt -- --check
+      - cargo clippy --all-targets -- -D warnings
+      - cargo build
+  python:build:
+    desc: Build the Python wheel with maturin (needs `pip install maturin`).
+    dir: crates/felix-python
+    cmds:
+      - maturin build --release {{.CLI_ARGS}}
+  python:develop:
+    desc: Install the Python binding into the active virtualenv, in place.
+    dir: crates/felix-python
+    cmds:
+      - maturin develop {{.CLI_ARGS}}
+  python:test:
+    desc: Run the Python suite against a conformance fixture (needs python:develop first).
+    dir: crates/felix-python
+    cmds:
+      - pytest -q {{.CLI_ARGS}}
+  conformance:scenarios:
+    desc: Print the client conformance catalogue — what a client in any language must implement.
+    cmds: ["cargo run -q -p felix-conformance -- scenarios"]
+  conformance:verify:
+    desc: Check a client's conformance results against the catalogue.
+    cmds: ["cargo run -q -p felix-conformance -- verify {{.CLI_ARGS}}"]
+  conformance:fixture:
+    desc: Hold a cluster for a client conformance suite to run against.
+    cmds:
+      - cargo build -p broker --bin felix-broker
+      - cargo run -q -p felix-cluster -- client-fixture {{.CLI_ARGS}}
