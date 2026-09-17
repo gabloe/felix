@@ -182,7 +182,10 @@ pub fn check_continuity(since: u64, first_seq: Option<u64>, next_seq: u64) -> Op
 pub async fn run(
     client: reqwest::Client,
     base_url: String,
-    bearer: Option<String>,
+    // Held rather than copied: this task outlives many token lifetimes, and a
+    // copy taken at startup is the exact bug that drops a broker out of the
+    // cluster when its first token expires.
+    bearer: Option<crate::credential::NodeCredential>,
     ownership: Arc<RwLock<ShardOwnership>>,
     interval: Duration,
     shutdown: CancellationToken,
@@ -203,9 +206,13 @@ pub async fn run(
             _ = tokio::time::sleep(delay) => {}
         }
 
+        // Read per poll, not once: a refreshed token has to reach this loop
+        // without it knowing refresh exists.
+        let token = bearer.as_ref().map(|credential| credential.bearer());
+        let token = token.as_deref().map(String::as_str);
         let result = match checkpoint {
-            None => snapshot(&client, &base_url, bearer.as_deref(), &ownership).await,
-            Some(since) => poll(&client, &base_url, bearer.as_deref(), &ownership, since).await,
+            None => snapshot(&client, &base_url, token, &ownership).await,
+            Some(since) => poll(&client, &base_url, token, &ownership, since).await,
         };
 
         match result {

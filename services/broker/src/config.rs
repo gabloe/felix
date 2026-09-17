@@ -32,6 +32,20 @@ pub struct MembershipConfig {
     /// has not said where clients reach it.
     pub client_advertise_addr: Option<String>,
     pub region: String,
+    /// Where this broker's refresh token lives, when it has one.
+    ///
+    /// A path rather than a value, and that is forced by rotation: refreshing
+    /// spends the token and mints a replacement, so whatever the broker was
+    /// given at startup stops working the first time it refreshes. It has to
+    /// write the replacement somewhere it will read on restart, or a restart
+    /// presents a spent token — which the control plane correctly reads as a
+    /// replay and answers by revoking the whole chain, locking the broker out
+    /// for good.
+    ///
+    /// `None` means no refresh: the broker runs on the token it was given and
+    /// falls out of the cluster when that expires, which is the behaviour every
+    /// deployment had before refresh existed.
+    pub refresh_token_file: Option<std::path::PathBuf>,
 }
 
 /// Warn when peers would be told to connect somewhere nothing is listening.
@@ -392,9 +406,30 @@ fn membership_from_env(
         ));
     }
 
+    // A value, not a path — which cannot work, so say why rather than accept
+    // it and lock the broker out at its first restart.
+    if std::env::var("FELIX_NODE_REFRESH_TOKEN")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_REFRESH_TOKEN is set, but a refresh token cannot be \
+             passed by value: refreshing spends it and mints a replacement, so \
+             the broker has to write that replacement back somewhere. Use \
+             FELIX_NODE_REFRESH_TOKEN_FILE and make the path writable.",
+        ));
+    }
+    let refresh_token_file = std::env::var("FELIX_NODE_REFRESH_TOKEN_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+
     Ok(Some(MembershipConfig {
         node_id,
         token,
+        refresh_token_file,
         advertise_addr,
         client_advertise_addr: std::env::var("FELIX_CLIENT_ADVERTISE_ADDR")
             .ok()

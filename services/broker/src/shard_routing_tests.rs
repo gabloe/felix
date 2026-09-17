@@ -381,7 +381,7 @@ mod feed {
                     .build()
                     .expect("client"),
                 base_url,
-                token: Some("a-token".to_string()),
+                token: Some(crate::credential::NodeCredential::new("a-token")),
             }),
             Duration::from_millis(20),
             shutdown.clone(),

@@ -402,7 +402,9 @@ pub struct ReportTo {
     pub client: reqwest::Client,
     pub base_url: String,
     pub node_id: String,
-    pub token: Option<String>,
+    /// Held, not copied: this reports for the life of the process, across
+    /// however many access tokens that spans.
+    pub token: Option<crate::credential::NodeCredential>,
     pub incarnation: u64,
 }
 
@@ -449,7 +451,7 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
     let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
     let mut request = to.client.post(&url).json(&body);
     if let Some(token) = &to.token {
-        request = request.bearer_auth(token);
+        request = request.bearer_auth(token.bearer());
     }
     match request.send().await {
         Ok(response) if response.status().is_success() => {}

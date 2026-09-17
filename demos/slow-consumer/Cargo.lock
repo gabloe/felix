@@ -851,7 +851,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "metrics",
  "parking_lot",
- "slab",
  "thiserror 2.0.20",
  "tokio",
 ]
