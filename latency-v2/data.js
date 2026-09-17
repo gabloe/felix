@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789658434998,
+  "lastUpdate": 1789659200034,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11616,6 +11616,72 @@ window.BENCHMARK_DATA = {
             "range": "512.68",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1630.00\nmean: 1309.20\nstdev: 512.68\ncv: 39.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7c6b86ddd376a5c12f4e8263afdd62e1466b051",
+          "message": "fix(replication): a follower cannot confirm past the batch it was sent (#427)\n\nA wholly-overlapping batch answered with the follower's own tail, which can\nbe past the end of the batch. The leader takes that as the follower's\nconfirmed position and resumes from it, so anything between the batch end\nand that tail is skipped and never compared.\n\nThat is the skip behind the quorum loss in #406. A follower holding an\nuncommitted record from a dead leader has exactly that shape: the orphan\nsits at an offset the new leader will reuse, the cursor jumps past it, and\nthe two logs disagree with nothing to notice.\n\napply now answers with first_offset + payloads.len() — the end of what was\nverified. The partial-overlap path already computed the same value, so the\ntwo agree now rather than only when the batch happens to reach the tail.\n\nship_once clamps to the same bound. The leader knows what it sent and has\ncompared nothing beyond it, so a follower answering higher — buggy, or\nreporting for a shard it does not lead, per #410 — cannot drag the cursor.\n\nWhat this does and does not do: the conflict is now found, and a conflict\nhalts the follower, so a divergence becomes fail-stop instead of silent. It\ndoes not repair anything. The follower still cannot truncate its orphan, so\nit stays halted until an operator acts, which is #412 and #424. Epochs and\ntruncation remain #406's real fix.\n\nBoth new cases in replication_tests.rs fail without the change: the first\nshows the follower confirming offset 3 for a batch that verified 2, and the\nsecond shows the new leader's record landing past the orphan with no\nconflict reported.\n\nRefs #406",
+          "timestamp": "2026-09-17T08:30:47-07:00",
+          "tree_id": "5f30e82cb3d0a43a7f30be30218160c90c377bac",
+          "url": "https://github.com/gabloe/felix/commit/c7c6b86ddd376a5c12f4e8263afdd62e1466b051"
+        },
+        "date": 1789659198501,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "2.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.00\nstdev: 2.35\ncv: 1.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 200,
+            "range": "6.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 201.60\nstdev: 6.11\ncv: 3.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 222,
+            "range": "381.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 222.00\nmean: 394.20\nstdev: 381.19\ncv: 96.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 197.60\nstdev: 0.89\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 399,
+            "range": "5.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 399.80\nstdev: 5.45\ncv: 1.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 880,
+            "range": "658.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 880.00\nmean: 1029.80\nstdev: 658.63\ncv: 63.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
