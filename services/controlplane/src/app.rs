@@ -182,6 +182,10 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::post(auth::exchange::exchange_token),
         )
         .route(
+            "/v1/tenants/{tenant_id}/token/refresh",
+            axum::routing::post(auth::refresh::refresh_token_handler),
+        )
+        .route(
             "/v1/tenants/{tenant_id}/.well-known/jwks.json",
             axum::routing::get(auth::jwks::tenant_jwks),
         )

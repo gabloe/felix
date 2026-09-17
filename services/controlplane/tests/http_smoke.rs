@@ -1135,6 +1135,37 @@ impl AuthStore for FailingStore {
     ) -> StoreResult<TenantSigningKeys> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
+    async fn insert_refresh_token(
+        &self,
+        _token: controlplane::auth::refresh_token::RefreshToken,
+    ) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn take_refresh_token(
+        &self,
+        _tenant_id: &str,
+        _token_id: &str,
+        _now_secs: i64,
+    ) -> StoreResult<controlplane::auth::refresh_token::RefreshTokenTake> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn revoke_refresh_family(&self, _tenant_id: &str, _family_id: &str) -> StoreResult<u64> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn revoke_refresh_tokens_for_principal(
+        &self,
+        _tenant_id: &str,
+        _principal_id: &str,
+    ) -> StoreResult<u64> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn purge_expired_refresh_tokens(&self, _before_secs: i64) -> StoreResult<u64> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
 }
 
 /// Health answers 503 when the store does not, and it must probe the *real*

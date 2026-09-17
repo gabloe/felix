@@ -37,6 +37,10 @@ pub struct TokenExchangeResponse {
     pub felix_token: String,
     pub expires_in: u64,
     pub token_type: String,
+    /// Presented to `/token/refresh` for a new access token, without another
+    /// IdP round trip. Single-use: refreshing mints its replacement.
+    pub refresh_token: String,
+    pub refresh_expires_in: u64,
 }
 
 /// Exchange an upstream IdP token for a Felix EdDSA token.
@@ -130,26 +134,52 @@ pub async fn exchange_token(
         .await
         .map_err(|err| api_internal("failed to load signing keys", &err))?;
 
-    // TTL is short by default (900s) to limit blast radius if a token leaks.
-    // That is right for an interactive client that re-exchanges freely, but a
-    // credential a broker holds statically for its whole lifetime, or one used
-    // to drive a long operation, needs more — so the deployment can raise it
-    // with FELIX_EXCHANGE_TOKEN_TTL_SECONDS. The default is unchanged.
-    let ttl = Duration::from_secs(
-        std::env::var("FELIX_EXCHANGE_TOKEN_TTL_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|&value| value > 0)
-            .unwrap_or(900),
-    );
+    let ttl = access_token_ttl();
     let felix_token = mint_token(&keys, &tenant_id, &principal.principal_id, perms, ttl)
         .map_err(|_| api_internal_message("failed to mint token"))?;
+
+    // The refresh token is what makes the short access TTL above workable for
+    // anything long-running. Its group claims are recorded rather than its
+    // permissions: a refresh re-runs RBAC, so a grant removed later stops
+    // working without waiting for a re-exchange.
+    let refresh_ttl = crate::auth::refresh::refresh_ttl();
+    let (record, refresh_secret) = crate::auth::refresh::issue(
+        &tenant_id,
+        &principal.principal_id,
+        principal.groups.clone(),
+        None,
+        crate::auth::refresh::now_secs(),
+        refresh_ttl,
+    );
+    state
+        .store
+        .insert_refresh_token(record)
+        .await
+        .map_err(|err| api_internal("failed to store refresh token", &err))?;
+    metrics::counter!("felix_refresh_tokens_issued_total", "via" => "exchange").increment(1);
 
     Ok(Json(TokenExchangeResponse {
         felix_token,
         expires_in: ttl.as_secs(),
         token_type: "Bearer".to_string(),
+        refresh_token: refresh_secret,
+        refresh_expires_in: refresh_ttl.as_secs(),
     }))
+}
+
+/// How long a minted access token is good for.
+///
+/// Short by default (900s) to limit blast radius if one leaks. Refresh is what
+/// keeps a long-running caller authenticated, so raising this is a tuning knob
+/// rather than the way to stay up — see `FELIX_REFRESH_TOKEN_TTL_SECONDS`.
+pub fn access_token_ttl() -> Duration {
+    Duration::from_secs(
+        std::env::var("FELIX_EXCHANGE_TOKEN_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|&value| value > 0)
+            .unwrap_or(900),
+    )
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
@@ -192,7 +222,7 @@ fn filter_permissions(perms: Vec<String>, request: &TokenExchangeRequest) -> Vec
 
 // Group claims from the IdP become ephemeral Casbin groupings for this
 // request only; they are never persisted.
-fn add_group_claim_groupings(
+pub(crate) fn add_group_claim_groupings(
     groupings: &mut Vec<GroupingRule>,
     principal_id: &str,
     groups: &[String],

@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
     Node, NodeChange, NodeLifecycle, NodePatchRequest, ShardAssignment, ShardAssignmentChange,
@@ -515,6 +516,73 @@ impl AuthStore for RaftStore {
         {
             MetaResponse::SigningKeys { keys } => Ok(keys),
             _ => Err(unexpected_shape("signing keys")),
+        }
+    }
+    async fn insert_refresh_token(&self, token: RefreshToken) -> StoreResult<()> {
+        self.propose(MetaCommand::InsertRefreshToken { token })
+            .await
+            .map(|_| ())
+    }
+
+    async fn take_refresh_token(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        now_secs: i64,
+    ) -> StoreResult<RefreshTokenTake> {
+        // A write, not a read of the local replica: spending a single-use token
+        // has to be agreed on. Answering from `local()` would let each replica
+        // spend the same token once.
+        match self
+            .propose(MetaCommand::TakeRefreshToken {
+                tenant_id: tenant_id.to_string(),
+                token_id: token_id.to_string(),
+                now_secs,
+            })
+            .await?
+        {
+            MetaResponse::RefreshTokenTake { take } => Ok(take),
+            _ => Err(unexpected_shape("refresh token take")),
+        }
+    }
+
+    async fn revoke_refresh_family(&self, tenant_id: &str, family_id: &str) -> StoreResult<u64> {
+        match self
+            .propose(MetaCommand::RevokeRefreshFamily {
+                tenant_id: tenant_id.to_string(),
+                family_id: family_id.to_string(),
+            })
+            .await?
+        {
+            MetaResponse::Count { count } => Ok(count),
+            _ => Err(unexpected_shape("count")),
+        }
+    }
+
+    async fn revoke_refresh_tokens_for_principal(
+        &self,
+        tenant_id: &str,
+        principal_id: &str,
+    ) -> StoreResult<u64> {
+        match self
+            .propose(MetaCommand::RevokeRefreshTokensForPrincipal {
+                tenant_id: tenant_id.to_string(),
+                principal_id: principal_id.to_string(),
+            })
+            .await?
+        {
+            MetaResponse::Count { count } => Ok(count),
+            _ => Err(unexpected_shape("count")),
+        }
+    }
+
+    async fn purge_expired_refresh_tokens(&self, before_secs: i64) -> StoreResult<u64> {
+        match self
+            .propose(MetaCommand::PurgeExpiredRefreshTokens { before_secs })
+            .await?
+        {
+            MetaResponse::Count { count } => Ok(count),
+            _ => Err(unexpected_shape("count")),
         }
     }
 }

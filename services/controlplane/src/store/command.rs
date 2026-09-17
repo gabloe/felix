@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheKey, CachePatchRequest, Namespace, NamespaceKey, Node, NodeLifecycle,
     NodePatchRequest, ShardAssignment, ShardKey, Stream, StreamKey, StreamPatchRequest, Tenant,
@@ -160,6 +161,36 @@ pub enum MetaCommand {
         state: Box<crate::store::memory::ExportedState>,
         overwrite: bool,
     },
+    /// Refresh-token writes.
+    ///
+    /// Through the log like every other write, because the replicas must agree
+    /// on which tokens exist and which are spent. `TakeRefreshToken` in
+    /// particular: a single-use token whose spend was applied on one replica
+    /// and not another would be usable twice, once per replica.
+    InsertRefreshToken {
+        token: RefreshToken,
+    },
+    TakeRefreshToken {
+        tenant_id: String,
+        token_id: String,
+        /// The clock, decided by the proposer.
+        ///
+        /// Every replica applies this command, so anything read from the
+        /// environment would differ between them — a token could expire on one
+        /// replica and not another, and the state machines would diverge.
+        now_secs: i64,
+    },
+    RevokeRefreshFamily {
+        tenant_id: String,
+        family_id: String,
+    },
+    RevokeRefreshTokensForPrincipal {
+        tenant_id: String,
+        principal_id: String,
+    },
+    PurgeExpiredRefreshTokens {
+        before_secs: i64,
+    },
 }
 
 /// What a command returns, mirroring the store method it stands for.
@@ -194,6 +225,14 @@ pub enum MetaResponse {
     },
     SigningKeys {
         keys: TenantSigningKeys,
+    },
+    /// What `TakeRefreshToken` found, carried back from the apply.
+    RefreshTokenTake {
+        take: RefreshTokenTake,
+    },
+    /// How many rows a revoke or purge affected.
+    Count {
+        count: u64,
     },
 }
 
