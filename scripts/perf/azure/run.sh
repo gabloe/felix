@@ -110,6 +110,22 @@ for watchers in 1 50 500; do
     --payload-bytes 256 --warmup 200 --total 2000
 done
 
+# Queues. The drain is the measurement, so the enqueue is not timed: the
+# scenario publishes and acks the whole run first, then polls it through one
+# consumer group. Redeliveries are reported beside the throughput rather than
+# folded into it -- a drain that retried its way to the finish is a different
+# number from one that did not.
+run_case "queue-p256" --scenario queue --stream perf --payload-bytes 256 --warmup 2000 --total 20000
+
+# Retained join: time-to-complete-state against roster size. Three points
+# because one cannot show a curve, and the curve is the question -- an
+# application joining a room wants to know how long before it holds the whole
+# roster, and whether that grows with the roster or with something worse.
+for roster in 100 1000 10000; do
+  run_case "retained-r${roster}" \
+    --scenario retained --cache perf --payload-bytes 256 --total "${roster}"
+done
+
 # One artifact the analysis reads directly.
 grep -h '^LOADGEN_JSON ' "${out}"/*.out | sed 's/^LOADGEN_JSON //' > "${out}/results.jsonl"
 echo ">> $(wc -l < "${out}/results.jsonl") result rows in ${out}/results.jsonl"

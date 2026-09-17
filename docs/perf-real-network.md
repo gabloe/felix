@@ -100,8 +100,9 @@ the load generator took the cut from 8 to 4. Raise `loadgenVmSize` (and request
 more quota) if the fanout/throughput cases show it CPU-bound.
 
 What T1 answers: publish/subscribe/cache/counter latency and throughput over a
-real NIC and switch, fsync against real premium storage, fanout curves, and
-the JWT flow — the honest replacements for every published localhost number.
+real NIC and switch, fsync against real premium storage, fanout curves, queue
+drain and retained join, and the JWT flow — the honest replacements for every
+published localhost number.
 
 ### T2 — three zones (what quorum costs)
 
@@ -158,6 +159,7 @@ scenarios only a real network can ask:
 | Throughput profile (batch 64) × payload | T1 | Sustained delivery over a real NIC; delivered vs published |
 | Cache put/get, counter add/get latency | T1 | Request/response path incl. routed forwards |
 | Keyed watch: change-to-delivery latency at watcher fanout {1, 50, 500} | T1 | The fanout claim of the composed semantics |
+| Queue drain: enqueue-to-delivery latency and drain throughput through one consumer group | T1 | What the queue semantics cost, with redeliveries counted rather than folded in |
 | Retained join: time-to-complete-state vs roster size {10², 10³, 10⁴} | T1 | What "join and hold the roster" costs |
 | Leader vs Quorum publish latency, same stream shape | T2 | What the acknowledgement guarantee costs across zones |
 | Failover blackout: kill the leader mid-load, measure publish gap and watch re-establishment | T2 | The ~1s local failover claim, on real infrastructure |

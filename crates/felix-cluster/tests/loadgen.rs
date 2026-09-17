@@ -240,3 +240,153 @@ async fn watch_delivers_every_put_to_every_watcher() {
         "no delivery latency reported: {row}",
     );
 }
+
+/// The queue scenario drains what it enqueued, and accounts for every record.
+///
+/// The accounting is the part worth pinning. A consumer group redelivers
+/// anything left unsettled, so a scenario that measured each delivery rather
+/// than each *record* would report a latency distribution shaped by its own
+/// retries and a throughput that counts the same work twice. Redeliveries are
+/// counted separately for exactly that reason, and `delivered` must reach
+/// `published` — a drain that stops early is a stuck instrument, not a slow
+/// broker.
+#[tokio::test]
+#[serial]
+async fn queue_drains_everything_it_enqueued() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+    let (stdout, _) = run_loadgen(
+        &cluster,
+        &[
+            "--scenario",
+            "queue",
+            "--stream",
+            "perf",
+            "--warmup",
+            "20",
+            "--total",
+            "200",
+            "--payload-bytes",
+            "64",
+        ],
+    )
+    .expect("queue run");
+
+    let row = result_json(&stdout).expect("json row");
+    assert_eq!(
+        row["delivered"], row["published"],
+        "the drain did not settle every record: {row}",
+    );
+    assert!(
+        row["drain_throughput_msg_s"].as_f64().unwrap_or(0.0) > 0.0,
+        "no drain throughput reported: {row}",
+    );
+    assert!(
+        row["delivery_latency_us"]["p50"].as_u64().unwrap_or(0) > 0,
+        "no enqueue-to-delivery latency reported: {row}",
+    );
+    assert!(
+        row["redeliveries"].is_u64(),
+        "redeliveries must be reported even when zero, or a run that retried \
+         its way to the finish looks identical to one that did not: {row}",
+    );
+}
+
+/// A retained join receives the whole roster before it goes live.
+///
+/// `complete` is the assertion that matters: the measurement is
+/// time-to-complete-*state*, so a join that timed out holding half a roster
+/// has not produced a slow number, it has produced a meaningless one. Two
+/// roster sizes, because a single point cannot show the curve this scenario
+/// exists to trace, and because each size uses its own key prefix — a leak
+/// there would show up as the second join replaying the first's keys.
+#[tokio::test]
+#[serial]
+async fn a_retained_join_completes_the_roster() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+
+    let mut previous = None;
+    for roster in ["50", "200"] {
+        let (stdout, _) = run_loadgen(
+            &cluster,
+            &[
+                "--scenario",
+                "retained",
+                "--cache",
+                "perf",
+                "--total",
+                roster,
+                "--payload-bytes",
+                "64",
+            ],
+        )
+        .expect("retained run");
+
+        let row = result_json(&stdout).expect("json row");
+        let want: u64 = roster.parse().expect("roster size");
+        assert_eq!(
+            row["roster"].as_u64(),
+            Some(want),
+            "the roster size was not what was asked for: {row}",
+        );
+        assert_eq!(
+            row["received"].as_u64(),
+            Some(want),
+            "the join went live holding a partial roster, so the time it \
+             reports is not a time-to-complete-state: {row}",
+        );
+        assert_eq!(row["complete"], true, "{row}");
+        assert!(
+            row["time_to_complete_state_us"].as_u64().unwrap_or(0) > 0,
+            "no join time reported: {row}",
+        );
+        previous = Some(want);
+    }
+    assert_eq!(previous, Some(200));
+}
+
+/// The ingest scenario reports what it actually sent.
+///
+/// Throughput is derived from `published`, and `publish_retries` is reported
+/// beside it rather than folded in: a run that spent half its time retrying
+/// is a different measurement from one that did not, and averaging them into
+/// one number hides the difference.
+#[tokio::test]
+#[serial]
+async fn ingest_reports_what_it_published() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+    let (stdout, _) = run_loadgen(
+        &cluster,
+        &[
+            "--scenario",
+            "ingest",
+            "--stream",
+            "perf",
+            "--total",
+            "2000",
+            "--batch",
+            "16",
+            "--concurrency",
+            "2",
+            "--payload-bytes",
+            "64",
+        ],
+    )
+    .expect("ingest run");
+
+    let row = result_json(&stdout).expect("json row");
+    let published = row["published"].as_u64().unwrap_or(0);
+    assert!(published > 0, "nothing was published: {row}");
+    assert!(
+        row["throughput_msg_s"].as_f64().unwrap_or(0.0) > 0.0,
+        "no throughput reported: {row}",
+    );
+    assert_eq!(
+        row["publishers"].as_u64(),
+        Some(2),
+        "the run did not use the concurrency it was given: {row}",
+    );
+    assert!(
+        row["publish_retries"].is_u64(),
+        "retries must be reported even when zero: {row}",
+    );
+}
