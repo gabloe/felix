@@ -132,6 +132,17 @@ Plenty of reasons, and most of them are good ones.
   so Kafka Connect, Streams, ksqlDB, Debezium and every tool that expects a Kafka
   broker will not work against it. If you need that ecosystem, use something that
   speaks the protocol.
+
+  This is a decision rather than a gap nobody got to. A shim was built far
+  enough to measure: 533 lines gets `kcat` reading a Felix shard with correct
+  offsets, because Felix's offsets and shards already have the shape Kafka
+  assumes. What that does *not* get is the ecosystem, all of which needs the
+  consumer-group coordinator — and a client asked to join a group against a
+  broker that has none does not fail, it hangs in "waiting for group rebalance".
+  Building the coordinator means building a rebalance protocol Felix
+  deliberately does not have and owning its behaviour across Kafka versions.
+  The full finding, including what everyone else who tried this had to build,
+  is in [`docs/kafka-shim-spike.md`](https://github.com/gabloe/felix/blob/main/docs/kafka-shim-spike.md).
 - **You need AMQP.** Exchanges, bindings, topic routing, per-message TTL, priority
   queues — the whole RabbitMQ model. Felix has none of it. A queue in Felix is a
   group of workers reading one shard, and that is the extent of it.
