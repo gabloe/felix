@@ -290,11 +290,15 @@ Anything else halts, as before. That is the same shape Kafka arrived at without
 Raft (KIP-101, KIP-279), reached without adding a message: the generation is
 already on every batch, and the follower's own history supplies the rest.
 
-Not exchanging it is deliberate. A new internal message kind cannot be sent to
-a peer that might not understand it — an undecodable frame ends the stream, and
-those streams are long-lived lanes multiplexing every in-flight request, so a
-probe costs far more than it learns. Repairing from what a follower already
-knows needs no negotiation and no rolling-upgrade order.
+Not exchanging it is deliberate, and the reason has since narrowed. It used to
+be that a new kind could not be sent to a peer that might not understand it: an
+unknown kind ended the stream, and those streams are long-lived lanes carrying
+every in-flight request, so a probe cost far more than it learned. A peer now
+steps over a kind it does not know and refuses that one frame, so the cost is no
+longer prohibitive — but it is still a round trip, and repairing from what a
+follower already knows needs none, along with no negotiation and no
+rolling-upgrade order. An older peer predating that change still drops the
+stream, so a probe would also have to wait out a deployment.
 
 What it gives up is the case where the follower's history is absent or does not
 reach back far enough. Those halt, which is exactly today's behaviour.
