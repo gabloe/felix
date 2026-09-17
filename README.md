@@ -118,7 +118,7 @@ publish path, subscribe/fanout path, and backpressure/concurrency model.
 In-repo design docs (`docs/`):
 - `docs/architecture.md` — system architecture
 - `docs/protocol.md` — wire protocol specification
-- `docs/control-plane.md` — control plane; its Raft sections are design intent, not current behaviour
+- `docs/control-plane.md` — control plane. Opens with the original Raft sketch, marked as such, then points at the design that was actually built
 - `docs/semantics.md` — delivery semantics and guarantees
 - `docs/design.md` — product and protocol design notes
 - `docs/auth.md` — authentication and authorization
@@ -143,12 +143,13 @@ latency/backpressure behavior early to keep p99/p999 predictable.
 - A log-backed cache, routed to one owner per key and replicated
 - Consumer groups: poll, acknowledge, redeliver, bound the redelivery,
   dead-letter and redrive
-- A control plane over REST and Postgres, tenant-scoped tokens with RBAC, and
-  capability negotiation on the wire
+- A control plane over REST, tenant-scoped tokens with RBAC, and capability
+  negotiation on the wire. Its metadata store is Postgres or an embedded Raft
+  group (`FELIX_CONTROLPLANE_STORAGE_BACKEND=raft`), so availability need not
+  rest on an external database
 
 ## What does not exist yet
 
-- Raft for control-plane metadata, so its availability does not rest on Postgres
 - Per-stream retention: a policy is recorded on the stream and nothing reads it.
   Retention itself works, but it is configured per broker
   (`FELIX_DURABLE_RETENTION_BYTES` / `_SECONDS`) and is off unless set, so by
@@ -189,7 +190,7 @@ demos/
 
 docs/
   architecture.md    # system architecture
-  control-plane.md   # control plane (Raft sections are design intent)
+  control-plane.md   # control plane (opens with the original Raft sketch)
   protocol.md        # wire protocol specification
   design.md          # product + protocol design notes
   todos.md           # the original MVP checklist (historical)
@@ -253,11 +254,11 @@ If a feature cannot be enforced in code, it is considered incomplete.
 
 Done: QUIC transport with backpressure, the durable log, the control plane and
 placement, intra-region clustering with replication and failover, the log-backed
-cache, consumer groups, and tenant-scoped RBAC.
+cache, consumer groups, tenant-scoped RBAC, and control-plane high availability
+over either Postgres or an embedded Raft group.
 
 Next, roughly in order:
 
-- Control-plane high availability, and Raft for its metadata
 - Per-stream retention, so a stream's declared policy is the one enforced
 - mTLS between brokers, and the rest of the security hardening
 - Rebalancing and Kubernetes packaging
