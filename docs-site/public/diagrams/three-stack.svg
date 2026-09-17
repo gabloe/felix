@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" width="900" height="470" role="img" aria-label="The usual arrangement: one application wired to three separate systems. An event log such as Kafka or Redpanda, a cache such as Redis, and a work queue such as NATS JetStream or RabbitMQ each appear beside the application, and each carries its own replication, its own logins and permissions, and its own behaviour when it fails. A write travels from the application to the event log and is recorded there as order 42 paid. The same fact then has to be sent separately to the cache, by the application's own glue code, and it arrives. A third write goes to the work queue, enqueuing the job that sends the receipt. A second write then records order 42 as refunded in the event log, but the matching write to the cache fails partway across. The two systems now disagree: the log says refunded while the cache still says paid, nothing detects this except the application, and the queued receipt job is left working from an order it still believes was paid. The closing frame shows what is being operated: three replication models, three security models, three failure models, and glue code holding them together.">
+
+  <style>
+    .tag   { fill: var(--ink-dim); font: 600 11px ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+    .name  { fill: var(--ink); font: 600 13px ui-sans-serif, system-ui, -apple-system, sans-serif; letter-spacing: .04em; }
+    .body  { fill: var(--ink-dim); font: 400 13px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: var(--ink-dim); font: 500 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .note  { fill: var(--ink-dim); font: 400 11px ui-sans-serif, system-ui, sans-serif; }
+    .warn  { fill: var(--accent); font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .box   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-step); }
+    .app   { stroke: var(--edge); stroke-width: 1.25; fill: var(--c-hdr); }
+    .wire  { stroke: var(--edge-dim); stroke-width: 1.25; fill: none; }
+    .glue  { stroke: var(--edge-dim); stroke-width: 1.25; stroke-dasharray: 4 3; fill: none; }
+    .dot   { fill: var(--edge); }
+    .dotx  { fill: var(--accent); }
+    .cross { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linecap: round; }
+    .alert { stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 4 3; fill: none; }
+
+    :root {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; --c-step:#e8f0fe; --c-hdr:#dfe6f5;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; --c-step:#24344b; --c-hdr:#1c2839; } }
+    :root[data-theme="dark"] {
+      --ink:#dfe8f3; --ink-dim:#9aabbf; --edge:#6d94cc; --edge-dim:#46536a;
+      --accent:#d99a6c; --okay:#7fbf95; --c-step:#24344b; --c-hdr:#1c2839; }
+    :root[data-theme="light"] {
+      --ink:#1a2b40; --ink-dim:#5b6b7f; --edge:#4a6fa5; --edge-dim:#aab6c6;
+      --accent:#b0653a; --okay:#3f7a52; --c-step:#e8f0fe; --c-hdr:#dfe6f5; }
+
+    /* One 24s loop, shared with one-plane.svg so the two read as a pair. */
+    .hide { opacity: 0; }
+
+    .s0 { animation: s0 24s infinite; } @keyframes s0 { 0%,2% { opacity:0 } 5%,96% { opacity:1 } 98%,100% { opacity:0 } }
+    .s1 { animation: s1 24s infinite; } @keyframes s1 { 0%,5% { opacity:0 } 8%,96% { opacity:1 } 98%,100% { opacity:0 } }
+    .s2 { animation: s2 24s infinite; } @keyframes s2 { 0%,8% { opacity:0 } 11%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    /* First write: into the log, and then — separately — into the cache. */
+    .d1 { animation: d1 24s infinite; }
+    @keyframes d1 {
+      0%,14%  { opacity: 0; transform: translate(0px, 0px) }
+      16%     { opacity: 1; transform: translate(0px, 0px) }
+      22%     { opacity: 1; transform: translate(300px, -70px) }
+      23%,100% { opacity: 0; transform: translate(300px, -70px) }
+    }
+    /* The log's first value gives way to the second: one line, one truth. */
+    .v1 { animation: v1 24s infinite; } @keyframes v1 { 0%,22% { opacity:0 } 24%,50% { opacity:1 } 53%,100% { opacity:0 } }
+
+    .d2 { animation: d2 24s infinite; }
+    @keyframes d2 {
+      0%,26%  { opacity: 0; transform: translate(0px, 0px) }
+      28%     { opacity: 1; transform: translate(0px, 0px) }
+      34%     { opacity: 1; transform: translate(300px, 50px) }
+      35%,100% { opacity: 0; transform: translate(300px, 50px) }
+    }
+    .v2 { animation: v2 24s infinite; } @keyframes v2 { 0%,34% { opacity:0 } 36%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    /* And a third write, because the receipt still has to be queued. The same
+       fact reaches three systems, by three separate calls that fail separately. */
+    .d5 { animation: d5 24s infinite; }
+    @keyframes d5 {
+      0%,36%  { opacity: 0; transform: translate(0px, 0px) }
+      38%     { opacity: 1; transform: translate(0px, 0px) }
+      43%     { opacity: 1; transform: translate(300px, 170px) }
+      44%,100% { opacity: 0; transform: translate(300px, 170px) }
+    }
+    .v4 { animation: v4 24s infinite; } @keyframes v4 { 0%,43% { opacity:0 } 45%,74% { opacity:1 } 77%,100% { opacity:0 } }
+    .v5 { animation: v5 24s infinite; } @keyframes v5 { 0%,74% { opacity:0 } 77%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    /* Second write: the log takes it, the glue write to the cache does not
+       arrive, and nothing but the application would notice. */
+    .d3 { animation: d3 24s infinite; }
+    @keyframes d3 {
+      0%,44%  { opacity: 0; transform: translate(0px, 0px) }
+      46%     { opacity: 1; transform: translate(0px, 0px) }
+      52%     { opacity: 1; transform: translate(300px, -70px) }
+      53%,100% { opacity: 0; transform: translate(300px, -70px) }
+    }
+    .v3 { animation: v3 24s infinite; } @keyframes v3 { 0%,52% { opacity:0 } 54%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    .d4 { animation: d4 24s infinite; }
+    @keyframes d4 {
+      0%,56%  { opacity: 0; transform: translate(0px, 0px) }
+      58%     { opacity: 1; transform: translate(0px, 0px) }
+      63%     { opacity: 1; transform: translate(150px, 25px) }
+      66%     { opacity: 1; transform: translate(150px, 25px) }
+      67%,100% { opacity: 0; transform: translate(150px, 25px) }
+    }
+    .fail  { animation: fail 24s infinite; } @keyframes fail { 0%,64% { opacity:0 } 67%,96% { opacity:1 } 98%,100% { opacity:0 } }
+    .split { animation: split 24s infinite; } @keyframes split { 0%,69% { opacity:0 } 72%,96% { opacity:1 } 98%,100% { opacity:0 } }
+    .cost  { animation: cost 24s infinite; } @keyframes cost { 0%,80% { opacity:0 } 83%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    .c1 { animation: c1 24s infinite; } @keyframes c1 { 0%,3% { opacity:0 } 6%,25% { opacity:1 } 26%,100% { opacity:0 } }
+    .c2 { animation: c2 24s infinite; } @keyframes c2 { 0%,26% { opacity:0 } 29%,43% { opacity:1 } 44%,100% { opacity:0 } }
+    .c3 { animation: c3 24s infinite; } @keyframes c3 { 0%,44% { opacity:0 } 47%,68% { opacity:1 } 69%,100% { opacity:0 } }
+    .c4 { animation: c4 24s infinite; } @keyframes c4 { 0%,69% { opacity:0 } 72%,96% { opacity:1 } 98%,100% { opacity:0 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .s0,.s1,.s2,.d1,.d2,.d3,.d4,.d5,.v1,.v2,.v3,.v4,.v5,.fail,.split,.cost,
+      .c1,.c2,.c3,.c4 { animation: none; }
+      /* The end state is the divergence: the log on the newer value, the cache
+         still on the older one. `.v1` stays hidden so the log shows one line. */
+      .s0,.s1,.s2,.v2,.v3,.v5,.fail,.split,.cost { opacity: 1; }
+      .c4 { opacity: 1; }
+      .d4 { opacity: 1; transform: translate(150px, 25px); }
+    }
+  </style>
+
+  <text class="tag" x="450" y="28" text-anchor="middle">THE USUAL ARRANGEMENT — THREE SYSTEMS, AND THE GLUE BETWEEN THEM</text>
+
+  <!-- ============================== application ============================== -->
+  <rect class="app" x="60" y="155" width="155" height="84" rx="6"/>
+  <text class="name" x="137" y="190" text-anchor="middle">YOUR SERVICE</text>
+  <text class="small" x="137" y="210" text-anchor="middle">one thing to write</text>
+  <text class="small" x="137" y="224" text-anchor="middle">three places to put it</text>
+
+  <!-- ================================ the wires ============================== -->
+  <path class="wire" d="M 215 197 L 515 127"/>
+  <path class="glue" d="M 215 197 L 515 247"/>
+  <path class="wire" d="M 215 197 L 515 367"/>
+  <text class="note" x="360" y="238" text-anchor="middle">your sync code</text>
+
+  <!-- ============================== the three boxes ========================== -->
+  <g class="hide s0">
+    <rect class="box" x="520" y="88" width="300" height="78" rx="6"/>
+    <text class="name" x="540" y="116">EVENT LOG</text>
+    <text class="small" x="540" y="136">Kafka · Redpanda</text>
+    <text class="note" x="540" y="155">its own replication, logins, failure behaviour</text>
+  </g>
+  <g class="hide s1">
+    <rect class="box" x="520" y="208" width="300" height="78" rx="6"/>
+    <text class="name" x="540" y="236">CACHE</text>
+    <text class="small" x="540" y="256">Redis</text>
+    <text class="note" x="540" y="275">its own replication, logins, failure behaviour</text>
+  </g>
+  <g class="hide s2">
+    <rect class="box" x="520" y="328" width="300" height="78" rx="6"/>
+    <text class="name" x="540" y="356">WORK QUEUE</text>
+    <text class="small" x="540" y="376">NATS JetStream · RabbitMQ</text>
+    <text class="note" x="540" y="395">its own replication, logins, failure behaviour</text>
+  </g>
+  <text class="small hide v4" x="800" y="356" text-anchor="end" style="fill: var(--edge)">job: send receipt</text>
+  <text class="small hide v5" x="800" y="356" text-anchor="end" style="fill: var(--accent)">receipt job now stale</text>
+
+  <!-- ============================ the writes moving =========================== -->
+  <circle class="dot hide d1" cx="215" cy="197" r="6"/>
+  <circle class="dot hide d2" cx="215" cy="197" r="6"/>
+  <circle class="dot hide d3" cx="215" cy="197" r="6"/>
+  <circle class="dotx hide d4" cx="215" cy="197" r="6"/>
+  <circle class="dot hide d5" cx="215" cy="197" r="6"/>
+
+  <!-- what each system believes -->
+  <text class="small hide v1" x="800" y="116" text-anchor="end" style="fill: var(--edge)">order-42 = paid</text>
+  <text class="small hide v2" x="800" y="236" text-anchor="end" style="fill: var(--edge)">order-42 = paid</text>
+  <text class="small hide v3" x="800" y="116" text-anchor="end" style="fill: var(--accent)">order-42 = refunded</text>
+
+  <!-- the glue write that never lands -->
+  <g class="hide fail">
+    <path class="cross" d="M 358 216 l 14 14 M 372 216 l -14 14"/>
+    <text class="warn" x="365" y="206" text-anchor="middle">lost</text>
+  </g>
+
+  <!-- the moment they disagree -->
+  <g class="hide split">
+    <rect class="alert" x="516" y="84" width="308" height="206" rx="8"/>
+    <text class="warn" x="670" y="308" text-anchor="middle">the log says refunded · the cache says paid</text>
+  </g>
+
+  <g class="hide cost">
+    <text class="warn" x="137" y="266" text-anchor="middle">3 replication models</text>
+    <text class="warn" x="137" y="284" text-anchor="middle">3 security models</text>
+    <text class="warn" x="137" y="302" text-anchor="middle">3 failure models</text>
+  </g>
+
+  <!-- ================================ captions =============================== -->
+  <text class="body hide c1" x="450" y="430" text-anchor="middle">A service that needs a durable history, the newest value for a key, and work delivery needs three systems.</text>
+  <text class="body hide c2" x="450" y="430" text-anchor="middle">One fact means three calls — log, cache, queue — each written and maintained by you.</text>
+  <text class="body hide c3" x="450" y="430" text-anchor="middle">Every one of those writes can fail on its own. The second one here does.</text>
+  <text class="body hide c4" x="450" y="430" text-anchor="middle">Now the two disagree, and nothing in either system knows it. That is the glue's job, at 3am.</text>
+
+  <text class="body" x="450" y="458" text-anchor="middle">All three are good systems. The cost is not in any one of them — it is in running three, and in the code between.</text>
+</svg>

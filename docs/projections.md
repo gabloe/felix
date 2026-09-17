@@ -184,6 +184,7 @@ here has to be read as covering them:
 - **A cache declares no consistency level.** A stream chooses `Leader` or
   `Quorum`; a cache write is acknowledged by its leader, so losing that leader
   between the acknowledgement and the ship loses the write.
+
 What used to be listed here and no longer applies: **dead letters are now
 replicated.** The list of offsets a group gave up on is one log per stream
 shard — the group folded into the entry key, exactly as the cursors are shaped

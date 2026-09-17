@@ -121,6 +121,14 @@ again — which is at-least-once, the guarantee a queue offers anyway.
 > same records.
 > `a_group_position_survives_a_leader_failover` — a promoted leader resumes
 > where the group had got to.
+> `a_dead_letter_survives_a_leader_failover` — and it still lists what that
+> group gave up on.
+
+Both of those travel together. The offsets a group abandoned are one log per
+stream shard, with the group folded into the entry key exactly as the cursors
+are, so they ship beside the cursors on the same replica set at the same
+generation. A promoted leader lists what its groups set aside, and an
+operator's redrive works there.
 
 ### What a queue does not promise
 
@@ -148,8 +156,11 @@ here has to be read as covering them:
 - **A cache declares no consistency level.** A stream chooses `Leader` or
   `Quorum`; a cache write is acknowledged by its leader, so losing that leader
   between the acknowledgement and the ship loses the write.
-- **Dead letters are not replicated.** The committed position now travels with
-  its shard, but the list of offsets a group gave up on does not: a promoted
-  leader keeps the position and forgets which records were set aside. Those
-  records were already skipped by the cursor, so what is lost is the record that
-  they were skipped at all.
+- **Dead letters recorded under the old layout do not travel.** Shipping them
+  became possible when the list moved to one log per stream shard, which is the
+  unit the replication driver already walks; the earlier layout kept one log per
+  `(stream, group)`, a set it cannot enumerate, because a group appears whenever
+  a consumer names one. Entries written under that earlier layout are still read
+  and still discardable, but they were never shipped — so on a shard carrying
+  them, a failover keeps the cursor and forgets those particular set-aside
+  records.
