@@ -365,6 +365,65 @@ mod bootstrap {
         assert!(!refused.code.is_retryable());
     }
 
+    /// **A base inside what this broker already holds is accepted.**
+    ///
+    /// Retention and compaction trim brokers at their own pace, so a leader
+    /// offering from a base above this broker's is ordinary rather than a
+    /// conflict. The two logs meet — everything from the offered base up to
+    /// `tail` is here — so there is nothing to refuse, and refusing is how a
+    /// replica set shrinks over successive failovers with no error to point at.
+    #[tokio::test]
+    async fn a_base_inside_what_is_held_is_accepted_and_resumes_at_the_tail() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler
+            .apply(
+                batch(4, 0, &["a", "b", "c", "d"]),
+                felix_broker::LogKind::Stream,
+            )
+            .await;
+
+        // The leader has trimmed below 2 and offers from there.
+        let answer = handler
+            .bootstrap(offer(4, 2), felix_broker::LogKind::Stream)
+            .await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(
+                ok.durable_offset, 4,
+                "the leader must resume at this broker's tail, not re-ship what it holds",
+            ),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+    }
+
+    /// A base *below* what this broker holds is a real hole, and still refused.
+    ///
+    /// The leader's records start before this broker's do, so everything
+    /// between is on neither. Accepting would leave the replica set believing a
+    /// follower holds a range it has never seen.
+    #[tokio::test]
+    async fn a_base_below_what_is_held_is_still_refused() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        // Place the log high, then offer from far below it.
+        handler
+            .bootstrap(offer(4, BASE), felix_broker::LogKind::Stream)
+            .await;
+
+        let answer = handler
+            .bootstrap(offer(4, 10), felix_broker::LogKind::Stream)
+            .await;
+
+        let refused = refusal(&answer);
+        assert_eq!(refused.code, ErrorCode::LogConflict);
+        assert!(
+            refused.detail.contains("begin after"),
+            "the refusal should say which way the gap runs: {}",
+            refused.detail,
+        );
+    }
+
     /// Offering the same base twice is harmless: the second finds the log
     /// already placed there and agrees.
     #[tokio::test]
