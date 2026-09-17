@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789672755706,
+  "lastUpdate": 1789674202246,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12144,6 +12144,72 @@ window.BENCHMARK_DATA = {
             "range": "822.68",
             "unit": "us",
             "extra": "trials: 5\nmedian: 742.00\nmean: 1092.80\nstdev: 822.68\ncv: 75.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c203b64ad6235f7edcb67291d99c6f6a95a3c269",
+          "message": "test(controlplane): give each test schema a name no other call produces (#472)\n\nCoverage failed on main with\n\n  duplicate key value violates unique constraint \"pg_namespace_nspname_index\"\n  Key (nspname)=(felix_migrate_31654_1789668951690256729) already exists\n\nTwo tests asked for the same schema. The name was pid plus a timestamp, and\nneither separates them: tests in one binary run on parallel threads, so the\npid is identical, and two threads starting together read the same timestamp\nwhenever the clock's granularity is coarser than the gap between them. In a\ntight loop that is about half of all calls — 1033 distinct out of 2000 — so\nthis was luck rather than rarity.\n\nCREATE SCHEMA IF NOT EXISTS does not cover it: two concurrent creates of one\nname race in Postgres and the loser gets exactly that error, so the\nuniqueness has to be real rather than papered over at the call site.\n\nA process-wide counter makes it real. The pid separates concurrent test\nbinaries, the timestamp keeps the name readable and tells runs apart, and the\ncounter guarantees two calls in one process differ however close together\nthey are. All four generators across three files share it now.\n\nThe tests for it carry no #[cfg(test)] on purpose: this module compiles into\nintegration test binaries, which are already test crates, so the gate removes\nthem entirely — which it did until I noticed they reported zero.\n\nVerified against a real Postgres: pg_migration and pg_store_e2e green.",
+          "timestamp": "2026-09-17T12:40:35-07:00",
+          "tree_id": "40cac8b984e96e2582960a34258d5825234e4a91",
+          "url": "https://github.com/gabloe/felix/commit/c203b64ad6235f7edcb67291d99c6f6a95a3c269"
+        },
+        "date": 1789674200422,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "2.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 162.00\nstdev: 2.92\ncv: 1.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 213,
+            "range": "13.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 217.60\nstdev: 13.18\ncv: 6.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 273,
+            "range": "445.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 273.00\nmean: 465.80\nstdev: 445.25\ncv: 95.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 199.80\nstdev: 0.84\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 409,
+            "range": "12.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 409.00\nmean: 414.20\nstdev: 12.85\ncv: 3.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 607,
+            "range": "555.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 607.00\nmean: 941.20\nstdev: 555.36\ncv: 59.01%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
