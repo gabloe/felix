@@ -89,6 +89,21 @@ pub enum ShardKind {
     Cache,
 }
 
+/// The wire shape a broker reports with, mapped to the model.
+///
+/// Two types on purpose: the wire form is shared with the broker and changes
+/// only with the protocol, while this one is stored and carries the
+/// persistence rules. Converting explicitly is what keeps a change to either
+/// from silently becoming a change to the other.
+impl From<felix_common::membership::ShardKind> for ShardKind {
+    fn from(kind: felix_common::membership::ShardKind) -> Self {
+        match kind {
+            felix_common::membership::ShardKind::Stream => Self::Stream,
+            felix_common::membership::ShardKind::Cache => Self::Cache,
+        }
+    }
+}
+
 impl ShardKind {
     /// The name this kind is stored and logged under.
     pub fn as_str(self) -> &'static str {

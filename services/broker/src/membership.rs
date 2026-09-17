@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use felix_common::membership::NodeLifecycle;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -72,7 +73,11 @@ struct HeartbeatRequest {
 
 #[derive(Debug, Deserialize)]
 struct HeartbeatResponse {
-    lifecycle: String,
+    /// An enum, not a string: a typo in a comparison is a silent false, and a
+    /// state added later would read as one too. `Unknown` covers the latter,
+    /// and is not placeable — a broker that cannot understand its own status
+    /// must not assume it may keep leading shards.
+    lifecycle: NodeLifecycle,
     heartbeat_interval_ms: u64,
     /// How long the control plane will wait before declaring this node down.
     /// The broker's lease is derived from it, so the two ends cannot disagree
@@ -257,7 +262,7 @@ pub async fn run_heartbeat(
                 // The heartbeat *is* the lease renewal. Renewed only on an
                 // accepted response, so a control plane that answers "you are
                 // not live" does not extend the authority to serve.
-                if response.lifecycle == "live" || response.lifecycle == "draining" {
+                if response.lifecycle.is_placeable() {
                     if let Some(expiry) = response.expiry_timeout_ms {
                         lease.adopt(Duration::from_millis(expiry.max(1)));
                     }
@@ -271,7 +276,7 @@ pub async fn run_heartbeat(
                 // Being told we are down means expiry already removed this node
                 // from placement. Registering again is the broker's job, not
                 // this loop's, so make the state visible and keep reporting.
-                let placeable = response.lifecycle == "live" || response.lifecycle == "draining";
+                let placeable = response.lifecycle.is_placeable();
                 mm::record_membership_live(placeable);
                 if !placeable {
                     // Told outright that it is not a member. Waiting out the

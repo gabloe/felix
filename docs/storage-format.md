@@ -270,3 +270,35 @@ would misparse every field after the length.
 | `MAX_PAYLOAD_BYTES` | 64 MiB | Bounds the allocation a corrupt length field can request |
 | Max records per segment | `u64` offsets, so effectively unbounded | Rollover is driven by size, not count |
 | Oversized records | A record larger than `segment_size_bytes` is written to an otherwise-empty segment of its own | Splitting a record across segments would break the "offsets are contiguous within a segment" invariant that recovery depends on |
+
+## `epochs` — the generation history
+
+A shard directory may hold an `epochs` file beside its segments. It records
+where each leadership generation began, as `(generation, start offset)` pairs —
+one entry per leadership change, not per record.
+
+```text
+ 0   4  magic        u32  "FLEP"
+ 4   2  version      u16
+ 6   2  count        u16  entries following
+ 8   4  body_crc     u32  crc32 over the entries
+12   …  entries           count × { generation u64, start_offset u64 }
+```
+
+Written through a temporary and a rename, so a crash leaves either the old file
+or the new one. A half-written history is worse than none, because it would be
+read back as a confident answer about where a generation began — and that
+answer becomes a truncation point.
+
+**Unlike the segments, this file is not authoritative and its loss is not
+fatal.** Absent, short, or failing its checksum, it reads as empty: every shard
+written before the file existed has none, and refusing to open those would
+trade an outage for a convenience. What is lost is the ability to repair a
+divergence automatically, never a record.
+
+The entries are bounded, because every open reads the whole file and a
+generation older than the oldest retained record cannot be one two brokers
+diverge within.
+
+See `docs/replication-design.md`, "Divergence and truncation", for what it is
+for.

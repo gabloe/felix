@@ -10,6 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use felix_broker::Broker;
+use felix_common::membership::{
+    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
+};
 use felix_router::{Route, ShardKey, ShardRouter};
 use felix_wire::internal::ShardRef;
 use tokio_util::sync::CancellationToken;
@@ -183,17 +186,39 @@ pub async fn replicate_once<R: PeerRequester>(
         // Reporting first costs a round trip to the control plane on the path
         // of a quorum publish. That is the price of the acknowledgement meaning
         // what it says.
-        if let Some(report_to) = report_to {
-            send_reports(report_to, std::slice::from_ref(&report)).await;
-        }
+        //
+        // A report that did not land leaves the mark where it was. The whole
+        // argument above rests on the control plane knowing which replica holds
+        // the record, so releasing the publish on a report that failed to send
+        // is the same window the ordering exists to close — just reached by a
+        // different route. The publish waits, the next pass retries, and a
+        // client is told a timeout rather than an acknowledgement this broker
+        // cannot stand behind.
+        let reported = match report_to {
+            Some(report_to) => send_reports(report_to, std::slice::from_ref(&report)).await,
+            // Nothing to report to, so nothing to be behind: a broker with no
+            // cluster membership has no promotion to inform.
+            None => true,
+        };
 
-        // Published after shipping, so a publish waiting on this shard sees the
-        // majority move as soon as this pass establishes it.
-        marks.publish(
-            &watch_key(key),
-            route.generation,
-            quorum_offset(tail, &entry.followers),
-        );
+        if reported {
+            // Published after shipping, so a publish waiting on this shard sees
+            // the majority move as soon as this pass establishes it.
+            marks.publish(
+                &watch_key(key),
+                route.generation,
+                quorum_offset(tail, &entry.followers),
+            );
+        } else {
+            metrics::record_mark_withheld();
+            tracing::warn!(
+                stream = %key.stream,
+                shard = key.shard,
+                "holding the quorum mark: the replica report did not reach the \
+                 control plane, so an acknowledgement now could not be made good \
+                 on at failover",
+            );
+        }
 
         // A stream shard has two logs beside it: the positions its consumer
         // groups have reached, and the offsets those groups gave up on. Both
@@ -408,61 +433,67 @@ pub struct ReportTo {
     pub incarnation: u64,
 }
 
-/// Tell the control plane which replicas could take each shard over.
+/// Tell the control plane which replicas could take each shard over, and say
+/// whether it took the report.
 ///
-/// A failure here is logged and dropped rather than retried. The next pass
-/// sends a fresher report anyway, and a queue of stale ones is worse than none:
-/// promotion is gated on *recent* positions, so a late report is at best
-/// ignored and at worst believed after it stopped being true.
-async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
+/// Not retried here: the next pass sends a fresher one, and a queue of stale
+/// reports is worse than none, since promotion is gated on *recent* positions.
+/// The answer instead gates the quorum mark, so "could not tell" reads as
+/// false — see the caller.
+async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
     if reports.is_empty() {
-        return;
+        return true;
     }
-    let body = serde_json::json!({
-        "incarnation": to.incarnation,
-        "shards": reports
+    // The shared type, not a `json!` literal: the control plane parses this
+    // same definition, so a field renamed on one side stops compiling instead
+    // of quietly arriving as a missing one.
+    let body = ReplicaStatusRequest {
+        incarnation: to.incarnation,
+        shards: reports
             .iter()
-            .map(|report| serde_json::json!({
-                "tenant_id": report.key.tenant_id,
-                "namespace": report.key.namespace,
-                "stream": report.key.stream,
-                "shard": report.key.shard,
+            .map(|report| ShardReplicaStatus {
+                tenant_id: report.key.tenant_id.clone(),
+                namespace: report.key.namespace.clone(),
+                stream: report.key.stream.clone(),
+                shard: report.key.shard,
                 // Without the kind the control plane files a cache's report
                 // under the stream of the same name, so placement finds no
                 // caught-up replica for the cache and its shard is never
                 // promoted -- the contents are unreachable after a failover.
-                "kind": match report.key.kind {
-                    felix_router::ShardKind::Cache => "cache",
-                    felix_router::ShardKind::Stream => "stream",
+                kind: match report.key.kind {
+                    felix_router::ShardKind::Cache => WireShardKind::Cache,
+                    felix_router::ShardKind::Stream => WireShardKind::Stream,
                 },
-                "generation": report.generation,
-                "caught_up": report.caught_up,
-                "replica_offsets": report
+                generation: report.generation,
+                caught_up: report.caught_up.to_vec(),
+                replica_offsets: report
                     .offsets
                     .iter()
-                    .map(|(node_id, durable_offset)| serde_json::json!({
-                        "node_id": node_id,
-                        "durable_offset": durable_offset,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-            .collect::<Vec<_>>(),
-    });
+                    .map(|(node_id, durable_offset)| ReplicaOffset {
+                        node_id: node_id.clone(),
+                        durable_offset: *durable_offset,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
     let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
     let mut request = to.client.post(&url).json(&body);
     if let Some(token) = &to.token {
         request = request.bearer_auth(token.bearer());
     }
     match request.send().await {
-        Ok(response) if response.status().is_success() => {}
+        Ok(response) if response.status().is_success() => true,
         Ok(response) => {
             tracing::warn!(
                 status = %response.status(),
                 "the control plane refused a replica report",
             );
+            false
         }
         Err(err) => {
             tracing::warn!(error = %err, "could not send a replica report");
+            false
         }
     }
 }
@@ -480,14 +511,27 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Woken by a durable append as well as by the tick. Under `Quorum` the
+        // publish that just landed is about to wait on a majority, and waiting
+        // out a tick first put seconds in front of milliseconds of shipping.
+        //
+        // The tick stays: it covers shards with no recent appends, the
+        // auxiliary logs, and the replica report, none of which an append
+        // signals.
+        let appended = broker.appended();
         let mut cursors = HashMap::new();
         let mut group_cursors = HashMap::new();
         let mut dead_letter_cursors = HashMap::new();
         let mut counter_cursors = HashMap::new();
         loop {
+            // An append during the previous pass left a permit, so this
+            // returns at once rather than waiting for the tick — see
+            // `Broker::appended`.
+            let woken = appended.notified();
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
+                _ = woken => {}
             }
             replicate_once(
                 requester.as_ref(),
