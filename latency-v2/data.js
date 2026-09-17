@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789682411405,
+  "lastUpdate": 1789682575628,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12540,6 +12540,72 @@ window.BENCHMARK_DATA = {
             "range": "835.05",
             "unit": "us",
             "extra": "trials: 5\nmedian: 885.00\nmean: 1208.80\nstdev: 835.05\ncv: 69.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4c05c6c28ec8e03f6452409fb4c1c8192985f728",
+          "message": "fix(controlplane): judge a replica report on the clock that stamped it (#484)\n\nFreshness is a subtraction, and the two sides came from different clocks. A\nreplica-status report was stamped with `ControlPlaneStore::now_millis` and its\nTTL judged against this process's own clock in `placement.rs`. Under memory and\nRaft those are the same reading; under Postgres they are the database host's\nclock and the control plane's.\n\nA stamp from a clock behind the reader's reads as older than it is, so a\nreplica that is level with its leader is called stale and is not considered for\npromotion — which is the opposite of what the report exists to establish.\n\nThe store's clock was the wrong reach. A heartbeat needs it because it is\nstamped on one instance and judged by an expiry sweep that may run on another,\nso the two need a clock they share. Replica positions never leave the instance:\nthey live in `AppState`, and the placement pass that reads them back runs in\nthis process. One process, one clock, and `placement.rs` already had it right.\n\nStill not the caller's clock, which would let a broker keep its own report\nalive.\n\nThe end-to-end case needs a Postgres host whose clock is skewed from the\ncontrol plane's, which no test here can arrange. The unit test demonstrates\nwhat that costs instead: a report stamped a minute behind the reader reads as\nstale while it is fresh, and the same report judged on the clock that wrote it\ndoes not. The skew is held above the TTL by a `const` assertion, so widening\nthe window cannot leave the test quietly proving nothing.",
+          "timestamp": "2026-09-17T14:57:37-07:00",
+          "tree_id": "279ee134eb1ef37af81722fe7a3cd8110d7b829b",
+          "url": "https://github.com/gabloe/felix/commit/4c05c6c28ec8e03f6452409fb4c1c8192985f728"
+        },
+        "date": 1789682573735,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 123,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 123.00\nmean: 122.60\nstdev: 0.55\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 167,
+            "range": "4.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 168.80\nstdev: 4.55\ncv: 2.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 223,
+            "range": "14.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 223.00\nmean: 227.00\nstdev: 14.88\ncv: 6.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "1.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 165.00\nstdev: 1.41\ncv: 0.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 342,
+            "range": "8.88",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 342.00\nmean: 345.60\nstdev: 8.88\ncv: 2.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 466,
+            "range": "323.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 466.00\nmean: 683.60\nstdev: 323.78\ncv: 47.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
