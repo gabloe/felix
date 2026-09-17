@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-pub fn build_test_client() -> Result<Client> {
+pub(crate) fn build_test_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(1))
         .no_proxy()
@@ -19,7 +19,7 @@ pub fn build_test_client() -> Result<Client> {
         .context("build test http client")
 }
 
-pub async fn wait_for_listen(addr: SocketAddr) -> Result<()> {
+pub(crate) async fn wait_for_listen(addr: SocketAddr) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         match tokio::net::TcpStream::connect(addr).await {
@@ -34,7 +34,7 @@ pub async fn wait_for_listen(addr: SocketAddr) -> Result<()> {
     }
 }
 
-pub fn spawn_axum_with_shutdown(
+pub(crate) fn spawn_axum_with_shutdown(
     listener: TcpListener,
     router: axum::Router,
 ) -> (oneshot::Sender<()>, JoinHandle<()>) {
@@ -51,7 +51,7 @@ pub fn spawn_axum_with_shutdown(
 }
 
 #[allow(dead_code)]
-pub async fn get_with_context(client: &Client, url: &str, phase: &str) -> Result<Response> {
+pub(crate) async fn get_with_context(client: &Client, url: &str, phase: &str) -> Result<Response> {
     client
         .get(url)
         .send()

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// One point in the resource time series.
 #[derive(Debug, Clone, Copy)]
-pub struct ResourceSample {
+pub(crate) struct ResourceSample {
     pub unix_ms: u128,
     pub rss_kb: u64,
     pub open_fds: u64,
@@ -18,7 +18,7 @@ pub struct ResourceSample {
 }
 
 impl ResourceSample {
-    pub fn capture() -> Self {
+    pub(crate) fn capture() -> Self {
         Self {
             unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -87,7 +87,7 @@ fn count_open_fds() -> u64 {
 /// return to zero after quiescence is exactly the leak signal we want. Labelled
 /// series are summed across labels, since "any connection still registered" is
 /// the question, not which one.
-pub fn scrape_gauges(rendered: &str) -> HashMap<String, f64> {
+pub(crate) fn scrape_gauges(rendered: &str) -> HashMap<String, f64> {
     let mut gauge_names = Vec::new();
     let mut values: HashMap<String, f64> = HashMap::new();
 

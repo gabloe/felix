@@ -15,12 +15,12 @@ categories = ["network-programming", "api-bindings"]
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
-ahash = "0.8"
-hashbrown = { version = "0.16", features = ["equivalent"] }
+ahash = { workspace = true }
+hashbrown = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-metrics = "0.24"
-serde = { workspace = true, features = ["derive"] }
+metrics = { workspace = true }
+serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 # felix-broker/felix-storage are optional: they're only needed by the `in-process` feature
 # (an embedded-broker convenience mode for local dev/tests). Both are AGPL-3.0 licensed,
@@ -31,7 +31,7 @@ felix-broker = { path = "../felix-broker", version = "0.4.0-preview", optional =
 felix-storage = { path = "../felix-storage", version = "0.4.0-preview", optional = true }
 felix-transport = { path = "../felix-transport", version = "0.4.0-preview" }
 felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }
-quinn = "0.11"
+quinn = { workspace = true }
 
 [features]
 default = []
@@ -41,12 +41,15 @@ telemetry = []
 in-process = ["dep:felix-broker", "dep:felix-storage"]
 
 [dev-dependencies]
-rcgen = "0.14"
-rustls = "0.23"
-serial_test = "3"
-tempfile = "3"
+rcgen = { workspace = true }
+rustls = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [package.metadata.docs.rs]
 # `in-process` and `telemetry` are off by default; document them anyway.
 all-features = true
+
+[lints]
+workspace = true

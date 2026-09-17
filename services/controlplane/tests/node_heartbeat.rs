@@ -1,9 +1,9 @@
 //! HTTP behaviour of the broker heartbeat endpoint.
 mod common;
-mod http_helpers;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::json_request;
 use common::read_json;
 use controlplane::api::types::FeatureFlags;
 use controlplane::app::{AppState, build_router};
@@ -11,7 +11,6 @@ use controlplane::config::NodeLivenessConfig;
 use controlplane::model::{Node, NodeCapacity, NodeLifecycle, NodeSpec, NodeStatus};
 use controlplane::store::memory::InMemoryStore;
 use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig};
-use http_helpers::json_request;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;

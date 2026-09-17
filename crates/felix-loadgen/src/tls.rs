@@ -15,7 +15,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
-pub fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig> {
+pub(crate) fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig> {
     let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))

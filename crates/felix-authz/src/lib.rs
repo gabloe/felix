@@ -1,5 +1,6 @@
-//! Authn/authz primitives shared by the control plane and the broker: the
-//! Casbin model, permission matching, and token/JWKS helpers.
+//! Authn/authz primitives shared by the control plane and the broker:
+//! permission matching and token/JWKS helpers. The Casbin model itself lives
+//! with the control plane, the only place policy is evaluated.
 //!
 //! The control plane mints tokens and publishes JWKS; brokers verify and
 //! enforce. Both sides must agree on issuer and audience, tokens are
@@ -7,7 +8,6 @@
 //! wildcards.
 
 mod action;
-mod casbin_model;
 mod errors;
 mod jwks;
 mod matcher;
@@ -17,7 +17,6 @@ mod token;
 mod types;
 
 pub use action::Action;
-pub use casbin_model::{casbin_model, casbin_model_string};
 pub use errors::{AuthzError, AuthzResult};
 pub use jwks::{Jwk, Jwks, KeyUse};
 pub use matcher::{PermissionMatcher, wildcard_match};

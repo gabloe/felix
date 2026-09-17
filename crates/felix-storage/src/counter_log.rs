@@ -459,5 +459,5 @@ pub fn decode_sum(bytes: &[u8]) -> Result<i64> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "counter_log/tests.rs"]
 mod tests;

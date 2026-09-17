@@ -15,14 +15,14 @@ categories = ["network-programming", "asynchronous"]
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-metrics = "0.24"
+metrics = { workspace = true }
 felix-storage = { path = "../felix-storage", version = "0.4.0-preview" }
 felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }
 arc-swap = "1.8"
-ahash = "0.8"
-hashbrown = { version = "0.16", features = ["equivalent"] }
+ahash = { workspace = true }
+hashbrown = { workspace = true }
 slab = "0.4"
-parking_lot = "0.12"
+parking_lot = { workspace = true }
 
 [features]
 default = []
@@ -30,5 +30,8 @@ telemetry = []
 perf_debug = []
 
 [dev-dependencies]
-tempfile = "3"
-serial_test = "3"
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+
+[lints]
+workspace = true

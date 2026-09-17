@@ -18,7 +18,7 @@ const MARKER_BYTES: usize = 13 + OFFSET_DIGITS + 1;
 ///
 /// Layout: `felix-record-<offset:020>-` followed by a repeating byte pattern
 /// seeded from the offset.
-pub fn payload_for(offset: u64, len: usize) -> Vec<u8> {
+pub(crate) fn payload_for(offset: u64, len: usize) -> Vec<u8> {
     let marker = format!(
         "felix-record-{offset:0OFFSET_DIGITS$}-",
         OFFSET_DIGITS = OFFSET_DIGITS
@@ -36,12 +36,12 @@ pub fn payload_for(offset: u64, len: usize) -> Vec<u8> {
 }
 
 /// Check that `payload` is exactly what `payload_for(offset, len)` produces.
-pub fn matches(offset: u64, len: usize, payload: &[u8]) -> bool {
+pub(crate) fn matches(offset: u64, len: usize, payload: &[u8]) -> bool {
     payload_for(offset, len) == payload
 }
 
 /// Recover the offset a payload claims, or `None` if it is not one of ours.
-pub fn claimed_offset(payload: &[u8]) -> Option<u64> {
+pub(crate) fn claimed_offset(payload: &[u8]) -> Option<u64> {
     let text = std::str::from_utf8(payload.get(..MARKER_BYTES)?).ok()?;
     text.strip_prefix("felix-record-")?
         .trim_end_matches('-')

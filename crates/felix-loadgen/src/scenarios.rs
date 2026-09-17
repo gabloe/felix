@@ -19,7 +19,7 @@ use felix_wire::AckMode;
 
 use crate::stats::{Percentiles, Samples, emit_json, fmt_us};
 
-pub struct Common {
+pub(crate) struct Common {
     pub brokers: Vec<SocketAddr>,
     pub tenant: String,
     pub namespace: String,
@@ -97,7 +97,7 @@ async fn client(common: &Common, addr: SocketAddr) -> Result<Client> {
 /// Publish/subscribe: `fanout` subscribers, one publisher, and both latencies
 /// that matter — the acknowledgement round trip (batch 1) and the
 /// publish-to-delivery path (always).
-pub async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
+pub(crate) async fn pubsub(common: &Common, stream: &str, binary: bool) -> Result<()> {
     let epoch = Instant::now();
     let use_ack = common.batch <= 1 && !binary;
 
@@ -464,7 +464,7 @@ where
 
 /// Cache put then get, reported separately: a put pays the log append and a
 /// get pays the index-plus-read, and folding them together hides both.
-pub async fn cache(common: &Common, cache: &str) -> Result<()> {
+pub(crate) async fn cache(common: &Common, cache: &str) -> Result<()> {
     let value = bytes::Bytes::from(vec![0u8; common.payload_bytes]);
     let (tenant, namespace, name) = scope(common, cache);
     let put_value = value.clone();
@@ -512,7 +512,7 @@ pub async fn cache(common: &Common, cache: &str) -> Result<()> {
 
 /// Counter add then get. The add is the composed-semantics headline: one
 /// round trip that both applies the delta and answers with the sum.
-pub async fn counter(common: &Common, cache: &str) -> Result<()> {
+pub(crate) async fn counter(common: &Common, cache: &str) -> Result<()> {
     let (tenant, namespace, name) = scope(common, cache);
     let (t, ns, c) = (tenant.clone(), namespace.clone(), name.clone());
     let (add, add_tp, add_n) = round_trips(
@@ -561,7 +561,7 @@ pub async fn counter(common: &Common, cache: &str) -> Result<()> {
 /// Keyed watch: `fanout` watchers on one key, a writer putting `total` values
 /// through it, and the latency from each put landing to each watcher seeing
 /// it — the composed-semantics fanout claim, measured.
-pub async fn watch(common: &Common, cache: &str) -> Result<()> {
+pub(crate) async fn watch(common: &Common, cache: &str) -> Result<()> {
     let epoch = Instant::now();
     let (tenant, namespace, name) = scope(common, cache);
     let key = "watched";
@@ -735,7 +735,7 @@ fn account_group(
 /// against poll time, one clock) and the drain throughput. Redeliveries
 /// (`attempts > 1`) are counted, not hidden. A cumulative ack of each batch's
 /// highest offset finishes it, which is how a real drain settles a run of work.
-pub async fn queue(common: &Common, stream: &str) -> Result<()> {
+pub(crate) async fn queue(common: &Common, stream: &str) -> Result<()> {
     let epoch = Instant::now();
     let group = "perf-cg";
     let shard = 0u32;
@@ -899,7 +899,7 @@ pub async fn queue(common: &Common, stream: &str) -> Result<()> {
 /// roster before it is live. Run it at `--total` 100 / 1000 / 10000 to trace
 /// the curve the design doc asks for. Each roster size gets its own key prefix,
 /// so the retained replay is exactly the roster and nothing else in the cache.
-pub async fn retained(common: &Common, cache: &str) -> Result<()> {
+pub(crate) async fn retained(common: &Common, cache: &str) -> Result<()> {
     let (tenant, namespace, name) = scope(common, cache);
     let roster = common.total.max(1);
     let prefix = format!("roster-{roster}/");
@@ -984,7 +984,7 @@ pub async fn retained(common: &Common, cache: &str) -> Result<()> {
 /// scaling is visible. A single publisher on one shard is the least-parallel
 /// configuration possible; this is the opposite, and it is what actually
 /// stresses the brokers.
-pub async fn ingest(common: &Common, stream: &str) -> Result<()> {
+pub(crate) async fn ingest(common: &Common, stream: &str) -> Result<()> {
     let publishers = common.concurrency.max(1);
     let per = (common.total / publishers).max(1);
     let batch = common.batch.max(1);

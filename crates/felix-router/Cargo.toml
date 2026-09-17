@@ -15,4 +15,7 @@ categories = ["network-programming"]
 felix-common = { path = "../felix-common", version = "0.4.0-preview" }
 # Routes are read on every publish and replaced wholesale; a swap keeps readers
 # off any lock a writer can hold.
-arc-swap = "1"
+arc-swap = { workspace = true }
+
+[lints]
+workspace = true

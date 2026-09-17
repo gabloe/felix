@@ -38,24 +38,20 @@ APACHE = {
 COPYLEFT = {
     "felix-broker",
     "felix-storage",
-    "felix-metadata",
     "felix-authz",
-    "felix-crypto",
     "felix-router",
     "felix-cluster",
     "felix-loadgen",
     "broker",
     "controlplane",
-    "agent",
 }
 
 # Service binaries and dev/CI tools with hard AGPL-3.0 dependencies. Nobody
-# consumes these from a registry, and `broker`/`controlplane`/`agent` are generic
+# consumes these from a registry, and `broker`/`controlplane` are generic
 # names that would collide besides.
 NOT_PUBLISHABLE = {
     "broker",
     "controlplane",
-    "agent",
     "felix-conformance",
     "felix-cluster",
     "felix-loadgen",

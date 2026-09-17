@@ -71,7 +71,7 @@ pub async fn read_frame_limited_into(
 }
 
 // Low-level frame writer for QUIC streams.
-pub async fn write_frame(send: &mut SendStream, frame: &Frame) -> Result<()> {
+pub(super) async fn write_frame(send: &mut SendStream, frame: &Frame) -> Result<()> {
     let mut header_bytes = [0u8; FrameHeader::LEN];
     frame.header.encode_into(&mut header_bytes);
     send.write_all(&header_bytes)

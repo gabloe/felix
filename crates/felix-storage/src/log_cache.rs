@@ -959,5 +959,5 @@ impl LogCache {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "log_cache/tests.rs"]
 mod tests;

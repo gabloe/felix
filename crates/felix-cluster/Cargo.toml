@@ -21,25 +21,28 @@ controlplane = { path = "../../services/controlplane", version = "0.4.0-preview"
 felix-client = { path = "../felix-client", version = "0.4.0-preview" }
 felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }
 bytes = { workspace = true }
-quinn = "0.11"
-rustls = "0.23"
-axum = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+quinn = { workspace = true }
+rustls = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # Suspending a broker needs a signal, not a kill: the point of the fault is a
 # process that is still alive and holding its lease while answering nothing.
-libc = "0.2"
+libc = { workspace = true }
 
 [dev-dependencies]
 # These spawn several broker processes each. Run one cluster at a time: a CI
 # runner with two cores starting nine brokers at once starves them all, and the
 # ephemeral ports they were handed are more likely to collide.
-serial_test = "3"
+serial_test = { workspace = true }
+
+[lints]
+workspace = true

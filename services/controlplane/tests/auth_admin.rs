@@ -1,9 +1,9 @@
 mod common;
-mod http_helpers;
 
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
+use common::json_request;
 use common::read_json;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
@@ -12,7 +12,6 @@ use controlplane::auth::keys::generate_signing_keys;
 use controlplane::auth::oidc::UpstreamOidcValidator;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::store::{AuthStore, ControlPlaneAuthStore, StoreConfig, memory::InMemoryStore};
-use http_helpers::json_request;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;

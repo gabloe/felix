@@ -10,7 +10,10 @@ pub(crate) mod base64_bytes {
     use serde::de::Error;
 
     // Encode Vec<u8> as base64 string for JSON payloads.
-    pub fn serialize<S>(value: &Vec<u8>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(
+        value: &Vec<u8>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -19,7 +22,7 @@ pub(crate) mod base64_bytes {
     }
 
     // Decode base64 string into Vec<u8>.
-    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -35,7 +38,7 @@ pub(crate) mod base64_bytes_bytes {
     use serde::de::Error;
 
     // Encode Bytes as base64 string for JSON payloads.
-    pub fn serialize<S>(value: &Bytes, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(value: &Bytes, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -44,7 +47,7 @@ pub(crate) mod base64_bytes_bytes {
     }
 
     // Decode base64 string into Bytes.
-    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Bytes, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Bytes, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -61,7 +64,7 @@ pub(crate) mod base64_option_bytes {
     use serde::de::Error;
 
     // Encode Option<Bytes> as nullable base64 string.
-    pub fn serialize<S>(
+    pub(crate) fn serialize<S>(
         value: &Option<Bytes>,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error>
@@ -78,7 +81,9 @@ pub(crate) mod base64_option_bytes {
     }
 
     // Decode optional base64 string into Option<Bytes>.
-    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Option<Bytes>, D::Error>
+    pub(crate) fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<Bytes>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -98,7 +103,10 @@ pub(crate) mod base64_vec {
     use serde::de::Error;
 
     // Encode Vec<Vec<u8>> as base64 array.
-    pub fn serialize<S>(values: &[Vec<u8>], serializer: S) -> std::result::Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(
+        values: &[Vec<u8>],
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -110,7 +118,9 @@ pub(crate) mod base64_vec {
     }
 
     // Decode base64 array into Vec<Vec<u8>>.
-    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<Vec<Vec<u8>>, D::Error>
+    pub(crate) fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Vec<Vec<u8>>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
