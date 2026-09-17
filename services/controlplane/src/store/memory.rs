@@ -221,6 +221,38 @@ pub struct InMemoryStore {
 }
 
 impl InMemoryStore {
+    /// Forget every shard assignment belonging to a stream or cache that has
+    /// just been deleted.
+    ///
+    /// Postgres does this with `ON DELETE CASCADE`, and the reason is in the
+    /// migration: ownership records for shards that no longer exist leave
+    /// placement chasing ghosts. Doing it only there would be the more
+    /// dangerous divergence of the two — a suite running in memory would see
+    /// stale assignments the deployed system never produces, so a placement bug
+    /// that needs orphaned rows is invisible in memory and real in Postgres.
+    ///
+    /// No change-log entry, deliberately, because Postgres writes none either:
+    /// a cascade happens inside the database and never reaches the code that
+    /// records unassignments. The delete is already announced on the stream or
+    /// cache change log, and a consumer that has been told the stream is gone
+    /// does not need to be told separately about the shards of a stream that no
+    /// longer exists.
+    async fn drop_shard_assignments_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        name: &str,
+    ) {
+        let mut state = self.shards.write().await;
+        state.records.retain(|key, _| {
+            !(key.kind == kind
+                && key.tenant_id == tenant_id
+                && key.namespace == namespace
+                && key.stream == name)
+        });
+    }
+
     pub fn new(config: StoreConfig) -> Self {
         let capacity = config.change_window();
         // The change window is a retention bound for incremental sync consumers.
@@ -636,6 +668,13 @@ impl ControlPlaneStore for InMemoryStore {
         if removed.is_none() {
             return Err(StoreError::NotFound("stream".into()));
         }
+        self.drop_shard_assignments_for(
+            ShardKind::Stream,
+            &key.tenant_id,
+            &key.namespace,
+            &key.stream,
+        )
+        .await;
         self.stream_changes
             .write()
             .await
@@ -754,6 +793,13 @@ impl ControlPlaneStore for InMemoryStore {
         if removed.is_none() {
             return Err(StoreError::NotFound("cache".into()));
         }
+        self.drop_shard_assignments_for(
+            ShardKind::Cache,
+            &key.tenant_id,
+            &key.namespace,
+            &key.cache,
+        )
+        .await;
         self.cache_changes.write().await.record(|seq| CacheChange {
             seq,
             op: CacheChangeOp::Deleted,

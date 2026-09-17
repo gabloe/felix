@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use super::{ControlPlaneStore, StoreError};
 use crate::model::{
-    Cache, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy, ShardAssignment,
-    ShardKey, ShardKind, ShardState, Stream, StreamKind, Tenant,
+    Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy,
+    ShardAssignment, ShardKey, ShardKind, ShardState, Stream, StreamKey, StreamKind, Tenant,
 };
 use crate::store::node_contract::node;
 
@@ -123,6 +123,7 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     a_cache_shard_and_a_stream_shard_of_the_same_name_coexist(store).await;
     a_cache_shard_is_bounded_by_the_cache_not_the_stream(store).await;
     an_unknown_cache_is_rejected(store).await;
+    deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(store).await;
 }
 
 fn cache_key(shard: u32) -> ShardKey {
@@ -559,4 +560,123 @@ pub(crate) async fn assign_for_restart(store: &dyn ControlPlaneStore) -> ShardAs
     active.state = ShardState::Active;
     let _ = first;
     store.put_shard_assignment(active).await.expect("activate")
+}
+
+/// Deleting a stream or a cache must not leave its shards owned.
+///
+/// Postgres enforces this with `ON DELETE CASCADE`; the point of running it
+/// here is that the in-memory store must do the same thing, and the divergence
+/// runs the dangerous way — a suite in memory that kept the rows would be
+/// asserting against ghosts the deployed system has already cleaned up.
+///
+/// Uses names of its own rather than the shared fixtures, because the cases
+/// after it still need those to exist.
+async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
+    store: &dyn ControlPlaneStore,
+) {
+    const DOOMED: &str = "doomed";
+
+    let stream_key = StreamKey {
+        tenant_id: TENANT.to_string(),
+        namespace: NAMESPACE.to_string(),
+        stream: DOOMED.to_string(),
+    };
+    let cache_key = CacheKey {
+        tenant_id: TENANT.to_string(),
+        namespace: NAMESPACE.to_string(),
+        cache: DOOMED.to_string(),
+    };
+
+    store
+        .create_stream(Stream {
+            tenant_id: TENANT.to_string(),
+            namespace: NAMESPACE.to_string(),
+            stream: DOOMED.to_string(),
+            kind: StreamKind::Stream,
+            shards: 2,
+            replication_factor: 1,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtMostOnce,
+            durable: true,
+        })
+        .await
+        .expect("create the stream to delete");
+    store
+        .create_cache(Cache {
+            tenant_id: TENANT.to_string(),
+            namespace: NAMESPACE.to_string(),
+            cache: DOOMED.to_string(),
+            display_name: "Doomed".to_string(),
+            shards: 2,
+            replication_factor: 1,
+        })
+        .await
+        .expect("create the cache to delete");
+
+    let doomed = |shard: u32, kind: ShardKind| ShardAssignment {
+        key: ShardKey {
+            tenant_id: TENANT.to_string(),
+            namespace: NAMESPACE.to_string(),
+            stream: DOOMED.to_string(),
+            shard,
+            kind,
+        },
+        leader: "broker-x".to_string(),
+        replicas: Vec::new(),
+        generation: 0,
+        state: ShardState::Assigning,
+    };
+    for shard in 0..2 {
+        store
+            .put_shard_assignment(doomed(shard, ShardKind::Stream))
+            .await
+            .expect("assign a stream shard");
+        store
+            .put_shard_assignment(doomed(shard, ShardKind::Cache))
+            .await
+            .expect("assign a cache shard");
+    }
+
+    let owned = |assignments: &[ShardAssignment], kind: ShardKind| -> usize {
+        assignments
+            .iter()
+            .filter(|a| a.key.stream == DOOMED && a.key.kind == kind)
+            .count()
+    };
+    let before = store.list_shard_assignments().await.expect("list");
+    assert_eq!(owned(&before, ShardKind::Stream), 2);
+    assert_eq!(owned(&before, ShardKind::Cache), 2);
+
+    store
+        .delete_stream(&stream_key)
+        .await
+        .expect("delete the stream");
+    let after_stream = store.list_shard_assignments().await.expect("list");
+    assert_eq!(
+        owned(&after_stream, ShardKind::Stream),
+        0,
+        "the deleted stream's shards are still owned, so placement is chasing \
+         a stream that no longer exists",
+    );
+    assert_eq!(
+        owned(&after_stream, ShardKind::Cache),
+        2,
+        "deleting the stream took the same-named cache's shards with it; the \
+         two are distinguished by kind and nothing else",
+    );
+
+    store
+        .delete_cache(&cache_key)
+        .await
+        .expect("delete the cache");
+    let after_cache = store.list_shard_assignments().await.expect("list");
+    assert_eq!(
+        owned(&after_cache, ShardKind::Cache),
+        0,
+        "the deleted cache's shards are still owned",
+    );
 }
