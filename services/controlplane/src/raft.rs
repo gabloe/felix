@@ -72,6 +72,23 @@ pub trait AppStateMachine: Send + Sync + 'static {
     async fn apply(&self, command: &[u8]) -> Vec<u8>;
     async fn snapshot(&self) -> Vec<u8>;
     async fn restore(&self, snapshot: &[u8]);
+
+    /// Replace any clock reading the proposer baked into `command` with
+    /// `now_millis`, or return `None` to propose the bytes unchanged.
+    ///
+    /// Determinism forces the nondeterministic parts of a command to be
+    /// decided before it is proposed, which means some commands carry a wall
+    /// clock. Whose clock that is matters when the value is later compared
+    /// against one read somewhere else: the receiving instance's makes the
+    /// comparison depend on two machines' clocks agreeing. This is the hook
+    /// that lets the leader's be the only one appended — the seam calls it
+    /// on the leader, immediately before the entry enters the log, so
+    /// commands stay opaque here and their meaning stays with the
+    /// application.
+    fn restamp(&self, command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
+        let _ = (command, now_millis);
+        None
+    }
 }
 
 /// Everything needed to start this instance's member of the group.
@@ -142,6 +159,9 @@ pub struct RaftHandle {
     write_timeout: Duration,
     /// For forwarding proposals to the leader; pooled per host underneath.
     forward: reqwest::Client,
+    /// Kept past construction only for [`AppStateMachine::restamp`], which
+    /// runs on the proposal path rather than the apply loop.
+    app: Arc<dyn AppStateMachine>,
 }
 
 /// Whether a background task that must run on exactly one instance should
@@ -197,7 +217,7 @@ impl RaftHandle {
         // from it. Read before the node starts, because the node moves it.
         let committed_floor = store::persisted_committed_index(&db);
         let log_store = store::LogStore::new(Arc::clone(&db));
-        let state_machine = store::StateMachineStore::open(db, app).await?;
+        let state_machine = store::StateMachineStore::open(db, Arc::clone(&app)).await?;
 
         let raft = types::Raft::new(
             settings.node_id,
@@ -245,6 +265,7 @@ impl RaftHandle {
                 .timeout(settings.write_timeout)
                 .build()
                 .context("build forwarding client")?,
+            app,
         })
     }
 
@@ -300,7 +321,8 @@ impl RaftHandle {
             // Bounded per attempt too: a leader that lost quorum queues
             // proposals forever, and that must become this instance's error,
             // not its hang.
-            match tokio::time::timeout(attempt, self.raft.client_write(command.clone())).await {
+            let proposal = self.proposal_bytes(&command);
+            match tokio::time::timeout(attempt, self.raft.client_write(proposal)).await {
                 Err(_) => {
                     last_refusal = Some(anyhow::anyhow!("proposal not committed in time"));
                     continue;
@@ -325,6 +347,26 @@ impl RaftHandle {
             }
             tokio::time::sleep(RETRY_DELAY.min(remaining)).await;
         }
+    }
+
+    /// What to append, with the leader's clock in place of the proposer's.
+    ///
+    /// A clock inside a command has to be the leader's when it will later be
+    /// compared against a reading taken on the leader, and this is the only
+    /// place that knows which instance that is. `client_write` succeeds on
+    /// the leader alone, so stamping right before it is stamping at the
+    /// moment of acceptance.
+    ///
+    /// `command` itself is left alone. If this instance turns out to be
+    /// deposed between the check and the write, what gets forwarded carries
+    /// no reading of ours and the real leader stamps its own.
+    fn proposal_bytes(&self, command: &[u8]) -> Vec<u8> {
+        let leading = self.raft.metrics().borrow().current_leader == Some(self.id);
+        if leading && let Some(stamped) = self.app.restamp(command, crate::api::nodes::now_millis())
+        {
+            return stamped;
+        }
+        command.to_vec()
     }
 
     async fn forward_to(&self, addr: &str, command: &[u8], budget: Duration) -> Result<Vec<u8>> {

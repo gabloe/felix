@@ -159,6 +159,12 @@ pub trait ControlPlaneStore: Send + Sync {
     ///
     /// `at_millis` never moves the stored value backwards, so a delayed
     /// heartbeat is a no-op rather than a regression.
+    ///
+    /// The stored time may not be the `at_millis` passed in. Under Raft the
+    /// leader overwrites it as it accepts the proposal, because the instance
+    /// a broker's heartbeat happens to reach is not the one that later judges
+    /// it stale. Pass [`ControlPlaneStore::now_millis`] and treat the returned
+    /// node as the record of what was stored.
     async fn record_node_heartbeat(
         &self,
         node_id: &str,
@@ -181,8 +187,14 @@ pub trait ControlPlaneStore: Send + Sync {
     /// the bound on drift *rate* the design assumes, and one NTP steps break
     /// outright.
     ///
-    /// Backends with a shared clock return it. The default is the process
-    /// clock, which is correct for a single-process store.
+    /// Backends with a shared clock return it — Postgres answers with
+    /// `clock_timestamp()`. The default is the process clock, which is
+    /// correct for a single-process store and for the Raft backend, where
+    /// the leader overwrites a proposer's reading before the command enters
+    /// the log (`store::command::restamp`) and the sweep that reads it back
+    /// runs only on that same leader. Both sides of the comparison are one
+    /// process's clock either way; the two backends just reach that
+    /// differently.
     async fn now_millis(&self) -> StoreResult<u64> {
         Ok(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

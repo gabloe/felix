@@ -307,7 +307,7 @@ async fn a_heartbeat_never_moves_backwards(store: &dyn ControlPlaneStore) {
         .expect("register");
     let at = registered.status.last_heartbeat_at_millis;
 
-    store
+    let beat = store
         .record_node_heartbeat("broker-a", 0, at + 1_000)
         .await
         .expect("beat");
@@ -316,8 +316,14 @@ async fn a_heartbeat_never_moves_backwards(store: &dyn ControlPlaneStore) {
         .await
         .expect("late beat");
 
+    // The property, not the exact value: the Raft backend ignores the caller's
+    // `at_millis` and stamps the leader's clock, so asserting the number that
+    // went in would be asserting which backend this is.
     let seen = store.get_node("broker-a").await.expect("get");
-    assert_eq!(seen.status.last_heartbeat_at_millis, at + 1_000);
+    assert!(
+        seen.status.last_heartbeat_at_millis >= beat.status.last_heartbeat_at_millis,
+        "a late heartbeat moved the recorded time backwards",
+    );
 }
 
 async fn a_heartbeat_publishes_no_change(store: &dyn ControlPlaneStore) {
@@ -542,7 +548,7 @@ async fn a_heartbeat_from_a_superseded_incarnation_is_rejected(store: &dyn Contr
 /// receiving placement.
 async fn a_heartbeat_does_not_revive_a_down_node(store: &dyn ControlPlaneStore) {
     clear(store).await;
-    store
+    let registered = store
         .register_node(node("broker-a", 7001))
         .await
         .expect("register");
@@ -556,8 +562,8 @@ async fn a_heartbeat_does_not_revive_a_down_node(store: &dyn ControlPlaneStore) 
         .await
         .expect("beat");
     assert_eq!(after.status.lifecycle, NodeLifecycle::Down);
-    assert_eq!(
-        after.status.last_heartbeat_at_millis, 1_900_000_000_000,
+    assert!(
+        after.status.last_heartbeat_at_millis > registered.status.last_heartbeat_at_millis,
         "liveness is still recorded, so a later registration is judged fairly",
     );
 }
