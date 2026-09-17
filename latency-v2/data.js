@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789661904790,
+  "lastUpdate": 1789663610428,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11946,6 +11946,72 @@ window.BENCHMARK_DATA = {
             "range": "517.01",
             "unit": "us",
             "extra": "trials: 5\nmedian: 962.00\nmean: 1085.60\nstdev: 517.01\ncv: 47.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6593d868857d3111763c964fa088e5809041bf93",
+          "message": "fix(controlplane): judge liveness expiry by one clock, not one per instance (#439)\n\nA heartbeat recorded a time and the expiry sweep compared against another,\neach read from whichever instance happened to handle it. With several\nstateless instances over one Postgres those are different processes, so\nsafety rested on their wall clocks agreeing to within the margin — much\nstronger than the bound on drift rate the design assumes, and something a\nsingle NTP step breaks.\n\nBoth sides now read ControlPlaneStore::now_millis. The Postgres backend\nanswers with clock_timestamp(), so the database is the clock and every\ninstance judges expiry by the same one. The default is the process clock,\nwhich is right for a single-process store.\n\nclock_timestamp() rather than now(): now() is the transaction's start time\nand is identical for every call inside one, which is not a clock.\n\nThe callers still do not take the time from the request — a broker must not\nbe able to postpone its own timeout — so this changes which of the control\nplane's clocks is authoritative, not who owns it.\n\nrecord_node_heartbeat and expire_stale_nodes keep their timestamp\nparameters. Contract tests drive them at exact times, and the raft backend\nneeds the proposer to decide the time so every replica applies the same one.\n\nThe new contract case runs against both backends, so a backend answering\nfrom its own process clock is caught rather than assumed away.\n\nFixes #408",
+          "timestamp": "2026-09-17T09:15:20-07:00",
+          "tree_id": "97eaa7dd31888076974cfeca5dbe8bdb0836a77c",
+          "url": "https://github.com/gabloe/felix/commit/6593d868857d3111763c964fa088e5809041bf93"
+        },
+        "date": 1789663608217,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 94,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 94.00\nmean: 94.40\nstdev: 0.55\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 125,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 125.00\nmean: 125.20\nstdev: 1.10\ncv: 0.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 162,
+            "range": "8.56",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 160.40\nstdev: 8.56\ncv: 5.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "4.66",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 128.80\nstdev: 4.66\ncv: 3.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 254,
+            "range": "480.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 254.00\nmean: 466.00\nstdev: 480.25\ncv: 103.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 462,
+            "range": "877.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 462.00\nmean: 805.80\nstdev: 877.77\ncv: 108.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
