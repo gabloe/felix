@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789682578020,
+  "lastUpdate": 1789684535794,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9932,6 +9932,58 @@ window.BENCHMARK_DATA = {
             "range": "9948.58",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 581025.20\nmean: 576435.04\nstdev: 9948.58\ncv: 1.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3854e782330167243bc3de6d5ad6ba2847de479",
+          "message": "feat(broker): name the replicas replication has stopped for (#485)\n\n`felix_broker_replication_halted` is a bare count, and has to stay one — a\nlabel per shard is a label per stream per tenant, which is unbounded by design\nin a multi-tenant broker. So it can say three replicas have stopped and nothing\nmore, and the only way to learn which was to grep the broker's logs for the\nwarning that accompanied each halt.\n\nThat is a poor position to be in, because a halt does not resolve on its own.\nThe follower is out of every quorum until an operator acts, and acting means\nknowing which replica of which shard on which node, and whether it diverged or\nmerely needs history this leader no longer holds — which decides whether a\nrebuild is the right move at all.\n\nSo the broker serves a listing beside the metrics, at `GET\n/replication/halted`. A listing rather than a metric is exactly what lets it\ncarry the identity: it is read on demand and its size is the number of halted\nreplicas, normally zero. It names the shard, the node, the generation, how far\nthe follower had got, a stable reason a runbook can key off, and a remedy in\nprose. A healthy broker answers `[]` rather than 404, because \"nothing is\nhalted\" and \"this broker does not answer that question\" are different things to\na dashboard.\n\nRead-only, deliberately. Discarding a halted replica's log so the leader's\nstanding bootstrap offer is accepted is the obvious next step, and that\nlistener has no authentication (#125, #126) — it carries what is worth knowing\nand nothing worth doing. The supervised rebuild stays #424.\n\nThe listing is replaced wholesale each pass rather than accumulated, so a halt\nthat has resolved stops being reported instead of sending someone after a\nreplica that is already shipping again.\n\n`spawn` crossed clippy's argument limit, so the two things a pass publishes are\none `Published` now. They belong together anyway: the mark is what a `Quorum`\npublish waits on, and the listing is what an operator reads when a replica\nstops contributing to one.",
+          "timestamp": "2026-09-17T15:32:59-07:00",
+          "tree_id": "8f725dc912fa2ef715b89181c4a5a7cbdcbf75f1",
+          "url": "https://github.com/gabloe/felix/commit/b3854e782330167243bc3de6d5ad6ba2847de479"
+        },
+        "date": 1789684534961,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 234245.67,
+            "range": "4538.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234245.67\nmean: 234787.95\nstdev: 4538.84\ncv: 1.93%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 234245.67,
+            "range": "4538.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234245.67\nmean: 234787.95\nstdev: 4538.84\ncv: 1.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55465.11,
+            "range": "4534.25",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55465.11\nmean: 53568.78\nstdev: 4534.25\ncv: 8.46%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 554651.1,
+            "range": "45342.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 554651.10\nmean: 535687.79\nstdev: 45342.48\ncv: 8.46%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
