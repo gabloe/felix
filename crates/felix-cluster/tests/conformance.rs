@@ -193,11 +193,21 @@ async fn a_moved_shard_converges_on_the_new_owner() -> Result<()> {
     );
 
     // Publish through the broker that used to own it until it forwards rather
-    // than serving locally. That transition is convergence; the loop bounds how
-    // long it may take.
+    // than serving locally. That transition is convergence, and what follows
+    // bounds how long it may take.
+    //
+    // A **deadline**, not an attempt count. Two hundred attempts is a duration
+    // only if every attempt costs about the same, and they do not: an attempt
+    // that fails immediately — the old owner has not seen the new assignment,
+    // so the publish is refused rather than forwarded — is far cheaper than one
+    // that succeeds. So the count ran out in seconds on a machine where the
+    // assignment feed itself needed longer than that, which is how this failed
+    // under coverage instrumentation while passing in eight times less wall
+    // clock without it.
     let old_owner = before.leader.clone();
     let mut converged = false;
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         let forwards_before = cluster
             .metric(&old_owner, "felix_broker_forwards_total")
             .await?
@@ -271,9 +281,15 @@ async fn a_broker_that_cannot_renew_its_lease_stops_serving() -> Result<()> {
     cluster.stop_control_plane().await;
 
     // The lease outlives a brief outage — that is the point of a lease — and
-    // then lapses. Bounded: the harness runs a 1s expiry window.
+    // then lapses. The harness runs a 1s expiry window, so this is a wide
+    // margin around a short wait.
+    //
+    // A deadline rather than an attempt count, for the reason above: the
+    // attempts that cost real time here are the ones that *succeed*, and a
+    // count is only a duration if they all cost about the same.
     let mut refused = false;
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         if cluster
             .publish_via(&owner, STREAM, b"after-expiry".to_vec())
             .await
