@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789644971603,
+  "lastUpdate": 1789652871121,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8996,6 +8996,58 @@ window.BENCHMARK_DATA = {
             "range": "6348.94",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 559273.10\nmean: 560271.18\nstdev: 6348.94\ncv: 1.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e93a66af7216fed2cd26ca5a3c98a6ec7cae15e",
+          "message": "feat(broker): refresh the node credential instead of holding it forever (#404)\n\nA broker read its node token once and presented that one value for every\ncontrol-plane call it would ever make. When the token expired, heartbeat,\nnode catalog, shard-assignment feed and replication reports all started\nanswering 401 and the broker left the cluster with nothing wrong with the\nbroker. The perf suite watched it: a 900s token, and brokers deregistering\nfifteen minutes in.\n\nThe fix is not a longer token — a long-lived bearer secret is what the short\ndefault exists to avoid — so the credential becomes something that can\nchange while requests are using it. NodeCredential is one holder every\ncaller reads through; a refresh swaps what is inside it. Callers read it per\nrequest, so a task handed it at startup presents a current token for the\nlife of the process without knowing refresh exists. That is the part worth\nguarding: the_watch_picks_up_a_refreshed_credential fails if any consumer\ngoes back to copying the token once.\n\nThe loop wakes two thirds of the way through the token's remaining life, so\nthe last third is retry budget — at the 900s default, five minutes of\nfailures before anything is at risk. Failure is never fatal and backs off,\nbut never past the expiry deadline, because a backoff that sails past the\nmoment the token stops working turns a recoverable outage into a\nderegistration.\n\nThe broker needs no new identity config: its own token carries `tid` and\n`exp`, which is the tenant to call and the moment to wake. Those claims are\nread without verifying the signature, which is sound because neither is a\ntrust decision — a forged `tid` sends the refresh somewhere it is refused, a\nforged `exp` wakes it at the wrong time, and the control plane verifies for\nreal.\n\nRotation forces the refresh token to be a *file*. Refreshing spends it and\nmints a replacement, so a restart presenting the original is a replay, and\nthe control plane correctly answers by revoking the chain — locking the\nbroker out for good. So the replacement is written back, atomically through\na rename, and persisted before the new access token is adopted: a crash\nbetween them costs one access token, and the other order costs the chain.\nFELIX_NODE_REFRESH_TOKEN set as a value fails startup and says why, rather\nthan working until the first restart.\n\nWithout FELIX_NODE_REFRESH_TOKEN_FILE nothing changes: the broker runs on\nthe token it was given, exactly as before.\n\nShutdown deregisters with the current token too. A broker up for hours would\notherwise present an expired one, be refused, and be expired by the control\nplane as though it had crashed.\n\nFixes #373",
+          "timestamp": "2026-09-17T06:45:35-07:00",
+          "tree_id": "bbb55837d4b20dc6f0fab62f17d42305c699a33d",
+          "url": "https://github.com/gabloe/felix/commit/9e93a66af7216fed2cd26ca5a3c98a6ec7cae15e"
+        },
+        "date": 1789652870448,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 379510.6,
+            "range": "4055.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 379510.60\nmean: 377762.28\nstdev: 4055.58\ncv: 1.07%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 379510.6,
+            "range": "4055.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 379510.60\nmean: 377762.28\nstdev: 4055.58\ncv: 1.07%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 83012.24,
+            "range": "3102.68",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 83012.24\nmean: 81489.69\nstdev: 3102.68\ncv: 3.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 830122.38,
+            "range": "31026.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 830122.38\nmean: 814896.86\nstdev: 31026.76\ncv: 3.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
