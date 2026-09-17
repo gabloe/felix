@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789672759176,
+  "lastUpdate": 1789674205718,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9568,6 +9568,58 @@ window.BENCHMARK_DATA = {
             "range": "9562.18",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 560220.80\nmean: 564819.10\nstdev: 9562.18\ncv: 1.69%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c203b64ad6235f7edcb67291d99c6f6a95a3c269",
+          "message": "test(controlplane): give each test schema a name no other call produces (#472)\n\nCoverage failed on main with\n\n  duplicate key value violates unique constraint \"pg_namespace_nspname_index\"\n  Key (nspname)=(felix_migrate_31654_1789668951690256729) already exists\n\nTwo tests asked for the same schema. The name was pid plus a timestamp, and\nneither separates them: tests in one binary run on parallel threads, so the\npid is identical, and two threads starting together read the same timestamp\nwhenever the clock's granularity is coarser than the gap between them. In a\ntight loop that is about half of all calls — 1033 distinct out of 2000 — so\nthis was luck rather than rarity.\n\nCREATE SCHEMA IF NOT EXISTS does not cover it: two concurrent creates of one\nname race in Postgres and the loser gets exactly that error, so the\nuniqueness has to be real rather than papered over at the call site.\n\nA process-wide counter makes it real. The pid separates concurrent test\nbinaries, the timestamp keeps the name readable and tells runs apart, and the\ncounter guarantees two calls in one process differ however close together\nthey are. All four generators across three files share it now.\n\nThe tests for it carry no #[cfg(test)] on purpose: this module compiles into\nintegration test binaries, which are already test crates, so the gate removes\nthem entirely — which it did until I noticed they reported zero.\n\nVerified against a real Postgres: pg_migration and pg_store_e2e green.",
+          "timestamp": "2026-09-17T12:40:35-07:00",
+          "tree_id": "40cac8b984e96e2582960a34258d5825234e4a91",
+          "url": "https://github.com/gabloe/felix/commit/c203b64ad6235f7edcb67291d99c6f6a95a3c269"
+        },
+        "date": 1789674204984,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 226872.11,
+            "range": "6255.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 226872.11\nmean: 225907.72\nstdev: 6255.31\ncv: 2.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 226872.11,
+            "range": "6255.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 226872.11\nmean: 225907.72\nstdev: 6255.31\ncv: 2.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 52866.54,
+            "range": "727.43",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 52866.54\nmean: 52922.62\nstdev: 727.43\ncv: 1.37%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 528665.38,
+            "range": "7274.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 528665.38\nmean: 529226.15\nstdev: 7274.36\ncv: 1.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
