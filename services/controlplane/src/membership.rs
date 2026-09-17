@@ -86,7 +86,18 @@ pub fn spawn_expiry_sweep(
                     if !gate.holds().await {
                         continue;
                     }
-                    expire_once(store.as_ref(), &liveness, crate::api::nodes::now_millis()).await;
+                    // The store's clock, which is the one heartbeats were
+                    // stamped with. Reading this instance's own would make
+                    // expiry depend on two processes' wall clocks agreeing.
+                    match store.now_millis().await {
+                        Ok(now) => {
+                            expire_once(store.as_ref(), &liveness, now).await;
+                        }
+                        Err(err) => tracing::warn!(
+                            error = %err,
+                            "skipping the expiry sweep: could not read the store clock",
+                        ),
+                    }
                 }
             }
         }

@@ -104,6 +104,13 @@ pub struct Broker {
     /// offsets, so offering one over an ephemeral cache would promise a resume
     /// anchor that does not exist.
     pub(crate) cache_watches: Option<Arc<crate::cache_watch::CacheWatchHub>>,
+    /// Signalled after every durable append, so replication can ship without
+    /// waiting for its next tick.
+    ///
+    /// A `Notify` rather than a channel: a waiter only needs to know that
+    /// *something* landed, and coalescing a burst into one wake-up is the
+    /// behaviour wanted rather than a queue of them to drain.
+    pub(crate) appended: Arc<tokio::sync::Notify>,
 }
 
 // `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
@@ -270,7 +277,17 @@ impl Broker {
             group_reader: None,
             counters: None,
             cache_watches,
+            appended: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Signalled after every durable append.
+    ///
+    /// Replication waits on it so shipping starts when a record lands rather
+    /// than on its next tick — which is most of a `Quorum` publish's latency
+    /// when the tick is seconds and the shipping is milliseconds.
+    pub fn appended(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.appended)
     }
 
     /// Where counters keep their logs.
@@ -465,6 +482,18 @@ impl Broker {
                 // dropped mid-await — releases the range through `turn`.
                 durable.commit(&pending).await?;
                 turn.wait().await;
+                // Replication waits on this. Under `Quorum` the publish is
+                // about to block on a majority, so the shipping that produces
+                // it should already be under way rather than waiting out a
+                // tick.
+                //
+                // `notify_one`, not `notify_waiters`: the latter wakes only
+                // waiters already registered, so an append landing while
+                // replication is mid-pass would be lost and that record would
+                // wait for the tick after all. `notify_one` leaves a permit, so
+                // the next wait returns at once — and it stores only one, so a
+                // burst becomes a single extra pass rather than a storm.
+                self.appended.notify_one();
 
                 if let Some(start) = durable_start {
                     let durable_ns = start.elapsed().as_nanos() as u64;

@@ -218,6 +218,27 @@ impl StreamLog {
     /// Rises as retention trims the head, so this is the floor a resuming
     /// subscriber can ask for: anything below it has been discarded and must be
     /// reported rather than silently skipped.
+    /// Drop every record at or after `offset`.
+    ///
+    /// For replication's divergence repair, which is the only caller: a
+    /// follower discards an uncommitted suffix left by a leader that is gone.
+    /// Bounded by the generation history — see `docs/replication-design.md`.
+    pub async fn truncate(&self, offset: Offset) -> Result<()> {
+        self.log.truncate(offset).await.map_err(storage_error)
+    }
+
+    /// Note that `generation` begins at `start_offset`.
+    pub fn record_generation(&self, generation: u64, start_offset: Offset) -> Result<bool> {
+        self.log
+            .record_generation(generation, start_offset)
+            .map_err(storage_error)
+    }
+
+    /// Where each leadership generation began here, oldest first.
+    pub fn generations(&self) -> Vec<felix_storage::disk_log::epochs::Epoch> {
+        self.log.generations()
+    }
+
     pub fn base_offset(&self) -> Offset {
         self.log.base_offset()
     }

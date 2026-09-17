@@ -171,6 +171,24 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Safe to run from several control-plane instances at once: each node is
     /// moved by exactly one of them, and only that one publishes the change.
     async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>>;
+    /// The clock that heartbeats are stamped with and expiry is judged against.
+    ///
+    /// One clock, because the two sides are compared. With several stateless
+    /// instances over one database, the instance that records a heartbeat and
+    /// the instance that runs the expiry sweep are different processes, so
+    /// reading each one's own `SystemTime` makes safety depend on their wall
+    /// clocks agreeing to within the margin — a much stronger assumption than
+    /// the bound on drift *rate* the design assumes, and one NTP steps break
+    /// outright.
+    ///
+    /// Backends with a shared clock return it. The default is the process
+    /// clock, which is correct for a single-process store.
+    async fn now_millis(&self) -> StoreResult<u64> {
+        Ok(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis() as u64)
+            .unwrap_or(0))
+    }
     /// Move a node's lifecycle from an observed signal rather than an operator.
     ///
     /// Unlike [`ControlPlaneStore::patch_node`] this may drive transitions an

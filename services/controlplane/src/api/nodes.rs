@@ -61,9 +61,15 @@ pub(crate) async fn report_health(
     Json(request): Json<NodeHeartbeatRequest>,
 ) -> Result<Json<NodeHeartbeatResponse>, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
-    // The control plane's clock, deliberately: expiry is judged against it, so
-    // letting a caller supply the time would let it postpone its own timeout.
-    let now = now_millis();
+    // The *store's* clock, not this instance's. Expiry is judged against the
+    // same one, and with several instances over one database those are
+    // different processes — see `ControlPlaneStore::now_millis`. Still not the
+    // caller's, which would let a broker postpone its own timeout.
+    let now = state
+        .store
+        .now_millis()
+        .await
+        .map_err(|ref err| api_internal("read the store clock", err))?;
 
     let node = state
         .store
@@ -115,9 +121,14 @@ pub(crate) async fn report_replica_status(
     Json(request): Json<ReplicaStatusRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
-    // The control plane's clock, deliberately, exactly as for a heartbeat:
-    // letting a caller supply the time would let it keep a stale report alive.
-    let now = now_millis();
+    // The store's clock, exactly as for a heartbeat: a report's freshness is
+    // judged against the same one, and letting a caller supply the time would
+    // let it keep a stale report alive.
+    let now = state
+        .store
+        .now_millis()
+        .await
+        .map_err(|ref err| api_internal("read the store clock", err))?;
     // Not enforced: brokers still send 0 here, because the driver that reports
     // is spawned before registration returns an incarnation. The leadership
     // check below is the stronger one anyway — it bounds *which* shards a
@@ -131,7 +142,7 @@ pub(crate) async fn report_replica_status(
             namespace: shard.namespace,
             stream: shard.stream,
             shard: shard.shard,
-            kind: shard.kind,
+            kind: shard.kind.into(),
         };
 
         // Being authorised to speak for yourself is not the same as leading

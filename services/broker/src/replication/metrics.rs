@@ -54,6 +54,17 @@ pub fn record_halted(count: usize) {
     metrics::gauge!(HALTED).set(count as f64);
 }
 
+/// Quorum marks held back because the replica report did not reach the control
+/// plane.
+///
+/// Worth alerting on: `Quorum` publishes are timing out on those shards, and
+/// nothing else in the broker looks unwell — the replication itself succeeded.
+pub const MARKS_WITHHELD: &str = "felix_broker_quorum_marks_withheld_total";
+
+pub fn record_mark_withheld() {
+    metrics::counter!(MARKS_WITHHELD).increment(1);
+}
+
 /// Publishes to a `Quorum` stream that did not reach a majority, by `reason`.
 ///
 /// The `ok` case is not counted here: an acknowledged publish is already
