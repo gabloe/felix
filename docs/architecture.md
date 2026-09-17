@@ -117,7 +117,9 @@ Metadata is strongly consistent and minimal by design. It stores:
 - Retention and quota policies
 - Region and bridge configuration
 
-The control plane exposes administrative APIs but is not on the data path.
+The control plane exposes administrative APIs and is off the data path for
+reads, for subscribes, and for `Leader` publishes. A **`Quorum`** publish is the
+one exception, and it is deliberate — see "Routing & Placement" below.
 
 ### Routing & Placement
 Routing is region-aware and shard-aware. Clients are routed directly to shard leaders
@@ -232,10 +234,24 @@ it yet; until the rest of M13 lands, control-plane availability rests on
 Postgres: any number of stateless instances over one HA database, whose
 required properties are spelled out in [`ha-postgres.md`](ha-postgres.md).
 
-The control plane is not on the data path. Resolving an owner is an atomic load
-of a routing snapshot the broker already holds — no lock and no network call,
-because it is the hottest question a broker is asked. The snapshot is refreshed
-in the background.
+Resolving an owner is an atomic load of a routing snapshot the broker already
+holds — no lock and no network call, because it is the hottest question a broker
+is asked. The snapshot is refreshed in the background.
+
+**One path does reach the control plane, and it is not an oversight.** A
+`Quorum` publish is released by the shard's quorum mark, and the leader sends
+its replica report *before* moving that mark, awaiting the answer. Releasing the
+publish first would leave a window where a leader has told a client its record
+is on a majority while the control plane knows nothing about which replica holds
+it — and a leader dying in that window is replaced by whichever replica scores
+highest, which may be the one without the record. The acknowledgement would then
+be a promise nothing could keep.
+
+So a quorum acknowledgement costs a control-plane round trip, and a control
+plane that cannot be reached stalls `Quorum` publishes rather than
+acknowledging them on a report that never landed. `Leader` publishes,
+subscribes and cache operations are untouched by this. Coalescing those round
+trips across a sweep is #479.
 
 ## Cross-Broker Delivery
 
