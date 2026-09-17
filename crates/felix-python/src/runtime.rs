@@ -5,7 +5,7 @@
 //! would multiply the I/O threads for no benefit. Created on first use so
 //! importing the module costs nothing.
 //!
-//! Every call into it is wrapped in `Python::allow_threads`, which releases
+//! Every call into it is wrapped in `Python::detach`, which releases
 //! the GIL for the duration. Without that a blocking publish would stall every
 //! other Python thread in the process, which is exactly the behaviour that
 //! makes people distrust native extensions.
@@ -38,5 +38,5 @@ where
     T: Send,
 {
     let runtime = runtime()?;
-    py.allow_threads(|| runtime.block_on(future))
+    py.detach(|| runtime.block_on(future))
 }
