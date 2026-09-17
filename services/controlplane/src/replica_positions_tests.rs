@@ -278,3 +278,44 @@ fn a_report_outlives_the_detection_of_the_leader_that_made_it() {
          leaves the shard unpromotable for good",
     );
 }
+
+/// **Both sides have to read the same clock.**
+///
+/// Freshness here is a subtraction: the stamp a report was recorded with,
+/// against the cutoff the placement pass computes. Nothing in the types says
+/// the two came from the same source, and they did not — the report was
+/// stamped with `ControlPlaneStore::now_millis` while placement read this
+/// process's own clock. Those agree under memory and Raft and are two
+/// different hosts' clocks under Postgres.
+///
+/// This is what that costs, in the direction that matters: a report stamped by
+/// a clock behind the reader's reads as older than it is, so a replica that is
+/// level with its leader is called stale and is not considered for promotion.
+#[test]
+fn a_stamp_from_a_clock_behind_the_readers_looks_stale_while_it_is_fresh() {
+    let positions = positions();
+    let nodes = caught_up(&["broker-b"]);
+    let reader_now = 10_000_000;
+    // Recorded the instant the reader would call "now", by a clock a minute
+    // behind it. Well inside the TTL; entirely outside it once skewed — which
+    // the compiler holds to, so the test cannot quietly stop demonstrating
+    // anything if the window is widened.
+    const SKEW_MS: u64 = 60_000;
+    const _: () = assert!(SKEW_MS > TTL_MS);
+    let writer_now = reader_now - SKEW_MS;
+
+    positions.record(
+        key("orders"),
+        4,
+        nodes.clone(),
+        offsets_for(&nodes),
+        writer_now,
+    );
+
+    assert!(
+        !at(&positions, reader_now).is_caught_up(&key("orders"), "broker-b"),
+        "a skew this large has to be visible, or the test proves nothing",
+    );
+    // The same report, judged on the clock that wrote it.
+    assert!(at(&positions, writer_now).is_caught_up(&key("orders"), "broker-b"));
+}

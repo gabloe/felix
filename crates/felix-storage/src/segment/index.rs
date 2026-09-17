@@ -53,11 +53,25 @@ impl SparseIndex {
 
     /// Record that `offset` begins at byte `position`.
     ///
-    /// Entries must be pushed in ascending offset order; out-of-order pushes are
-    /// dropped rather than corrupting the search invariant.
+    /// Entries must ascend in both offset and position; anything else is
+    /// dropped rather than corrupting the search invariant. Both halves matter,
+    /// and only the offset was checked: an index file is bytes on disk like any
+    /// other, so a corrupt or hostile one can pair ascending offsets with a
+    /// position of zero, and [`SparseIndex::seek_position`] would hand that
+    /// back as somewhere to decode forward from — inside the segment header,
+    /// where the next thing read is a header field interpreted as a record.
+    ///
+    /// A real index cannot contain such an entry: records occupy distinct
+    /// ascending byte ranges after the header, so position ascends exactly when
+    /// offset does. Dropping the entry keeps the promise `seek_position` makes
+    /// while leaving everything before it usable, which is the same bargain the
+    /// torn-tail case already strikes.
     pub fn push(&mut self, entry: IndexEntry) {
+        if entry.position < SEGMENT_HEADER_LEN {
+            return;
+        }
         if let Some(last) = self.entries.last()
-            && entry.offset <= last.offset
+            && (entry.offset <= last.offset || entry.position <= last.position)
         {
             return;
         }
@@ -265,6 +279,41 @@ mod tests {
         let index = SparseIndex::new(0);
         assert_eq!(index.seek_position(0), SEGMENT_HEADER_LEN);
         assert_eq!(index.seek_position(u64::MAX), SEGMENT_HEADER_LEN);
+    }
+
+    /// An index file is bytes on disk like any other, so it can say a record
+    /// begins inside the segment header. `seek_position` promises a boundary
+    /// the caller can decode forward from, and a position in the header is not
+    /// one — the next thing read is a header field parsed as a record.
+    ///
+    /// Found by the `sparse_index` fuzz target the first time it ran in CI.
+    #[test]
+    fn an_entry_pointing_inside_the_header_is_dropped() {
+        let index = index_with(0, &[(0, 0), (1, SEGMENT_HEADER_LEN - 1)]);
+        assert!(index.is_empty());
+        for probe in [0u64, 1, 7, u64::MAX / 2, u64::MAX] {
+            assert!(index.seek_position(probe) >= SEGMENT_HEADER_LEN);
+        }
+    }
+
+    /// Position has to ascend with offset for the same reason: records occupy
+    /// distinct ascending byte ranges, so an entry that moves backwards is one
+    /// no writer could have produced, and seeking to it would decode forward
+    /// over records the caller has already passed.
+    #[test]
+    fn an_entry_whose_position_goes_backwards_is_dropped() {
+        let index = index_with(0, &[(0, 500), (10, 100), (20, 900)]);
+        assert_eq!(
+            index
+                .entries()
+                .iter()
+                .map(|entry| (entry.offset, entry.position))
+                .collect::<Vec<_>>(),
+            vec![(0, 500), (20, 900)],
+        );
+        // What survives is still a usable index, not an empty one.
+        assert_eq!(index.seek_position(10), 500);
+        assert_eq!(index.seek_position(20), 900);
     }
 
     #[test]

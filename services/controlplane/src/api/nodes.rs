@@ -121,14 +121,22 @@ pub(crate) async fn report_replica_status(
     Json(request): Json<ReplicaStatusRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
-    // The store's clock, exactly as for a heartbeat: a report's freshness is
-    // judged against the same one, and letting a caller supply the time would
-    // let it keep a stale report alive.
-    let now = state
-        .store
-        .now_millis()
-        .await
-        .map_err(|ref err| api_internal("read the store clock", err))?;
+    // This process's clock, *not* the store's — the opposite of a heartbeat,
+    // and for the same underlying reason.
+    //
+    // A heartbeat is stamped here and judged by the expiry sweep, which may be
+    // a different instance, so the two need a clock they share. Replica
+    // positions never leave this instance: they live in `AppState`, and the
+    // placement pass that reads them back runs in this process against
+    // `api::nodes::now_millis`. Reaching for the store's clock made the write
+    // side the database's reading and the read side ours, so under Postgres a
+    // skew between the two hosts expired fresh reports or kept stale ones —
+    // and a report wrongly called stale means a caught-up replica is not
+    // considered for promotion.
+    //
+    // Still not the caller's, which would let a broker keep its own report
+    // alive.
+    let now = now_millis();
     // Not enforced: brokers still send 0 here, because the driver that reports
     // is spawned before registration returns an incarnation. The leadership
     // check below is the stronger one anyway — it bounds *which* shards a

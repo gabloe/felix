@@ -130,7 +130,7 @@ impl ShardRecovered {
 /// A function pair rather than an enum class, because `felix.key("a")` reads
 /// better at a call site than constructing a variant, and Python has no enum
 /// shape that would.
-#[pyclass(module = "felix", frozen)]
+#[pyclass(module = "felix", frozen, from_py_object)]
 #[derive(Clone)]
 pub struct CacheWatchFilter {
     pub(crate) prefix: bool,

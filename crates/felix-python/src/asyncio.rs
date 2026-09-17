@@ -128,9 +128,9 @@ impl AsyncSubscription {
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -207,7 +207,7 @@ impl AsyncClient {
     ))]
     fn connect<'py>(
         py: Python<'py>,
-        addrs: PyObject,
+        addrs: Py<PyAny>,
         tenant_id: &str,
         token: &str,
         server_name: &str,
@@ -303,7 +303,7 @@ impl AsyncClient {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-        start: Option<PyObject>,
+        start: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let start = parse_start(py, start)?;
         let inner = Arc::clone(&self.inner);
@@ -699,7 +699,7 @@ impl AsyncClient {
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-        start: Option<PyObject>,
+        start: Option<Py<PyAny>>,
         resume: Option<std::collections::BTreeMap<u32, u64>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let start = parse_start(py, start)?;
@@ -751,9 +751,9 @@ impl AsyncClient {
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(false) })
     }
@@ -880,9 +880,9 @@ impl AsyncCacheWatch {
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -975,9 +975,9 @@ impl AsyncShardedSubscription {
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

@@ -15,6 +15,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # The Dockerfiles, built on every change that could break them.
   #
@@ -165,3 +168,64 @@ jobs:
 
       - name: RSA dependency check (non-controlplane crates)
         run: task deny:rsa:default
+
+  # The decoders that parse input from outside the process, on a time budget.
+  #
+  # Separate from `test` because it needs nightly (libFuzzer links a runtime the
+  # stable toolchain does not ship) and because it is time-boxed rather than
+  # pass/fail on a fixed set — a job that sometimes takes longer does not belong
+  # in front of the suite everything else waits on.
+  #
+  # A budget rather than exhaustion: this is a regression gate, not a campaign.
+  # Deep runs belong in a scheduled job or a developer's afternoon; what a pull
+  # request needs to know is that the committed seeds and everything a minute of
+  # mutation reaches still decode or refuse cleanly.
+  fuzz:
+    name: Fuzz the decoders
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      # Seven targets; keep the whole job inside a few minutes.
+      FUZZ_SECONDS: "30"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          # The fuzz crates are outside the workspace and build with their own
+          # flags, so they would otherwise miss the cache the other jobs share.
+          workspaces: |
+            .
+            crates/felix-wire/fuzz
+            crates/felix-storage/fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Install Task
+        uses: arduino/setup-task@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fuzz
+        run: task fuzz
+
+      # A crash leaves the input that caused it, which is the only thing needed
+      # to reproduce it. Without this the run says a target died and the bytes
+      # that killed it are gone with the runner.
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: |
+            crates/felix-wire/fuzz/artifacts/
+            crates/felix-storage/fuzz/artifacts/
+          if-no-files-found: ignore
