@@ -365,6 +365,31 @@ tasks:
   conformance:
     cmds: ["cargo run -p felix-conformance"]
 
+  fuzz:
+    desc: >
+      Run every libFuzzer target on a short budget. Needs nightly and
+      cargo-fuzz; `FUZZ_SECONDS` sets the per-target budget (default 60).
+    vars:
+      SECONDS: '{{.FUZZ_SECONDS | default "60"}}'
+    cmds:
+      # The wire decoders first: these bytes come from whoever connects,
+      # where the segment format is written by Felix itself.
+      #
+      # `seeds` is the curated set that ships; `corpus` is libFuzzer's own
+      # working directory and is git-ignored. Passing corpus first makes it
+      # the one that grows, so a run never writes into the committed seeds.
+      - for: ["frame", "internal_message", "binary_payload", "client_message"]
+        cmd: >
+          cd crates/felix-wire/fuzz &&
+          mkdir -p corpus/{{.ITEM}} &&
+          cargo +nightly fuzz run {{.ITEM}} corpus/{{.ITEM}} seeds/{{.ITEM}}
+          -- -max_total_time={{.SECONDS}}
+      - for: ["segment_record", "segment_recovery", "sparse_index"]
+        cmd: >
+          cd crates/felix-storage/fuzz &&
+          cargo +nightly fuzz run {{.ITEM}}
+          -- -max_total_time={{.SECONDS}}
+
   python:check:
     desc: Build and lint the Python binding (its own workspace, like the demos).
     dir: crates/felix-python
