@@ -28,6 +28,11 @@ on:
         required: false
         default: "5"
 
+# Read-only by default: nothing here writes to the repo. A job that needs more
+# (publishing, commenting) asks for it explicitly rather than inheriting it.
+permissions:
+  contents: read
+
 concurrency:
   group: soak-${{ github.ref }}
   cancel-in-progress: true
