@@ -136,6 +136,63 @@ fn publish(router: &ShardRouter, leader: &str, replicas: &[&str], generation: u6
     router.publish(table, &nodes);
 }
 
+/// A router where `leader` leads `shards` shards, each with `replicas` behind
+/// it.
+fn router_over_shards(
+    leader: &str,
+    replicas: &[&str],
+    generation: u64,
+    shards: u32,
+) -> Arc<ShardRouter> {
+    let router = Arc::new(ShardRouter::new(
+        LOCAL,
+        "us-west-2",
+        RegionRouter::new("us-west-2".to_string()),
+    ));
+    let nodes = nodes();
+    let table = RoutingTable::build(
+        (0..shards).map(|shard| {
+            (
+                ShardKey { shard, ..key() },
+                leader.to_string(),
+                replicas.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+                generation,
+            )
+        }),
+        &nodes,
+    );
+    router.publish(table, &nodes);
+    router
+}
+
+/// A broker leading `shards` shards, each with `per_shard` records on disk.
+async fn leader_with_shards(shards: u32, per_shard: usize) -> (Arc<Broker>, TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = DurableStorage::open(
+        dir.path(),
+        LogConfig {
+            segment_size_bytes: 4 * 1024,
+            index_spacing_bytes: 256,
+            fsync_mode: FsyncMode::None,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        },
+    )
+    .expect("storage");
+    for shard in 0..shards {
+        let log = storage
+            .open_stream(TENANT, NAMESPACE, STREAM, shard)
+            .expect("open");
+        for i in 0..per_shard {
+            log.append(&[Bytes::from(format!("s{shard}-v{i}"))])
+                .await
+                .expect("append");
+        }
+    }
+    let broker = Broker::new(EphemeralCache::new().into()).with_durable_storage(storage);
+    (Arc::new(broker), dir)
+}
+
 /// A broker leading the shard, with `count` records already on disk.
 async fn leader_with(count: usize) -> (Arc<Broker>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -895,5 +952,83 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         "nothing shipped within 5s of the append, against a 300s tick: the \
          append signal is not reaching the driver, so a Quorum publish waits \
          out the interval",
+    );
+}
+
+/// A slow follower costs one delay for the whole pass, not one per shard.
+///
+/// A follower is slow for *every* shard it holds, so shipping shards one after
+/// another multiplied its latency by the shard count — and every one of those
+/// shards' quorum marks, and so every `Quorum` publish waiting on them, sat
+/// behind the sum. One tenant's unlucky replica became every tenant's latency
+/// (#411).
+struct SlowFollower {
+    delay: Duration,
+    seen: Mutex<Vec<u32>>,
+}
+
+impl PeerRequester for SlowFollower {
+    async fn request(
+        &self,
+        _node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        tokio::time::sleep(self.delay).await;
+        self.seen.lock().expect("lock").push(batch.shard.shard);
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_follower_does_not_cost_one_delay_per_shard() {
+    const SHARDS: u32 = 4;
+    let (broker, _dir) = leader_with_shards(SHARDS, 2).await;
+    let router = router_over_shards(LOCAL, &["broker-b"], 4, SHARDS);
+    let delay = Duration::from_secs(30);
+    let requester = SlowFollower {
+        delay,
+        seen: Mutex::new(Vec::new()),
+    };
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let started = tokio::time::Instant::now();
+    replicate_once(
+        &requester,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+    let took = started.elapsed();
+
+    let seen = requester.seen.lock().expect("lock").clone();
+    let mut distinct: Vec<u32> = seen.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        SHARDS as usize,
+        "not every shard shipped: {seen:?}",
+    );
+
+    // Each shard sends two batches here, so sequentially this is 8 delays.
+    // Concurrently it is 2 — the batches within a shard are still ordered.
+    assert!(
+        took < delay * 4,
+        "the pass took {took:?} with a {delay:?} follower across {SHARDS} \
+         shards; the shards were shipped one after another",
     );
 }
