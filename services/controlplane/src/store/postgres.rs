@@ -1531,6 +1531,19 @@ impl ControlPlaneStore for PostgresStore {
         Ok(updated)
     }
 
+    /// The database's clock, so every instance judges expiry by the same one.
+    ///
+    /// `clock_timestamp()` rather than `now()`: `now()` is the transaction's
+    /// start time and would be identical for every call inside one, which is
+    /// not what a clock means.
+    async fn now_millis(&self) -> StoreResult<u64> {
+        let millis: i64 =
+            sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(millis.max(0) as u64)
+    }
+
     async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>> {
         let mut tx = self.pool.begin().await?;
 
