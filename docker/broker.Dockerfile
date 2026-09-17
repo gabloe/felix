@@ -1,94 +1,76 @@
 # syntax=docker/dockerfile:1.7
+# The broker, as a container.
+#
+# Built from the workspace root (`docker build -f docker/broker.Dockerfile .`),
+# because the binary is a workspace member and cargo needs the workspace to
+# resolve it. `.dockerignore` is what keeps that from meaning a 16GB context.
+#
+# Two stages: one that has a Rust toolchain, and one that does not. The runtime
+# image carries the binary, a CA bundle, and an init — no compiler, no package
+# manager, nothing else for an attacker to find.
 
-############################
-# Build stage
-############################
-FROM rust:1.85-bookworm AS builder
+# --- build ---------------------------------------------------------------
+FROM rust:1.97-bookworm AS build
+WORKDIR /felix
 
-ARG PROFILE=release
-ARG BIN_NAME=broker
-ARG PACKAGE_NAME=broker
-ARG CARGO_FEATURES=""
-ARG RUSTFLAGS=""
-
-ENV CARGO_HOME=/usr/local/cargo \
-    RUSTUP_HOME=/usr/local/rustup \
-    RUSTFLAGS=${RUSTFLAGS}
-
-WORKDIR /src
-
-# System deps (keep minimal; add libssl-dev/pkg-config if you need them)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    git \
-    pkg-config \
- && rm -rf /var/lib/apt/lists/*
-
-# --- Cache-friendly dependency build ---
-# Copy workspace manifests first
-COPY Cargo.toml Cargo.lock ./
-# Copy each crate manifest (adjust if you have more crates)
-COPY crates/broker/Cargo.toml crates/broker/Cargo.toml
-COPY crates/felix-broker/Cargo.toml crates/felix-broker/Cargo.toml
-COPY crates/felix-wire/Cargo.toml crates/felix-wire/Cargo.toml
-COPY crates/felix-storage/Cargo.toml crates/felix-storage/Cargo.toml
-# If you have many crates, you can add them here or replace with a script.
-
-# Create dummy src to compile deps without full source
-RUN mkdir -p crates/broker/src && echo "fn main(){}" > crates/broker/src/main.rs
-
-# Warm dependency cache
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/src/target \
-    cargo build -p ${PACKAGE_NAME} --bin ${BIN_NAME} --profile ${PROFILE} ${CARGO_FEATURES}
-
-# Now copy the real source
-RUN rm -rf crates/broker/src
+# Everything, rather than a manifest-first dependency-caching dance. That trick
+# needs every workspace member's manifest listed by hand, and a missed one fails
+# confusingly — which is how the previous version of this file ended up
+# referencing `crates/broker`, a path that has not existed since the workspace
+# reorganisation. BuildKit's cache mounts below get most of the same benefit
+# with none of the bookkeeping.
 COPY . .
 
-# Build real binary
+ARG BIN=felix-broker
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/src/target \
-    cargo build -p ${PACKAGE_NAME} --bin ${BIN_NAME} --profile ${PROFILE} ${CARGO_FEATURES}
+    --mount=type=cache,target=/felix/target \
+    cargo build --release --locked -p broker --bin "${BIN}" \
+    && strip "target/release/${BIN}" \
+    # Copied out of the cache mount, which does not survive the layer.
+    && cp "target/release/${BIN}" /usr/local/bin/felix-broker
 
-# Optional: strip (install binutils)
-RUN apt-get update && apt-get install -y --no-install-recommends binutils && rm -rf /var/lib/apt/lists/* \
- && strip /src/target/${PROFILE}/${BIN_NAME} || true
-
-############################
-# Runtime stage
-############################
+# --- runtime -------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
-ARG BIN_NAME=broker
+# ca-certificates: QUIC is TLS 1.3 only and the broker verifies the control
+#   plane's certificate, so the trust store is load-bearing.
+# tini: a real init at PID 1. The broker handles SIGTERM itself, but PID 1 on
+#   Linux gets no default signal handlers and no zombie reaping, and a missed
+#   SIGTERM means every rolling update ends in a kill.
+# wget: the healthcheck below. debian-slim ships neither wget nor curl, which
+#   is why the previous healthcheck here could never have passed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tini wget \
+    && rm -rf /var/lib/apt/lists/*
 
-# Minimal runtime deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    tini \
- && rm -rf /var/lib/apt/lists/*
+# A fixed uid, so a Kubernetes `runAsUser` and a volume's ownership can be set
+# without inspecting the image first.
+RUN groupadd --gid 65532 felix \
+    && useradd --uid 65532 --gid 65532 --home-dir /var/lib/felix --create-home felix
 
-# Create non-root user
-RUN useradd -r -u 10001 -g nogroup felix
+COPY --from=build /usr/local/bin/felix-broker /usr/local/bin/felix-broker
 
-WORKDIR /app
+# Durability is opt-in — with FELIX_DURABLE_STORAGE_DIR unset the broker keeps
+# nothing on disk — so this is the path to point it at rather than one the
+# broker already uses. Declared as a volume so an operator who sets that
+# variable and forgets the mount fills a volume rather than the container's
+# writable layer, which grows until the node evicts the pod.
+VOLUME ["/var/lib/felix"]
+WORKDIR /var/lib/felix
 
-COPY --from=builder /src/target/release/${BIN_NAME} /app/${BIN_NAME}
+USER 65532:65532
 
-# If you use config files, mount them at runtime.
-# COPY config/broker.yml /etc/felix/broker.yml
+# Client QUIC (FELIX_QUIC_BIND), broker-to-broker QUIC (FELIX_INTERNAL_BIND),
+# and metrics (FELIX_METRICS_BIND). Documentation rather than enforcement —
+# EXPOSE publishes nothing on its own — but it is what tooling reads.
+EXPOSE 5000/udp 5001/udp 8080/tcp
 
-USER 10001
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/app/broker"]
+# `/ready`, not `/healthz`: that is the path the broker actually serves, and it
+# is the one that flips during a drain. `/live` stays up on a broker that is
+# shutting down correctly, so using it here would keep sending traffic to one.
+HEALTHCHECK --interval=10s --timeout=2s --start-period=10s --retries=6 \
+    CMD wget -qO- http://127.0.0.1:8080/ready >/dev/null 2>&1 || exit 1
 
-# Ports (example)
-EXPOSE 5000/udp
-EXPOSE 8080
-EXPOSE 9090
-
-# Healthcheck assumes an HTTP health endpoint; adjust path/port.
-HEALTHCHECK --interval=10s --timeout=2s --retries=6 CMD \
-  sh -c 'wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1'
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/felix-broker"]

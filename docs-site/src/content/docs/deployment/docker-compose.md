@@ -2,7 +2,22 @@
 title: "Docker Compose Deployment"
 ---
 
-Running Felix under Docker Compose, for local development and testing. There are no pre-built images; the compose files here build from the Dockerfiles in `docker/`.
+Running Felix under Docker Compose, for local development and testing.
+
+:::caution[The images are not published yet]
+The examples here name `ghcr.io/gabloe/felix-broker` and
+`ghcr.io/gabloe/felix-controlplane`, which is where releases will publish them
+— but publishing is off until Felix is meant to be publicly pullable, so
+`docker pull` will not find them today. Build locally in the meantime:
+
+```bash
+docker build -f docker/broker.Dockerfile -t ghcr.io/gabloe/felix-broker:latest .
+docker build -f docker/controlplane.Dockerfile -t ghcr.io/gabloe/felix-controlplane:latest .
+```
+
+Both build from the repository root — the binaries are workspace members, so
+cargo needs the workspace to resolve them.
+:::
 
 ## Overview
 
@@ -44,7 +59,7 @@ version: '3.8'
 
 services:
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
@@ -101,7 +116,7 @@ services:
       - "55432:5432"
 
   felix-controlplane:
-    image: felix/controlplane:latest
+    image: ghcr.io/gabloe/felix-controlplane:latest
     build:
       context: .
       dockerfile: docker/controlplane.Dockerfile
@@ -116,7 +131,7 @@ services:
       - postgres
 
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
@@ -151,7 +166,7 @@ version: '3.8'
 
 services:
   felix-broker:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
@@ -334,7 +349,7 @@ version: '3.8'
 
 services:
   felix-broker-1:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
@@ -350,7 +365,7 @@ services:
       - felix-net
 
   felix-broker-2:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     ports:
       - "5002:5000/udp"
       - "8082:8080"
@@ -363,7 +378,7 @@ services:
       - felix-net
 
   felix-broker-3:
-    image: felix/broker:latest
+    image: ghcr.io/gabloe/felix-broker:latest
     ports:
       - "5003:5000/udp"
       - "8083:8080"

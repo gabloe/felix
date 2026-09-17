@@ -1,0 +1,42 @@
+# What must not travel to the build daemon.
+#
+# The Dockerfiles copy the whole workspace, because cargo needs it to resolve a
+# workspace member. Without this file that means `target/` as well — which on a
+# developer machine is tens of gigabytes, takes minutes to transfer, and can
+# fill the builder's disk before the build starts. Everything listed here is
+# either rebuilt inside the image or irrelevant to it.
+
+# Build output. Host-shaped, and useless in a Linux image even when it is not.
+target/
+**/target/
+
+# The docs site. Not part of either binary.
+node_modules/
+**/node_modules/
+docs-site/
+
+# Python: virtualenvs, caches, wheels.
+.venv*/
+**/__pycache__/
+**/*.pyc
+crates/felix-python/dist/
+
+# Version control and editor state.
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Local artifacts a build must never depend on — and credentials it must never
+# bake in. The last three are perf-session state that can hold tokens.
+*.pem
+*.key
+.env
+.env.*
+perf-results/
+scripts/perf/azure/sessions/
+scripts/perf/azure/session.env
+
+# Prose. Changing a README should not invalidate a build layer.
+*.md
+docs/
