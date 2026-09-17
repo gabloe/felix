@@ -42,21 +42,38 @@ design, it is a storage rewrite.
 That single property is why torn-tail repair is sound, why a missing index can
 be rebuilt, and why preallocation reserves blocks without changing `st_size`.
 
-**Raft requires a leader to overwrite a follower's divergent uncommitted log
-suffix.** That is not an incidental detail of Raft; it is how log matching is
-achieved. A follower that accepted entries from a deposed leader must truncate
-and re-accept.
+**The invariant is narrower than "never rewritten", and it has to be.**
 
-So per-shard Raft over the stream log forces one of:
+An earlier version of this document argued that Felix avoids truncation
+entirely, because a leader only ships records it has committed. That is false
+under `Quorum`, where shipping is what *produces* the commit: a follower stores
+a record before any majority holds it, so a leader that dies mid-flight leaves
+that record on some followers and not others. The next leader may legitimately
+reuse the offset. Every leader-change scheme has to reconcile that, and Felix is
+not an exception — `Divergence::Conflict` exists precisely because it happens.
 
-1. **Abandon the never-rewritten invariant.** Recovery can no longer trust that
-   valid bytes end at EOF, because a truncation may have been interrupted.
-   Torn-tail repair and interior-corruption detection both rest on that
-   distinction, and both would need redesigning.
-2. **Keep two logs** — a Raft log for consensus and the segment log for serving.
-   Every record is written twice, and the two can disagree after a crash. That is
-   a second durability path with its own recovery story, which is the thing the
-   storage design most deliberately avoided having.
+The invariant that actually holds, and that recovery depends on, is:
+
+> **No record at or below the high-water mark is ever rewritten.**
+
+Below the mark a record is on a majority and can never be un-committed. Above it
+a record is a proposal, and discarding a proposal the cluster did not adopt is
+not the same act as rewriting history. Torn-tail repair and interior-corruption
+detection rest on the *committed* prefix being immutable, which this gives them.
+
+So the case against per-shard Raft is not about truncation, because truncation
+is required either way. It is:
+
+1. **Election and clock trade-offs.** Raft elects by term and majority vote,
+   which needs no clock assumption but adds a round of voting to every failover
+   and a second failure detector beside the one the control plane already runs.
+   Leases reuse the heartbeat the broker already sends, and pay for it with the
+   safety interval described below.
+2. **Two logs, or one.** Raft over the stream log means either the segment log
+   *is* the Raft log — with Raft's index and term bookkeeping in the record
+   format — or every record is written twice and the two can disagree after a
+   crash. The second is a durability path the storage design deliberately does
+   not have.
 
 Neither is a tuning problem. Both are a different storage layer.
 
@@ -196,14 +213,21 @@ tune, and the residual risk to state honestly rather than claim away.
 
 ### Replication
 
-The leader ships committed records to followers over the internal transport that
-already exists (#105), append-only. A follower never truncates a record it has
-durably stored, because the leader only ships records it has committed, and a
-committed record is never un-committed: it was ordered by a leader that held an
-unexpired lease, and no other leader existed at that epoch.
+The leader ships records to followers over the internal transport that already
+exists (#105). Under `Quorum` it ships them *before* they are committed — that
+is what makes the majority — so a follower can hold a record no majority ever
+acknowledged, from a leader that then died.
 
-That is the property Raft has to work for and leases give directly, and it is why
-the never-rewritten invariant survives.
+A follower therefore truncates, but only **above** the high-water mark. Below it
+a record is on a majority and is never discarded: it was ordered by a leader
+holding an unexpired lease, and the safety interval means no other leader existed
+at that generation. Above it, a record is a proposal that the cluster may not
+have adopted, and a new leader reusing the offset is ordinary rather than
+alarming.
+
+Reconciling that needs the two sides to agree on where their histories diverge,
+which is what the generation of each record establishes — see
+[Divergence and truncation](#divergence-and-truncation) (#406).
 
 Catch-up for a new or lagging follower is a bounded `read_range` from the leader,
 with sealed-segment checksums to verify wholesale rather than record by record —
@@ -233,6 +257,45 @@ large it currently is.
 
 `Quorum` has no such window: a majority including the leader holds every
 acknowledged record, so any failure within the configured majority preserves it.
+
+### Divergence and truncation
+
+Two brokers can hold different records at the same offset. It takes a leader
+dying mid-flight under `Quorum`: the record reached some followers, no majority
+acknowledged it, and the next leader reuses the offset for its own. Nothing is
+wrong with either broker.
+
+Finding it is the easy half and is done: a batch's overlap with what a follower
+already holds is compared byte for byte, and a mismatch is
+`Divergence::Conflict`. A follower answers with the end of the batch it was sent
+rather than its own tail, so the leader cannot resume past records neither side
+has compared (#406).
+
+Repairing it needs the two to agree on where their histories part, and offsets
+alone do not say — both logs have an offset 100, and being told "they differ at
+100" does not say how far back the agreement goes. The generation does say,
+because a generation belongs to exactly one leader: the highest generation both
+brokers hold is the last one they cannot disagree within, and its end offset on
+the leader is the furthest point the follower can keep.
+
+So a follower records where each generation began in its log, as a small map
+beside the segments. On a conflict it names its newest generation and the
+offset it started at; the leader answers with its own end offset for that
+generation; the follower truncates there and resumes. That is the shape Kafka
+arrived at without Raft (KIP-101, KIP-279), for the same reason.
+
+Three things this deliberately does not do:
+
+- **It does not go in the record format.** A generation per record would mean a
+  segment format bump, and `SegmentHeader::decode` rejects an unknown version
+  outright rather than guess — by design, since a moved field produces a
+  plausible mis-parse. The map is derived state that can be rebuilt or absent.
+- **It does not truncate below the high-water mark.** Everything there is on a
+  majority. A truncation point computed below it is a bug, not a repair, and
+  should refuse rather than proceed.
+- **It does not make a halted follower repair itself automatically.** Truncating
+  a divergent suffix is a decision with a policy attached — how many followers
+  may rebuild at once, and at what bandwidth (#424).
 
 ### Who may be promoted
 
@@ -396,7 +459,7 @@ cannot be bounded — or where process suspension is common enough that `ε` can
 be chosen — that trade stops being worth it.
 
 The other trigger is the storage layer changing. The argument above rests on
-"records are never rewritten." If that invariant is ever relaxed for another
+"no committed record is ever rewritten." If that invariant is ever relaxed for another
 reason, Raft's cost drops sharply and this should be revisited rather than
 inherited.
 
