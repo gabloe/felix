@@ -1318,3 +1318,114 @@ async fn the_slower_follower_is_still_caught_up_by_the_end_of_the_pass() {
     let offsets: Map<String, u64> = pass.reports[0].offsets.iter().cloned().collect();
     assert_eq!(offsets.get("broker-c"), Some(&3));
 }
+
+/// Records when each follower was reached, with one of them answering late
+/// enough that it needs a wake-up after the first has already finished.
+struct TimingFollower {
+    late: &'static str,
+    delay: Duration,
+    started: tokio::time::Instant,
+    reached: Mutex<Vec<(String, Duration)>>,
+}
+
+impl PeerRequester for TimingFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        if node_id == self.late {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.reached.lock().expect("lock").push((
+            node_id.to_string(),
+            tokio::time::Instant::now().duration_since(self.started),
+        ));
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+/// **The replica report runs beside the followers, not in front of them.**
+///
+/// The report has to reach the control plane before the mark is published, so
+/// it is awaited — but awaiting it inside the drain loop suspends every
+/// follower still in flight. A slow control plane would then stall replication
+/// to the rest of the replica set, which is the head-of-line block this whole
+/// change exists to remove, just moved onto the reporting hop.
+#[tokio::test(start_paused = true)]
+async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
+    const SLOW: Duration = Duration::from_secs(30);
+    // Well under the control plane's delay, and long enough that this follower
+    // needs a wake-up of its own after the first one has finished — which is
+    // the only way to tell "shipped beside the report" from "shipped after it".
+    const LATE: Duration = Duration::from_secs(5);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = TimingFollower {
+        late: "broker-c",
+        delay: LATE,
+        started: tokio::time::Instant::now(),
+        reached: Mutex::new(Vec::new()),
+    };
+    let marks = QuorumMarks::new();
+
+    // A control plane that takes half a minute to answer.
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(|| async {
+            tokio::time::sleep(SLOW).await;
+            axum::http::StatusCode::NO_CONTENT
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let report_to = ReportTo {
+        client: reqwest::Client::new(),
+        base_url: format!("http://{addr}"),
+        node_id: LOCAL.to_string(),
+        token: None,
+        incarnation: 0,
+    };
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        Some(&report_to),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let reached = follower.reached.lock().expect("lock").clone();
+    assert_eq!(
+        reached.len(),
+        2,
+        "both followers should have been shipped to"
+    );
+    for (node, at) in reached {
+        assert!(
+            at < SLOW,
+            "{node} was not reached until {at:?}, so it waited behind the \
+             control plane rather than shipping beside it",
+        );
+    }
+
+    server.abort();
+}

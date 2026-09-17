@@ -44,6 +44,39 @@ impl ShardCursors {
     }
 }
 
+/// Tell the control plane who holds what, then move the mark if it listened.
+///
+/// Returns whether the mark moved. A caller with nothing waiting on the mark
+/// can ignore it; a caller on the quorum path cannot.
+async fn publish_mark(
+    report_to: Option<&ReportTo>,
+    marks: &QuorumMarks,
+    key: &ShardKey,
+    generation: u64,
+    report: &ShardReport,
+    offset: u64,
+) -> bool {
+    let reported = match report_to {
+        Some(report_to) => send_reports(report_to, std::slice::from_ref(report)).await,
+        // Nothing to report to, so nothing to be behind: a broker with no
+        // cluster membership has no promotion to inform.
+        None => true,
+    };
+    if reported {
+        marks.publish(&watch_key(key), generation, offset);
+    } else {
+        metrics::record_mark_withheld();
+        tracing::warn!(
+            stream = %key.stream,
+            shard = key.shard,
+            "holding the quorum mark: the replica report did not reach the \
+             control plane, so an acknowledgement now could not be made good \
+             on at failover",
+        );
+    }
+    reported
+}
+
 /// Who could take this shard over, as of `tail`.
 fn shard_report(
     key: &ShardKey,
@@ -256,79 +289,80 @@ async fn replicate_shard<R: PeerRequester>(
         })
         .collect();
 
-    let mut report_out = None;
-    let mut published = 0;
-    while let Some(cursor) = in_flight.next().await {
+    /// Put a finished cursor back where its stale copy was.
+    fn settle(positions: &mut [FollowerCursor], cursor: FollowerCursor) {
         if let Some(slot) = positions
             .iter_mut()
             .find(|held| held.node_id == cursor.node_id)
         {
             *slot = cursor;
         }
+    }
 
-        // Re-read after each answer, not once before shipping.
-        //
-        // A publish landing between the two leaves `tail` describing a log that
-        // is already shorter than the one on disk. Both the report and the mark
-        // are relative to it, so a follower level with the *old* tail would be
-        // reported caught up and counted toward the quorum for a record it does
-        // not have — which is exactly how a quorum-acknowledged record ends up
-        // on a promoted broker that never stored it.
+    // Drain until a majority is established, or until everyone is in.
+    //
+    // The tail is re-read after each answer rather than once before shipping,
+    // for the reason it was already re-read once: a publish landing in between
+    // leaves it describing a log that is already shorter than the one on disk,
+    // and a follower level with the *old* tail would be counted toward the
+    // quorum for a record it does not have.
+    let mut majority = None;
+    while let Some(cursor) = in_flight.next().await {
+        settle(&mut positions, cursor);
         let tail = log.tail_offset().await.unwrap_or(tail);
         let offset = quorum_offset(tail, &positions);
-        if offset <= published {
-            // No new majority. Nothing to tell the control plane and nothing to
-            // release, so this follower's answer costs no round trip: the usual
-            // pass reports once, when the first follower reaches the tail.
-            continue;
-        }
-
-        let report = shard_report(key, route.generation, tail, &positions);
-        report_out = Some(report.clone());
-
-        // **Reported before the mark is published, and awaited.**
-        //
-        // The mark is what releases a `Quorum` publish, and the report is what
-        // promotion later reads. Releasing the publish first leaves a window in
-        // which a leader has told a client its record is on a majority and has
-        // told the control plane nothing about which replica holds it — and a
-        // leader that dies in that window is replaced by whichever replica
-        // scores highest, which may be the one that does not have it. The
-        // acknowledged record is then gone, which is the one thing `Quorum` is
-        // supposed to rule out.
-        //
-        // Reporting first costs a round trip to the control plane on the path
-        // of a quorum publish. That is the price of the acknowledgement meaning
-        // what it says.
-        //
-        // A report that did not land leaves the mark where it was. The whole
-        // argument above rests on the control plane knowing which replica holds
-        // the record, so releasing the publish on a report that failed to send
-        // is the same window the ordering exists to close — just reached by a
-        // different route. The publish waits, the next pass retries, and a
-        // client is told a timeout rather than an acknowledgement this broker
-        // cannot stand behind.
-        let reported = match report_to {
-            Some(report_to) => send_reports(report_to, std::slice::from_ref(&report)).await,
-            // Nothing to report to, so nothing to be behind: a broker with no
-            // cluster membership has no promotion to inform.
-            None => true,
-        };
-
-        if reported {
-            marks.publish(&watch_key(key), route.generation, offset);
-            published = offset;
-        } else {
-            metrics::record_mark_withheld();
-            tracing::warn!(
-                stream = %key.stream,
-                shard = key.shard,
-                "holding the quorum mark: the replica report did not reach the \
-                 control plane, so an acknowledgement now could not be made good \
-                 on at failover",
-            );
+        if offset > 0 {
+            majority = Some((
+                shard_report(key, route.generation, tail, &positions),
+                offset,
+            ));
+            break;
         }
     }
+
+    // The report goes out *beside* the followers still shipping, not in front
+    // of them. Awaiting it inside the drain loop suspends every future still in
+    // `in_flight`, so a slow control plane would stall replication to the rest
+    // of the replica set — the same head-of-line block this change exists to
+    // remove, just moved onto the reporting hop.
+    let (rest, reported) = futures::future::join(
+        async {
+            let mut rest = Vec::new();
+            while let Some(cursor) = in_flight.next().await {
+                rest.push(cursor);
+            }
+            rest
+        },
+        async {
+            let (report, offset) = majority?;
+
+            // **Reported before the mark is published, and awaited.**
+            //
+            // The mark is what releases a `Quorum` publish, and the report is
+            // what promotion later reads. Releasing the publish first leaves a
+            // window in which a leader has told a client its record is on a
+            // majority and has told the control plane nothing about which
+            // replica holds it — and a leader that dies in that window is
+            // replaced by whichever replica scores highest, which may be the
+            // one that does not have it. The acknowledged record is then gone,
+            // which is the one thing `Quorum` is supposed to rule out.
+            //
+            // A report that did not land leaves the mark where it was, because
+            // the argument above rests on the control plane knowing who holds
+            // the record: releasing on a failed report reaches the same window
+            // by another route. The publish waits, the next pass retries, and a
+            // client is told a timeout rather than an acknowledgement this
+            // broker cannot stand behind.
+            publish_mark(report_to, marks, key, route.generation, &report, offset).await;
+            Some(report)
+        },
+    )
+    .await;
+    for cursor in rest {
+        settle(&mut positions, cursor);
+    }
+    let mut report_out = reported;
+
     entry.followers = positions;
 
     // What the pass ended up seeing, when that is not what was already sent.
@@ -346,11 +380,19 @@ async fn replicate_shard<R: PeerRequester>(
     let tail = log.tail_offset().await.unwrap_or(tail);
     let settled = shard_report(key, route.generation, tail, &entry.followers);
     if report_out.as_ref() != Some(&settled) {
-        if let Some(report_to) = report_to {
-            // Nothing is gated on this one: the mark it would support has
-            // already been published, or there was none to publish.
-            send_reports(report_to, std::slice::from_ref(&settled)).await;
-        }
+        // And the mark with it. Usually a no-op — the mark is monotonic and the
+        // majority already moved it — but with five replicas a second follower
+        // answering raises the offset a majority holds, and that is this pass's
+        // to publish rather than the next one's.
+        publish_mark(
+            report_to,
+            marks,
+            key,
+            route.generation,
+            &settled,
+            quorum_offset(tail, &entry.followers),
+        )
+        .await;
         report_out = Some(settled);
     }
 
