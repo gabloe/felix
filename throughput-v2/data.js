@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789625355047,
+  "lastUpdate": 1789644362794,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8840,6 +8840,58 @@ window.BENCHMARK_DATA = {
             "range": "20446.29",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 602029.70\nmean: 600678.83\nstdev: 20446.29\ncv: 3.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c079b52192e1faff562b5dad4a3eda537d64c91",
+          "message": "test(controlplane): say why the controlplane exited before listening (#403)\n\nmain_runtime.rs failed once in CI with \"controlplane exited before\nlistening on 127.0.0.1:53912: exit status: 1\" and nothing else, because\nthe child's stderr was sent to /dev/null. A harness that spawns a process\nand discards its output cannot tell you why the process died, so the\nfailure reads as an unexplained flake and the next one will too.\n\nstderr is piped and read on the failure path, where there is nothing after\nit to keep the pipe open for.\n\nPort reservation is tightened while here: both listeners are held while the\ntwo addresses are chosen, so they are distinct by construction rather than\nby the OS happening not to repeat itself. This is hygiene, not the fix — I\nchecked, and back-to-back bind/release does not return the same port. The\nreal race is between releasing a port and the child binding it, where any\nother test binary in the same cargo run can take it. Closing that needs the\nchild to choose its own port and report it back, which is more than this\nharness justifies; what it gets instead is a failure that names the cause.",
+          "timestamp": "2026-09-17T04:23:48-07:00",
+          "tree_id": "1e8a3e4ff4cd30f46427e3417c3742a10eb97bcf",
+          "url": "https://github.com/gabloe/felix/commit/5c079b52192e1faff562b5dad4a3eda537d64c91"
+        },
+        "date": 1789644361869,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 312221.57,
+            "range": "12362.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 312221.57\nmean: 315006.64\nstdev: 12362.32\ncv: 3.92%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 312221.57,
+            "range": "12362.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 312221.57\nmean: 315006.64\nstdev: 12362.32\ncv: 3.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 77460.06,
+            "range": "1221.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 77460.06\nmean: 77194.68\nstdev: 1221.27\ncv: 1.58%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 774600.56,
+            "range": "12212.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 774600.56\nmean: 771946.77\nstdev: 12212.71\ncv: 1.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
