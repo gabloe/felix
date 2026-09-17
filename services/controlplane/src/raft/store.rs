@@ -33,7 +33,7 @@ use openraft::storage::{
     LogFlushed, LogState, RaftLogStorage, RaftSnapshotBuilder, RaftStateMachine,
 };
 use openraft::{AnyError, ErrorSubject, ErrorVerb, RaftLogReader, StorageIOError};
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use super::AppStateMachine;
 use super::types::{
