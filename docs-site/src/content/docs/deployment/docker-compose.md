@@ -169,7 +169,6 @@ services:
     build:
       context: .
       dockerfile: docker/broker.Dockerfile
-        CARGO_FEATURES: "--features telemetry"
     ports:
       - "5000:5000/udp"
       - "8080:8080"
@@ -412,18 +411,20 @@ curl http://localhost:8083/ready
 Build the broker image from source:
 
 ```bash
-# Build with default settings
 docker compose build
-
-# Build with specific profile
-docker compose build --build-arg PROFILE=release
-
-# Build with telemetry enabled
-docker compose build --build-arg CARGO_FEATURES="--features telemetry"
-
-# Build with custom RUSTFLAGS
-docker compose build --build-arg RUSTFLAGS="-C target-cpu=native"
 ```
+
+`docker/broker.Dockerfile` and `docker/controlplane.Dockerfile` declare exactly
+one build argument between them, `BIN`, which selects the binary to build:
+
+```bash
+docker compose build --build-arg BIN=felix-broker
+```
+
+Anything else is ignored. Docker warns about an unrecognised `--build-arg` and
+builds anyway, so a flag that looks like it enabled something produces an image
+that did not — pass build settings through the Dockerfile rather than inventing
+an argument for them.
 
 ### Using Pre-built Images
 
