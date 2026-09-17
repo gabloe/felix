@@ -950,20 +950,24 @@ async fn a_failed_replica_report_holds_the_quorum_mark_back() {
         let _ = axum::serve(listener, app.into_make_service()).await;
     });
 
-    let report_to = ReportTo {
-        client: reqwest::Client::new(),
-        base_url: format!("http://{addr}"),
-        node_id: LOCAL.to_string(),
-        token: None,
-        incarnation: 0,
-    };
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
 
     replicate_once(
         &follower,
         &broker,
         &router,
         &marks,
-        Some(&report_to),
+        Some(&reporter),
         &mut cursors,
         &mut HashMap::new(),
         &mut HashMap::new(),
@@ -1481,20 +1485,24 @@ async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
         let _ = axum::serve(listener, app.into_make_service()).await;
     });
 
-    let report_to = ReportTo {
-        client: reqwest::Client::new(),
-        base_url: format!("http://{addr}"),
-        node_id: LOCAL.to_string(),
-        token: None,
-        incarnation: 0,
-    };
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
 
     replicate_once(
         &follower,
         &broker,
         &router,
         &marks,
-        Some(&report_to),
+        Some(&reporter),
         &mut HashMap::new(),
         &mut HashMap::new(),
         &mut HashMap::new(),

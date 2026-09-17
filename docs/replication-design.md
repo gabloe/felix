@@ -479,11 +479,25 @@ reason: the argument rests on the control plane knowing who holds the record, so
 releasing on a failed report reaches the same window by another route.
 
 That costs a control-plane round trip on the path of a quorum publish, which is
-the price of the acknowledgement meaning what it says. It is one round trip per
-shard per pass in the healthy case: the majority report already describes every
-follower, because they finish together. A follower that answers late enough to
-move after that report sends a second one, so a replica that is level does not
-look behind — and so out of promotion — until the next pass.
+the price of the acknowledgement meaning what it says. One report per shard per
+pass in the healthy case: the majority report already describes every follower,
+because they finish together. A follower that answers late enough to move after
+that report sends a second one, so a replica that is level does not look behind
+— and so out of promotion — until the next pass.
+
+**Reports are not one round trip each.** A flush takes every report queued at
+that moment and sends them as one request, which the endpoint has always
+accepted; reports arriving while that request is in flight go together in the
+next one. So a pass shipping sixteen shards concurrently costs round trips
+proportional to how long the control plane takes to answer, not to how many
+shards this broker leads.
+
+Group commit rather than a window, and for the reason `disk_log/sync.rs` makes
+the same choice: a timer would add its own wait to a pass with a single shard to
+report, which is the deployment least able to spare it on a `Quorum` publish.
+Batches grow under load, which is when they are worth having, and an idle broker
+waits for nothing. `felix_broker_replica_reports_per_request` says how well it
+is working — one, on a broker leading hundreds of shards, means it is not.
 
 A wait that runs out is reported as a failure, and the distinction matters: the
 records *are* durable on the leader and may yet reach a majority. The broker is

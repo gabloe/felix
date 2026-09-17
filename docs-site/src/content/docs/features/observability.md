@@ -101,6 +101,7 @@ felix_broker_membership_live                # broker: does the cluster still cou
 felix_broker_heartbeat_age_seconds          # alert when this nears the expiry timeout
 felix_broker_replication_lag_records
 felix_broker_replication_halted             # a count; GET /replication/halted says which
+felix_broker_replica_reports_per_request    # shards per control-plane report; 1 on a busy broker means batching found nothing
 felix_broker_lease_held
 felix_broker_lease_refusals_total           # writes refused after a lease lapsed
 ```

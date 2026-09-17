@@ -21,6 +21,7 @@ use futures::StreamExt;
 
 use super::halted::{HaltedReplica, HaltedReplicas};
 use super::quorum::QuorumMarks;
+use super::reporter::Reporter;
 use super::{FollowerCursor, Progress, caught_up, lag_records, metrics, quorum_offset, ship_once};
 use crate::peer::PeerRequester;
 
@@ -50,15 +51,15 @@ impl ShardCursors {
 /// Returns whether the mark moved. A caller with nothing waiting on the mark
 /// can ignore it; a caller on the quorum path cannot.
 async fn publish_mark(
-    report_to: Option<&ReportTo>,
+    reporter: Option<&Reporter>,
     marks: &QuorumMarks,
     key: &ShardKey,
     generation: u64,
     report: &ShardReport,
     offset: u64,
 ) -> bool {
-    let reported = match report_to {
-        Some(report_to) => send_reports(report_to, std::slice::from_ref(report)).await,
+    let reported = match reporter {
+        Some(reporter) => reporter.send(report.clone()).await,
         // Nothing to report to, so nothing to be behind: a broker with no
         // cluster membership has no promotion to inform.
         None => true,
@@ -177,7 +178,7 @@ async fn replicate_shard<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
     marks: &QuorumMarks,
-    report_to: Option<&ReportTo>,
+    reporter: Option<&Reporter>,
     key: ShardKey,
     route: felix_router::Route,
     mut entry: ShardCursors,
@@ -354,7 +355,7 @@ async fn replicate_shard<R: PeerRequester>(
             // by another route. The publish waits, the next pass retries, and a
             // client is told a timeout rather than an acknowledgement this
             // broker cannot stand behind.
-            publish_mark(report_to, marks, key, route.generation, &report, offset).await;
+            publish_mark(reporter, marks, key, route.generation, &report, offset).await;
             Some(report)
         },
     )
@@ -386,7 +387,7 @@ async fn replicate_shard<R: PeerRequester>(
         // answering raises the offset a majority holds, and that is this pass's
         // to publish rather than the next one's.
         publish_mark(
-            report_to,
+            reporter,
             marks,
             key,
             route.generation,
@@ -488,7 +489,7 @@ pub async fn replicate_once<R: PeerRequester>(
     broker: &Arc<Broker>,
     router: &ShardRouter,
     marks: &QuorumMarks,
-    report_to: Option<&ReportTo>,
+    reporter: Option<&Reporter>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
     group_cursors: &mut HashMap<ShardKey, ShardCursors>,
     dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
@@ -548,7 +549,7 @@ pub async fn replicate_once<R: PeerRequester>(
     // thousands of those at once.
     let passes: Vec<ShardPass> =
         futures::stream::iter(work.into_iter().map(|(key, route, entry, aux)| {
-            replicate_shard(requester, broker, marks, report_to, key, route, entry, aux)
+            replicate_shard(requester, broker, marks, reporter, key, route, entry, aux)
         }))
         .buffer_unordered(SHARD_CONCURRENCY)
         .collect()
@@ -740,7 +741,7 @@ pub struct ReportTo {
 /// reports is worse than none, since promotion is gated on *recent* positions.
 /// The answer instead gates the quorum mark, so "could not tell" reads as
 /// false — see the caller.
-async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
+pub(super) async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
     if reports.is_empty() {
         return true;
     }
@@ -814,7 +815,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     broker: Arc<Broker>,
     router: Arc<ShardRouter>,
     published: Published,
-    report_to: Option<ReportTo>,
+    reporter: Option<Reporter>,
     interval: Duration,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -848,7 +849,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &broker,
                 &router,
                 &published.marks,
-                report_to.as_ref(),
+                reporter.as_ref(),
                 &mut cursors,
                 &mut group_cursors,
                 &mut dead_letter_cursors,

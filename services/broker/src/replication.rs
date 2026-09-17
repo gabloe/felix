@@ -43,6 +43,7 @@ pub mod driver;
 pub mod halted;
 pub mod metrics;
 pub mod quorum;
+pub mod reporter;
 
 /// How far a follower has got, as this leader understands it.
 #[derive(Debug, Clone, PartialEq, Eq)]
