@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789644362794,
+  "lastUpdate": 1789644530424,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8892,6 +8892,58 @@ window.BENCHMARK_DATA = {
             "range": "12212.71",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 774600.56\nmean: 771946.77\nstdev: 12212.71\ncv: 1.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6621d86703833dcaf3ea2d771d62a8f1d02dbaa0",
+          "message": "fix(broker): bound a forwarded publish by the ack budget (#399)\n\nA publish through a broker that does not own the shard is forwarded, and\nthe forward's budget is up to MAX_ATTEMPTS peer requests, each able to dial\nfirst. That runs to tens of seconds. The ack waiter gives up in a few, so\nfor a forward it always won the race: whatever the forward concluded was\ndiscarded and the client got \"publish commit timeout\" instead.\n\nThat is the least useful answer available. It says nothing about why, and\nit is ambiguous about whether the record landed, so a client cannot act on\nit. The forward had already classified the failure — Unavailable means\nnothing was sent and the batch may go again; Disconnected or Timeout means\nit went out and its fate is unknown — and none of that reached the caller.\n\nack_wait_timeout already sits above the quorum wait for exactly this\nreason, with the same reasoning written next to it. Forwarding is the other\ninner wait a publish can sit on and was never covered. Raising the ceiling\nto fit it would make a client wait out tens of seconds, so the forward is\nbounded to fit under the ceiling instead: BrokerConfig::forward_budget is\nthe ack ceiling less the same hop margin, derived rather than configured so\nthe two cannot be tuned apart.\n\nRunning out mid-request is indeterminate, because the request went out.\nRunning out before one is refused, because nothing did — that is the\noutcome a caller may safely act on by going elsewhere.\n\nWithout the bound, a_forward_answers_within_its_budget does not answer in\n60 seconds and a_spent_budget_sends_nothing sends the batch anyway.\n\nThis is the broker half of #269. The client half is #119: nothing retries\na retryable publish failure yet, so seed_endpoints still retries by hand,\nand its comment is corrected to say what the failure now looks like.\n\nRefs #269",
+          "timestamp": "2026-09-17T04:25:10-07:00",
+          "tree_id": "3056b221c1efe1500ffe0378283ac6c1b31967d2",
+          "url": "https://github.com/gabloe/felix/commit/6621d86703833dcaf3ea2d771d62a8f1d02dbaa0"
+        },
+        "date": 1789644529660,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 253479.39,
+            "range": "3189.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253479.39\nmean: 254231.58\nstdev: 3189.44\ncv: 1.25%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 253479.39,
+            "range": "3189.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 253479.39\nmean: 254231.58\nstdev: 3189.44\ncv: 1.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60597.19,
+            "range": "1625.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60597.19\nmean: 60279.30\nstdev: 1625.31\ncv: 2.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 605971.88,
+            "range": "16253.06",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 605971.88\nmean: 602793.06\nstdev: 16253.06\ncv: 2.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
