@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789663610428,
+  "lastUpdate": 1789666849921,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12012,6 +12012,72 @@ window.BENCHMARK_DATA = {
             "range": "877.77",
             "unit": "us",
             "extra": "trials: 5\nmedian: 462.00\nmean: 805.80\nstdev: 877.77\ncv: 108.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cffa24bca44d40275f835ad22e6288f29951d8b9",
+          "message": "feat(storage): record where each leadership generation began (#466)\n\nThe foundation for repairing a divergence (#406). Offsets alone cannot say\nwhere two logs part company — both have an offset 100, and \"they differ at\n100\" says nothing about how far back they agree. A generation does say,\nbecause it belongs to exactly one leader.\n\nEach shard keeps a short list of (generation, start offset) beside its\nsegments. One entry per leadership change rather than per record, which is\nwhat keeps it out of the record format: a generation per record means a\nsegment version bump, and SegmentHeader::decode rejects an unknown version\noutright rather than guess.\n\nThree properties the tests are mostly about, because each answer here\nbecomes a truncation point:\n\n- A generation not in the history has no end. Interpolating between\n  neighbours would be a plausible-looking answer with nothing behind it.\n- An older generation never rewrites where a later one started, so a stale\n  message from a deposed leader cannot move the mark.\n- Two histories with nothing in common share nothing, which is a refusal to\n  repair rather than a repair to offset zero.\n\nAbsent, short, or corrupt reads as empty rather than failing the open: every\nshard written before this existed has none, and refusing to start over it\nwould trade an outage for a convenience. What is lost is automatic repair,\nnever a record. The checksum is what keeps a corrupt file from being read\nback as a confident answer.\n\nTruncation takes the history with it, or it would answer with offsets the\nlog no longer holds. Removing that fails\ntruncating_forgets_the_generations_it_removed.\n\nNothing consumes this yet. The wire exchange and the follower-side\ntruncation follow.\n\nRefs #406",
+          "timestamp": "2026-09-17T09:44:21-07:00",
+          "tree_id": "8106a2a98a0ed97e2fcebb28f756305ada90ec8b",
+          "url": "https://github.com/gabloe/felix/commit/cffa24bca44d40275f835ad22e6288f29951d8b9"
+        },
+        "date": 1789666848754,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 151,
+            "range": "3.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 151.00\nmean: 150.00\nstdev: 3.00\ncv: 2.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 193,
+            "range": "663.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 193.00\nmean: 530.80\nstdev: 663.86\ncv: 125.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 221,
+            "range": "1730.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 221.00\nmean: 1074.00\nstdev: 1730.24\ncv: 161.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 194,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 194.00\nmean: 193.80\nstdev: 1.30\ncv: 0.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 391,
+            "range": "11.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 391.00\nmean: 397.60\nstdev: 11.37\ncv: 2.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 560,
+            "range": "220.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 560.00\nmean: 660.40\nstdev: 220.92\ncv: 33.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
