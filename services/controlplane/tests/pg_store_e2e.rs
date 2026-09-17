@@ -48,7 +48,7 @@ use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use testcontainers::clients::Cli;
 use testcontainers::core::Container;
 use testcontainers_modules::postgres::Postgres;
@@ -127,14 +127,10 @@ async fn wait_for_postgres(url: &str, timeout: Duration) -> Result<(), sqlx::Err
 async fn test_schema_name(cell: &tokio::sync::OnceCell<String>, suffix: &str) -> String {
     // Unique schema per run keeps tests isolated across processes.
     cell.get_or_init(|| async {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
         if suffix.is_empty() {
-            format!("felix_test_{}_{}", std::process::id(), nanos)
+            common::unique_schema("felix_test")
         } else {
-            format!("felix_test_{}_{}_{}", std::process::id(), nanos, suffix)
+            format!("{}_{suffix}", common::unique_schema("felix_test"))
         }
     })
     .await
