@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789680273573,
+  "lastUpdate": 1789682411405,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12474,6 +12474,72 @@ window.BENCHMARK_DATA = {
             "range": "119.76",
             "unit": "us",
             "extra": "trials: 5\nmedian: 312.00\nmean: 362.40\nstdev: 119.76\ncv: 33.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f21d88a9bb6b35bb4765c1877cddc5f3336fde76",
+          "message": "fix(storage): a sparse index entry may not point inside the segment header (#483)\n\nThe fuzz job added in #480 found this on its first run on main, in\n`sparse_index` — a target that has existed for a while and had never run\nanywhere automated. CI is red on every open pull request until this lands.\n\n`SparseIndex::push` checked that offsets ascend and said nothing about\npositions. An index file is bytes on disk like any other, so a corrupt or\nhostile one can pair ascending offsets with a position of zero, and\n`seek_position` hands that straight back as somewhere to decode forward from.\nIts doc comment promises \"always a valid record boundary\"; inside the header\nthe next thing read is a header field parsed as a record.\n\nThe consequence is not memory unsafety — the scan finds nonsense and errors —\nbut it is a shard refusing to open because of a file the design says is derived\nand rebuildable. \"Indexes are derived, never trusted\" is the rule; the position\nnobody checked was the part still being trusted.\n\nPositions now have to ascend with offsets, which is what a real index always\ndoes: records occupy distinct ascending byte ranges after the header, so\nposition moves exactly when offset does. An entry that breaks it is dropped and\nthe entries before it stay usable — the same bargain the torn-tail case already\nstrikes.\n\nReverted the guard and watched both new cases fail. The 50-byte input from CI,\nkept here rather than in the tree since the deterministic tests cover it:\n\n    464c 5349 0002 0049 0000 0000 0000 0000\n    0000 464c 5349 0002 0000 464c 5349 0000\n    0000 0000 0000 0000 0000 0000 464c 5349\n    0000",
+          "timestamp": "2026-09-17T14:57:29-07:00",
+          "tree_id": "d3fc1ca94d22c379ca0039b0e9fce5a3225253c8",
+          "url": "https://github.com/gabloe/felix/commit/f21d88a9bb6b35bb4765c1877cddc5f3336fde76"
+        },
+        "date": 1789682408693,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "1.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 159.40\nstdev: 1.82\ncv: 1.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 201,
+            "range": "2.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 201.00\nstdev: 2.12\ncv: 1.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 240,
+            "range": "14.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 240.00\nmean: 245.00\nstdev: 14.11\ncv: 5.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "2.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 199.40\nstdev: 2.19\ncv: 1.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 421,
+            "range": "204.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 421.00\nmean: 500.60\nstdev: 204.28\ncv: 40.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 885,
+            "range": "835.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 885.00\nmean: 1208.80\nstdev: 835.05\ncv: 69.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
