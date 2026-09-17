@@ -197,10 +197,23 @@ impl Cluster {
         ownership: Arc<RwLock<ShardOwnership>>,
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
+        self.watch_with(
+            broker::credential::NodeCredential::new(self.bearer.clone()),
+            ownership,
+            shutdown,
+        )
+    }
+
+    fn watch_with(
+        &self,
+        credential: broker::credential::NodeCredential,
+        ownership: Arc<RwLock<ShardOwnership>>,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(shard_watch::run(
             self.client.clone(),
             self.base_url.clone(),
-            Some(self.bearer.clone()),
+            Some(credential),
             ownership,
             Duration::from_millis(10),
             shutdown,
@@ -364,4 +377,44 @@ async fn the_watch_survives_the_control_plane_going_away() {
 
     shutdown.cancel();
     let _ = watch.await;
+}
+
+/// The watch reads its credential per poll, not once at startup.
+///
+/// This is the whole reason the credential is a shared holder rather than a
+/// `String`: the watch outlives many access tokens, and a copy taken when it
+/// started is the exact thing that drops a broker out of the cluster fifteen
+/// minutes in. Started with a credential the control plane refuses, so the
+/// watch makes no progress; a refresh then swaps a good one in, and progress
+/// is the proof it went back and looked.
+#[tokio::test]
+async fn the_watch_picks_up_a_refreshed_credential() {
+    let cluster = Cluster::start().await;
+    cluster.assign(0, "broker-a", ShardState::Assigning).await;
+
+    let credential = broker::credential::NodeCredential::new("not-a-valid-token");
+    let ownership = Arc::new(RwLock::new(ShardOwnership::default()));
+    let shutdown = CancellationToken::new();
+    let watch = cluster.watch_with(credential.clone(), Arc::clone(&ownership), shutdown.clone());
+
+    // Nothing arrives while the credential is refused. Long enough for several
+    // poll intervals, so this is "refused" rather than "not yet".
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        ownership.read().await.len(),
+        0,
+        "the watch applied assignments it was not authorised to read",
+    );
+
+    credential.replace(cluster.bearer.clone());
+
+    assert!(
+        until(async || ownership.read().await.len() == 1).await,
+        "the watch never picked up the refreshed credential, so it is still \
+         presenting the token it was handed at startup",
+    );
+
+    shutdown.cancel();
+    let _ = watch.await;
+    cluster.shutdown().await;
 }

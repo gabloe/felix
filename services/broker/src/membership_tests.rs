@@ -101,6 +101,7 @@ async fn serve(
 
 fn config() -> MembershipConfig {
     MembershipConfig {
+        refresh_token_file: None,
         node_id: "broker-a".to_string(),
         token: "test-token".to_string(),
         advertise_addr: "10.0.0.4:7000".to_string(),
@@ -115,9 +116,14 @@ async fn registration_sends_the_identity_and_returns_the_incarnation() {
     let (base_url, stop, handle) = serve(Arc::clone(&calls)).await;
     let client = build_test_client().expect("client");
 
-    let registration = register(&client, &base_url, &config())
-        .await
-        .expect("register");
+    let registration = register(
+        &client,
+        &base_url,
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect("register");
     assert_eq!(registration.node_id, "broker-a");
     assert_eq!(registration.incarnation, 0);
     assert_eq!(registration.heartbeat_interval_ms, 20);
@@ -149,9 +155,14 @@ async fn a_rejected_registration_is_an_error() {
     wait_for_listen(addr).await.expect("listen");
 
     let client = build_test_client().expect("client");
-    let err = register(&client, &format!("http://{addr}"), &config())
-        .await
-        .expect_err("should fail");
+    let err = register(
+        &client,
+        &format!("http://{addr}"),
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect_err("should fail");
     assert!(err.to_string().contains("rejected registration"), "{err}");
 
     let _ = stop.send(());
@@ -166,9 +177,14 @@ async fn heartbeats_carry_the_registered_incarnation() {
     let (base_url, stop, handle) = serve(Arc::clone(&calls)).await;
     let client = build_test_client().expect("client");
 
-    let mut registration = register(&client, &base_url, &config())
-        .await
-        .expect("register");
+    let mut registration = register(
+        &client,
+        &base_url,
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect("register");
     registration.incarnation = 7;
 
     let shutdown = CancellationToken::new();
@@ -217,9 +233,14 @@ async fn heartbeat_failures_are_counted_and_then_recovered_from() {
     let (base_url, stop, handle) = serve(Arc::clone(&calls)).await;
     let client = build_test_client().expect("client");
 
-    let registration = register(&client, &base_url, &config())
-        .await
-        .expect("register");
+    let registration = register(
+        &client,
+        &base_url,
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect("register");
     let shutdown = CancellationToken::new();
     let failures = Arc::new(AtomicU64::new(0));
     let beating = tokio::spawn(run_heartbeat(
@@ -324,18 +345,28 @@ async fn a_refusal_and_an_outage_are_different_kinds() {
     wait_for_listen(addr).await.expect("listen");
 
     let client = build_test_client().expect("client");
-    let refused = register(&client, &format!("http://{addr}"), &config())
-        .await
-        .expect_err("should be refused");
+    let refused = register(
+        &client,
+        &format!("http://{addr}"),
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect_err("should be refused");
     assert_eq!(refused.kind(), crate::membership_metrics::KIND_REJECTED);
 
     let _ = stop.send(());
     let _ = handle.await;
 
     // Nothing listening: no answer at all.
-    let outage = register(&client, &format!("http://{addr}"), &config())
-        .await
-        .expect_err("should be unavailable");
+    let outage = register(
+        &client,
+        &format!("http://{addr}"),
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect_err("should be unavailable");
     assert_eq!(outage.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
 }
 
@@ -355,9 +386,14 @@ async fn a_server_error_counts_as_an_outage_not_a_refusal() {
     wait_for_listen(addr).await.expect("listen");
 
     let client = build_test_client().expect("client");
-    let err = register(&client, &format!("http://{addr}"), &config())
-        .await
-        .expect_err("should fail");
+    let err = register(
+        &client,
+        &format!("http://{addr}"),
+        &config(),
+        &crate::credential::NodeCredential::new("a-node-token"),
+    )
+    .await
+    .expect_err("should fail");
     assert_eq!(err.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
     assert!(
         matches!(err, MembershipError::Unavailable(_)),

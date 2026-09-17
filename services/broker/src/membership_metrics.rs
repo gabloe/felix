@@ -29,9 +29,17 @@ pub const MEMBERSHIP_LIVE: &str = "felix_broker_membership_live";
 /// Registration attempts, by `outcome`: `registered`, `rejected`, `unavailable`.
 pub const REGISTRATIONS_TOTAL: &str = "felix_broker_membership_registrations_total";
 
+/// Node-credential refreshes, by `outcome`: `ok`, `unavailable`.
+///
+/// Worth an alert on: a broker whose refreshes are failing is still serving
+/// and still looks healthy, right up to the moment its credential expires and
+/// it leaves the cluster. The failures are the only warning.
+pub const CREDENTIAL_REFRESHES_TOTAL: &str = "felix_broker_credential_refreshes_total";
+
 /// Why a membership call did not succeed.
 pub const KIND_REJECTED: &str = "rejected";
 pub const KIND_UNAVAILABLE: &str = "unavailable";
+pub const KIND_OK: &str = "ok";
 
 pub fn record_heartbeat_success() {
     metrics::counter!(HEARTBEATS_TOTAL).increment(1);
@@ -45,6 +53,10 @@ pub fn record_heartbeat_failure(kind: &'static str) {
 /// Report how stale this broker's own liveness is.
 pub fn record_heartbeat_age(age: std::time::Duration) {
     metrics::gauge!(HEARTBEAT_AGE_SECONDS).set(age.as_secs_f64());
+}
+
+pub fn record_credential_refresh(outcome: &'static str) {
+    metrics::counter!(CREDENTIAL_REFRESHES_TOTAL, "outcome" => outcome).increment(1);
 }
 
 pub fn record_registration(outcome: &'static str) {

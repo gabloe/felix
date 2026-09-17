@@ -34,6 +34,7 @@ mod observability;
 mod test_support;
 
 use anyhow::{Context, Result};
+use broker::credential;
 use broker::membership;
 use broker::peer;
 use broker::replication;
@@ -451,6 +452,14 @@ where
     // for `serving`, because advertising a node placement can route to before
     // it can answer is worse than advertising it a moment late.
     let membership_client = reqwest::Client::new();
+    // One holder, shared by every control-plane caller below. A refresh swaps
+    // what is inside it, so a caller handed it at startup keeps presenting a
+    // current token for the life of the process rather than the one token it
+    // was given.
+    let credential = config
+        .membership
+        .as_ref()
+        .map(|membership| credential::NodeCredential::new(membership.token.clone()));
     let membership = match (&config.membership, &config.controlplane_url) {
         (Some(membership_config), Some(base_url)) => {
             let serving = if gate_readiness_on_sync {
@@ -467,10 +476,36 @@ where
             // to discover it.
             let refresh = Arc::clone(&lease).spawn_refresh(sync_shutdown.clone());
             drop(refresh);
+            let node_credential = credential
+                .clone()
+                .expect("a cluster member has a credential");
+            // Refresh only when the operator provided somewhere to keep the
+            // rotating half. Without it the broker behaves exactly as it did
+            // before refresh existed: it runs on the token it was given, and
+            // leaves the cluster when that expires.
+            match membership_config.refresh_token_file.clone() {
+                Some(refresh_token_file) => {
+                    tokio::spawn(credential::refresh::run(
+                        credential::refresh::RefreshConfig {
+                            client: membership_client.clone(),
+                            base_url: base_url.clone(),
+                            credential: node_credential.clone(),
+                            refresh_token_file,
+                        },
+                        sync_shutdown.clone(),
+                    ));
+                }
+                None => tracing::info!(
+                    "no FELIX_NODE_REFRESH_TOKEN_FILE: this broker will run on \
+                     the credential it was given and leave the cluster when it \
+                     expires",
+                ),
+            }
             Some(membership::spawn(
                 membership_client.clone(),
                 base_url.clone(),
                 membership_config.clone(),
+                node_credential,
                 serving,
                 sync_shutdown.clone(),
                 lease,
@@ -530,7 +565,7 @@ where
                 base_url.clone(),
                 // The assignment feed is cluster metadata, so it is read with
                 // the same credential the rest of membership uses.
-                config.membership.as_ref().map(|m| m.token.clone()),
+                credential.clone(),
                 Arc::clone(ownership),
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
@@ -547,7 +582,7 @@ where
                 Some(shard_routing::CatalogSource {
                     client: membership_client.clone(),
                     base_url: base_url.clone(),
-                    token: config.membership.as_ref().map(|m| m.token.clone()),
+                    token: credential.clone(),
                 }),
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
@@ -571,7 +606,7 @@ where
                             client: membership_client.clone(),
                             base_url: base_url.clone(),
                             node_id: membership.node_id.clone(),
-                            token: Some(membership.token.clone()),
+                            token: credential.clone(),
                             incarnation: 0,
                         }),
                     Duration::from_millis(config.controlplane_sync_interval_ms),
@@ -664,7 +699,14 @@ where
                     &membership_client,
                     base_url,
                     &membership_config.node_id,
-                    &membership_config.token,
+                    // The current token, not the startup one: a broker that has
+                    // been up for hours would otherwise deregister with an
+                    // expired credential and be refused, leaving the control
+                    // plane to expire it as if it had crashed.
+                    &credential
+                        .as_ref()
+                        .map(|credential| credential.bearer().to_string())
+                        .unwrap_or_default(),
                 )
                 .await;
             })

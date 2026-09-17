@@ -90,7 +90,10 @@ struct HeartbeatResponse {
 pub struct Registration {
     pub node_id: String,
     /// Carried so the heartbeat loop does not need the whole config.
-    pub token: String,
+    ///
+    /// The shared holder, not a copy: heartbeats run for the life of the
+    /// process and outlast any one access token.
+    pub token: crate::credential::NodeCredential,
     /// This process's incarnation. Sent with every heartbeat so one delayed
     /// past a restart is rejected instead of counted for its successor.
     pub incarnation: u64,
@@ -148,13 +151,14 @@ pub async fn register(
     client: &reqwest::Client,
     base_url: &str,
     config: &MembershipConfig,
+    credential: &crate::credential::NodeCredential,
 ) -> std::result::Result<Registration, MembershipError> {
     let response = client
         .post(format!("{}/v1/nodes", base_url.trim_end_matches('/')))
         // Proves this broker may claim `node_id`. The control plane authorises
         // the identity in the body against it, so a broker cannot register
         // under a name its credential does not cover.
-        .bearer_auth(&config.token)
+        .bearer_auth(credential.bearer())
         .json(&RegistrationRequest {
             node_id: &config.node_id,
             advertise_addr: &config.advertise_addr,
@@ -196,7 +200,7 @@ pub async fn register(
 
     Ok(Registration {
         node_id: config.node_id.clone(),
-        token: config.token.clone(),
+        token: credential.clone(),
         incarnation: registered.node.status.incarnation,
         heartbeat_interval_ms: registered.heartbeat_interval_ms,
     })
@@ -235,7 +239,16 @@ pub async fn run_heartbeat(
             _ = tokio::time::sleep(jittered(delay)) => {}
         }
 
-        match send_heartbeat(&client, &url, &registration.token, registration.incarnation).await {
+        // Read per heartbeat, so a refresh between beats is picked up without
+        // this loop knowing refresh exists.
+        match send_heartbeat(
+            &client,
+            &url,
+            &registration.token.bearer(),
+            registration.incarnation,
+        )
+        .await
+        {
             Ok(response) => {
                 consecutive_failures.store(0, Ordering::Release);
                 last_success = std::time::Instant::now();
@@ -415,6 +428,7 @@ pub fn spawn(
     client: reqwest::Client,
     base_url: String,
     config: MembershipConfig,
+    credential: crate::credential::NodeCredential,
     serving: CancellationToken,
     shutdown: CancellationToken,
     lease: Arc<crate::lease::LeaseState>,
@@ -433,7 +447,7 @@ pub fn spawn(
 
             let mut attempt = 0u64;
             let registration = loop {
-                match register(&client, &base_url, &config).await {
+                match register(&client, &base_url, &config, &credential).await {
                     Ok(registration) => break registration,
                     Err(MembershipError::Rejected(message)) => {
                         mm::record_registration(mm::KIND_REJECTED);

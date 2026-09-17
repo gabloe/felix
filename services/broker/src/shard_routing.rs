@@ -310,8 +310,9 @@ pub struct CatalogSource {
     pub client: reqwest::Client,
     pub base_url: String,
     /// The same credential the assignment feed uses: `/v1/nodes` and
-    /// `/v1/shard-assignments` both require `node.view:cluster:*`.
-    pub token: Option<String>,
+    /// `/v1/shard-assignments` both require `node.view:cluster:*`. Held, not
+    /// copied, so a refresh reaches this feed too.
+    pub token: Option<crate::credential::NodeCredential>,
 }
 
 /// Keep local shard state and the routing table in step with the watch.
@@ -349,10 +350,13 @@ pub fn spawn_feed(
             }
 
             if let Some(source) = &catalog_source {
+                // Read on every tick rather than once, so a refreshed token is
+                // in use from the next poll.
+                let bearer = source.token.as_ref().map(|token| token.bearer());
                 match crate::node_catalog::fetch(
                     &source.client,
                     &source.base_url,
-                    source.token.as_deref(),
+                    bearer.as_deref().map(String::as_str),
                 )
                 .await
                 {
