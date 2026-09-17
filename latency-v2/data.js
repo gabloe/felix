@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789659200034,
+  "lastUpdate": 1789659440362,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11682,6 +11682,72 @@ window.BENCHMARK_DATA = {
             "range": "658.63",
             "unit": "us",
             "extra": "trials: 5\nmedian: 880.00\nmean: 1029.80\nstdev: 658.63\ncv: 63.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d5dfa242d673465d015bcdae4f99551e1c20c31",
+          "message": "fix(storage): a failed fsync poisons the segment writer (#428)\n\nAn fsync error on the active segment returned Err and left the writer\nusable. Linux may drop the dirty pages a failed writeback could not write,\nso the next fsync returns success having flushed nothing — and the log then\nreports durability for records that are gone. That is fsyncgate, and it is\nthe same silent loss the checksum rule already refuses to risk.\n\nsync() and seal() now set the poison flag on failure, and sync() refuses\nonce poisoned, as append() already did. mark_synced ignores a durability\nmark from the log syncer on a poisoned writer, since that is the other way\nsynced_bytes advances.\n\nThe flag's meaning widens from \"a failed append could not be rolled back\"\nto \"this writer can no longer make truthful claims\", which covers both.\n\nRemoving the poison assignment fails a_failed_sync_poisons_the_writer: the\nsecond sync succeeds, which is exactly the behaviour being guarded against.\n\nFixes #413",
+          "timestamp": "2026-09-17T08:34:47-07:00",
+          "tree_id": "5cd6b4169c194fdd318bae6d1f3b264860d40116",
+          "url": "https://github.com/gabloe/felix/commit/2d5dfa242d673465d015bcdae4f99551e1c20c31"
+        },
+        "date": 1789659437965,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 121,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 121.00\nmean: 121.60\nstdev: 0.89\ncv: 0.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 167,
+            "range": "2.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 165.80\nstdev: 2.17\ncv: 1.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 219,
+            "range": "80.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 219.00\nmean: 246.20\nstdev: 80.35\ncv: 32.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.00\nstdev: 1.22\ncv: 0.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 330,
+            "range": "13.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 330.00\nmean: 336.40\nstdev: 13.35\ncv: 3.97%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 501,
+            "range": "402.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 501.00\nmean: 673.80\nstdev: 402.83\ncv: 59.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
