@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789684532571,
+  "lastUpdate": 1789684679115,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12672,6 +12672,72 @@ window.BENCHMARK_DATA = {
             "range": "568.89",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1524.00\nmean: 1186.20\nstdev: 568.89\ncv: 47.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "166d0a900716f370fc70a4990340f8a69e435a1a",
+          "message": "docs(test): the client does have a retry, and not retrying a publish is a choice (#486)\n\nThe comment on `a_seed_list_survives_losing_the_leader` said the client \"has no\nretry of its own\" and pointed at #119 as the planned fix. #119 shipped and is\nclosed: `ClusterClient` carries a `ReconnectPolicy` with jittered backoff, and\na failed publish reconnects before returning so the caller's next call lands on\na live broker. That is why the loop in the test converges quickly rather than\nspending its whole twenty seconds.\n\nWhat the client does *not* do is retry the publish itself, and reading the old\ncomment it sounds like an omission waiting on someone. It is a decision, and\nthe same one `peer/forward.rs` argues at length for the broker: a publish whose\nanswer was lost may already be on the owner's disk, so a retry inside the\nclient manufactures a duplicate that only the client — holding the request id —\ncould ever detect. Idempotent producers (#422) are what would make an absorbing\nretry safe to add.\n\nComment only; the test is unchanged and still asserts what it did.",
+          "timestamp": "2026-09-17T15:35:23-07:00",
+          "tree_id": "ceaf1f454c7b3fd27f8b82a4bd356fc73a08b309",
+          "url": "https://github.com/gabloe/felix/commit/166d0a900716f370fc70a4990340f8a69e435a1a"
+        },
+        "date": 1789684677370,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 83,
+            "range": "2.51",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 83.00\nmean: 83.60\nstdev: 2.51\ncv: 3.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 118,
+            "range": "6.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 118.00\nmean: 120.00\nstdev: 6.52\ncv: 5.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 142,
+            "range": "9.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 142.00\nmean: 141.80\nstdev: 9.34\ncv: 6.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 111,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 111.00\nmean: 110.80\nstdev: 0.84\ncv: 0.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 250,
+            "range": "8.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 250.00\nmean: 249.00\nstdev: 8.86\ncv: 3.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 356,
+            "range": "329.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 356.00\nmean: 509.80\nstdev: 329.46\ncv: 64.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
