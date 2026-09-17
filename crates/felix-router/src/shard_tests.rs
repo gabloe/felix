@@ -354,3 +354,39 @@ fn an_empty_table_resolves_nothing() {
         Resolution::Unavailable(Unavailable::NoAssignment),
     );
 }
+
+/// "I do not know this stream" and "exactly one shard" must be different
+/// answers.
+///
+/// They are the same value out of `shards_for`, which is correct for routing —
+/// a publish to a stream the snapshot has not caught up on hashes to shard 0
+/// rather than failing — and wrong for anything a client acts on. A client told
+/// "one shard" for a stream that does not exist opens one subscription, reports
+/// success, and reads nothing, which surfaces later as missing data.
+#[test]
+fn an_unplaced_stream_is_distinguishable_from_a_single_shard_one() {
+    let nodes = catalog(&[node("broker-a", 7001, "us-west-2", true)]);
+    let router = router(&nodes, &[(0, "broker-a", 1)]);
+    let table = router.snapshot();
+
+    assert_eq!(
+        table.placed_shards_for(ShardKind::Stream, "t1", "ns", "orders"),
+        Some(1),
+        "a stream placed with one shard reports one",
+    );
+    assert_eq!(
+        table.placed_shards_for(ShardKind::Stream, "t1", "ns", "nothing-here"),
+        None,
+        "a stream this table has never heard of reported a shard count, which a \
+         client cannot tell from a real single-shard stream",
+    );
+
+    // Routing keeps its fallback: the two callers want different answers, which
+    // is why they are different methods.
+    assert_eq!(
+        table.shards_for(ShardKind::Stream, "t1", "ns", "nothing-here"),
+        1,
+        "routing lost its fallback, so a publish to a stream the snapshot has \
+         not caught up on now has nowhere to go",
+    );
+}

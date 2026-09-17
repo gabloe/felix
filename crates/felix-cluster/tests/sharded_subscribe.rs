@@ -448,3 +448,68 @@ async fn a_sharded_subscription_resumes_from_its_per_shard_offsets() {
         "resuming skipped records published while disconnected: {missed:?}"
     );
 }
+
+/// A stream the broker has never heard of reports zero shards, not one.
+///
+/// This is the answer the whole sharded path is built on. `StreamShardsView`
+/// documents zero as "the broker knows nothing of the stream", and
+/// `subscribe_sharded` refuses on it — that refusal is what stops it "reading
+/// shard 0 and calling it the stream". A broker that answers one instead makes
+/// an unknown stream indistinguishable from a genuine single-shard one, the
+/// refusal unreachable, and the caller's mistake something they discover much
+/// later as missing data (#394).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn an_unknown_stream_reports_no_shards() {
+    let cluster = Cluster::start(sharded()).await.expect("start cluster");
+    let client = cluster_client(&cluster).await;
+    // The raw answer, straight from a broker: `subscribe_sharded` below is the
+    // caller-facing consequence, but the count is what the protocol specifies.
+    let direct = felix_cluster::client::connect_any(
+        &cluster.broker_addrs(),
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("connect a plain client");
+
+    // The placed stream first, so the zero below is about this stream being
+    // unknown rather than about the broker not answering at all.
+    assert_eq!(
+        direct
+            .stream_shards(&cluster.tenant_id, &cluster.namespace, STREAM)
+            .await
+            .expect("ask how many shards the placed stream has"),
+        SHARDS,
+    );
+
+    assert_eq!(
+        direct
+            .stream_shards(&cluster.tenant_id, &cluster.namespace, "no-such-stream")
+            .await
+            .expect("asking about an unknown stream is a question, not an error"),
+        0,
+        "an unknown stream reported a shard count, which a client cannot tell \
+         from a real single-shard stream",
+    );
+
+    let err = match client
+        .subscribe_sharded(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            "no-such-stream",
+            None,
+        )
+        .await
+    {
+        Ok(_) => panic!(
+            "subscribing to a stream that does not exist succeeded; the caller \
+             now holds an empty subscription it believes is the whole stream"
+        ),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:#}").contains("no-such-stream"),
+        "the refusal must name the stream: {err:#}",
+    );
+}

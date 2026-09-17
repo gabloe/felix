@@ -187,6 +187,20 @@ impl IngressRouter {
             .shards_for(to_router_kind(kind), tenant_id, namespace, stream)
     }
 
+    /// The placed shard count, or `None` if the routing snapshot does not know
+    /// this stream. See [`felix_router::ShardTable::placed_shards_for`].
+    pub fn placed_shards_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Option<u32> {
+        self.router
+            .snapshot()
+            .placed_shards_for(to_router_kind(kind), tenant_id, namespace, stream)
+    }
+
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
         match self.router.resolve(&to_router_key(key)) {
             Resolution::Local { generation } => {

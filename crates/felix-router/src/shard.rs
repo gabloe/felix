@@ -222,11 +222,16 @@ impl RoutingTable {
         }
     }
 
-    /// How many shards this stream was placed with.
+    /// How many shards this stream was placed with, for routing.
     ///
     /// `1` when the table has never heard of the stream, which is the answer a
     /// publish needs: an unplaced stream has one shard as far as routing is
     /// concerned, and `shard_for` sends every key to shard 0.
+    ///
+    /// **Not the answer to give a client.** That fallback makes an unknown
+    /// stream indistinguishable from a single-shard one, and a client told
+    /// "one shard" reads shard 0 and calls it the stream. Use
+    /// [`ShardTable::placed_shards_for`] where the answer leaves the broker.
     pub fn shards_for(
         &self,
         kind: ShardKind,
@@ -234,8 +239,30 @@ impl RoutingTable {
         namespace: &str,
         stream: &str,
     ) -> u32 {
+        self.placed_shards_for(kind, tenant_id, namespace, stream)
+            .unwrap_or(1)
+    }
+
+    /// How many shards this stream was placed with, or `None` if this table has
+    /// never heard of it.
+    ///
+    /// The distinction [`ShardTable::shards_for`] deliberately collapses: "I do
+    /// not know this stream" and "exactly one shard" are different answers, and
+    /// only one of them is safe to act on.
+    pub fn placed_shards_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Option<u32> {
         let id = stream_id(kind, tenant_id, namespace, stream);
-        self.shards_per_stream.get(&id).copied().unwrap_or(1).max(1)
+        // A placement of zero shards is not a placement; treating it as unknown
+        // keeps every caller from having to special-case a count it cannot use.
+        self.shards_per_stream
+            .get(&id)
+            .copied()
+            .filter(|shards| *shards > 0)
     }
 
     pub fn get(&self, key: &ShardKey) -> Option<&Route> {
