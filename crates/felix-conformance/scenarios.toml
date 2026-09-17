@@ -67,7 +67,7 @@ reconnecting consumer correct rather than approximately correct.
 
 [[scenario]]
 id = "pubsub.start_earliest"
-required = false
+required = true
 title = "A subscription can start at the oldest retained record"
 detail = """
 `earliest` means as far back as the broker still holds, which is not
@@ -81,13 +81,13 @@ for it is an error while `earliest` succeeds.
 
 [[scenario]]
 id = "cache.put_get"
-required = false
+required = true
 title = "A cached value reads back"
 detail = "Put a value, get it back byte for byte."
 
 [[scenario]]
 id = "cache.miss_is_absent"
-required = false
+required = true
 title = "A missing key reads as absent, not as an error"
 detail = """
 A key that was never written reads as the language's absent value (None, nil,
@@ -97,7 +97,7 @@ use exceptions for control flow over the most common cache outcome.
 
 [[scenario]]
 id = "cache.delete_returns_previous"
-required = false
+required = true
 title = "Delete reports the value it removed"
 detail = """
 Deleting a present key returns what it held; deleting an absent key returns
@@ -106,7 +106,7 @@ absent. The second is an answer, not an error.
 
 [[scenario]]
 id = "cache.ttl_expires"
-required = false
+required = true
 title = "A value with a TTL stops being readable after it"
 detail = """
 Expiry is lazy — the record is reclaimed at compaction, not at the deadline —
@@ -120,7 +120,7 @@ passed, not that storage shrank.
 
 [[scenario]]
 id = "counter.add_returns_sum"
-required = false
+required = true
 title = "Adding to a counter returns the sum including the delta"
 detail = """
 One round trip applies the delta and reports where the counter now stands. A
@@ -130,7 +130,7 @@ calls can interleave with another writer's.
 
 [[scenario]]
 id = "counter.get_absent_is_none"
-required = false
+required = true
 title = "An unwritten counter reads as absent, not zero"
 detail = """
 Absent and zero are different: a counter that was decremented to zero has been
@@ -362,9 +362,178 @@ close does nothing rather than raising.
 
 [[scenario]]
 id = "client.subscription_ends_cleanly"
-required = false
+required = true
 title = "A closed subscription reports the end rather than hanging"
 detail = """
 When the broker closes the event stream, iteration ends. A client that blocks
 forever instead turns a routine shutdown into a hung consumer.
+"""
+
+# ---------------------------------------------------------------------------
+# Queues (consumer groups)
+#
+# A queue is a different shape from a stream: records are pulled, claimed by
+# one consumer at a time, and settled explicitly. A client that models it as a
+# subscription with extra steps gets the settle semantics wrong.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "queue.poll_returns_claimed_records"
+required = true
+title = "A poll claims records, and an empty poll is an answer"
+detail = """
+Polling a group hands back up to the requested count, each with the offset to
+settle and how many times it has been delivered. An empty result means the log
+has nothing unclaimed for this group right now — it is an answer, not an error,
+and a client that raises on it forces exception handling around the ordinary
+case.
+"""
+
+[[scenario]]
+id = "queue.acknowledged_records_are_not_redelivered"
+required = true
+title = "An acknowledged record does not come back"
+detail = """
+Settling a record finishes it. A client whose acknowledgement does not reach
+the broker — wrong offset, wrong group, fire-and-forget — produces a queue that
+redelivers everything forever, and the symptom appears in the consumer rather
+than the client.
+"""
+
+[[scenario]]
+id = "queue.unacknowledged_records_are_redelivered"
+required = true
+title = "A record handed back is delivered again"
+detail = """
+Handing a record back (nack) returns it to the queue for immediate
+redelivery rather than waiting out the visibility timeout. The redelivered
+record must carry a higher attempt count than the first delivery, because that
+count is how a consumer tells a retry from a first attempt.
+"""
+
+[[scenario]]
+id = "queue.dead_letters_are_listable_and_redrivable"
+required = false
+title = "Records that kept failing can be listed, redriven, or discarded"
+detail = """
+Past the attempt bound a record is set aside rather than retried forever. A
+client exposing queues should be able to list those offsets, put one back with
+its attempts reset once the cause is fixed, and drop one that is not worth
+reprocessing. Optional because a binding may reasonably ship polling and
+settling before the administrative half.
+"""
+
+# ---------------------------------------------------------------------------
+# Cache watches
+#
+# The semantics that make a watch usable as a state-synchronisation primitive
+# rather than a notification: resume by offset, and loss that is loud.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "watch.delivers_changes_for_the_filter"
+required = true
+title = "A watch delivers matching changes and ignores the rest"
+detail = """
+A key watch sees that key; a prefix watch sees every key under it. Writes to
+other keys must not arrive — a client that over-delivers makes every watcher
+filter again, and one that under-delivers loses changes silently.
+"""
+
+[[scenario]]
+id = "watch.deletes_arrive_as_changes_without_values"
+required = true
+title = "A delete is a change carrying no value"
+detail = """
+A watcher mirroring the cache has to distinguish 'set to empty' from 'removed'.
+A client that reports a delete as an absent event, or as an empty value, makes
+the two indistinguishable.
+"""
+
+[[scenario]]
+id = "watch.resumes_from_an_offset"
+required = true
+title = "A watch resumes at a requested offset with no gap"
+detail = """
+Every change carries its cache-log offset; re-watching from `offset + 1`
+replays what was missed and then joins live delivery. Without this, a watcher
+that reconnects has to re-read the whole cache and hope nothing changed while
+it did.
+"""
+
+[[scenario]]
+id = "watch.lag_is_reported_rather_than_silent"
+required = true
+title = "A watch that falls behind says so"
+detail = """
+Offsets on a filtered watch are sparse by construction — other keys' changes
+consume them — so a gap between delivered offsets is *not* a drop signal, and a
+client cannot infer loss the way a stream subscriber can. The broker ends a
+lagging watch with an explicit signal carrying the offset to resume from, and a
+client must surface it as something the application can act on rather than as
+an ordinary end of iteration.
+"""
+
+[[scenario]]
+id = "watch.retained_delivers_state_before_changes"
+required = false
+title = "A retained watch delivers current state, then live changes"
+detail = """
+Join and immediately hold the roster. The client must report how many retained
+values to expect, so an application knows the exact moment its state is
+complete; zero is a definite answer (the prefix is empty), not a silence to
+wait through.
+"""
+
+# ---------------------------------------------------------------------------
+# Multi-shard streams
+#
+# A subscription reads one shard. Consuming a whole stream means one per shard,
+# each following its own owner — which is why this is a client concern and not
+# something the broker can do on the caller's behalf.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "sharded.delivers_every_shard"
+required = true
+title = "A sharded subscription receives records from every shard"
+detail = """
+Publish with keys that hash to different shards and receive all of them
+through one subscription. A client that opens shard 0 and calls it the stream
+silently drops the rest, which looks like missing data with no error anywhere.
+"""
+
+[[scenario]]
+id = "sharded.reports_the_shard_count"
+required = true
+title = "A client can ask how many shards a stream has"
+detail = """
+A consumer cannot open one subscription per shard without knowing how many
+there are, and guessing is not available.
+
+The protocol also says a broker that does not know the stream answers zero
+rather than one, so an unknown stream is distinguishable from a single-shard
+one. That half is deliberately not required here yet: the broker reports one
+either way (#394), and a catalogue must not demand behaviour the server does
+not have.
+"""
+
+[[scenario]]
+id = "sharded.resumes_per_shard"
+required = false
+title = "A sharded subscription resumes each shard at its own offset"
+detail = """
+Offsets are per shard, so resuming is a map rather than a number. A client that
+carries a single offset across shards either replays or skips on every shard
+but one.
+"""
+
+[[scenario]]
+id = "sharded.a_lost_shard_is_surfaced"
+required = false
+title = "Losing one shard is reported, not swallowed"
+detail = """
+The remaining shards keep delivering, so a consumer that is not told has no way
+to know it is now reading part of the stream while believing it reads all of
+it.
 """

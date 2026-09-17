@@ -28,7 +28,18 @@ use pyo3::types::PyBytes;
 use tokio::sync::Mutex;
 
 use crate::errors::to_py_err;
+use crate::types::{CacheWatchFilter, OwnedGroupRecord, OwnedShardEvent, OwnedWatchItem};
 use crate::{Event, parse_ack, parse_addrs, parse_start};
+
+/// Which settle a group call is making. One helper serves all four because
+/// they differ only in the client method they reach.
+#[derive(Clone, Copy)]
+enum Settle {
+    Ack,
+    Nack,
+    Discard,
+    Redrive,
+}
 
 /// A subscription consumed with `async for`.
 #[pyclass(module = "felix", name = "AsyncSubscription")]
@@ -232,6 +243,7 @@ impl AsyncClient {
         stream,
         payload,
         *,
+        key=None,
         ack="per_message",
         at_least_once=false,
     ))]
@@ -242,10 +254,17 @@ impl AsyncClient {
         namespace: &str,
         stream: &str,
         payload: &[u8],
+        key: Option<&[u8]>,
         ack: &str,
         at_least_once: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ack = parse_ack(ack)?;
+        if key.is_some() && at_least_once {
+            return Err(PyValueError::new_err(
+                "at_least_once does not carry a routing key yet; publish the \
+                 keyed record without it, or drop the key",
+            ));
+        }
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream) = (
             tenant_id.to_string(),
@@ -253,15 +272,24 @@ impl AsyncClient {
             stream.to_string(),
         );
         let payload = payload.to_vec();
+        let key = key.map(Bytes::copy_from_slice);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            if at_least_once {
-                inner
-                    .publish_at_least_once(&tenant_id, &namespace, &stream, payload, ack)
-                    .await
-            } else {
-                inner
-                    .publish(&tenant_id, &namespace, &stream, payload, ack)
-                    .await
+            match (key, at_least_once) {
+                (Some(key), _) => {
+                    inner
+                        .publish_keyed(&tenant_id, &namespace, &stream, payload, key, ack)
+                        .await
+                }
+                (None, true) => {
+                    inner
+                        .publish_at_least_once(&tenant_id, &namespace, &stream, payload, ack)
+                        .await
+                }
+                (None, false) => {
+                    inner
+                        .publish(&tenant_id, &namespace, &stream, payload, ack)
+                        .await
+                }
             }
             .map_err(to_py_err)
         })
@@ -424,6 +452,284 @@ impl AsyncClient {
         })
     }
 
+    // ---- consumer groups -------------------------------------------------
+
+    /// Take up to `max_records` for this group, waiting up to `wait` seconds.
+    /// See the synchronous `Client.group_poll` for what the options mean.
+    #[pyo3(signature = (tenant_id, namespace, stream, shard, group, *, max_records=32, wait=5.0))]
+    fn group_poll<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        max_records: u32,
+        wait: f64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, stream, group) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+            group.to_string(),
+        );
+        let wait = std::time::Duration::from_secs_f64(wait.max(0.0));
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let client = inner.client().await;
+            let records = client
+                .group_poll_wait(
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                    &group,
+                    max_records,
+                    wait,
+                )
+                .await
+                .map_err(to_py_err)?;
+            Ok(records
+                .into_iter()
+                .map(OwnedGroupRecord::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    /// Finish one record.
+    fn group_ack<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.settle(
+            py,
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+            group,
+            offset,
+            Settle::Ack,
+        )
+    }
+
+    /// Hand one record back for immediate redelivery.
+    fn group_nack<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.settle(
+            py,
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+            group,
+            offset,
+            Settle::Nack,
+        )
+    }
+
+    /// Offsets this group gave up on, lowest first.
+    fn group_dead_letters<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, stream, group) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+            group.to_string(),
+        );
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let client = inner.client().await;
+            client
+                .group_dead_letters(&tenant_id, &namespace, &stream, shard, &group)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Drop one dead letter without touching the record.
+    fn group_discard<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.settle(
+            py,
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+            group,
+            offset,
+            Settle::Discard,
+        )
+    }
+
+    /// Put one dead letter back in the queue, attempts reset.
+    fn group_redrive<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.settle(
+            py,
+            tenant_id,
+            namespace,
+            stream,
+            shard,
+            group,
+            offset,
+            Settle::Redrive,
+        )
+    }
+
+    // ---- cache watch -----------------------------------------------------
+
+    /// Watch a key or prefix for changes. See the synchronous
+    /// `Client.watch_cache` for what `start` and `retained` mean.
+    #[pyo3(signature = (tenant_id, namespace, cache, filter, *, start=None, retained=false))]
+    fn watch_cache<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: &CacheWatchFilter,
+        start: Option<u64>,
+        retained: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if retained && start.is_some() {
+            return Err(PyValueError::new_err(
+                "retained and start are mutually exclusive: a resume already \
+                 replays the state a retained start shortcuts",
+            ));
+        }
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, cache) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            cache.to_string(),
+        );
+        let filter = filter.to_client();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Through the cluster client, so the watch follows the redirect to
+            // whichever broker owns the key's shard.
+            let watch = if retained {
+                inner
+                    .watch_cache_retained(&tenant_id, &namespace, &cache, filter)
+                    .await
+            } else {
+                inner
+                    .watch_cache(&tenant_id, &namespace, &cache, filter, start)
+                    .await
+            }
+            .map_err(to_py_err)?;
+            Ok(AsyncCacheWatch {
+                resume_offset: watch.resume_offset(),
+                resnapshot: watch.resnapshot(),
+                retained_count: watch.retained_count(),
+                inner: Arc::new(Mutex::new(Some(watch))),
+            })
+        })
+    }
+
+    // ---- multi-shard subscribe -------------------------------------------
+
+    /// How many shards this stream was placed with.
+    fn stream_shards<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, stream) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+        );
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let client = inner.client().await;
+            client
+                .stream_shards(&tenant_id, &namespace, &stream)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Subscribe to every shard of a stream and merge them. See the
+    /// synchronous `Client.subscribe_sharded` for the ordering caveat.
+    #[pyo3(signature = (tenant_id, namespace, stream, *, start=None, resume=None))]
+    fn subscribe_sharded<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<PyObject>,
+        resume: Option<std::collections::BTreeMap<u32, u64>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let start = parse_start(py, start)?;
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, stream) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+        );
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let subscription = match resume {
+                Some(positions) => {
+                    inner
+                        .resubscribe_sharded(&tenant_id, &namespace, &stream, positions, start)
+                        .await
+                }
+                None => {
+                    inner
+                        .subscribe_sharded(&tenant_id, &namespace, &stream, start)
+                        .await
+                }
+            }
+            .map_err(to_py_err)?;
+            Ok(AsyncShardedSubscription {
+                shards: subscription.shards(),
+                inner: Arc::new(Mutex::new(Some(subscription))),
+            })
+        })
+    }
+
     fn endpoints<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -450,5 +756,233 @@ impl AsyncClient {
         _traceback: Option<PyObject>,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(false) })
+    }
+}
+
+impl AsyncClient {
+    /// The four group settles differ only in which client method they call.
+    #[allow(clippy::too_many_arguments)]
+    fn settle<'py>(
+        &self,
+        py: Python<'py>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        group: &str,
+        offset: u64,
+        what: Settle,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let (tenant_id, namespace, stream, group) = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+            group.to_string(),
+        );
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let client = inner.client().await;
+            match what {
+                Settle::Ack => {
+                    client
+                        .group_ack(&tenant_id, &namespace, &stream, shard, &group, offset)
+                        .await
+                }
+                Settle::Nack => {
+                    client
+                        .group_nack(&tenant_id, &namespace, &stream, shard, &group, offset)
+                        .await
+                }
+                Settle::Discard => {
+                    client
+                        .group_discard(&tenant_id, &namespace, &stream, shard, &group, offset)
+                        .await
+                }
+                Settle::Redrive => {
+                    client
+                        .group_redrive(&tenant_id, &namespace, &stream, shard, &group, offset)
+                        .await
+                }
+            }
+            .map_err(to_py_err)
+        })
+    }
+}
+
+/// A cache watch consumed with `async for`.
+#[pyclass(module = "felix", name = "AsyncCacheWatch")]
+pub struct AsyncCacheWatch {
+    inner: Arc<Mutex<Option<felix_client::CacheWatch>>>,
+    #[pyo3(get)]
+    resume_offset: u64,
+    #[pyo3(get)]
+    resnapshot: bool,
+    #[pyo3(get)]
+    retained_count: Option<u64>,
+}
+
+#[pymethods]
+impl AsyncCacheWatch {
+    #[pyo3(signature = (timeout=None))]
+    fn recv<'py>(&self, py: Python<'py>, timeout: Option<f64>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let Some(watch) = guard.as_mut() else {
+                return Ok(None);
+            };
+            let next = match timeout {
+                Some(seconds) => {
+                    let duration = std::time::Duration::from_secs_f64(seconds.max(0.0));
+                    match tokio::time::timeout(duration, watch.recv()).await {
+                        Ok(item) => item,
+                        Err(_elapsed) => return Ok(None),
+                    }
+                }
+                None => watch.recv().await,
+            };
+            Ok(next.map(OwnedWatchItem::from))
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.lock().await.take();
+            Ok(())
+        })
+    }
+
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let Some(watch) = guard.as_mut() else {
+                return Err(PyStopAsyncIteration::new_err("watch closed"));
+            };
+            match watch.recv().await {
+                Some(item) => Ok(OwnedWatchItem::from(item)),
+                None => Err(PyStopAsyncIteration::new_err("watch ended")),
+            }
+        })
+    }
+
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle: Py<Self> = slf.into();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(handle) })
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Option<PyObject>,
+        _exc_value: Option<PyObject>,
+        _traceback: Option<PyObject>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.lock().await.take();
+            Ok(false)
+        })
+    }
+}
+
+/// Every shard of a stream, merged, consumed with `async for`.
+#[pyclass(module = "felix", name = "AsyncShardedSubscription")]
+pub struct AsyncShardedSubscription {
+    inner: Arc<Mutex<Option<felix_client::ShardedSubscription>>>,
+    #[pyo3(get)]
+    shards: u32,
+}
+
+#[pymethods]
+impl AsyncShardedSubscription {
+    #[pyo3(signature = (timeout=None))]
+    fn next_event<'py>(
+        &self,
+        py: Python<'py>,
+        timeout: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let Some(subscription) = guard.as_mut() else {
+                return Ok(None);
+            };
+            let next = match timeout {
+                Some(seconds) => {
+                    let duration = std::time::Duration::from_secs_f64(seconds.max(0.0));
+                    match tokio::time::timeout(duration, subscription.next()).await {
+                        Ok(event) => event,
+                        Err(_elapsed) => return Ok(None),
+                    }
+                }
+                None => subscription.next().await,
+            };
+            Ok(next.map(OwnedShardEvent::from))
+        })
+    }
+
+    /// The highest offset handled per shard, for resuming.
+    fn positions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            Ok(guard
+                .as_ref()
+                .map(felix_client::ShardedSubscription::positions)
+                .unwrap_or_default())
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.lock().await.take();
+            Ok(())
+        })
+    }
+
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let Some(subscription) = guard.as_mut() else {
+                return Err(PyStopAsyncIteration::new_err("subscription closed"));
+            };
+            match subscription.next().await {
+                Some(event) => Ok(OwnedShardEvent::from(event)),
+                None => Err(PyStopAsyncIteration::new_err("every shard ended")),
+            }
+        })
+    }
+
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle: Py<Self> = slf.into();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(handle) })
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Option<PyObject>,
+        _exc_value: Option<PyObject>,
+        _traceback: Option<PyObject>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.lock().await.take();
+            Ok(false)
+        })
     }
 }

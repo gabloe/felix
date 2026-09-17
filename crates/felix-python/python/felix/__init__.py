@@ -28,28 +28,66 @@ For asyncio — which is what most Python realtime backends are — use
 Both surfaces wrap the same Rust client, so they fail over identically. The
 synchronous one blocks with the GIL released, which suits threads and
 ``asyncio.to_thread``; the async one yields to your event loop.
+
+Beyond streams, both surfaces cover:
+
+* **Queues** — ``group_poll`` / ``group_ack`` / ``group_nack``, with
+  ``group_dead_letters``, ``group_redrive`` and ``group_discard`` for records
+  that kept failing.
+* **Cache watches** — ``watch_cache`` with a key or prefix filter, resumable
+  by offset, or ``retained=True`` to receive current state before live changes.
+* **Multi-shard streams** — ``subscribe_sharded`` opens one subscription per
+  shard, follows each shard's own owner, and merges them.
 """
 
 from ._felix import (
+    AsyncCacheWatch,
     AsyncClient,
+    AsyncShardedSubscription,
     AsyncSubscription,
     AuthError,
+    CacheChange,
+    CacheWatchFilter,
+    CacheWatchHandle,
+    CacheWatchLagged,
     Client,
     ConnectionError,
     CursorError,
     Event,
     FelixError,
+    GroupRecord,
     NotFoundError,
+    ShardedSubscriptionHandle,
+    ShardLost,
+    ShardRecord,
+    ShardRecovered,
     SubscriptionHandle,
     __version__,
 )
 
 __all__ = [
+    # Clients
     "Client",
     "AsyncClient",
-    "AsyncSubscription",
+    # Streams
     "Event",
     "SubscriptionHandle",
+    "AsyncSubscription",
+    # Multi-shard streams
+    "ShardedSubscriptionHandle",
+    "AsyncShardedSubscription",
+    "ShardRecord",
+    "ShardLost",
+    "ShardRecovered",
+    # Queues
+    "GroupRecord",
+    # Cache watches
+    "CacheWatchFilter",
+    "CacheWatchHandle",
+    "AsyncCacheWatch",
+    "CacheChange",
+    "CacheWatchLagged",
+    # Errors
     "FelixError",
     "ConnectionError",
     "AuthError",

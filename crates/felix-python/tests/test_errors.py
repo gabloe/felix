@@ -132,3 +132,30 @@ def _publish_capturing(client, fixture, stream, payload):
         return None
     except Exception as error:  # noqa: BLE001 - reported, not swallowed
         return f"{payload!r}: {error}"
+
+
+@pytest.mark.scenario("client.subscription_ends_cleanly")
+def test_a_closed_subscription_reports_the_end_rather_than_hanging(client, fixture):
+    """Iteration must end, not block forever.
+
+    A consumer whose loop never returns after a shutdown is a hung process, and
+    the cause is invisible: nothing errors, nothing logs, the loop is simply
+    still waiting. So a closed subscription reports the end immediately.
+    """
+    import time
+
+    subscription = client.subscribe(
+        fixture["tenant_id"], fixture["namespace"], fixture["durable_stream"]
+    )
+    subscription.close()
+
+    started = time.monotonic()
+    assert subscription.next_event(timeout=5.0) is None
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0, (
+        f"a closed subscription took {elapsed:.2f}s to report the end; a "
+        "consumer loop would sit there rather than shutting down"
+    )
+
+    # And as an iterator, which is how most consumers actually read it.
+    assert list(subscription) == []

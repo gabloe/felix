@@ -531,6 +531,142 @@ impl ClusterClient {
         }
     }
 
+    /// Watch a cache key or prefix, following the cluster to whichever broker
+    /// owns the shard.
+    ///
+    /// A cache's shards have owners the way a stream's do, and a key hashes to
+    /// one of them — so a watch opened against an arbitrary broker is a watch
+    /// against a shard that broker may not own. [`Client::watch_cache`] reports
+    /// that as a `NotLeader` error and stops; this follows it, which is what
+    /// makes a watch usable against a sharded cache in a cluster at all.
+    ///
+    /// The client this wrapper holds is **not** replaced, for the same reason
+    /// a subscribe redirect does not replace it: a redirect is about one
+    /// shard, not about which broker is generally worth talking to.
+    pub async fn watch_cache(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::CacheWatchFilter,
+        from_offset: Option<u64>,
+    ) -> Result<crate::CacheWatch> {
+        self.watch_following_redirects(tenant_id, namespace, cache, filter, from_offset, false)
+            .await
+    }
+
+    /// Like [`ClusterClient::watch_cache`], but delivering each matching key's
+    /// current value before live changes.
+    pub async fn watch_cache_retained(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::CacheWatchFilter,
+    ) -> Result<crate::CacheWatch> {
+        self.watch_following_redirects(tenant_id, namespace, cache, filter, None, true)
+            .await
+    }
+
+    async fn watch_following_redirects(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: crate::CacheWatchFilter,
+        from_offset: Option<u64>,
+        retained: bool,
+    ) -> Result<crate::CacheWatch> {
+        let mut client = self.client().await;
+        // Every broker asked, so a redirect loop is reported rather than
+        // followed forever.
+        let mut visited: Vec<String> = Vec::new();
+
+        for _ in 0..=MAX_REDIRECTS {
+            let attempt = if retained {
+                client
+                    .watch_cache_retained(tenant_id, namespace, cache, filter.clone())
+                    .await
+            } else {
+                client
+                    .watch_cache(tenant_id, namespace, cache, filter.clone(), from_offset)
+                    .await
+            };
+            let error = match attempt {
+                Ok(watch) => return Ok(watch),
+                Err(err) => err,
+            };
+            let Some(redirect) = error.downcast_ref::<crate::NotLeaderError>().cloned() else {
+                return Err(error);
+            };
+            if visited.iter().any(|seen| seen == &redirect.node_id) {
+                return Err(error.context(format!(
+                    "redirected back to {}, which has already been asked",
+                    redirect.node_id
+                )));
+            }
+            let Some(addr) = redirect.addr.clone() else {
+                return Err(error.context(
+                    "the owner's client address is not published, so there is nowhere to follow to",
+                ));
+            };
+            let addr: SocketAddr = addr
+                .parse()
+                .with_context(|| format!("the owner's address {addr:?} is not usable"))?;
+            visited.push(redirect.node_id.clone());
+            client = Arc::new(
+                Client::connect(addr, &self.server_name, self.config.clone())
+                    .await
+                    .with_context(|| format!("connect to the cache shard owner at {addr}"))?,
+            );
+        }
+
+        Err(anyhow::anyhow!(
+            "a cache watch was redirected more than {MAX_REDIRECTS} times"
+        ))
+    }
+
+    /// Publish with a routing key, which decides the shard.
+    ///
+    /// Without a key every record lands on shard 0, which makes a multi-shard
+    /// stream behave like a single-shard one — the shards exist and only one
+    /// is ever written to. The key is what spreads records, and records
+    /// sharing a key share a shard and therefore stay ordered with respect to
+    /// each other.
+    pub async fn publish_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        key: bytes::Bytes,
+        ack: AckMode,
+    ) -> Result<()> {
+        let client = self.client().await;
+        match publish_once_keyed(
+            &client,
+            tenant_id,
+            namespace,
+            stream,
+            payload,
+            Some(key),
+            ack,
+        )
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let reconnected = self.reconnect().await;
+                match reconnected {
+                    Ok(()) => Err(err.context("publish failed; reconnected to another broker")),
+                    Err(reconnect_err) => Err(err.context(format!(
+                        "publish failed and no other broker answered: {reconnect_err:#}"
+                    ))),
+                }
+            }
+        }
+    }
+
     /// Publish, reconnecting *and sending the record again* if the broker in
     /// use has gone.
     ///
@@ -622,10 +758,31 @@ async fn publish_once(
     payload: Vec<u8>,
     ack: AckMode,
 ) -> Result<()> {
+    publish_once_keyed(client, tenant_id, namespace, stream, payload, None, ack).await
+}
+
+async fn publish_once_keyed(
+    client: &Client,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payload: Vec<u8>,
+    key: Option<bytes::Bytes>,
+    ack: AckMode,
+) -> Result<()> {
     let publisher = client.publisher().await.context("open publisher")?;
-    publisher
-        .publish(tenant_id, namespace, stream, payload, ack)
-        .await
+    match key {
+        Some(key) => {
+            publisher
+                .publish_keyed(tenant_id, namespace, stream, key, payload, ack)
+                .await
+        }
+        None => {
+            publisher
+                .publish(tenant_id, namespace, stream, payload, ack)
+                .await
+        }
+    }
 }
 
 #[cfg(test)]

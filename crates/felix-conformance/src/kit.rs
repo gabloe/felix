@@ -271,6 +271,14 @@ pub struct Fixture {
     /// A durable stream: offsets, resume, and ordering are observable on it.
     pub durable_stream: String,
     pub cache: String,
+    /// A cache with exactly one shard.
+    ///
+    /// A *prefix* watch reads one shard, and keys sharing a prefix hash to
+    /// different ones — so a prefix or retained watch over the multi-shard
+    /// cache above sees only the fraction that landed on the shard it opened.
+    /// Scenarios about prefix watches use this instead, which is the honest
+    /// scope of the feature rather than a workaround.
+    pub single_shard_cache: String,
     /// A stream name that is deliberately *not* registered, for the
     /// unknown-stream scenario.
     pub missing_stream: String,
