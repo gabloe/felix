@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 // Process lifecycle helpers shared by the service binaries. Feature-gated so that
 // library consumers which never run a process (felix-router) do not pull in tokio.
-#[cfg(feature = "lifecycle")]
 pub mod lifecycle;
+#[cfg(feature = "lifecycle")]
+pub mod membership;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

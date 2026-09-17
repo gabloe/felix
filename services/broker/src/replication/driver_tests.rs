@@ -777,3 +777,49 @@ async fn a_failed_replica_report_holds_the_quorum_mark_back() {
 
     server.abort();
 }
+
+/// The report a broker sends parses as the type the control plane reads.
+///
+/// That is the whole point of sharing the definition rather than building the
+/// body with `json!`: a field renamed on one side used to arrive at the other
+/// as a missing one, with nothing failing to compile and nothing failing at
+/// runtime until promotion went looking for a replica it could not find.
+#[test]
+fn a_report_body_is_the_shape_the_control_plane_parses() {
+    let sent = ReplicaStatusRequest {
+        incarnation: 2,
+        shards: vec![ShardReplicaStatus {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            shard: 3,
+            kind: WireShardKind::Cache,
+            generation: 9,
+            caught_up: vec!["broker-b".to_string()],
+            replica_offsets: vec![ReplicaOffset {
+                node_id: "broker-b".to_string(),
+                durable_offset: 41,
+            }],
+        }],
+    };
+
+    let json = serde_json::to_value(&sent).expect("serialise");
+    // The field names the control plane's handler reads, spelled out rather
+    // than derived, so a rename has to be made deliberately here too.
+    let shard = &json["shards"][0];
+    assert_eq!(json["incarnation"], 2);
+    assert_eq!(shard["tenant_id"], "t1");
+    assert_eq!(shard["namespace"], "ns");
+    assert_eq!(shard["stream"], "orders");
+    assert_eq!(shard["shard"], 3);
+    assert_eq!(shard["kind"], "cache");
+    assert_eq!(shard["generation"], 9);
+    assert_eq!(shard["caught_up"][0], "broker-b");
+    assert_eq!(shard["replica_offsets"][0]["node_id"], "broker-b");
+    assert_eq!(shard["replica_offsets"][0]["durable_offset"], 41);
+
+    assert_eq!(
+        serde_json::from_value::<ReplicaStatusRequest>(json).expect("parse"),
+        sent,
+    );
+}
