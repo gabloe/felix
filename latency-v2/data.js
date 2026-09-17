@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789625189504,
+  "lastUpdate": 1789625352533,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11154,6 +11154,72 @@ window.BENCHMARK_DATA = {
             "range": "246.11",
             "unit": "us",
             "extra": "trials: 5\nmedian: 572.00\nmean: 737.00\nstdev: 246.11\ncv: 33.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa48d068899a2195202b2882d2aad540f6b8ee6b",
+          "message": "fix(controlplane): cascade shard assignments on delete in memory too (#398)\n\nPostgres removes a stream's or cache's shard assignments when the stream or\ncache goes, through fk_shard_assignments_stream and fk_shard_assignments_cache.\nThe migration says why: ownership records for shards that no longer exist\nleave placement chasing ghosts. InMemoryStore did neither.\n\nThe divergence ran the dangerous way. A suite against the in-memory store saw\nstale assignments the deployed system never produces, so a placement bug that\nneeds orphaned rows is invisible in memory and real in Postgres — or a test\nasserts on rows Postgres has already cleaned up.\n\nThe new contract case runs against both backends, so the rule cannot hold in\none and not the other. It uses names of its own rather than the shared\nfixtures, since the cases after it still need those, and it checks that\ndeleting a stream leaves a same-named cache's shards alone: the two are\ndistinguished by kind and nothing else.\n\nNo change-log entry for the removals, deliberately, matching Postgres — a\ncascade happens inside the database and never reaches the code that records\nunassignments. The delete is already announced on the stream or cache change\nlog, and a consumer told the stream is gone does not need to be told\nseparately about that stream's shards.\n\nFixes #301",
+          "timestamp": "2026-09-16T23:03:36-07:00",
+          "tree_id": "1e207625f64754ce955610891ec38835f1d85dc9",
+          "url": "https://github.com/gabloe/felix/commit/aa48d068899a2195202b2882d2aad540f6b8ee6b"
+        },
+        "date": 1789625351330,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 121,
+            "range": "0.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 121.00\nmean: 121.00\nstdev: 0.00\ncv: 0.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 164,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 163.40\nstdev: 0.89\ncv: 0.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 209,
+            "range": "10.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 212.80\nstdev: 10.50\ncv: 4.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 162.00\nstdev: 0.71\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 331,
+            "range": "4.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 331.00\nmean: 330.20\nstdev: 4.55\ncv: 1.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 692,
+            "range": "521.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 692.00\nmean: 951.20\nstdev: 521.58\ncv: 54.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
