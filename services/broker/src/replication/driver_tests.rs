@@ -1285,3 +1285,236 @@ async fn a_shipping_follower_is_not_listed_as_halted() {
 
     assert!(pass.halted.is_empty());
 }
+/// Answers at once for everyone but one node, which it keeps waiting.
+struct OneSlowFollower {
+    slow: &'static str,
+    delay: Duration,
+}
+
+impl PeerRequester for OneSlowFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        if node_id == self.slow {
+            tokio::time::sleep(self.delay).await;
+        }
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+/// **The mark advances at the majority, not at the last follower.**
+///
+/// With three replicas a record is on a majority the moment one follower has
+/// it; the second is a durability margin, not a precondition. Waiting for every
+/// follower put one dead or slow replica's whole timeout in front of every
+/// acknowledgement on the shard, every pass — the failure `Quorum` exists to
+/// tolerate, turned into the thing that stalls it (#411).
+///
+/// The clock is the assertion: the mark has to reach the tail long before the
+/// slow follower answers at all.
+#[tokio::test(start_paused = true)]
+async fn the_mark_advances_at_the_majority_not_at_the_slowest_follower() {
+    const SLOW: Duration = Duration::from_secs(60);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = OneSlowFollower {
+        slow: "broker-c",
+        delay: SLOW,
+    };
+    let marks = QuorumMarks::new();
+    let watched = watch_key(&key());
+    let started = tokio::time::Instant::now();
+
+    let observe = async {
+        loop {
+            if marks.offset(&watched, 4) == Some(3) {
+                return tokio::time::Instant::now().duration_since(started);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    let (mut cursors, mut group, mut dead, mut counters) = (
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    );
+    let (_, reached) = tokio::join!(
+        replicate_once(
+            &follower,
+            &broker,
+            &router,
+            &marks,
+            None,
+            &mut cursors,
+            &mut group,
+            &mut dead,
+            &mut counters,
+        ),
+        observe,
+    );
+
+    assert!(
+        reached < SLOW,
+        "the majority held every record after {reached:?}, but the mark waited \
+         {SLOW:?} for the slowest follower",
+    );
+}
+
+/// The slow follower is still shipped to and still ends the pass at the tail.
+/// Publishing at the majority is about when the mark moves, not about giving up
+/// on the rest of the replica set.
+#[tokio::test(start_paused = true)]
+async fn the_slower_follower_is_still_caught_up_by_the_end_of_the_pass() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = OneSlowFollower {
+        slow: "broker-c",
+        delay: Duration::from_secs(60),
+    };
+    let marks = QuorumMarks::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let mut caught_up = pass.reports[0].caught_up.clone();
+    caught_up.sort();
+    assert_eq!(
+        caught_up,
+        vec!["broker-b".to_string(), "broker-c".to_string()],
+        "the slow follower was abandoned rather than waited for",
+    );
+    let offsets: Map<String, u64> = pass.reports[0].offsets.iter().cloned().collect();
+    assert_eq!(offsets.get("broker-c"), Some(&3));
+}
+
+/// Records when each follower was reached, with one of them answering late
+/// enough that it needs a wake-up after the first has already finished.
+struct TimingFollower {
+    late: &'static str,
+    delay: Duration,
+    started: tokio::time::Instant,
+    reached: Mutex<Vec<(String, Duration)>>,
+}
+
+impl PeerRequester for TimingFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        if node_id == self.late {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.reached.lock().expect("lock").push((
+            node_id.to_string(),
+            tokio::time::Instant::now().duration_since(self.started),
+        ));
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+/// **The replica report runs beside the followers, not in front of them.**
+///
+/// The report has to reach the control plane before the mark is published, so
+/// it is awaited — but awaiting it inside the drain loop suspends every
+/// follower still in flight. A slow control plane would then stall replication
+/// to the rest of the replica set, which is the head-of-line block this whole
+/// change exists to remove, just moved onto the reporting hop.
+#[tokio::test(start_paused = true)]
+async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
+    const SLOW: Duration = Duration::from_secs(30);
+    // Well under the control plane's delay, and long enough that this follower
+    // needs a wake-up of its own after the first one has finished — which is
+    // the only way to tell "shipped beside the report" from "shipped after it".
+    const LATE: Duration = Duration::from_secs(5);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = TimingFollower {
+        late: "broker-c",
+        delay: LATE,
+        started: tokio::time::Instant::now(),
+        reached: Mutex::new(Vec::new()),
+    };
+    let marks = QuorumMarks::new();
+
+    // A control plane that takes half a minute to answer.
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(|| async {
+            tokio::time::sleep(SLOW).await;
+            axum::http::StatusCode::NO_CONTENT
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let report_to = ReportTo {
+        client: reqwest::Client::new(),
+        base_url: format!("http://{addr}"),
+        node_id: LOCAL.to_string(),
+        token: None,
+        incarnation: 0,
+    };
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        Some(&report_to),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let reached = follower.reached.lock().expect("lock").clone();
+    assert_eq!(
+        reached.len(),
+        2,
+        "both followers should have been shipped to"
+    );
+    for (node, at) in reached {
+        assert!(
+            at < SLOW,
+            "{node} was not reached until {at:?}, so it waited behind the \
+             control plane rather than shipping beside it",
+        );
+    }
+
+    server.abort();
+}

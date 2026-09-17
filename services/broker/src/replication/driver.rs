@@ -45,6 +45,58 @@ impl ShardCursors {
     }
 }
 
+/// Tell the control plane who holds what, then move the mark if it listened.
+///
+/// Returns whether the mark moved. A caller with nothing waiting on the mark
+/// can ignore it; a caller on the quorum path cannot.
+async fn publish_mark(
+    report_to: Option<&ReportTo>,
+    marks: &QuorumMarks,
+    key: &ShardKey,
+    generation: u64,
+    report: &ShardReport,
+    offset: u64,
+) -> bool {
+    let reported = match report_to {
+        Some(report_to) => send_reports(report_to, std::slice::from_ref(report)).await,
+        // Nothing to report to, so nothing to be behind: a broker with no
+        // cluster membership has no promotion to inform.
+        None => true,
+    };
+    if reported {
+        marks.publish(&watch_key(key), generation, offset);
+    } else {
+        metrics::record_mark_withheld();
+        tracing::warn!(
+            stream = %key.stream,
+            shard = key.shard,
+            "holding the quorum mark: the replica report did not reach the \
+             control plane, so an acknowledgement now could not be made good \
+             on at failover",
+        );
+    }
+    reported
+}
+
+/// Who could take this shard over, as of `tail`.
+fn shard_report(
+    key: &ShardKey,
+    generation: u64,
+    tail: u64,
+    followers: &[FollowerCursor],
+) -> ShardReport {
+    ShardReport {
+        key: key.clone(),
+        generation,
+        caught_up: caught_up(tail, followers),
+        offsets: followers
+            .iter()
+            .filter(|follower| follower.halted.is_none())
+            .map(|follower| (follower.node_id.clone(), follower.next_offset))
+            .collect(),
+    }
+}
+
 /// Where to start comparing with a follower whose position is unknown.
 ///
 /// Offset zero re-reads the whole log — a batch per pass, per shard, at the
@@ -201,87 +253,148 @@ async fn replicate_shard<R: PeerRequester>(
     // dials again and is cut again. What a peer that is gone costs is
     // bounded by the pool's handshake timeout and then by its reconnect
     // backoff.
-    let shipping = entry.followers.iter_mut().map(|cursor| async {
-        // Keep going while there is more to send, so a follower catching up
-        // is not limited to one batch per tick. It ends on the first answer
-        // that is not progress, which bounds the work per pass.
-        while let Progress::Stored { .. } =
-            ship_once(requester, &log, &shard, log_kind, cursor, MAX_BATCH_BYTES).await
-        {}
-    });
-    futures::future::join_all(shipping).await;
-
-    // Re-read after shipping, not before.
+    // **The mark advances at the majority, not at the last follower.**
     //
-    // A publish landing between the earlier read and here leaves `tail`
-    // describing a log that is already shorter than the one on disk. Both
-    // the report and the mark below are relative to it, so a follower level
-    // with the *old* tail would be reported caught up and counted toward the
-    // quorum for a record it does not have — which is exactly how a
-    // quorum-acknowledged record ends up on a promoted broker that never
-    // stored it.
+    // Waiting for every follower before publishing meant a `Quorum` publish
+    // was held by the *slowest* replica, which is not what quorum means: with
+    // three replicas a record is on a majority the moment one follower has it,
+    // and the second is a durability margin, not a precondition. One dead
+    // replica put its whole handshake timeout in front of every acknowledgement
+    // on the shard, every pass, which is the failure `Quorum` is meant to
+    // tolerate rather than be stalled by.
+    //
+    // Each follower's cursor goes into its own future and comes back from it,
+    // so a position can be read while others are still in flight. A follower
+    // that has not answered yet keeps the position it came in with, which is
+    // behind where it may already be — so the mark it contributes to is a
+    // floor, never a claim beyond what has been established.
+    let mut positions: Vec<FollowerCursor> = entry.followers.clone();
+    let mut in_flight: futures::stream::FuturesUnordered<_> = entry
+        .followers
+        .drain(..)
+        .map(|mut cursor| async {
+            // Keep going while there is more to send, so a follower catching up
+            // is not limited to one batch per tick. It ends on the first answer
+            // that is not progress, which bounds the work per pass.
+            while let Progress::Stored { .. } = ship_once(
+                requester,
+                &log,
+                &shard,
+                log_kind,
+                &mut cursor,
+                MAX_BATCH_BYTES,
+            )
+            .await
+            {}
+            cursor
+        })
+        .collect();
+
+    /// Put a finished cursor back where its stale copy was.
+    fn settle(positions: &mut [FollowerCursor], cursor: FollowerCursor) {
+        if let Some(slot) = positions
+            .iter_mut()
+            .find(|held| held.node_id == cursor.node_id)
+        {
+            *slot = cursor;
+        }
+    }
+
+    // Drain until a majority is established, or until everyone is in.
+    //
+    // The tail is re-read after each answer rather than once before shipping,
+    // for the reason it was already re-read once: a publish landing in between
+    // leaves it describing a log that is already shorter than the one on disk,
+    // and a follower level with the *old* tail would be counted toward the
+    // quorum for a record it does not have.
+    let mut majority = None;
+    while let Some(cursor) = in_flight.next().await {
+        settle(&mut positions, cursor);
+        let tail = log.tail_offset().await.unwrap_or(tail);
+        let offset = quorum_offset(tail, &positions);
+        if offset > 0 {
+            majority = Some((
+                shard_report(key, route.generation, tail, &positions),
+                offset,
+            ));
+            break;
+        }
+    }
+
+    // The report goes out *beside* the followers still shipping, not in front
+    // of them. Awaiting it inside the drain loop suspends every future still in
+    // `in_flight`, so a slow control plane would stall replication to the rest
+    // of the replica set — the same head-of-line block this change exists to
+    // remove, just moved onto the reporting hop.
+    let (rest, reported) = futures::future::join(
+        async {
+            let mut rest = Vec::new();
+            while let Some(cursor) = in_flight.next().await {
+                rest.push(cursor);
+            }
+            rest
+        },
+        async {
+            let (report, offset) = majority?;
+
+            // **Reported before the mark is published, and awaited.**
+            //
+            // The mark is what releases a `Quorum` publish, and the report is
+            // what promotion later reads. Releasing the publish first leaves a
+            // window in which a leader has told a client its record is on a
+            // majority and has told the control plane nothing about which
+            // replica holds it — and a leader that dies in that window is
+            // replaced by whichever replica scores highest, which may be the
+            // one that does not have it. The acknowledged record is then gone,
+            // which is the one thing `Quorum` is supposed to rule out.
+            //
+            // A report that did not land leaves the mark where it was, because
+            // the argument above rests on the control plane knowing who holds
+            // the record: releasing on a failed report reaches the same window
+            // by another route. The publish waits, the next pass retries, and a
+            // client is told a timeout rather than an acknowledgement this
+            // broker cannot stand behind.
+            publish_mark(report_to, marks, key, route.generation, &report, offset).await;
+            Some(report)
+        },
+    )
+    .await;
+    for cursor in rest {
+        settle(&mut positions, cursor);
+    }
+    let mut report_out = reported;
+
+    entry.followers = positions;
+
+    // What the pass ended up seeing, when that is not what was already sent.
+    //
+    // Two cases reach here. A pass where no majority ever advanced sent
+    // nothing, and the report is the promotion signal as much as the mark's
+    // precondition — a shard whose followers are all stuck is the one the
+    // control plane most needs a current view of. And a follower that answered
+    // after the majority report went out has moved since; leaving it until the
+    // next pass would keep a replica that is level looking behind, and so out
+    // of promotion, for no reason.
+    //
+    // Equal reports send nothing, which is the healthy case: followers finish
+    // together, so the majority report already described all of them.
     let tail = log.tail_offset().await.unwrap_or(tail);
-
-    // Who could take this shard over, as of this pass.
-    let report = ShardReport {
-        key: key.clone(),
-        generation: route.generation,
-        caught_up: caught_up(tail, &entry.followers),
-        offsets: entry
-            .followers
-            .iter()
-            .filter(|follower| follower.halted.is_none())
-            .map(|follower| (follower.node_id.clone(), follower.next_offset))
-            .collect(),
-    };
-    let report_out = Some(report.clone());
-
-    // **Reported before the mark is published, and awaited.**
-    //
-    // The mark is what releases a `Quorum` publish, and the report is what
-    // promotion later reads. Releasing the publish first leaves a window in
-    // which a leader has told a client its record is on a majority and has
-    // told the control plane nothing about which replica holds it — and a
-    // leader that dies in that window is replaced by whichever replica
-    // scores highest, which may be the one that does not have it. The
-    // acknowledged record is then gone, which is the one thing `Quorum` is
-    // supposed to rule out.
-    //
-    // Reporting first costs a round trip to the control plane on the path
-    // of a quorum publish. That is the price of the acknowledgement meaning
-    // what it says.
-    //
-    // A report that did not land leaves the mark where it was. The whole
-    // argument above rests on the control plane knowing which replica holds
-    // the record, so releasing the publish on a report that failed to send
-    // is the same window the ordering exists to close — just reached by a
-    // different route. The publish waits, the next pass retries, and a
-    // client is told a timeout rather than an acknowledgement this broker
-    // cannot stand behind.
-    let reported = match report_to {
-        Some(report_to) => send_reports(report_to, std::slice::from_ref(&report)).await,
-        // Nothing to report to, so nothing to be behind: a broker with no
-        // cluster membership has no promotion to inform.
-        None => true,
-    };
-
-    if reported {
-        // Published after shipping, so a publish waiting on this shard sees
-        // the majority move as soon as this pass establishes it.
-        marks.publish(
-            &watch_key(key),
+    let settled = shard_report(key, route.generation, tail, &entry.followers);
+    if report_out.as_ref() != Some(&settled) {
+        // And the mark with it. Usually a no-op — the mark is monotonic and the
+        // majority already moved it — but with five replicas a second follower
+        // answering raises the offset a majority holds, and that is this pass's
+        // to publish rather than the next one's.
+        publish_mark(
+            report_to,
+            marks,
+            key,
             route.generation,
+            &settled,
             quorum_offset(tail, &entry.followers),
-        );
-    } else {
-        metrics::record_mark_withheld();
-        tracing::warn!(
-            stream = %key.stream,
-            shard = key.shard,
-            "holding the quorum mark: the replica report did not reach the \
-             control plane, so an acknowledgement now could not be made good \
-             on at failover",
-        );
+        )
+        .await;
+        report_out = Some(settled);
     }
 
     // A stream shard has two logs beside it: the positions its consumer

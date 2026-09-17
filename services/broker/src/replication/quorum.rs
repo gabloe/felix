@@ -86,6 +86,14 @@ impl QuorumMarks {
         self.shards.lock().retain(|key, _| live.contains(key));
     }
 
+    /// The mark as it stands for `key` at `generation`, or `None` when this
+    /// broker is not tracking the shard at that generation.
+    pub fn offset(&self, key: &ShardKey, generation: u64) -> Option<u64> {
+        let shards = self.shards.lock();
+        let mark = shards.get(key)?;
+        (mark.generation == generation).then(|| *mark.offset.borrow())
+    }
+
     /// A receiver for `key` at `generation`, if this broker is tracking it.
     fn watcher(&self, key: &ShardKey, generation: u64) -> Option<watch::Receiver<u64>> {
         let shards = self.shards.lock();
