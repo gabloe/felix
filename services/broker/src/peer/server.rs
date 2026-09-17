@@ -12,7 +12,7 @@
 //! 3. **A distinct magic.** A client frame fails to decode here rather than
 //!    parsing into something plausible.
 //!
-//! None of that is peer *authentication*, which is mTLS in M8.1 (#136).
+//! None of that is peer *authentication*, which is mTLS, #125.
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
