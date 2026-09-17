@@ -18,7 +18,7 @@
     "@fontsource/lobster-two": "^5.3.0",
     "astro": "7.1.6",
     "astro-mermaid": "2.1.0",
-    "mermaid": "11.12.3"
+    "mermaid": "11.17.2"
   },
   "devDependencies": {
     "jsdom": "30.0.1"
