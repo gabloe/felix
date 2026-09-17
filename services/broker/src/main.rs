@@ -148,6 +148,10 @@ where
     // Shared between the replication driver, which advances it, and the publish
     // path, which waits on it for `Quorum` streams.
     let quorum_marks = Arc::new(replication::quorum::QuorumMarks::new());
+    // What replication has stopped for. Read by the admin listing, because the
+    // metric is a bare count: a label per shard is a label per stream per
+    // tenant, and a halt is useless to act on without knowing which replica.
+    let halted_replicas = Arc::new(replication::halted::HaltedReplicas::new());
     // Empty until the first catalog refresh fills it, which is the honest
     // answer in the meantime: this broker has not yet been told where any
     // client may connect.
@@ -298,6 +302,7 @@ where
             metrics_handle,
             config.metrics_bind,
             readiness.clone(),
+            Arc::clone(&halted_replicas),
             async move { metrics_shutdown.cancelled().await },
         ))
     };
@@ -595,7 +600,10 @@ where
                     Arc::clone(pool),
                     Arc::clone(&broker),
                     Arc::clone(router),
-                    Arc::clone(&quorum_marks),
+                    replication::driver::Published {
+                        marks: Arc::clone(&quorum_marks),
+                        halted: Arc::clone(&halted_replicas),
+                    },
                     // Only a broker that is a cluster member reports: the
                     // report is about shards the control plane assigned, and a
                     // broker it has never registered leads none of them.

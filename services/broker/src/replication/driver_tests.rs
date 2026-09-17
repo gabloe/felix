@@ -1081,7 +1081,10 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         Arc::clone(&follower),
         Arc::clone(&broker),
         router,
-        Arc::clone(&marks),
+        Published {
+            marks: Arc::clone(&marks),
+            halted: Arc::new(crate::replication::halted::HaltedReplicas::new()),
+        },
         None,
         Duration::from_secs(300),
         shutdown.clone(),
@@ -1196,6 +1199,92 @@ async fn a_slow_follower_does_not_cost_one_delay_per_shard() {
     );
 }
 
+/// A follower whose log disagrees with the leader's, which is a halt.
+struct DivergingFollower;
+
+impl PeerRequester for DivergingFollower {
+    async fn request(
+        &self,
+        _node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        Ok(InternalMessage::ReplicateError(
+            felix_wire::internal::ReplicateError {
+                correlation_id: message.correlation_id(),
+                code: felix_wire::internal::ErrorCode::LogConflict,
+                expected_offset: 0,
+                detail: "diverged".to_string(),
+            },
+        ))
+    }
+}
+
+/// **A halt says which replica, not just how many.**
+///
+/// The metric is a bare count and has to stay one — a label per shard is a
+/// label per stream per tenant. So until now the only way to learn which
+/// replica had stopped, on which shard, and why, was to grep the broker's logs
+/// for the warning that accompanied the halt. A halt does not resolve on its
+/// own, so that is the information an operator needs before they can act at
+/// all (#424).
+#[tokio::test]
+async fn a_halted_follower_is_named_with_its_shard_and_reason() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let marks = QuorumMarks::new();
+
+    let pass = replicate_once(
+        &DivergingFollower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(pass.halted.len(), 1);
+    let halted = &pass.halted[0];
+    assert_eq!(halted.node_id, "broker-b");
+    assert_eq!(halted.stream, STREAM);
+    assert_eq!(halted.tenant_id, TENANT);
+    assert_eq!(halted.namespace, NAMESPACE);
+    assert_eq!(halted.shard, 0);
+    assert_eq!(halted.kind, "stream");
+    assert_eq!(halted.generation, 4);
+    assert_eq!(halted.reason, "diverged");
+    assert!(
+        halted.remedy.contains("discarded and rebuilt"),
+        "the listing named a halt without saying what to do about it",
+    );
+}
+
+/// A healthy pass lists nothing, so a non-empty listing is always news.
+#[tokio::test]
+async fn a_shipping_follower_is_not_listed_as_halted() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let marks = QuorumMarks::new();
+
+    let pass = replicate_once(
+        &AcceptingFollower::default(),
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert!(pass.halted.is_empty());
+}
 /// Answers at once for everyone but one node, which it keeps waiting.
 struct OneSlowFollower {
     slow: &'static str,

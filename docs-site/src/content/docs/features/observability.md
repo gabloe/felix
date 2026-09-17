@@ -100,10 +100,45 @@ felix_node_count                            # control plane: fleet size by lifec
 felix_broker_membership_live                # broker: does the cluster still count me
 felix_broker_heartbeat_age_seconds          # alert when this nears the expiry timeout
 felix_broker_replication_lag_records
-felix_broker_replication_halted
+felix_broker_replication_halted             # a count; GET /replication/halted says which
 felix_broker_lease_held
 felix_broker_lease_refusals_total           # writes refused after a lease lapsed
 ```
+
+### Which replica stopped
+
+`felix_broker_replication_halted` is a count, and stays one: a label per shard
+would be a label per stream per tenant. When it goes above zero, ask the broker
+which:
+
+```bash
+curl -s http://broker:9090/replication/halted | jq
+```
+
+```json
+[
+  {
+    "tenant_id": "t1",
+    "namespace": "ns",
+    "stream": "orders",
+    "shard": 3,
+    "kind": "stream",
+    "node_id": "broker-b",
+    "generation": 7,
+    "next_offset": 120,
+    "reason": "diverged",
+    "remedy": "the follower holds different bytes at an offset this leader also holds, …"
+  }
+]
+```
+
+A halt does not clear on its own — that replica is out of every quorum until
+someone acts — so any non-zero count is worth waking for. `reason` is stable
+and safe to key a runbook off; `remedy` is prose and says whether the
+follower's data is wrong or merely incomplete, which is what decides whether a
+rebuild is the right move.
+
+A healthy broker answers `[]`, not 404.
 
 **Example queries**:
 

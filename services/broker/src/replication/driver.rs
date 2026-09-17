@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use futures::StreamExt;
 
+use super::halted::{HaltedReplica, HaltedReplicas};
 use super::quorum::QuorumMarks;
 use super::{FollowerCursor, Progress, caught_up, lag_records, metrics, quorum_offset, ship_once};
 use crate::peer::PeerRequester;
@@ -143,7 +144,7 @@ struct ShardPass {
     cursors: ShardCursors,
     aux: AuxCursors,
     report: Option<ShardReport>,
-    halted: usize,
+    halted: Vec<HaltedReplica>,
     lag: Option<u64>,
 }
 
@@ -157,7 +158,7 @@ impl ShardPass {
             cursors,
             aux,
             report: None,
-            halted: 0,
+            halted: Vec::new(),
             lag: None,
         }
     }
@@ -440,11 +441,30 @@ async fn replicate_shard<R: PeerRequester>(
         .await;
     }
 
-    let halted = entry
+    // Named, not counted. The metric cannot carry the shard without a label
+    // per tenant; the listing can, and a halt is useless to act on without it.
+    let halted: Vec<HaltedReplica> = entry
         .followers
         .iter()
-        .filter(|follower| follower.halted.is_some())
-        .count();
+        .filter_map(|follower| {
+            let (reason, remedy) = super::halted::describe(follower.halted?);
+            Some(HaltedReplica {
+                tenant_id: key.tenant_id.clone(),
+                namespace: key.namespace.clone(),
+                stream: key.stream.clone(),
+                shard: key.shard,
+                kind: match key.kind {
+                    felix_router::ShardKind::Cache => "cache",
+                    felix_router::ShardKind::Stream => "stream",
+                },
+                node_id: follower.node_id.clone(),
+                generation: route.generation,
+                next_offset: follower.next_offset,
+                reason,
+                remedy,
+            })
+        })
+        .collect();
     let lag = lag_records(tail, &entry.followers);
 
     ShardPass {
@@ -483,7 +503,7 @@ pub async fn replicate_once<R: PeerRequester>(
 
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
-    let mut halted = 0usize;
+    let mut halted: Vec<HaltedReplica> = Vec::new();
     let mut live_shards = Vec::new();
     let mut reports = Vec::new();
 
@@ -539,7 +559,7 @@ pub async fn replicate_once<R: PeerRequester>(
         group_cursors.insert(pass.key.clone(), pass.aux.group);
         dead_letter_cursors.insert(pass.key.clone(), pass.aux.dead_letters);
         counter_cursors.insert(pass.key, pass.aux.counters);
-        halted += pass.halted;
+        halted.extend(pass.halted);
         if let Some(lag) = pass.lag {
             worst_lag = Some(worst_lag.map_or(lag, |worst: u64| worst.max(lag)));
         }
@@ -559,11 +579,15 @@ pub async fn replicate_once<R: PeerRequester>(
     // run out its timeout for an answer that can no longer come.
     marks.retain(&live_shards.iter().map(watch_key).collect::<Vec<_>>());
 
-    metrics::record_halted(halted);
+    metrics::record_halted(halted.len());
     if let Some(lag) = worst_lag {
         metrics::record_lag(lag);
     }
-    Pass { worst_lag, reports }
+    Pass {
+        worst_lag,
+        reports,
+        halted,
+    }
 }
 
 /// Ship one of a stream shard's group-state logs — cursors or dead letters —
@@ -649,6 +673,10 @@ pub struct Pass {
     pub worst_lag: Option<u64>,
     /// Per shard, who could take it over.
     pub reports: Vec<ShardReport>,
+    /// Replicas this broker has stopped shipping to, named rather than counted.
+    /// The metric cannot carry a shard without a label per tenant; this is what
+    /// an operator reads instead.
+    pub halted: Vec<HaltedReplica>,
 }
 
 /// One shard's replicas, as this leader currently sees them.
@@ -771,11 +799,21 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
 }
 
 /// Run replication until cancelled.
+/// What a pass publishes for the rest of the broker to read.
+///
+/// Together because they are the same thing from two sides: the mark is what a
+/// `Quorum` publish waits on, and the listing is what an operator reads when a
+/// replica stops contributing to one.
+pub struct Published {
+    pub marks: Arc<QuorumMarks>,
+    pub halted: Arc<HaltedReplicas>,
+}
+
 pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
     broker: Arc<Broker>,
     router: Arc<ShardRouter>,
-    marks: Arc<QuorumMarks>,
+    published: Published,
     report_to: Option<ReportTo>,
     interval: Duration,
     shutdown: CancellationToken,
@@ -805,11 +843,11 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = ticker.tick() => {}
                 _ = woken => {}
             }
-            replicate_once(
+            let pass = replicate_once(
                 requester.as_ref(),
                 &broker,
                 &router,
-                &marks,
+                &published.marks,
                 report_to.as_ref(),
                 &mut cursors,
                 &mut group_cursors,
@@ -817,6 +855,10 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &mut counter_cursors,
             )
             .await;
+            // Replaced wholesale, so a halt that has since resolved stops being
+            // listed rather than sending an operator after a replica that is
+            // already shipping again.
+            published.halted.publish(pass.halted);
         }
     })
 }
