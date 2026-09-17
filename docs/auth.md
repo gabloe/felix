@@ -170,9 +170,52 @@ Example:
 4) Control plane derives `principal_id` and loads RBAC policies/groupings for the tenant.
 5) Effective permissions are computed from Casbin and expanded for inheritance.
 6) Optional request filters reduce the permission set (`requested` / `resources`).
-7) A Felix token is minted and returned.
+7) A Felix access token is minted, along with a refresh token, and both are returned.
 
 If no permissions remain, the exchange returns `403`.
+
+## Staying authenticated: refresh
+
+The access token is deliberately short-lived (900s), because a leaked bearer
+token is only as dangerous as the time it stays valid. That is the right trade
+for a caller that can re-exchange freely and the wrong one for anything
+long-running — a broker holding a 900s node token drops out of the cluster in
+fifteen minutes. Raising the TTL trades the problem for a longer-lived secret.
+
+Refresh is the answer instead. Exchange hands back a refresh token; presenting
+it to `POST /v1/tenants/{tenant_id}/token/refresh` mints a new access token
+with no upstream IdP round trip.
+
+Three properties make that safe:
+
+- **The secret is never stored.** The control plane keeps a SHA-256 of it, so a
+  database read yields nothing presentable.
+- **Every refresh token is single-use.** Refreshing spends the one presented and
+  hands back its replacement. A stolen copy is worth one use, not a month of
+  them.
+- **A replay revokes the whole chain.** Nobody legitimately presents a spent
+  token, so seeing one means two parties hold the chain. Both lose it, and the
+  genuine holder re-exchanges. This is what makes single use *detect* theft
+  rather than merely limit it.
+
+Permissions are re-evaluated against current RBAC on every refresh, never
+carried over from the previous token. A grant removed after a token was issued
+stops working at the next refresh rather than whenever the caller happens to
+re-exchange — a refresh that froze its grants would turn the short access TTL
+into a long one for authorization purposes, which is most of what the short TTL
+was for. If every grant is gone, the refresh is refused **and the chain ends**,
+so a principal whose access was removed cannot keep rotating.
+
+The group claims presented at exchange are recorded on the refresh token,
+because group-derived grants cannot be recomputed without them. They are claims
+to re-check, not permissions to reuse.
+
+`FELIX_REFRESH_TOKEN_TTL_SECONDS` (default 30 days) bounds a refresh token that
+is stolen and *never used* — one that is used produces a replay, which ends the
+chain immediately.
+
+To cut off a principal without waiting out any token's expiry, revoke its
+refresh tokens for the tenant; every chain it holds ends at once.
 
 ## Bootstrap Mode (Day-0)
 
@@ -381,9 +424,46 @@ Response:
 {
   "felix_token": "<jwt>",
   "expires_in": 900,
-  "token_type": "Bearer"
+  "token_type": "Bearer",
+  "refresh_token": "<token_id>.<secret>",
+  "refresh_expires_in": 2592000
 }
 ```
+
+### Token Refresh
+
+```
+POST /v1/tenants/{tenant_id}/token/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "<token_id>.<secret>"
+}
+```
+
+No `Authorization` header: the refresh token *is* the credential.
+
+Response:
+
+```
+{
+  "felix_token": "<jwt>",
+  "expires_in": 900,
+  "token_type": "Bearer",
+  "refresh_token": "<new_token_id>.<new_secret>",
+  "refresh_expires_in": 2592000
+}
+```
+
+**Store the replacement before using the new access token.** The token you
+presented is already spent; losing the replacement means re-exchanging.
+
+Every failure answers `403` with the same message — unparseable, unknown,
+expired, revoked, wrong secret. Distinguishing them would let a caller probe
+which token ids exist.
+
+A wrong secret against a real token id also spends the token. Someone holding
+half a credential gets one guess, not unlimited ones.
 
 ### Tenant JWKS
 

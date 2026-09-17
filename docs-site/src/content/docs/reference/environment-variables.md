@@ -1379,7 +1379,8 @@ absent; they are listed in that script rather than here.
 | `FELIX_CONTROLPLANE_CHANGES_LIMIT` | `1000` | Maximum changes returned by one changefeed page. |
 | `FELIX_CONTROLPLANE_CHANGE_RETENTION_MAX_ROWS` | `10000` | Bounds the append-only change tables. Smaller means a watcher can fall behind sooner and need a fresh snapshot. |
 | `FELIX_CONTROLPLANE_OIDC_ALLOWED_ALGORITHMS` | — | Comma-separated JWS algorithms accepted from an upstream IdP. |
-| `FELIX_EXCHANGE_TOKEN_TTL_SECONDS` | `900` | Lifetime of a Felix token minted by the token exchange. The default is short to limit blast radius if a token leaks; raise it when a credential is held statically for a process's lifetime (a broker's node token) or drives a long operation. |
+| `FELIX_EXCHANGE_TOKEN_TTL_SECONDS` | `900` | Lifetime of a Felix access token minted by the token exchange. The default is short to limit blast radius if a token leaks. Prefer refresh over raising it: a long-running process should refresh rather than hold one long-lived bearer token. |
+| `FELIX_REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Lifetime of a refresh token (30 days). This is how a long-running process stays authenticated without standing IdP credentials. Refresh tokens are single-use and rotate on every refresh, so this bounds a *stolen and never used* token — one that is used produces a replay, which revokes its whole chain immediately. |
 | `FELIX_RAFT_NODE_ID` | — | This instance's id in the metadata Raft group (experimental backend; see [Metadata Raft](/felix/architecture/metadata-raft/)). All three raft variables together select the raft backend, or startup fails on a partial set. |
 | `FELIX_RAFT_DATA_DIR` | — | Where the Raft log, vote, and snapshots live. Must survive restarts: it is what makes a restart a rejoin rather than a fresh member. |
 | `FELIX_RAFT_PEERS` | — | The initial group as `id=host:port,...` of every member's main listener. Identical on every member. |

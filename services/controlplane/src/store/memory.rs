@@ -36,6 +36,7 @@ use super::{
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
@@ -218,6 +219,13 @@ pub struct InMemoryStore {
     /// Postgres backend takes. Held across the whole operation; nothing else
     /// acquires it, so it cannot deadlock against the field locks above.
     bootstrap_serial: Arc<tokio::sync::Mutex<()>>,
+    /// Refresh tokens keyed by `(tenant_id, token_id)`.
+    ///
+    /// One lock over the whole map, because `take_refresh_token` has to read a
+    /// record and mark it spent without anything in between — a single-use
+    /// token checked and then marked under separate locks is a token two
+    /// concurrent refreshes can both spend.
+    refresh_tokens: Arc<RwLock<HashMap<(String, String), RefreshToken>>>,
 }
 
 impl InMemoryStore {
@@ -281,6 +289,7 @@ impl InMemoryStore {
             rbac_groupings: Arc::new(RwLock::new(HashMap::new())),
             auth_bootstrapped: Arc::new(RwLock::new(HashMap::new())),
             bootstrap_serial: Arc::new(tokio::sync::Mutex::new(())),
+            refresh_tokens: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -1456,6 +1465,73 @@ impl AuthStore for InMemoryStore {
             .insert(tenant_id.to_string(), true);
         Ok(keys)
     }
+    async fn insert_refresh_token(&self, token: RefreshToken) -> StoreResult<()> {
+        self.refresh_tokens
+            .write()
+            .await
+            .insert((token.tenant_id.clone(), token.token_id.clone()), token);
+        Ok(())
+    }
+
+    async fn take_refresh_token(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        now_secs: i64,
+    ) -> StoreResult<RefreshTokenTake> {
+        // The write lock is taken for the read as well, which is the point:
+        // read-then-write under separate locks lets two refreshes both find the
+        // token live and both spend it.
+        let mut tokens = self.refresh_tokens.write().await;
+        let key = (tenant_id.to_string(), token_id.to_string());
+        let Some(token) = tokens.get_mut(&key) else {
+            return Ok(RefreshTokenTake::Unusable);
+        };
+        if token.used {
+            return Ok(RefreshTokenTake::Replayed(Box::new(token.clone())));
+        }
+        if !token.is_live(now_secs) {
+            return Ok(RefreshTokenTake::Unusable);
+        }
+        token.used = true;
+        Ok(RefreshTokenTake::Taken(Box::new(token.clone())))
+    }
+
+    async fn revoke_refresh_family(&self, tenant_id: &str, family_id: &str) -> StoreResult<u64> {
+        let mut tokens = self.refresh_tokens.write().await;
+        let mut revoked = 0;
+        for token in tokens.values_mut() {
+            if token.tenant_id == tenant_id && token.family_id == family_id && !token.revoked {
+                token.revoked = true;
+                revoked += 1;
+            }
+        }
+        Ok(revoked)
+    }
+
+    async fn revoke_refresh_tokens_for_principal(
+        &self,
+        tenant_id: &str,
+        principal_id: &str,
+    ) -> StoreResult<u64> {
+        let mut tokens = self.refresh_tokens.write().await;
+        let mut revoked = 0;
+        for token in tokens.values_mut() {
+            if token.tenant_id == tenant_id && token.principal_id == principal_id && !token.revoked
+            {
+                token.revoked = true;
+                revoked += 1;
+            }
+        }
+        Ok(revoked)
+    }
+
+    async fn purge_expired_refresh_tokens(&self, before_secs: i64) -> StoreResult<u64> {
+        let mut tokens = self.refresh_tokens.write().await;
+        let before = tokens.len();
+        tokens.retain(|_, token| token.expires_at_secs >= before_secs);
+        Ok((before - tokens.len()) as u64)
+    }
 }
 
 /// One change stream, exported: position and retained window, but not
@@ -1898,6 +1974,14 @@ mod tests {
         let store = std::sync::Arc::new(store_with_limits(100, 1000));
         crate::store::node_contract::run_node_contract(store.clone()).await;
         crate::store::node_contract::run_node_concurrency_contract(store).await;
+    }
+
+    /// The same suite Postgres runs. These are the security properties —
+    /// single use, replay detection, revocation — so parity is not a nicety.
+    #[tokio::test]
+    async fn satisfies_the_refresh_token_contract() {
+        let store = std::sync::Arc::new(store_with_limits(100, 1000));
+        crate::store::refresh_contract::run_refresh_contract(store).await;
     }
 
     /// The same suite Postgres runs.

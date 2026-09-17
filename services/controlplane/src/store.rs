@@ -8,6 +8,7 @@
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
     Node, NodeChange, NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardKey, Stream,
@@ -26,6 +27,8 @@ pub mod state_machine;
 pub(crate) mod node_contract;
 #[cfg(test)]
 mod postgres_tests;
+#[cfg(test)]
+pub(crate) mod refresh_contract;
 #[cfg(test)]
 pub(crate) mod shard_contract;
 
@@ -274,6 +277,51 @@ pub trait AuthStore: Send + Sync {
         tenant_id: &str,
         seed: TenantAuthSeed,
     ) -> StoreResult<TenantSigningKeys>;
+
+    /// Record a freshly minted refresh token.
+    ///
+    /// The record carries the secret's hash, never the secret.
+    async fn insert_refresh_token(&self, token: RefreshToken) -> StoreResult<()>;
+
+    /// Spend a refresh token, if it is live, and say what was found.
+    ///
+    /// **This is one atomic step, and that is the whole point.** Checking
+    /// liveness and marking the token spent as two operations lets two
+    /// concurrent refreshes both pass the check, which turns a single-use token
+    /// into a reusable one exactly when someone is racing to use a stolen copy.
+    ///
+    /// It does not verify the secret — the caller does that against the
+    /// returned record. A store that compared secrets would need the secret,
+    /// and the secret is the one thing that must not travel to the store.
+    async fn take_refresh_token(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        now_secs: i64,
+    ) -> StoreResult<RefreshTokenTake>;
+
+    /// Revoke every token in one rotation chain, returning how many were live.
+    ///
+    /// The response to a replay. One of the two holders is an attacker and the
+    /// store cannot tell which, so the chain ends for both.
+    async fn revoke_refresh_family(&self, tenant_id: &str, family_id: &str) -> StoreResult<u64>;
+
+    /// Revoke every refresh token a principal holds in this tenant.
+    ///
+    /// The operator-facing half: a compromised principal is cut off without
+    /// waiting out any token's expiry.
+    async fn revoke_refresh_tokens_for_principal(
+        &self,
+        tenant_id: &str,
+        principal_id: &str,
+    ) -> StoreResult<u64>;
+
+    /// Drop records that expired before `before_secs`.
+    ///
+    /// Housekeeping, not security: an expired token is already refused. This
+    /// stops the table growing without bound, and the record of a replay is
+    /// worth keeping until it can no longer be presented.
+    async fn purge_expired_refresh_tokens(&self, before_secs: i64) -> StoreResult<u64>;
 }
 
 /// Everything [`AuthStore::bootstrap_tenant_auth`] writes besides the keys it

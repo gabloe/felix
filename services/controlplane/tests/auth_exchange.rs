@@ -225,7 +225,7 @@ async fn exchange_returns_tenant_scoped_token() {
         ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
-        build_router(state).into_service();
+        build_router(state.clone()).into_service();
 
     let req = Request::builder()
         .method("POST")
@@ -256,6 +256,45 @@ async fn exchange_returns_tenant_scoped_token() {
         claims
             .perms
             .contains(&"stream.publish:stream:t1/payments/*".to_string())
+    );
+
+    // The refresh token, exercised end to end rather than merely present. This
+    // is the only place the whole path runs — a real upstream token, a real
+    // exchange, then a refresh against what it handed back — so a refresh token
+    // that exchange stored wrongly would pass every other test.
+    let refresh_token = payload["refresh_token"].as_str().expect("refresh token");
+    assert!(payload["refresh_expires_in"].as_u64().unwrap_or(0) > 0);
+
+    let req = common::json_request(
+        "POST",
+        "/v1/tenants/t1/token/refresh",
+        json!({ "refresh_token": refresh_token }),
+    );
+    let response = build_router(state)
+        .into_service::<Body>()
+        .oneshot(req)
+        .await
+        .expect("refresh");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let refreshed = read_json(response).await;
+    let refreshed_claims = verify_token(
+        &keys,
+        "t1",
+        refreshed["felix_token"].as_str().expect("token"),
+    )
+    .expect("verify the refreshed token");
+    // The same permissions, re-derived rather than copied — the refresh never
+    // saw the first token. Compared as sets: RBAC evaluation does not promise
+    // an order, and asserting one would fail on a reshuffle that changed
+    // nothing.
+    let granted: std::collections::BTreeSet<_> = claims.perms.iter().collect();
+    let refreshed_perms: std::collections::BTreeSet<_> = refreshed_claims.perms.iter().collect();
+    assert_eq!(refreshed_perms, granted);
+    assert_ne!(
+        refreshed["refresh_token"].as_str(),
+        Some(refresh_token),
+        "the refresh handed back the token it was given, so nothing rotated",
     );
 }
 

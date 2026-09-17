@@ -139,6 +139,41 @@ impl MetadataStateMachine {
                 .await
                 .map(|()| MetaResponse::Unit)
                 .map_err(Into::into),
+            MetaCommand::InsertRefreshToken { token } => store
+                .insert_refresh_token(token)
+                .await
+                .map(|()| MetaResponse::Unit)
+                .map_err(Into::into),
+            MetaCommand::TakeRefreshToken {
+                tenant_id,
+                token_id,
+                now_secs,
+            } => store
+                .take_refresh_token(&tenant_id, &token_id, now_secs)
+                .await
+                .map(|take| MetaResponse::RefreshTokenTake { take })
+                .map_err(Into::into),
+            MetaCommand::RevokeRefreshFamily {
+                tenant_id,
+                family_id,
+            } => store
+                .revoke_refresh_family(&tenant_id, &family_id)
+                .await
+                .map(|count| MetaResponse::Count { count })
+                .map_err(Into::into),
+            MetaCommand::RevokeRefreshTokensForPrincipal {
+                tenant_id,
+                principal_id,
+            } => store
+                .revoke_refresh_tokens_for_principal(&tenant_id, &principal_id)
+                .await
+                .map(|count| MetaResponse::Count { count })
+                .map_err(Into::into),
+            MetaCommand::PurgeExpiredRefreshTokens { before_secs } => store
+                .purge_expired_refresh_tokens(before_secs)
+                .await
+                .map(|count| MetaResponse::Count { count })
+                .map_err(Into::into),
             MetaCommand::UpsertIdpIssuer { tenant_id, issuer } => store
                 .upsert_idp_issuer(&tenant_id, issuer)
                 .await
