@@ -45,8 +45,26 @@ struct AuthFixture {
     broker_auth: Arc<BrokerAuth>,
 }
 
+use felix_conformance::kit;
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Subcommands are additive: with no arguments this is the protocol runner
+    // it has always been, so existing invocations are unchanged.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("verify") => run_verify(&args[1..]),
+        Some("scenarios") => run_scenarios(),
+        Some(other) => {
+            anyhow::bail!("unknown subcommand {other:?} (expected `verify` or `scenarios`)")
+        }
+        // Argument parsing is kept out of `run_protocol_suite` so the test
+        // below can call it without the test harness's own argv reaching it.
+        None => run_protocol_suite().await,
+    }
+}
+
+async fn run_protocol_suite() -> Result<()> {
     println!("== Felix Conformance Runner ==");
     let auth = build_auth_fixture()?;
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
@@ -88,6 +106,44 @@ async fn main() -> Result<()> {
     drop(connection);
     server_task.abort();
     println!("Conformance checks passed.");
+    Ok(())
+}
+
+/// Check a client's results against the catalogue.
+fn run_verify(args: &[String]) -> Result<()> {
+    let path = args
+        .first()
+        .ok_or_else(|| anyhow!("usage: felix-conformance verify <results.json>"))?;
+    let catalogue = kit::catalogue()?;
+    let results = kit::read_results(std::path::Path::new(path))?;
+    let report = kit::verify(&catalogue, &results)?;
+    report.print(&results.client);
+    if report.conformant() {
+        Ok(())
+    } else {
+        Err(anyhow!("{} is not conformant", results.client))
+    }
+}
+
+/// Print the catalogue, so a client author can see what to implement.
+fn run_scenarios() -> Result<()> {
+    let catalogue = kit::catalogue()?;
+    println!(
+        "Felix client conformance scenarios (v{})\n",
+        catalogue.version
+    );
+    for scenario in &catalogue.scenarios {
+        let tag = if scenario.required {
+            "required"
+        } else {
+            "optional"
+        };
+        println!("{} [{tag}]\n  {}", scenario.id, scenario.title);
+        for line in scenario.detail.trim().lines() {
+            println!("  {line}");
+        }
+        println!();
+    }
     Ok(())
 }
 
@@ -676,9 +732,9 @@ mod tests {
         Frame::decode(bytes).expect("decode frame")
     }
 
-    #[test]
-    fn conformance_main_smoke() {
-        super::main().expect("conformance run");
+    #[tokio::test]
+    async fn conformance_main_smoke() {
+        super::run_protocol_suite().await.expect("conformance run");
     }
 
     #[test]

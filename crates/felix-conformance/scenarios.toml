@@ -1,0 +1,370 @@
+# The semantics a Felix client must implement, as a catalogue every language
+# can be checked against.
+#
+# This file is the contract. A client binding — Rust, Python, or the third and
+# fourth languages after them — runs its own test suite against the fixture
+# from `felix-conformance client-fixture`, tags each test with a scenario `id`
+# from this file, and emits a results document. `felix-conformance verify`
+# then answers one question: does this client implement the semantics, or has
+# it quietly skipped some?
+#
+# Why a catalogue rather than a shared test binary: the tests have to be
+# written in the client's own language to exercise its own API, so what can be
+# shared is the *specification*, not the code. Divergence shows up here as a
+# `required` scenario with no passing result, rather than as a subtle
+# behavioural difference nobody notices until production.
+#
+# `required = true` means a client claiming conformance must implement it.
+# `required = false` marks semantics that are optional for a client to expose
+# (a binding may legitimately not wrap every surface yet) but must behave as
+# described if it does.
+
+version = 1
+
+# ---------------------------------------------------------------------------
+# Publish and subscribe
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "pubsub.roundtrip"
+required = true
+title = "A published record reaches a subscriber"
+detail = """
+Subscribe, publish one record, receive it. The payload must arrive byte for
+byte — a client that re-encodes payloads (text coercion, JSON wrapping) fails
+here, which is the point.
+"""
+
+[[scenario]]
+id = "pubsub.order"
+required = true
+title = "Records arrive in publish order"
+detail = """
+Publish N records to one stream and receive them in the order they were
+published. Ordering is per shard; a client that fans one stream across shards
+without merging must not claim this.
+"""
+
+[[scenario]]
+id = "pubsub.offsets_are_contiguous"
+required = true
+title = "Delivered offsets increase by one on a durable stream"
+detail = """
+Each event on a durable stream carries its log offset. Consecutive events
+differ by exactly one; a gap means the subscriber queue dropped records, and a
+client must surface the offset so an application can detect that.
+"""
+
+[[scenario]]
+id = "pubsub.resume_from_offset"
+required = true
+title = "A subscription resumes at a requested offset"
+detail = """
+Publish, note an offset, disconnect, resubscribe starting at that offset, and
+receive from there with no gap and no duplicate. This is what makes a
+reconnecting consumer correct rather than approximately correct.
+"""
+
+[[scenario]]
+id = "pubsub.start_earliest"
+required = false
+title = "A subscription can start at the oldest retained record"
+detail = """
+`earliest` means as far back as the broker still holds, which is not
+necessarily offset 0 — a trimmed log has no offset 0 to start from, and asking
+for it is an error while `earliest` succeeds.
+"""
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "cache.put_get"
+required = false
+title = "A cached value reads back"
+detail = "Put a value, get it back byte for byte."
+
+[[scenario]]
+id = "cache.miss_is_absent"
+required = false
+title = "A missing key reads as absent, not as an error"
+detail = """
+A key that was never written reads as the language's absent value (None, nil,
+null) rather than raising. A client that raises on a miss forces callers to
+use exceptions for control flow over the most common cache outcome.
+"""
+
+[[scenario]]
+id = "cache.delete_returns_previous"
+required = false
+title = "Delete reports the value it removed"
+detail = """
+Deleting a present key returns what it held; deleting an absent key returns
+absent. The second is an answer, not an error.
+"""
+
+[[scenario]]
+id = "cache.ttl_expires"
+required = false
+title = "A value with a TTL stops being readable after it"
+detail = """
+Expiry is lazy — the record is reclaimed at compaction, not at the deadline —
+so what a client must show is that the value reads as absent once the TTL has
+passed, not that storage shrank.
+"""
+
+# ---------------------------------------------------------------------------
+# Counters
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "counter.add_returns_sum"
+required = false
+title = "Adding to a counter returns the sum including the delta"
+detail = """
+One round trip applies the delta and reports where the counter now stands. A
+client that adds and then reads separately is not implementing this: the two
+calls can interleave with another writer's.
+"""
+
+[[scenario]]
+id = "counter.get_absent_is_none"
+required = false
+title = "An unwritten counter reads as absent, not zero"
+detail = """
+Absent and zero are different: a counter that was decremented to zero has been
+written, and one that never existed has not.
+"""
+
+# ---------------------------------------------------------------------------
+# Reconnection
+#
+# The semantics a second client is most likely to approximate rather than
+# implement. Each one is a place where "looks correct" and "is correct" differ
+# only under a fault nobody runs by hand.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "reconnect.survives_broker_loss"
+required = true
+title = "A client outlives the broker it was using"
+detail = """
+Kill the broker a client is connected to while other brokers remain. The next
+call must succeed against another broker rather than failing permanently. A
+client that holds one connection and surfaces its death to the application has
+not implemented this — it has moved the problem to every caller.
+"""
+
+[[scenario]]
+id = "reconnect.discovers_brokers_from_one_seed"
+required = true
+title = "One seed address is enough"
+detail = """
+Given a single reachable broker, a client learns the others from the cluster
+and will use them after the seed goes away. A client that can only ever talk to
+the addresses it was configured with is a single point of failure wearing a
+cluster's clothes.
+"""
+
+[[scenario]]
+id = "reconnect.subscription_resumes_at_the_next_offset"
+required = true
+title = "A resumed subscription continues at offset + 1, with no gap and no duplicate"
+detail = """
+Consume to a known offset, lose the connection, resubscribe. Delivery resumes
+at the next unseen record: nothing between the last handled offset and the
+resumption is skipped, and nothing already handled arrives twice. Off-by-one
+here is the single most expensive client bug — one direction loses records
+silently, the other duplicates them.
+"""
+
+# ---------------------------------------------------------------------------
+# Redirects
+#
+# A shard has one owner, and the broker a client happens to reach may not be
+# it. Getting this wrong looks like a broker bug from the outside, which is
+# why it is specified here rather than left to each client to infer.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "redirect.follows_to_the_shard_owner"
+required = true
+title = "A request to a non-owner reaches the owner"
+detail = """
+Subscribe through a broker that does not own the shard. The client follows the
+redirect and receives records. A client that treats the redirect as an error
+makes correctness depend on which broker the application happened to name.
+"""
+
+[[scenario]]
+id = "redirect.carries_the_start_offset_through_every_hop"
+required = true
+title = "A redirected subscription keeps its requested start offset"
+detail = """
+Subscribe from an explicit offset through a non-owner, so the request is
+redirected at least once. The subscription must begin at the offset the caller
+asked for, not at the tail.
+
+This is the subtle one. A client that reconstructs the subscribe request on
+redirect, rather than carrying the original, silently drops the start position
+and begins at the live tail — every record between the requested offset and
+now is lost, the call reports success, and the loss surfaces later as missing
+data with no error anywhere near it. A multi-hop redirect must preserve it at
+every hop, not just the first.
+"""
+
+[[scenario]]
+id = "redirect.is_not_reported_as_a_failure"
+required = true
+title = "A redirect is routing, not an error"
+detail = """
+`NotLeader` tells a client where to go. It must not reach the application as a
+failure, and it must not be counted against a retry budget — a client that
+spends its attempts on redirects fails calls that were always going to succeed
+one hop away.
+"""
+
+# ---------------------------------------------------------------------------
+# Retry classification
+#
+# What may be retried, what may not, and what is ambiguous. A client that gets
+# this wrong either duplicates records or gives up on calls that would have
+# succeeded.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "retry.terminal_failures_are_not_retried"
+required = true
+title = "A failure that cannot succeed is not retried"
+detail = """
+A publish refused for want of permission fails the same way on every broker and
+after every backoff. A client must report it immediately rather than spending a
+retry budget — and must not reclassify it as a transport failure on the way
+out.
+"""
+
+[[scenario]]
+id = "retry.ambiguous_outcomes_are_not_silently_retried"
+required = true
+title = "A publish that may already have been applied is not re-sent by default"
+detail = """
+When a publish fails after the broker may have written the record, re-sending
+it duplicates it and nothing downstream can tell the copies apart. The default
+must be to report the failure. Re-sending is opt-in — see
+`ack.at_least_once_may_duplicate` — and a client that retries ambiguous
+publishes silently has changed the delivery guarantee without saying so.
+"""
+
+[[scenario]]
+id = "retry.transport_failures_are_retried_against_another_broker"
+required = false
+title = "A connection failure is retried elsewhere, not against the dead broker"
+detail = """
+A client that retries the same failed endpoint burns its budget on the one
+broker known not to be answering.
+"""
+
+# ---------------------------------------------------------------------------
+# Acknowledgement modes
+#
+# Each mode is a different promise. A client that treats them as a performance
+# dial rather than a semantic one will misreport durability.
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "ack.none_does_not_wait_for_the_broker"
+required = true
+title = "An unacknowledged publish returns without a broker round trip"
+detail = """
+`none` promises nothing about whether the record was accepted, and must not
+block waiting to find out. A client that waits anyway has turned the cheapest
+mode into the most expensive one.
+"""
+
+[[scenario]]
+id = "ack.per_message_means_the_broker_accepted_it"
+required = true
+title = "An acknowledged publish returns only after the broker acknowledged it"
+detail = """
+Returning before the acknowledgement arrives reports success for a record the
+broker may have rejected. The acknowledgement is the whole value of the mode.
+"""
+
+[[scenario]]
+id = "ack.at_least_once_may_duplicate_and_says_so"
+required = false
+title = "Opt-in re-send is documented as duplicating"
+detail = """
+A client offering an at-least-once publish must make the duplication explicit
+at the call site and in its documentation. The guarantee is the caller's to
+choose, not the client's to assume.
+"""
+
+# ---------------------------------------------------------------------------
+# Errors and failure behaviour
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "error.unknown_stream_is_typed"
+required = true
+title = "Publishing to an unknown stream fails distinguishably"
+detail = """
+A client must let an application tell 'this stream does not exist' from 'the
+broker is unreachable' without parsing message text. Message wording changes;
+error identity must not.
+"""
+
+[[scenario]]
+id = "error.unauthorized_is_typed"
+required = true
+title = "An operation outside the token's permissions fails distinguishably"
+detail = """
+Authorization failure is not retryable and must not be reported as a transport
+failure — an application that retries it burns its budget on a call that
+cannot succeed.
+"""
+
+[[scenario]]
+id = "error.bad_offset_is_typed"
+required = false
+title = "Resuming from a discarded offset fails distinguishably"
+detail = """
+Retention discards history. A client asking for an offset that is gone must
+receive an identifiable error, because the recovery is specific: restart from
+`earliest` and accept the gap.
+"""
+
+# ---------------------------------------------------------------------------
+# Concurrency and lifecycle
+# ---------------------------------------------------------------------------
+
+[[scenario]]
+id = "client.concurrent_calls"
+required = true
+title = "One client serves concurrent callers"
+detail = """
+A client is shared by an application's tasks or threads. Concurrent publishes
+through one client must all succeed and must not interleave into corruption —
+a binding that serialises everything behind one lock passes this but should
+say so, and one that shares mutable state unsafely fails it.
+"""
+
+[[scenario]]
+id = "client.close_is_idempotent"
+required = true
+title = "Closing a client or subscription twice is safe"
+detail = """
+Cleanup runs on paths that may already have cleaned up — a context manager
+inside an exception handler, a finaliser after an explicit close. The second
+close does nothing rather than raising.
+"""
+
+[[scenario]]
+id = "client.subscription_ends_cleanly"
+required = false
+title = "A closed subscription reports the end rather than hanging"
+detail = """
+When the broker closes the event stream, iteration ends. A client that blocks
+forever instead turns a routine shutdown into a hung consumer.
+"""

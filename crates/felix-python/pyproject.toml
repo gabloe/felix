@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "felix-client"
+description = "Python client for Felix — streams, queues, and cache over QUIC"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["felix", "quic", "pubsub", "streaming", "cache"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Topic :: System :: Networking",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/gabloe/felix"
+Documentation = "https://gabloe.github.io/felix/"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.maturin]
+# The extension module is `felix._felix`; the hand-written `felix/__init__.py`
+# beside it is what callers import, so the public API is reviewable Python
+# rather than whatever the macro happened to emit.
+module-name = "felix._felix"
+python-source = "python"
+features = ["pyo3/extension-module"]

@@ -31,6 +31,9 @@ quinn = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 tokio = { workspace = true }
+toml = "1.1.6"
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [lints]
 workspace = true

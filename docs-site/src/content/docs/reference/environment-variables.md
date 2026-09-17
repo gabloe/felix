@@ -32,6 +32,32 @@ export FELIX_QUIC_BIND="10.0.1.5:5000"   # Specific interface
 - UDP port for QUIC transport
 - Use `0.0.0.0` to bind all interfaces
 
+### `FELIX_TLS_CERT_EXPORT`
+
+**Description**: Write the broker's generated self-signed certificate to this
+path (PEM) at startup, so clients can trust it explicitly.
+
+**Type**: File path
+
+**Default**: unset — no certificate is written
+
+**Example**:
+```bash
+export FELIX_TLS_CERT_EXPORT="/tmp/felix-dev-ca.pem"
+```
+
+**Notes**:
+- Development only. The broker generates a self-signed certificate at startup;
+  without exporting it, the only way for a non-Rust client to connect is to
+  skip verification entirely, which is a habit worth not forming.
+- Point a client at the file: the Python client takes `ca_file=`, and other
+  clients take whatever their TLS stack calls a CA bundle.
+- Startup **fails** if the file cannot be written. A deployment that asked for
+  the export has clients configured to read it, and coming up without it turns
+  into connection failures far from their cause.
+- Not a substitute for real certificates. Operator-supplied broker certificates
+  are not wired up yet.
+
 ### `FELIX_BROKER_METRICS_BIND`
 
 **Description**: HTTP metrics and health endpoint bind address.

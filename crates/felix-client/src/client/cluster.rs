@@ -331,6 +331,22 @@ impl ClusterClient {
             .await
     }
 
+    /// Like [`ClusterClient::subscribe`], but starting where the caller says.
+    ///
+    /// `None` is the tail, identical to `subscribe`. An offset is the first
+    /// record the caller has *not* seen, so a client resuming after a
+    /// disconnect passes the offset it last handled plus one.
+    pub async fn subscribe_from(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        self.subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, start)
+            .await
+    }
+
     /// One shard, following the cluster to whichever broker owns *that shard*.
     ///
     /// The redirect loop is per shard because ownership is: two shards of one
