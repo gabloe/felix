@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789688877867,
+  "lastUpdate": 1789689015878,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10244,6 +10244,58 @@ window.BENCHMARK_DATA = {
             "range": "11620.42",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 673038.38\nmean: 672329.30\nstdev: 11620.42\ncv: 1.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eba1f1ac96bb4d4527936013d7aa80a157fbfa3e",
+          "message": "test(cluster): bound convergence by a deadline, not an attempt count (#497)\n\n`a_moved_shard_converges_on_the_new_owner` failed the coverage job while\npassing the same suite in an eighth of the wall clock without instrumentation.\n\nTwo hundred attempts with a 50ms sleep looks like ten seconds and is not. An\nattempt costs whatever it costs, and the cheap ones are exactly the ones that\nhappen while the thing being waited for has not happened yet: a publish the old\nowner refuses, because it has not seen the new assignment, returns far faster\nthan one it forwards. So the count ran out early on a machine where the\nassignment feed needed longer than the budget it was supposed to provide —\nwhich is the machine that needs the budget most.\n\nA deadline says what was meant. Sixty seconds is wide around something that\nnormally takes one feed interval, and it still fails if convergence never\nhappens rather than if it merely took a while.\n\nThe lease-expiry case below it has the same shape with the sign flipped — there\nthe attempts that cost time are the ones that *succeed*, while the lease is\nstill valid — so it gets the same treatment.",
+          "timestamp": "2026-09-17T16:47:46-07:00",
+          "tree_id": "71d4783fb9d56ab76212f243cd4ef520e0edf220",
+          "url": "https://github.com/gabloe/felix/commit/eba1f1ac96bb4d4527936013d7aa80a157fbfa3e"
+        },
+        "date": 1789689015111,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 320462.25,
+            "range": "22875.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320462.25\nmean: 314350.86\nstdev: 22875.60\ncv: 7.28%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 320462.25,
+            "range": "22875.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 320462.25\nmean: 314350.86\nstdev: 22875.60\ncv: 7.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75286.97,
+            "range": "1736.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75286.97\nmean: 75556.83\nstdev: 1736.01\ncv: 2.30%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 752869.66,
+            "range": "17360.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 752869.66\nmean: 755568.30\nstdev: 17360.12\ncv: 2.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
