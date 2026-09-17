@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789621635019,
+  "lastUpdate": 1789625192882,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8736,6 +8736,58 @@ window.BENCHMARK_DATA = {
             "range": "25670.11",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 848822.99\nmean: 839603.71\nstdev: 25670.11\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1cd606dec06379bb258212aaedd21a76272b65b",
+          "message": "fix(broker): never reuse a subscriber id (#397)\n\nA subscriber id was a slab slot, and slab hands a freed slot to the next\ninsert. Both unregister paths work from an id captured earlier and neither\nholds a lock across the gap, so an id could come to name a different\nsubscriber than the caller meant:\n\n- The publish fanout iterates a snapshot taken under the log lock and\n  released before sending. A subscriber that departs during the fanout and\n  is replaced before it ends leaves the reap removing the replacement.\n- A subscription's receiver drops before its guard — they are separate\n  fields, and into_parts hands them out separately — so a reap can free the\n  registration in between and the guard's own unregister then lands on\n  whoever took the slot.\n\nEither way a subscriber that did nothing wrong is unregistered while\nholding a live subscription. Its channel closes once the last snapshot\nclone drops and recv() returns None, which is indistinguishable from the\nbroker closing the subscription.\n\nReaping by identity would close the first path; it would not close the\nsecond, because the guard holds no sender to compare. Making ids monotonic\ncloses both, so the registry is a HashMap keyed by a counter. The slab\nbought dense indexing the fanout never used — it reads the snapshot, which\nis rebuilt on every register and remove either way — so the only cost is\nsorting the snapshot to keep fanout order stable across publishes.\n\nReintroducing reuse fails all three of the new cases.\n\nFixes #256",
+          "timestamp": "2026-09-16T23:03:21-07:00",
+          "tree_id": "ac191df718c196f4e6d601a066566ccb5e7a4712",
+          "url": "https://github.com/gabloe/felix/commit/a1cd606dec06379bb258212aaedd21a76272b65b"
+        },
+        "date": 1789625191767,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230692.1,
+            "range": "2759.37",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230692.10\nmean: 229651.66\nstdev: 2759.37\ncv: 1.20%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230692.1,
+            "range": "2759.37",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230692.10\nmean: 229651.66\nstdev: 2759.37\ncv: 1.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55583.39,
+            "range": "323.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55583.39\nmean: 55668.45\nstdev: 323.36\ncv: 0.58%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 555833.95,
+            "range": "3233.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 555833.95\nmean: 556684.52\nstdev: 3233.62\ncv: 0.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
