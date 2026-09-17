@@ -20,7 +20,20 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    match scan_segment(&path, 0, "fuzz/shard/0", 128, ScanStart::Full) {
+    // Both truncation policies, chosen by a byte of the input so the fuzzer can
+    // steer it. With `repair_checksum_tail` off, only a provably incomplete
+    // trailing record may be dropped — the stricter of the two, and the one
+    // where wrongly discarding a record is silent data loss.
+    let repair_checksum_tail = data.first().is_some_and(|byte| byte & 1 == 1);
+
+    match scan_segment(
+        &path,
+        0,
+        "fuzz/shard/0",
+        128,
+        ScanStart::Full,
+        repair_checksum_tail,
+    ) {
         // Property 1: whatever recovery accepts is internally consistent —
         // the record count matches the offsets, and the valid region fits
         // inside the file it came from.
