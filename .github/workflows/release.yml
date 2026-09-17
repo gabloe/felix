@@ -89,3 +89,188 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+
+  # ---------------------------------------------------------------------------
+  # Python wheels
+  #
+  # Gated on conformance, deliberately. A wheel that publishes without passing
+  # the client conformance suite is a wheel that might diverge from the Rust
+  # client on resume, redirects, or retry classification — the divergences that
+  # get debugged as broker bugs. The gate is what makes "the Python client
+  # behaves like the Rust one" a checked claim rather than an intention.
+  # ---------------------------------------------------------------------------
+  python-conformance:
+    name: Python client conformance
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # The suite drives real brokers over real QUIC; these are what it starts.
+      - name: Build the broker and cluster harness
+        run: |
+          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-cluster --bin felix-cluster
+
+      - name: Install the binding
+        run: |
+          python -m pip install --upgrade pip maturin pytest
+          cd crates/felix-python
+          maturin develop
+
+      - name: Run the conformance suite
+        env:
+          FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/python-conformance.json
+        run: cd crates/felix-python && pytest -q
+
+      # The verdict, not the test exit code: a suite that passed while skipping
+      # a required scenario is not conformance, and this is what says so.
+      - name: Verify against the catalogue
+        run: cargo run --locked -q -p felix-conformance -- verify python-conformance.json
+
+      - name: Upload the conformance report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-conformance-${{ env.RELEASE_TAG }}
+          path: python-conformance.json
+          if-no-files-found: warn
+
+  python-wheels:
+    name: Python wheels (${{ matrix.target }})
+    needs: python-conformance
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64-unknown-linux-gnu, maturin: x86_64 }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, maturin: aarch64 }
+          - { runner: macos-latest, target: aarch64-apple-darwin, maturin: aarch64 }
+          - { runner: macos-13, target: x86_64-apple-darwin, maturin: x86_64 }
+          - { runner: windows-latest, target: x86_64-pc-windows-msvc, maturin: x64 }
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # abi3-py39, so one wheel per platform covers every Python from 3.9 up
+      # rather than one per interpreter version.
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.maturin }}
+          args: --release --out dist --manifest-path crates/felix-python/Cargo.toml
+          manylinux: auto
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  python-sdist:
+    name: Python source distribution
+    needs: python-conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/felix-python/Cargo.toml
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Wheels ride the GitHub release; PyPI comes later.
+  #
+  # `pip install felix-client` is a public commitment: the name is claimed, the
+  # version is permanent, and anyone can depend on it. Until Felix is ready for
+  # that, the wheels are attached to the release so they can be installed from
+  # a URL by anyone who wants them — and the PyPI step below stays behind an
+  # explicit switch.
+  #
+  # To turn it on: set the repository variable PUBLISH_PYPI to "true", and
+  # configure a PyPI trusted publisher for this repository and workflow (no
+  # long-lived token, nothing to rotate or leak). Check the `felix-client` name
+  # is actually available first — it is unrelated to the crate name.
+  python-release-assets:
+    name: Attach wheels to the release
+    needs: [python-wheels, python-sdist]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: What was built
+        run: ls -la dist
+
+      - name: Attach to the GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist/*
+          # The binaries job owns the release body; this only adds files to it.
+          append_body: false
+
+  python-publish:
+    name: Publish to PyPI
+    needs: python-release-assets
+    # Off until Felix is meant to be publicly installable. See the note above.
+    if: vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: What is about to be published
+        run: ls -la dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

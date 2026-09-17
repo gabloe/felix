@@ -1,18 +1,23 @@
-"""A real cluster for the tests to talk to.
+"""A real cluster for the tests to talk to, and the conformance ledger.
 
 Deliberately not a mock. The claim this binding makes is that Python gets the
 *same* client behaviour Rust does — reconnection, redirect-following, offset
 accounting — and a mock would only validate the mock. So these tests start the
-real thing: `felix-cluster up` runs a control plane and brokers, writes their
-addresses and a working token to a session file, and the tests connect over
-real QUIC with a real credential.
+real thing: `felix-cluster client-fixture` runs a control plane and brokers,
+registers what the scenarios need, and writes a JSON file saying how to reach
+them.
 
-Skipped rather than failed when the binaries are not built, so a checkout
-without a Rust toolchain still collects.
+Every test that covers a catalogued scenario tags itself with
+`@pytest.mark.scenario("<id>")`. What each one did is recorded and written out
+as a results document at the end of the session, which
+`felix-conformance verify` then checks against the catalogue. A test that
+fails, errors, or never runs becomes a non-passing outcome — so the claim
+"Python is conformant" is a thing the suite earns rather than asserts.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -22,7 +27,15 @@ import time
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-SESSION_WAIT_SECONDS = 90
+FIXTURE_WAIT_SECONDS = 120
+RESULTS_ENV = "FELIX_CONFORMANCE_RESULTS"
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "scenario(*ids): the conformance scenario(s) this test covers",
+    )
 
 
 def _require_binaries() -> None:
@@ -35,90 +48,162 @@ def _require_binaries() -> None:
             )
 
 
-@pytest.fixture(scope="session")
-def cluster(tmp_path_factory) -> dict:
-    """Start a one-node cluster, yield its session, tear it down afterwards."""
-    _require_binaries()
-    work = tmp_path_factory.mktemp("felix-cluster")
-    session_path = work / "session.json"
-    ca_file = work / "broker-ca.pem"
-
-    env = {
-        **os.environ,
-        # Every broker the harness starts exports the certificate it generated,
-        # so the Python client can trust it by name rather than skipping
-        # verification. One node, so one certificate.
-        "FELIX_TLS_CERT_EXPORT": str(ca_file),
-        "RUST_LOG": "warn",
-    }
+@contextlib.contextmanager
+def _cluster(work: pathlib.Path):
+    """Run a conformance cluster over `work`, yielding its fixture document."""
+    fixture_path = work / "fixture.json"
+    ca_file = work / "brokers.pem"
 
     process = subprocess.Popen(
         [
             str(REPO_ROOT / "target" / "debug" / "felix-cluster"),
-            "up",
-            "--nodes",
-            "1",
-            "--session",
-            str(session_path),
+            "client-fixture",
+            "--out",
+            str(fixture_path),
+            "--ca-file",
+            str(ca_file),
         ],
-        env=env,
+        env={**os.environ, "RUST_LOG": "warn"},
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
 
-    deadline = time.monotonic() + SESSION_WAIT_SECONDS
-    session = None
+    deadline = time.monotonic() + FIXTURE_WAIT_SECONDS
+    body = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             output = process.stdout.read() if process.stdout else ""
-            pytest.fail(f"cluster exited during startup:\n{output}")
-        if session_path.exists() and ca_file.exists():
+            pytest.fail(f"the fixture exited during startup:\n{output}")
+        if fixture_path.exists() and ca_file.exists():
             try:
-                session = json.loads(session_path.read_text())
+                body = json.loads(fixture_path.read_text())
             except json.JSONDecodeError:
-                # Being written right now; look again.
-                time.sleep(0.2)
+                time.sleep(0.2)  # being written right now
                 continue
-            if session.get("nodes"):
-                break
+            break
         time.sleep(0.2)
 
-    if session is None or not session.get("nodes"):
+    if body is None:
         process.terminate()
-        pytest.fail(f"cluster did not become usable within {SESSION_WAIT_SECONDS}s")
+        pytest.fail(f"the fixture was not ready within {FIXTURE_WAIT_SECONDS}s")
 
-    yield {
-        "addrs": [node["client_addr"] for node in session["nodes"]],
-        "ca_file": str(ca_file),
-        "tenant_id": session["tenant_id"],
-        "namespace": session["namespace"],
-        "token": session["client_token"],
-    }
-
-    process.terminate()
     try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
+        yield body
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+@pytest.fixture(scope="session")
+def fixture(tmp_path_factory) -> dict:
+    """The cluster every non-destructive test shares."""
+    _require_binaries()
+    with _cluster(tmp_path_factory.mktemp("felix-fixture")) as body:
+        yield body
 
 
 @pytest.fixture
-def client(cluster):
+def disposable_fixture(tmp_path_factory) -> dict:
+    """A cluster of this test's own, for tests that break one deliberately.
+
+    Killing a broker is a legitimate thing to assert against and a ruinous
+    thing to do to a shared fixture: every test after it would fail against a
+    cluster someone else damaged, and the failures would look like client
+    bugs. So the destructive tests pay for their own cluster.
+    """
+    _require_binaries()
+    with _cluster(tmp_path_factory.mktemp("felix-disposable")) as body:
+        yield body
+
+
+@pytest.fixture
+def client(fixture):
     """A connected synchronous client, closed after the test."""
     import felix
 
     with felix.Client(
-        cluster["addrs"],
-        tenant_id=cluster["tenant_id"],
-        token=cluster["token"],
-        ca_file=cluster["ca_file"],
+        fixture["addrs"],
+        tenant_id=fixture["tenant_id"],
+        token=fixture["token"],
+        ca_file=fixture["ca_file"],
     ) as connected:
         yield connected
 
 
 @pytest.fixture
-def stream_name(request) -> str:
-    """A stream name unique to the test, so tests cannot read each other's records."""
-    return f"py-{request.node.name.replace('[', '-').replace(']', '')}"
+def key(request) -> str:
+    """A key or stream suffix unique to the test, so tests cannot collide."""
+    return request.node.name.replace("[", "-").replace("]", "").replace(" ", "-")
+
+
+# ---------------------------------------------------------------------------
+# The conformance ledger
+# ---------------------------------------------------------------------------
+#
+# Recorded per scenario id rather than per test: several tests may cover one
+# scenario, and the scenario passes only when all of them do. A scenario whose
+# test errored during setup is not a pass either — the point of the ledger is
+# that only a demonstrated semantic counts.
+
+_OUTCOMES: dict[str, dict] = {}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = (yield).get_result()
+    marker = item.get_closest_marker("scenario")
+    if marker is None or not marker.args:
+        return
+
+    # One test may demonstrate several scenarios at once — a resume proves both
+    # the resume semantic and the reconnect one — and each is recorded.
+    for scenario_id in marker.args:
+        if report.when == "call" and report.passed:
+            _OUTCOMES.setdefault(scenario_id, {"id": scenario_id, "status": "pass"})
+        elif report.failed:
+            # A failure overwrites a pass: a scenario covered by several tests
+            # holds only if every one of them holds.
+            _OUTCOMES[scenario_id] = {
+                "id": scenario_id,
+                "status": "fail",
+                "detail": f"{item.nodeid}: {report.longreprtext.splitlines()[-1][:300]}"
+                if report.longreprtext
+                else item.nodeid,
+            }
+        elif report.skipped and scenario_id not in _OUTCOMES:
+            reason = ""
+            if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
+                reason = report.longrepr[2]
+            _OUTCOMES[scenario_id] = {
+                "id": scenario_id,
+                "status": "skip",
+                "detail": reason or item.nodeid,
+            }
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Write the results document `felix-conformance verify` reads."""
+    destination = os.environ.get(RESULTS_ENV)
+    if not destination:
+        return
+    try:
+        import felix
+
+        version = felix.__version__
+    except Exception:  # noqa: BLE001 - reporting must not depend on the import
+        version = "unknown"
+
+    document = {
+        "client": "felix-client (Python)",
+        "version": version,
+        "outcomes": sorted(_OUTCOMES.values(), key=lambda outcome: outcome["id"]),
+    }
+    path = pathlib.Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2) + "\n")
+    print(f"\nconformance results written to {path}")
