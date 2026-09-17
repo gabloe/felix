@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789644530424,
+  "lastUpdate": 1789644971603,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8944,6 +8944,58 @@ window.BENCHMARK_DATA = {
             "range": "16253.06",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 605971.88\nmean: 602793.06\nstdev: 16253.06\ncv: 2.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f14cf99244c0039666974421abfa7ae1f500fcb",
+          "message": "fix(broker): an unknown stream reports zero shards, not one (#400)\n\nThe wire protocol and the client both document zero as \"the broker knows\nnothing of this stream\". The broker never sent it.\n\nShardTable::shards_for ends `unwrap_or(1)`, which is right for routing — a\npublish to a stream the snapshot has not caught up on should hash to shard 0\nrather than fail — and wrong for an answer that leaves the broker. It makes\nan unknown stream indistinguishable from a genuine single-shard one, so\nClusterClient::subscribe_sharded could not do what its own documentation\nsays: asked for a stream that does not exist it opened one subscription on\nshard 0, reported success, and read nothing. The client's `shards > 0` guard\nwas unreachable.\n\nSo the routing default stays where it belongs and a separate accessor,\nplaced_shards_for, returns None for a stream the table has never heard of.\nThe StreamShardsView handler uses that. Its comment already said it answers\nzero rather than guessing one, which is what pointed at this.\n\nIts other branch was wrong the same way: with no routing snapshot to\nconsult it answered 1 unconditionally, including for streams that do not\nexist. The registry knows whether the stream is there, so it asks.\n\nThe conformance catalogue required the count but deliberately left the\nzero-for-unknown half out, because it must not demand behaviour the broker\nlacks. That half is now required, and the Python suite asserts it rather\nthan just checking the call answers.\n\nFixes #394",
+          "timestamp": "2026-09-17T04:33:39-07:00",
+          "tree_id": "9ef6209e7658d6366829737f91f0331363d581f4",
+          "url": "https://github.com/gabloe/felix/commit/9f14cf99244c0039666974421abfa7ae1f500fcb"
+        },
+        "date": 1789644971185,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232741.39,
+            "range": "2389.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232741.39\nmean: 231991.05\nstdev: 2389.83\ncv: 1.03%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232741.39,
+            "range": "2389.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232741.39\nmean: 231991.05\nstdev: 2389.83\ncv: 1.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55927.31,
+            "range": "634.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55927.31\nmean: 56027.12\nstdev: 634.89\ncv: 1.13%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 559273.1,
+            "range": "6348.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 559273.10\nmean: 560271.18\nstdev: 6348.94\ncv: 1.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
