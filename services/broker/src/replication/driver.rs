@@ -183,17 +183,39 @@ pub async fn replicate_once<R: PeerRequester>(
         // Reporting first costs a round trip to the control plane on the path
         // of a quorum publish. That is the price of the acknowledgement meaning
         // what it says.
-        if let Some(report_to) = report_to {
-            send_reports(report_to, std::slice::from_ref(&report)).await;
-        }
+        //
+        // A report that did not land leaves the mark where it was. The whole
+        // argument above rests on the control plane knowing which replica holds
+        // the record, so releasing the publish on a report that failed to send
+        // is the same window the ordering exists to close — just reached by a
+        // different route. The publish waits, the next pass retries, and a
+        // client is told a timeout rather than an acknowledgement this broker
+        // cannot stand behind.
+        let reported = match report_to {
+            Some(report_to) => send_reports(report_to, std::slice::from_ref(&report)).await,
+            // Nothing to report to, so nothing to be behind: a broker with no
+            // cluster membership has no promotion to inform.
+            None => true,
+        };
 
-        // Published after shipping, so a publish waiting on this shard sees the
-        // majority move as soon as this pass establishes it.
-        marks.publish(
-            &watch_key(key),
-            route.generation,
-            quorum_offset(tail, &entry.followers),
-        );
+        if reported {
+            // Published after shipping, so a publish waiting on this shard sees
+            // the majority move as soon as this pass establishes it.
+            marks.publish(
+                &watch_key(key),
+                route.generation,
+                quorum_offset(tail, &entry.followers),
+            );
+        } else {
+            metrics::record_mark_withheld();
+            tracing::warn!(
+                stream = %key.stream,
+                shard = key.shard,
+                "holding the quorum mark: the replica report did not reach the \
+                 control plane, so an acknowledgement now could not be made good \
+                 on at failover",
+            );
+        }
 
         // A stream shard has two logs beside it: the positions its consumer
         // groups have reached, and the offsets those groups gave up on. Both
@@ -408,15 +430,16 @@ pub struct ReportTo {
     pub incarnation: u64,
 }
 
-/// Tell the control plane which replicas could take each shard over.
+/// Tell the control plane which replicas could take each shard over, and say
+/// whether it took the report.
 ///
-/// A failure here is logged and dropped rather than retried. The next pass
-/// sends a fresher report anyway, and a queue of stale ones is worse than none:
-/// promotion is gated on *recent* positions, so a late report is at best
-/// ignored and at worst believed after it stopped being true.
-async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
+/// Not retried here: the next pass sends a fresher one, and a queue of stale
+/// reports is worse than none, since promotion is gated on *recent* positions.
+/// The answer instead gates the quorum mark, so "could not tell" reads as
+/// false — see the caller.
+async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
     if reports.is_empty() {
-        return;
+        return true;
     }
     let body = serde_json::json!({
         "incarnation": to.incarnation,
@@ -454,15 +477,17 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) {
         request = request.bearer_auth(token.bearer());
     }
     match request.send().await {
-        Ok(response) if response.status().is_success() => {}
+        Ok(response) if response.status().is_success() => true,
         Ok(response) => {
             tracing::warn!(
                 status = %response.status(),
                 "the control plane refused a replica report",
             );
+            false
         }
         Err(err) => {
             tracing::warn!(error = %err, "could not send a replica report");
+            false
         }
     }
 }
