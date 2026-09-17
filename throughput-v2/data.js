@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789684681379,
+  "lastUpdate": 1789685251968,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10036,6 +10036,58 @@ window.BENCHMARK_DATA = {
             "range": "17648.31",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 697505.58\nmean: 702883.68\nstdev: 17648.31\ncv: 2.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dceb7f46f11d20fce0bb16a0a598483618a1c5de",
+          "message": "perf(replication): advance the quorum mark at the majority, not at the last follower (#478)\n\n* fix(replication): resume a follower at the generation boundary, not at zero\n\nA cursor is a belief about where a follower stood under one leadership, so a\ngeneration change discards it. What replaced it was offset zero.\n\nThat means every follower of every shard the failed broker led byte-compares\nthe whole log before anything new moves: the leader reads its own log off disk\nand ships records the follower already has, and the follower compares each one\nagainst what it already stored. Every shard at once, on the pass that follows a\nfailover. On a log of any size that is the difference between a failover and an\noutage, and it is also half of how RF erodes — a follower still catching up is\nnot caught up, so it is not eligible for promotion.\n\nThe generation history added for #406 already answers where to start, but only\none side was recording it. A follower records where each generation began as it\naccepts batches; a leader recorded nothing, so a broker's own history had a hole\nover exactly the stretch it led. That also left the demotion case reasoning from\na stale predecessor — the newest generation such a broker knew of was whatever\nit last accepted as a follower, not the one it went on to lead.\n\nSo a leader records it too, when the shard is taken and while it is still\n`Opening`. That is the only moment the tail *is* the generation's start: the\nphase exists to hold writes back until recovery finishes, so nothing has been\nwritten under the new leadership yet. Recording it on the first replication pass\ninstead would be too late by however many records arrived in between, and a base\npast the real boundary skips comparing records that can genuinely differ.\n\nBelow that offset, this broker's records came from earlier leaders while it was\na follower, and so did the follower's — two prefixes of the same log agree. At\nor above it is where they can differ: what this leadership wrote, and what a\npredecessor left on the follower alone.\n\nComparison starts one record below the boundary rather than exactly on it, so\nthe first batch overlaps something the follower already holds and the boundary\nis checked rather than assumed. That is the check Raft makes at `prevLogIndex`,\nfor one record's cost.\n\nA follower further behind than the boundary still says so with a `LogGap` and\nthe leader rewinds in that one exchange, so a replica added mid-generation is\nnot assumed caught up. Without a history entry for the generation it falls back\nto zero, which is slow rather than wrong, and is what a shard written by an\nolder build does. A shard's group cursors, dead letters and counters stay at\nzero too: those logs are written only when group state changes, so there is\nalmost nothing to compare, and the leader does not open them at takeover.\n\nThe history is read only when a cursor actually has to be created — a generation\nchange, or a replica added — since the usual pass creates none and the map is a\nfew hundred entries to clone.\n\nReverted the bound and watched both new driver tests fail while the\nno-history-falls-back-to-zero one kept passing.\n\n* perf(replication): advance the quorum mark at the majority, not at the last follower\n\nA pass shipped to every follower at once and then waited for all of them\nbefore publishing the mark that releases a `Quorum` publish. That is not what\nquorum means: with three replicas a record is on a majority the moment the\nfirst follower has it, and the second is a durability margin, not a\nprecondition.\n\nThe cost was one dead or slow replica putting its whole handshake timeout in\nfront of every acknowledgement on the shard, every pass — the failure `Quorum`\nexists to tolerate, turned into the thing that stalls it.\n\nEach follower's cursor now goes into its own future and comes back from it, so\npositions can be read while others are still in flight, and the mark moves as\nsoon as enough answers make a majority. A follower that has not answered keeps\nthe position it came in with, which is behind where it may already be, so what\nit contributes is a floor rather than a claim. The rest of the set is still\nshipped to and still finishes the pass; what changed is when the\nacknowledgement is released, not who gets the records.\n\nReport ordering is unchanged and still load-bearing: the replica report reaches\nthe control plane before the mark is published, and a report that did not land\nleaves the mark where it was.\n\nTwo reports can now go out for one shard, where there was always exactly one.\nThe majority report describes every follower in the healthy case, because they\nfinish together, and equal reports send nothing. A follower that answers late\nenough to have moved since gets a second one — without it a replica that is\nlevel would keep looking behind, and so stay out of promotion, until the next\npass. A pass where no majority ever advanced still reports, because that is the\nshard the control plane most needs a current view of.\n\nThe tail is re-read after each answer rather than once before shipping, for the\nreason it was already re-read once: a publish landing in between leaves the\nreport and the mark describing a log that is already shorter than the one on\ndisk.\n\nReverted to draining every follower before reading any position — what\n`join_all` did — and the new test fails with \"the majority held every record\nafter 60.01s, but the mark waited 60s for the slowest follower\".\n\n* fix(replication): report beside the followers still shipping, not in front\n\nAwaiting the replica report inside the drain loop suspends every follower still\nin `FuturesUnordered`: nothing polls them while the loop is parked on an HTTP\ncall. A slow control plane therefore stalled replication to the rest of the\nreplica set — the same head-of-line block publishing at the majority exists to\nremove, moved onto the reporting hop.\n\nThe drain and the report now run as two halves of one `join`, so the report is\nstill awaited before the mark is published and the remaining followers keep\nshipping through it.\n\nTwo things fall out of the restructure. The report is built from the positions\nat the majority moment, before the join, so the reporting half owns it and does\nnot borrow what the drain half is writing. And the mark is published once at\nthe majority rather than on every advance, so the settled report at the end of\nthe pass publishes too — with five replicas a second follower answering raises\nthe offset a majority holds, and that is this pass's to publish.\n\nThe first version of the regression test proved nothing. Two followers that\nboth answer without an await point complete in the same poll, so both were\nrecorded before any report happened, and the test passed against the defect.\nIt now has one follower answering five seconds in — late enough to need a\nwake-up after the first has finished, which is the only way to tell \"shipped\nbeside the report\" from \"shipped after it\". Against the sequential version it\nfails with \"broker-c was not reached until 35s\".",
+          "timestamp": "2026-09-17T15:39:06-07:00",
+          "tree_id": "65b4829abb1a72b88cc5e74a1b617ac511c64956",
+          "url": "https://github.com/gabloe/felix/commit/dceb7f46f11d20fce0bb16a0a598483618a1c5de"
+        },
+        "date": 1789685251273,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233388.94,
+            "range": "10999.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233388.94\nmean: 228041.28\nstdev: 10999.04\ncv: 4.82%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233388.94,
+            "range": "10999.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233388.94\nmean: 228041.28\nstdev: 10999.04\ncv: 4.82%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56259.51,
+            "range": "597.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56259.51\nmean: 56020.01\nstdev: 597.53\ncv: 1.07%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 562595.1,
+            "range": "5975.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 562595.10\nmean: 560200.10\nstdev: 5975.28\ncv: 1.07%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
