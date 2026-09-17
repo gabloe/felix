@@ -381,6 +381,9 @@ async fn client_fixture(args: &[String]) -> Result<()> {
 
     const DURABLE_STREAM: &str = "conformance";
     const CACHE: &str = "conformance";
+    // A prefix watch reads one shard, so prefix and retained scenarios need a
+    // cache whose keys cannot be spread across several.
+    const SINGLE_SHARD_CACHE: &str = "conformance-single";
     // Never registered. A client proving it reports "unknown stream"
     // distinguishably needs a name the broker will genuinely refuse.
     const MISSING_STREAM: &str = "conformance-absent";
@@ -398,7 +401,10 @@ async fn client_fixture(args: &[String]) -> Result<()> {
         // surviving either. A client cannot reconnect its way to data that is
         // gone.
         streams: vec![StreamSpec::replicated(DURABLE_STREAM, 4, node_count as u32)],
-        caches: vec![CacheSpec::replicated(CACHE, 4, node_count as u32)],
+        caches: vec![
+            CacheSpec::replicated(CACHE, 4, node_count as u32),
+            CacheSpec::replicated(SINGLE_SHARD_CACHE, 1, node_count as u32),
+        ],
         inherit_output: std::env::var("FELIX_CLUSTER_VERBOSE").is_ok(),
         ..Default::default()
     })
@@ -437,6 +443,7 @@ async fn client_fixture(args: &[String]) -> Result<()> {
         ca_file: ca_file.clone(),
         durable_stream: DURABLE_STREAM.to_string(),
         cache: CACHE.to_string(),
+        single_shard_cache: SINGLE_SHARD_CACHE.to_string(),
         missing_stream: MISSING_STREAM.to_string(),
     };
     let body = serde_json::to_vec_pretty(&fixture).context("encode the fixture")?;

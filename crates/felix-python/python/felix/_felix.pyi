@@ -39,6 +39,114 @@ class SubscriptionHandle:
         traceback: TracebackType | None = None,
     ) -> bool: ...
 
+
+# ---------------------------------------------------------------------------
+# Queues, cache watches, and multi-shard streams
+# ---------------------------------------------------------------------------
+
+class GroupRecord:
+    """One record claimed by a consumer group member."""
+
+    offset: int
+    payload: bytes
+    attempts: int
+
+class CacheChange:
+    key: str
+    value: bytes | None
+    offset: int
+    expires_at_millis: int
+
+class CacheWatchLagged:
+    """The watch fell behind; re-watch from ``resume_from`` for no gap."""
+
+    resume_from: int
+
+WatchItem = CacheChange | CacheWatchLagged
+
+class CacheWatchFilter:
+    @staticmethod
+    def key(value: str) -> "CacheWatchFilter": ...
+    @staticmethod
+    def prefix(value: str) -> "CacheWatchFilter": ...
+
+class ShardRecord:
+    shard: int
+    event: Event
+
+class ShardLost:
+    shard: int
+    error: str
+
+class ShardRecovered:
+    shard: int
+
+ShardEvent = ShardRecord | ShardLost | ShardRecovered
+
+class CacheWatchHandle:
+    resume_offset: int
+    resnapshot: bool
+    retained_count: int | None
+    closed: bool
+    def recv(self, timeout: float | None = None) -> WatchItem | None: ...
+    def close(self) -> None: ...
+    def __iter__(self) -> Iterator[WatchItem]: ...
+    def __next__(self) -> WatchItem: ...
+    def __enter__(self) -> "CacheWatchHandle": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> bool: ...
+
+class ShardedSubscriptionHandle:
+    shards: int
+    closed: bool
+    def next_event(self, timeout: float | None = None) -> ShardEvent | None: ...
+    def positions(self) -> dict[int, int]: ...
+    def close(self) -> None: ...
+    def __iter__(self) -> Iterator[ShardEvent]: ...
+    def __next__(self) -> ShardEvent: ...
+    def __enter__(self) -> "ShardedSubscriptionHandle": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> bool: ...
+
+class AsyncCacheWatch:
+    resume_offset: int
+    resnapshot: bool
+    retained_count: int | None
+    async def recv(self, timeout: float | None = None) -> WatchItem | None: ...
+    async def close(self) -> None: ...
+    def __aiter__(self) -> AsyncIterator[WatchItem]: ...
+    async def __anext__(self) -> WatchItem: ...
+    async def __aenter__(self) -> "AsyncCacheWatch": ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> bool: ...
+
+class AsyncShardedSubscription:
+    shards: int
+    async def next_event(self, timeout: float | None = None) -> ShardEvent | None: ...
+    async def positions(self) -> dict[int, int]: ...
+    async def close(self) -> None: ...
+    def __aiter__(self) -> AsyncIterator[ShardEvent]: ...
+    async def __anext__(self) -> ShardEvent: ...
+    async def __aenter__(self) -> "AsyncShardedSubscription": ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> bool: ...
+
 class Client:
     def __init__(
         self,
@@ -56,6 +164,7 @@ class Client:
         stream: str,
         payload: bytes,
         *,
+        key: bytes | None = None,
         ack: AckMode = "per_message",
         at_least_once: bool = False,
     ) -> None: ...
@@ -89,6 +198,52 @@ class Client:
     def counter_get(
         self, tenant_id: str, namespace: str, cache: str, key: str
     ) -> int | None: ...
+    def group_poll(
+        self,
+        tenant_id: str,
+        namespace: str,
+        stream: str,
+        shard: int,
+        group: str,
+        *,
+        max_records: int = 32,
+        wait: float = 5.0,
+    ) -> list[GroupRecord]: ...
+    def group_ack(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    def group_nack(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    def group_dead_letters(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str
+    ) -> list[int]: ...
+    def group_discard(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    def group_redrive(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    def watch_cache(
+        self,
+        tenant_id: str,
+        namespace: str,
+        cache: str,
+        filter: CacheWatchFilter,
+        *,
+        start: int | None = None,
+        retained: bool = False,
+    ) -> CacheWatchHandle: ...
+    def stream_shards(self, tenant_id: str, namespace: str, stream: str) -> int: ...
+    def subscribe_sharded(
+        self,
+        tenant_id: str,
+        namespace: str,
+        stream: str,
+        *,
+        start: StartPosition | None = None,
+        resume: dict[int, int] | None = None,
+    ) -> ShardedSubscriptionHandle: ...
     def endpoints(self) -> list[str]: ...
     def __enter__(self) -> "Client": ...
     def __exit__(
@@ -134,6 +289,7 @@ class AsyncClient:
         stream: str,
         payload: bytes,
         *,
+        key: bytes | None = None,
         ack: AckMode = "per_message",
         at_least_once: bool = False,
     ) -> None: ...
@@ -167,6 +323,52 @@ class AsyncClient:
     async def counter_get(
         self, tenant_id: str, namespace: str, cache: str, key: str
     ) -> int | None: ...
+    async def group_poll(
+        self,
+        tenant_id: str,
+        namespace: str,
+        stream: str,
+        shard: int,
+        group: str,
+        *,
+        max_records: int = 32,
+        wait: float = 5.0,
+    ) -> list[GroupRecord]: ...
+    async def group_ack(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    async def group_nack(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    async def group_dead_letters(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str
+    ) -> list[int]: ...
+    async def group_discard(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    async def group_redrive(
+        self, tenant_id: str, namespace: str, stream: str, shard: int, group: str, offset: int
+    ) -> None: ...
+    async def watch_cache(
+        self,
+        tenant_id: str,
+        namespace: str,
+        cache: str,
+        filter: CacheWatchFilter,
+        *,
+        start: int | None = None,
+        retained: bool = False,
+    ) -> AsyncCacheWatch: ...
+    async def stream_shards(self, tenant_id: str, namespace: str, stream: str) -> int: ...
+    async def subscribe_sharded(
+        self,
+        tenant_id: str,
+        namespace: str,
+        stream: str,
+        *,
+        start: StartPosition | None = None,
+        resume: dict[int, int] | None = None,
+    ) -> AsyncShardedSubscription: ...
     async def endpoints(self) -> list[str]: ...
     async def __aenter__(self) -> "AsyncClient": ...
     async def __aexit__(

@@ -175,3 +175,32 @@ def test_an_unacknowledged_publish_does_not_wait(client, fixture, key):
         f"20 unacknowledged publishes took {elapsed:.2f}s; a client that waits "
         "for the broker has turned the cheapest ack mode into the dearest"
     )
+
+
+@pytest.mark.scenario("pubsub.start_earliest")
+def test_a_subscription_can_start_at_the_oldest_retained_record(client, fixture, key):
+    """`earliest` is "as far back as you can", not offset 0.
+
+    A trimmed log has no offset 0 to ask for, and asking is an error — which is
+    why this is a separate start position rather than a number a caller could
+    have written themselves.
+    """
+    stream = fixture["durable_stream"]
+    payload = f"earliest-{key}".encode()
+    client.publish(
+        fixture["tenant_id"], fixture["namespace"], stream, payload, ack="per_message"
+    )
+
+    with client.subscribe(
+        fixture["tenant_id"], fixture["namespace"], stream, start="earliest"
+    ) as events:
+        received = drain(events, 500, timeout=5.0)
+
+    payloads = [event.payload for event in received]
+    assert payload in payloads, (
+        "a subscription starting at the earliest retained record did not "
+        "replay history, so it started somewhere else"
+    )
+    # History, not just the live tail: the record was published before the
+    # subscription existed.
+    assert len(payloads) > 1

@@ -223,12 +223,116 @@ A development broker generates a self-signed certificate at startup. Set
 result — that exists precisely so non-Rust clients have something real to
 trust.
 
+### Queues
+
+Records are pulled rather than pushed, because only the consumer knows when it
+has capacity. Each is claimed by one member until it is settled, and anything
+unsettled comes back:
+
+```python
+records = await client.group_poll(
+    "acme", "prod", "orders", shard=0, group="fulfilment", max_records=32, wait=5.0
+)
+
+for record in records:
+    try:
+        handle(record.payload)
+        await client.group_ack("acme", "prod", "orders", 0, "fulfilment", record.offset)
+    except Retryable:
+        # Back in the queue now, rather than after the visibility timeout.
+        await client.group_nack("acme", "prod", "orders", 0, "fulfilment", record.offset)
+```
+
+An empty list means nothing is owed right now — an answer, not an error.
+`record.attempts` says how many times this record has been delivered, so a
+retry can be handled differently from a first attempt.
+
+Records that keep failing are set aside rather than retried forever.
+`group_dead_letters` lists those offsets, `group_redrive` puts one back with
+its attempts reset once the cause is fixed, and `group_discard` drops one that
+is not worth reprocessing.
+
+### Cache watches
+
+A watch turns the cache into a state-synchronisation primitive rather than a
+notification: every change carries its offset, so a reconnecting watcher
+resumes exactly where it stopped.
+
+```python
+async with await client.watch_cache(
+    "acme", "prod", "config", felix.CacheWatchFilter.key("feature-flags")
+) as watch:
+    async for change in watch:
+        if isinstance(change, felix.CacheWatchLagged):
+            # Not an error — the watch fell behind and said so. Re-watch from
+            # resume_from and nothing is missed.
+            next_offset = change.resume_from
+            break
+        apply(change.key, change.value)   # value is None for a delete
+        next_offset = change.offset + 1
+```
+
+Lag is a value rather than an exception because it is not a failure: the watch
+did its job by telling you. It matters more here than on a stream — offsets on
+a filtered watch are sparse by construction, since other keys' changes consume
+them, so loss cannot be inferred from a gap the way a stream subscriber infers
+it.
+
+With `retained=True` the watch delivers each matching key's current value
+first, then live changes — join a room and immediately hold the roster.
+`watch.retained_count` says exactly how many values to expect, so an
+application knows the moment its state is complete; zero is a definite answer,
+not a silence to wait through.
+
+:::note[A prefix watch reads one shard]
+Keys sharing a prefix hash to different shards, so watching a whole
+multi-shard cache means one watch per shard — which neither client wraps for
+you yet. A prefix or retained watch over a single-shard cache sees everything.
+:::
+
+### Multi-shard streams
+
+A subscription reads one shard. `subscribe_sharded` opens one per shard,
+follows each shard's own owner, and merges them:
+
+```python
+async with await client.subscribe_sharded("acme", "prod", "orders") as stream:
+    async for item in stream:
+        if isinstance(item, felix.ShardRecord):
+            handle(item.event.payload)
+        elif isinstance(item, felix.ShardLost):
+            # Surfaced rather than swallowed: the other shards carry on, so a
+            # consumer that ignored this would be reading part of the stream
+            # while believing it read all of it.
+            alert(item.shard, item.error)
+```
+
+Ordering holds *within* a shard, not across them. Records sharing a routing key
+share a shard and stay ordered with respect to each other; unrelated records do
+not. A consumer that needs total order wants a single-shard stream.
+
+The routing key is what spreads records — **without one every record lands on
+shard 0**, and a multi-shard stream behaves like a single-shard one:
+
+```python
+await client.publish("acme", "prod", "orders", payload, key=customer_id.encode())
+```
+
+Resuming is a map rather than a number, because offsets are per shard:
+
+```python
+positions = await stream.positions()
+# ... later
+resumed = await client.subscribe_sharded("acme", "prod", "orders", resume=positions)
+```
+
 ### Not wrapped yet
 
-Consumer groups, cache watches, and multi-shard subscription are not exposed in
-Python. The catalogue marks the corresponding scenarios optional, so the
-binding reports them as *not claimed* rather than passing over them in silence.
-Use the Rust client for those today.
+`at_least_once` does not carry a routing key (the client refuses the
+combination rather than silently dropping one), and a prefix watch over a
+multi-shard cache needs one watch per shard. Both are marked in the conformance
+catalogue, so the binding reports them as unclaimed rather than passing over
+them in silence.
 
 ## Rust
 

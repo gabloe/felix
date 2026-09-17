@@ -1,0 +1,276 @@
+"""Cache reads, writes, counters, and watches.
+
+The watch scenarios carry the weight here. A cache watch is what makes Felix
+usable for state synchronisation rather than notification, and the parts that
+make it so — resume by offset, loss reported rather than inferred — are exactly
+the parts a client can appear to implement without implementing.
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+import felix
+
+
+def wait_for_change(watch, predicate, attempts=20, timeout=3.0):
+    """The next matching change, or None. Lag ends the watch and is returned."""
+    for _ in range(attempts):
+        item = watch.recv(timeout=timeout)
+        if item is None:
+            return None
+        if isinstance(item, felix.CacheWatchLagged):
+            return item
+        if predicate(item):
+            return item
+    return None
+
+
+@pytest.mark.scenario("cache.put_get")
+def test_a_value_reads_back(client, fixture, key):
+    cache = fixture["cache"]
+    client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, key, b"value")
+    assert (
+        client.cache_get(fixture["tenant_id"], fixture["namespace"], cache, key) == b"value"
+    )
+
+
+@pytest.mark.scenario("cache.miss_is_absent")
+def test_a_missing_key_is_absent_not_an_error(client, fixture, key):
+    # None, not an exception: a miss is the most common cache outcome, and
+    # forcing exception handling around it is a poor trade.
+    assert (
+        client.cache_get(
+            fixture["tenant_id"], fixture["namespace"], fixture["cache"], f"absent-{key}"
+        )
+        is None
+    )
+
+
+@pytest.mark.scenario("cache.delete_returns_previous")
+def test_delete_reports_what_it_removed(client, fixture, key):
+    cache = fixture["cache"]
+    client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, key, b"doomed")
+
+    assert (
+        client.cache_delete(fixture["tenant_id"], fixture["namespace"], cache, key) == b"doomed"
+    )
+    # Deleting what is not there is an answer, not an error.
+    assert client.cache_delete(fixture["tenant_id"], fixture["namespace"], cache, key) is None
+    assert client.cache_get(fixture["tenant_id"], fixture["namespace"], cache, key) is None
+
+
+@pytest.mark.scenario("cache.ttl_expires")
+def test_a_value_with_a_ttl_stops_reading(client, fixture, key):
+    cache = fixture["cache"]
+    client.cache_put(
+        fixture["tenant_id"], fixture["namespace"], cache, key, b"brief", ttl=1.0
+    )
+    assert client.cache_get(fixture["tenant_id"], fixture["namespace"], cache, key) == b"brief"
+
+    # Expiry is lazy — the record is reclaimed at compaction, not at the
+    # deadline — so what matters is that it reads as absent, not that storage
+    # shrank.
+    time.sleep(2.0)
+    assert client.cache_get(fixture["tenant_id"], fixture["namespace"], cache, key) is None
+
+
+@pytest.mark.scenario("counter.add_returns_sum")
+def test_adding_to_a_counter_returns_the_sum(client, fixture, key):
+    cache = fixture["cache"]
+    counter = f"counter-{key}"
+
+    assert client.counter_add(fixture["tenant_id"], fixture["namespace"], cache, counter, 5) == 5
+    # The sum *including* this delta, in one round trip — not an add followed
+    # by a read, which another writer could interleave with.
+    assert client.counter_add(fixture["tenant_id"], fixture["namespace"], cache, counter, 3) == 8
+    assert client.counter_add(fixture["tenant_id"], fixture["namespace"], cache, counter, -8) == 0
+
+
+@pytest.mark.scenario("counter.get_absent_is_none")
+def test_an_unwritten_counter_is_absent_not_zero(client, fixture, key):
+    # Absent and zero are different: a counter decremented to zero has been
+    # written; one that never existed has not.
+    assert (
+        client.counter_get(
+            fixture["tenant_id"], fixture["namespace"], fixture["cache"], f"never-{key}"
+        )
+        is None
+    )
+
+    counter = f"zeroed-{key}"
+    client.counter_add(fixture["tenant_id"], fixture["namespace"], fixture["cache"], counter, 1)
+    client.counter_add(fixture["tenant_id"], fixture["namespace"], fixture["cache"], counter, -1)
+    assert (
+        client.counter_get(
+            fixture["tenant_id"], fixture["namespace"], fixture["cache"], counter
+        )
+        == 0
+    )
+
+
+@pytest.mark.scenario("watch.delivers_changes_for_the_filter")
+def test_a_watch_delivers_matching_changes_only(client, fixture, key):
+    cache = fixture["cache"]
+    watched = f"watched-{key}"
+    ignored = f"other-{key}"
+
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.key(watched),
+    ) as watch:
+        client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, ignored, b"no")
+        client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, watched, b"yes")
+
+        change = wait_for_change(watch, lambda item: item.key == watched)
+
+    assert change is not None, "the watched key's change never arrived"
+    assert isinstance(change, felix.CacheChange)
+    assert change.value == b"yes"
+    assert change.key == watched, "a change for an unwatched key was delivered"
+
+
+@pytest.mark.scenario("watch.deletes_arrive_as_changes_without_values")
+def test_a_delete_arrives_as_a_change_with_no_value(client, fixture, key):
+    cache = fixture["cache"]
+    watched = f"deleted-{key}"
+    client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, watched, b"here")
+
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.key(watched),
+    ) as watch:
+        client.cache_delete(fixture["tenant_id"], fixture["namespace"], cache, watched)
+        change = wait_for_change(
+            watch, lambda item: item.key == watched and item.value is None
+        )
+
+    assert change is not None, "the delete never arrived"
+    # None rather than b"": a watcher mirroring the cache has to tell 'removed'
+    # from 'set to empty'.
+    assert change.value is None
+
+
+@pytest.mark.scenario("watch.resumes_from_an_offset")
+def test_a_watch_resumes_from_an_offset(client, fixture, key):
+    cache = fixture["cache"]
+    watched = f"resumed-{key}"
+
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.key(watched),
+    ) as watch:
+        client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, watched, b"first")
+        first = wait_for_change(watch, lambda item: item.value == b"first")
+
+    assert first is not None, "nothing to resume from"
+
+    # Written while nothing is watching: only a resume can see it.
+    client.cache_put(fixture["tenant_id"], fixture["namespace"], cache, watched, b"second")
+
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.key(watched),
+        start=first.offset + 1,
+    ) as resumed:
+        replayed = wait_for_change(resumed, lambda item: item.value == b"second")
+
+    assert replayed is not None, (
+        "a watch resuming from the next offset did not replay the change made "
+        "while it was away — a reconnecting watcher would have to re-read the "
+        "whole cache and hope"
+    )
+
+
+@pytest.mark.scenario("watch.lag_is_reported_rather_than_silent")
+def test_lag_is_a_value_the_application_can_act_on(client, fixture, key):
+    """Lag must be distinguishable from an ordinary end.
+
+    Driving a real overflow needs a watcher slower than a flood, which is not
+    a thing to do reliably in a conformance run. What this asserts is that the
+    signal is a first-class value the client can hand back — carrying the
+    offset to resume from — rather than an exception or a silent close, because
+    a filtered watch's sparse offsets mean loss cannot be inferred.
+    """
+    assert hasattr(felix.CacheWatchLagged, "resume_from")
+
+    # The single-shard cache: a prefix watch reads one shard, so over a
+    # multi-shard cache this would watch a shard the key never lands on.
+    cache = fixture["single_shard_cache"]
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.prefix(f"lag-{key}"),
+    ) as watch:
+        client.cache_put(
+            fixture["tenant_id"],
+            fixture["namespace"],
+            cache,
+            f"lag-{key}-a",
+            b"v",
+        )
+        item = watch.recv(timeout=5.0)
+
+    # A healthy watch yields changes; a lagging one yields the lag value. Both
+    # come back through the same call, which is what lets an application branch
+    # rather than guess.
+    assert isinstance(item, (felix.CacheChange, felix.CacheWatchLagged))
+
+
+@pytest.mark.scenario("watch.retained_delivers_state_before_changes")
+def test_a_retained_watch_delivers_current_state_first(client, fixture, key):
+    # A retained *prefix* watch reads one shard, so the roster has to live on
+    # a cache that has only one.
+    cache = fixture["single_shard_cache"]
+    prefix = f"room-{key}:"
+    for member in ("alice", "bob"):
+        client.cache_put(
+            fixture["tenant_id"], fixture["namespace"], cache, f"{prefix}{member}", b"here"
+        )
+
+    with client.watch_cache(
+        fixture["tenant_id"],
+        fixture["namespace"],
+        cache,
+        felix.CacheWatchFilter.prefix(prefix),
+        retained=True,
+    ) as watch:
+        # The count is the point: an application knows the exact moment its
+        # state is complete, and zero is a definite answer rather than a
+        # silence to wait through.
+        expected = watch.retained_count
+        assert expected is not None, "a retained watch must report how many values to expect"
+
+        roster = {}
+        for _ in range(expected):
+            item = watch.recv(timeout=10.0)
+            assert isinstance(item, felix.CacheChange)
+            roster[item.key] = item.value
+
+    assert f"{prefix}alice" in roster
+    assert f"{prefix}bob" in roster
+
+
+@pytest.mark.scenario("watch.resumes_from_an_offset")
+def test_retained_and_start_are_mutually_exclusive(client, fixture, key):
+    """Asking for both is a mistake the client should name, not resolve."""
+    with pytest.raises(ValueError):
+        client.watch_cache(
+            fixture["tenant_id"],
+            fixture["namespace"],
+            fixture["cache"],
+            felix.CacheWatchFilter.key(key),
+            start=0,
+            retained=True,
+        )

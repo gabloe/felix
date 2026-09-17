@@ -37,6 +37,23 @@ async with client:
 Both wrap the same client and fail over identically. The sync one blocks with
 the GIL released; the async one yields to your event loop.
 
+## Beyond publish and subscribe
+
+Both surfaces also cover consumer groups (`group_poll` and the four settles),
+cache watches (`watch_cache`, including retained watches that hand you current
+state before live changes), and multi-shard subscriptions (`subscribe_sharded`,
+which opens one subscription per shard and merges them). Two things catch
+people out, so they are worth saying here:
+
+- **Publishing without a `key=` puts every record on shard 0.** The key is what
+  spreads a stream, and a multi-shard stream published without one behaves
+  exactly like a single-shard one.
+- **A prefix watch reads one shard.** Keys sharing a prefix do not share a
+  shard, so watching a whole multi-shard cache means one watch per shard.
+
+The [clients page](../../docs-site/src/content/docs/api/clients.md) has the
+worked examples.
+
 ## TLS
 
 QUIC has no unencrypted mode, so there is always a trust decision — and
