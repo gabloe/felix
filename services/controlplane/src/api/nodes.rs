@@ -101,9 +101,10 @@ pub(crate) async fn report_health(
 /// than it claims — so reports expire, and the expiry is derived from the
 /// liveness settings rather than trusted from the caller.
 ///
-/// Authorised exactly as a heartbeat is: a broker may speak for itself and no
-/// one else. A broker that could report on another's behalf could nominate
-/// itself for promotion.
+/// Two checks, not one. A broker may speak for itself and no one else, as for
+/// a heartbeat — and it may only report on shards it currently leads. The
+/// second matters just as much: speaking for yourself about someone else's
+/// shard is still nominating yourself for promotion.
 ///
 /// # Errors
 /// - 404 when the node is not registered.
@@ -117,17 +118,62 @@ pub(crate) async fn report_replica_status(
     // The control plane's clock, deliberately, exactly as for a heartbeat:
     // letting a caller supply the time would let it keep a stale report alive.
     let now = now_millis();
+    // Not enforced: brokers still send 0 here, because the driver that reports
+    // is spawned before registration returns an incarnation. The leadership
+    // check below is the stronger one anyway — it bounds *which* shards a
+    // broker can speak about, where the incarnation would only catch a stale
+    // report from the same broker's previous life.
     let _ = request.incarnation;
 
     for shard in request.shards {
+        let key = crate::model::ShardKey {
+            tenant_id: shard.tenant_id,
+            namespace: shard.namespace,
+            stream: shard.stream,
+            shard: shard.shard,
+            kind: shard.kind,
+        };
+
+        // Being authorised to speak for yourself is not the same as leading
+        // this shard. Without this, any node credential can list itself as
+        // caught up for any shard and nominate itself for promotion.
+        let assignment = match state.store.get_shard_assignment(&key).await {
+            Ok(assignment) => assignment,
+            // An unplaced shard has no leader, so nobody can report on it.
+            Err(StoreError::NotFound(_)) => continue,
+            Err(ref other) => return Err(api_internal("read shard assignment", other)),
+        };
+        if assignment.leader != node_id {
+            tracing::warn!(
+                node_id = %node_id,
+                leader = %assignment.leader,
+                stream = %key.stream,
+                shard = key.shard,
+                "a broker reported replica positions for a shard it does not lead",
+            );
+            metrics::counter!("felix_replica_status_rejected_total", "reason" => "not_leader")
+                .increment(1);
+            continue;
+        }
+        // A generation past the assignment's cannot be one the broker read, and
+        // accepting it would wedge the shard: `record` drops everything older,
+        // so one report claiming u64::MAX blocks every real one after it.
+        if shard.generation > assignment.generation {
+            tracing::warn!(
+                node_id = %node_id,
+                reported = shard.generation,
+                assigned = assignment.generation,
+                stream = %key.stream,
+                shard = key.shard,
+                "a broker reported a generation ahead of the assignment",
+            );
+            metrics::counter!("felix_replica_status_rejected_total", "reason" => "future_generation")
+                .increment(1);
+            continue;
+        }
+
         state.replica_positions.record(
-            crate::model::ShardKey {
-                tenant_id: shard.tenant_id,
-                namespace: shard.namespace,
-                stream: shard.stream,
-                shard: shard.shard,
-                kind: shard.kind,
-            },
+            key,
             shard.generation,
             shard.caught_up.into_iter().collect(),
             shard

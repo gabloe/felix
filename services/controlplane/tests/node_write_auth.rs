@@ -27,12 +27,22 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
 
 type App = axum::routing::RouterIntoService<Body, ()>;
 
+type Positions = std::sync::Arc<controlplane::replica_positions::ReplicaPositions>;
+
 async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
+    let (app, store, keys, _positions) = setup_with_positions().await;
+    (app, store, keys)
+}
+
+async fn setup_with_positions() -> (App, Arc<InMemoryStore>, TenantSigningKeys, Positions) {
     let store = Arc::new(InMemoryStore::new(StoreConfig {
         changes_limit: 1000,
         change_retention_max_rows: Some(1000),
     }));
     let keys = generate_signing_keys().expect("keys");
+    let positions: Positions = std::sync::Arc::new(
+        controlplane::replica_positions::ReplicaPositions::new(&LIVENESS),
+    );
     store
         .set_tenant_signing_keys("t1", keys.clone())
         .await
@@ -58,11 +68,9 @@ async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&LIVENESS),
-        ),
+        replica_positions: positions.clone(),
     };
-    (build_router(state).into_service(), store, keys)
+    (build_router(state).into_service(), store, keys, positions)
 }
 
 fn token(keys: &TenantSigningKeys, perms: Vec<&str>) -> String {
@@ -350,4 +358,206 @@ async fn registration_authorises_the_identity_in_the_body() {
         StatusCode::FORBIDDEN,
         "a broker must not register under another identity",
     );
+}
+
+/// Seed a tenant, namespace, stream and a shard assignment naming `leader`.
+async fn seed_shard(store: &InMemoryStore, leader: &str, generation: u64) {
+    use controlplane::model::{
+        ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy, ShardAssignment, ShardKey,
+        ShardKind, ShardState, Stream, StreamKind, Tenant,
+    };
+
+    let _ = store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "T1".to_string(),
+        })
+        .await;
+    let _ = store
+        .create_namespace(Namespace {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            display_name: "NS".to_string(),
+        })
+        .await;
+    let _ = store
+        .create_stream(Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 1,
+            replication_factor: 1,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtMostOnce,
+            durable: true,
+        })
+        .await;
+    for _ in 0..=generation {
+        store
+            .put_shard_assignment(ShardAssignment {
+                key: ShardKey {
+                    tenant_id: "t1".to_string(),
+                    namespace: "ns".to_string(),
+                    stream: "orders".to_string(),
+                    shard: 0,
+                    kind: ShardKind::Stream,
+                },
+                leader: leader.to_string(),
+                replicas: Vec::new(),
+                generation: 0,
+                state: ShardState::Assigning,
+            })
+            .await
+            .expect("assign");
+    }
+}
+
+fn replica_report(generation: u64, caught_up: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "incarnation": 0,
+        "shards": [{
+            "tenant_id": "t1",
+            "namespace": "ns",
+            "stream": "orders",
+            "shard": 0,
+            "generation": generation,
+            "caught_up": caught_up,
+            "replica_offsets": [],
+        }],
+    })
+}
+
+/// A broker may only report positions for shards it leads.
+///
+/// Speaking for yourself about someone else's shard is still nominating
+/// yourself for promotion, so the identity check on its own is not enough.
+#[tokio::test]
+async fn a_broker_cannot_report_positions_for_a_shard_it_does_not_lead() {
+    let (app, store, keys, positions) = setup_with_positions().await;
+    seed_node(&store, "broker-a", 7001).await;
+    seed_node(&store, "broker-b", 7002).await;
+    seed_shard(&store, "broker-a", 0).await;
+
+    // broker-b is properly authenticated as itself, and leads nothing.
+    let bearer = token(&keys, vec!["node.manage:cluster:*"]);
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/v1/nodes/broker-b/replica-status",
+            Some(&bearer),
+            replica_report(0, &["broker-b"]),
+        ))
+        .await
+        .expect("report");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let key = controlplane::model::ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: controlplane::model::ShardKind::Stream,
+    };
+    assert!(
+        !reported_caught_up(&positions, &key, "broker-b"),
+        "a broker that leads nothing had its report recorded, so it can \
+         nominate itself for promotion",
+    );
+}
+
+/// A generation past the assignment's is refused, rather than wedging the shard.
+///
+/// Reports older than the newest held are dropped, so accepting a claim of
+/// `u64::MAX` would block every genuine report for that shard from then on.
+#[tokio::test]
+async fn a_generation_ahead_of_the_assignment_is_refused() {
+    let (app, store, keys, positions) = setup_with_positions().await;
+    seed_node(&store, "broker-a", 7001).await;
+    seed_shard(&store, "broker-a", 0).await;
+    let bearer = token(&keys, vec!["node.manage:cluster:*"]);
+
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/v1/nodes/broker-a/replica-status",
+            Some(&bearer),
+            replica_report(u64::MAX, &["broker-zzz"]),
+        ))
+        .await
+        .expect("report");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // The genuine report that follows must still land.
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/v1/nodes/broker-a/replica-status",
+            Some(&bearer),
+            replica_report(0, &["broker-a"]),
+        ))
+        .await
+        .expect("report");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let key = controlplane::model::ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: controlplane::model::ShardKind::Stream,
+    };
+    assert!(
+        reported_caught_up(&positions, &key, "broker-a"),
+        "the genuine report was dropped as older than the bogus one, so a \
+         single claim of u64::MAX wedges the shard's positions for good",
+    );
+}
+
+/// The leader's own report is recorded, so the checks above are refusing the
+/// right thing rather than everything.
+#[tokio::test]
+async fn the_leader_of_a_shard_can_report_it() {
+    let (app, store, keys, positions) = setup_with_positions().await;
+    seed_node(&store, "broker-a", 7001).await;
+    seed_shard(&store, "broker-a", 0).await;
+    let bearer = token(&keys, vec!["node.manage:cluster:*"]);
+
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/v1/nodes/broker-a/replica-status",
+            Some(&bearer),
+            replica_report(0, &["broker-a"]),
+        ))
+        .await
+        .expect("report");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let key = controlplane::model::ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: controlplane::model::ShardKind::Stream,
+    };
+    assert!(reported_caught_up(&positions, &key, "broker-a"));
+}
+
+/// What promotion would conclude: is this node a candidate for this shard?
+fn reported_caught_up(
+    positions: &Positions,
+    key: &controlplane::model::ShardKey,
+    node_id: &str,
+) -> bool {
+    use controlplane::placement::CaughtUp;
+    controlplane::replica_positions::CaughtUpAt {
+        positions,
+        now_millis: 1,
+    }
+    .is_caught_up(key, node_id)
 }
