@@ -646,15 +646,20 @@ docker compose run --rm felix-broker cargo test -- --nocapture
 Access Prometheus UI at `http://localhost:9090`:
 
 ```promql
-# Request rate
-rate(felix_broker_requests_total[1m])
+# Publish rate
+rate(felix_publish_requests_total[1m])
 
-# Error rate
-rate(felix_broker_errors_total[1m])
+# Publish failures, by what went wrong — `error`, `not_owner`, `unroutable`,
+# `dropped`. The same counter carries the successes, under `ok`, `accepted`
+# and `forwarded`.
+rate(felix_publish_requests_total{result=~"error|not_owner|unroutable|dropped"}[1m])
 
-# Latency p99
-histogram_quantile(0.99, rate(felix_broker_request_duration_seconds_bucket[5m]))
+# Publish latency p99. Milliseconds, so the bucket name says `_ms`.
+histogram_quantile(0.99, rate(felix_publish_latency_ms_bucket[5m]))
 ```
+
+[Observability](/felix/features/observability/) lists the rest, grouped by the
+question each one answers.
 
 ### Container Metrics
 
