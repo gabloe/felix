@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789625192882,
+  "lastUpdate": 1789625355047,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -8788,6 +8788,58 @@ window.BENCHMARK_DATA = {
             "range": "3233.62",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 555833.95\nmean: 556684.52\nstdev: 3233.62\ncv: 0.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa48d068899a2195202b2882d2aad540f6b8ee6b",
+          "message": "fix(controlplane): cascade shard assignments on delete in memory too (#398)\n\nPostgres removes a stream's or cache's shard assignments when the stream or\ncache goes, through fk_shard_assignments_stream and fk_shard_assignments_cache.\nThe migration says why: ownership records for shards that no longer exist\nleave placement chasing ghosts. InMemoryStore did neither.\n\nThe divergence ran the dangerous way. A suite against the in-memory store saw\nstale assignments the deployed system never produces, so a placement bug that\nneeds orphaned rows is invisible in memory and real in Postgres — or a test\nasserts on rows Postgres has already cleaned up.\n\nThe new contract case runs against both backends, so the rule cannot hold in\none and not the other. It uses names of its own rather than the shared\nfixtures, since the cases after it still need those, and it checks that\ndeleting a stream leaves a same-named cache's shards alone: the two are\ndistinguished by kind and nothing else.\n\nNo change-log entry for the removals, deliberately, matching Postgres — a\ncascade happens inside the database and never reaches the code that records\nunassignments. The delete is already announced on the stream or cache change\nlog, and a consumer told the stream is gone does not need to be told\nseparately about that stream's shards.\n\nFixes #301",
+          "timestamp": "2026-09-16T23:03:36-07:00",
+          "tree_id": "1e207625f64754ce955610891ec38835f1d85dc9",
+          "url": "https://github.com/gabloe/felix/commit/aa48d068899a2195202b2882d2aad540f6b8ee6b"
+        },
+        "date": 1789625354665,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 258033.46,
+            "range": "5188.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 258033.46\nmean: 257065.55\nstdev: 5188.03\ncv: 2.02%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 258033.46,
+            "range": "5188.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 258033.46\nmean: 257065.55\nstdev: 5188.03\ncv: 2.02%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60202.97,
+            "range": "2044.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60202.97\nmean: 60067.88\nstdev: 2044.63\ncv: 3.40%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 602029.7,
+            "range": "20446.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 602029.70\nmean: 600678.83\nstdev: 20446.29\ncv: 3.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
