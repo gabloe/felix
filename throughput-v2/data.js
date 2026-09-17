@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789677301478,
+  "lastUpdate": 1789677791056,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9724,6 +9724,58 @@ window.BENCHMARK_DATA = {
             "range": "24896.53",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553378.52\nmean: 546263.11\nstdev: 24896.53\ncv: 4.56%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5377f339741e4fa4b2c486f908cef7524e98967d",
+          "message": "test(wire): fuzz the protocol decoders, and run every target in CI (#480)\n\n* test(wire): fuzz the protocol decoders, and run every target in CI\n\nOnly storage was fuzzed, which is the wrong place to stop. Segment bytes are\nwritten by Felix; wire bytes are written by whoever connects, and the frame\ndecoder is reached before authentication. A malformed frame is the one input\nan attacker fully controls.\n\nFour libFuzzer targets over the decoders that parse input from outside the\nprocess: the client frame, the broker-to-broker message, the binary payload\nlayouts, and the JSON control message. The properties are about refusing\nrather than recovering — no panic, no allocation from an unchecked length, no\nsilent acceptance of an unknown flag bit or kind, and a round trip that\nreproduces the bytes it came from. That last one is what holds \"trailing bytes\nare refused rather than ignored\" true: a body with slack re-encodes shorter\nthan it arrived.\n\nFlags get their own property because the design turns on it. A flag bit\nselects the payload *layout*, so a bit that is neither known nor reported is\none the dispatch would ignore — and ignoring it means confidently misparsing\nthe body rather than refusing it.\n\nThe deterministic subset runs in the normal suite as `tests/wire_fuzz.rs`,\nseeded xorshift like `format_fuzz.rs` next door, so a regression in the obvious\ncases fails a plain `cargo test` instead of waiting for a fuzz budget. It\nmutates and truncates real encodings as well as generating noise, because the\ninteresting failures are one bit away from something valid.\n\n`seeds/` is a committed input per layout so a run starts from structure rather\nthan guessing four magic bytes; `corpus/` is libFuzzer's working directory,\ngit-ignored, and passed first on the command line so its thousands of files\nnever land in `seeds/`.\n\n`task fuzz` runs all seven targets on a budget, and a CI job runs it on thirty\nseconds each, uploading the crashing input when a target dies — without that\nthe bytes go with the runner. Nightly, so it is its own job rather than in\nfront of the suite everything waits on.\n\nRunning it found that `segment_recovery` had not compiled since `scan_segment`\ngained `repair_checksum_tail`. The fuzz crates are outside the workspace, so\n`task lint` never saw it. It now exercises both policies, chosen by a byte of\nthe input, and CI would have caught the rot.\n\n18M executions across the four new targets found nothing, which is the\nresult worth having from a first run.\n\n* Potential fix for pull request finding 'CodeQL / Workflow does not contain permissions'\n\nCo-authored-by: Copilot Autofix powered by AI <62310815+github-advanced-security[bot]@users.noreply.github.com>\n\n---------\n\nCo-authored-by: Copilot Autofix powered by AI <62310815+github-advanced-security[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-17T13:39:59-07:00",
+          "tree_id": "79a0916e9c18e14ea4e4320586833345577b4c01",
+          "url": "https://github.com/gabloe/felix/commit/5377f339741e4fa4b2c486f908cef7524e98967d"
+        },
+        "date": 1789677790284,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 227272.62,
+            "range": "1203.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227272.62\nmean: 227550.89\nstdev: 1203.99\ncv: 0.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 227272.62,
+            "range": "1203.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227272.62\nmean: 227550.89\nstdev: 1203.99\ncv: 0.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55637.52,
+            "range": "1236.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55637.52\nmean: 54861.41\nstdev: 1236.24\ncv: 2.25%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 556375.16,
+            "range": "12362.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 556375.16\nmean: 548614.08\nstdev: 12362.39\ncv: 2.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
