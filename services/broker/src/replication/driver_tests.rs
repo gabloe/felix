@@ -823,3 +823,77 @@ fn a_report_body_is_the_shape_the_control_plane_parses() {
         sent,
     );
 }
+
+/// A durable append starts shipping without waiting for the tick.
+///
+/// The tick is seconds and the shipping is milliseconds, so under `Quorum` the
+/// tick was most of a publish's latency — a record landed, and then the broker
+/// waited out an interval before telling anyone about it (#411).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_append_ships_without_waiting_for_the_tick() {
+    let (broker, _dir) = leader_with(0).await;
+    // Registered on the broker, not just opened on disk: the point is that a
+    // real publish wakes replication, and `publish_batch` needs the stream.
+    broker.register_tenant(TENANT).await.expect("tenant");
+    broker
+        .register_namespace(TENANT, NAMESPACE)
+        .await
+        .expect("namespace");
+    broker
+        .register_stream(
+            TENANT,
+            NAMESPACE,
+            STREAM,
+            felix_broker::StreamMetadata {
+                durable: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("stream");
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = Arc::new(AcceptingFollower::default());
+    let marks = Arc::new(QuorumMarks::new());
+
+    // A tick long enough that reaching it would mean the signal did nothing.
+    let shutdown = CancellationToken::new();
+    let driver = spawn(
+        Arc::clone(&follower),
+        Arc::clone(&broker),
+        router,
+        Arc::clone(&marks),
+        None,
+        Duration::from_secs(300),
+        shutdown.clone(),
+    );
+
+    // The first pass runs on the interval's immediate first tick; let it
+    // settle so what follows is attributable to the append.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before = follower.batches().len();
+
+    broker
+        .publish_batch(TENANT, NAMESPACE, STREAM, 0, &[Bytes::from_static(b"now")])
+        .await
+        .expect("publish");
+
+    let shipped = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if follower.batches().len() > before {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    shutdown.cancel();
+    let _ = driver.await;
+
+    assert!(
+        shipped.is_ok(),
+        "nothing shipped within 5s of the append, against a 300s tick: the \
+         append signal is not reaching the driver, so a Quorum publish waits \
+         out the interval",
+    );
+}

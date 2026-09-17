@@ -511,14 +511,27 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Woken by a durable append as well as by the tick. Under `Quorum` the
+        // publish that just landed is about to wait on a majority, and waiting
+        // out a tick first put seconds in front of milliseconds of shipping.
+        //
+        // The tick stays: it covers shards with no recent appends, the
+        // auxiliary logs, and the replica report, none of which an append
+        // signals.
+        let appended = broker.appended();
         let mut cursors = HashMap::new();
         let mut group_cursors = HashMap::new();
         let mut dead_letter_cursors = HashMap::new();
         let mut counter_cursors = HashMap::new();
         loop {
+            // An append during the previous pass left a permit, so this
+            // returns at once rather than waiting for the tick — see
+            // `Broker::appended`.
+            let woken = appended.notified();
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
+                _ = woken => {}
             }
             replicate_once(
                 requester.as_ref(),
