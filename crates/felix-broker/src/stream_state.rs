@@ -4,7 +4,7 @@
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use parking_lot::Mutex;
-use slab::Slab;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -70,14 +70,24 @@ pub(crate) struct StreamState {
     consistency: AtomicU8,
 }
 
+/// The stream's live subscribers, keyed by an id that is never reused.
+///
+/// Reuse is the whole point of the counter. Both unregister paths work from an
+/// id captured earlier — the publish fanout reaps senders it found closed, and
+/// the subscription guard unregisters on drop — and neither can hold a lock
+/// across that gap. If an id named a slot, a subscriber that registered in the
+/// gap would inherit the slot and be unregistered in place of the one that
+/// actually went away: silently unsubscribed, holding a live subscription that
+/// never delivers again.
 #[derive(Debug, Default)]
 pub(crate) struct SubscriberRegistry {
-    pub(crate) senders: Slab<mpsc::Sender<QueuedDelivery>>,
+    pub(crate) senders: HashMap<u64, mpsc::Sender<QueuedDelivery>>,
+    next_id: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SubscriberEntry {
-    pub(crate) id: usize,
+    pub(crate) id: u64,
     pub(crate) sender: mpsc::Sender<QueuedDelivery>,
 }
 
@@ -212,16 +222,16 @@ impl StreamState {
     pub(crate) fn register_subscriber(&self) -> (u64, SubscriptionReceiver) {
         let mut state = self.subscribers.lock();
         let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
-        let id = state.senders.insert(tx);
+        let id = state.next_id;
+        state.next_id += 1;
+        state.senders.insert(id, tx);
         self.rebuild_subscriber_snapshot(&state);
-        (id as u64, SubscriptionReceiver::new(rx))
+        (id, SubscriptionReceiver::new(rx))
     }
 
     pub(crate) fn remove_subscriber(&self, id: u64) {
         let mut state = self.subscribers.lock();
-        let id = id as usize;
-        if state.senders.contains(id) {
-            state.senders.remove(id);
+        if state.senders.remove(&id).is_some() {
             self.rebuild_subscriber_snapshot(&state);
         }
     }
@@ -230,11 +240,7 @@ impl StreamState {
         let mut state = self.subscribers.lock();
         let mut removed = false;
         for subscriber_id in subscriber_ids {
-            let id = *subscriber_id as usize;
-            if state.senders.contains(id) {
-                state.senders.remove(id);
-                removed = true;
-            }
+            removed |= state.senders.remove(subscriber_id).is_some();
         }
         if removed {
             self.rebuild_subscriber_snapshot(&state);
@@ -256,10 +262,15 @@ impl StreamState {
         let mut snapshot = Vec::with_capacity(state.senders.len());
         for (id, sender) in state.senders.iter() {
             snapshot.push(SubscriberEntry {
-                id,
+                id: *id,
                 sender: sender.clone(),
             });
         }
+        // The fanout reads this in order and a HashMap does not have one.
+        // Delivery order across subscribers is not a guarantee, but an order
+        // that reshuffles between publishes makes a fanout timing difference
+        // look like a bug in whatever changed last.
+        snapshot.sort_unstable_by_key(|entry| entry.id);
         self.subscribers_snapshot.store(Arc::new(snapshot));
     }
 
@@ -470,3 +481,7 @@ impl StreamState {
         metrics::counter!("felix_sub_queue_enqueued_total").increment(count as u64);
     }
 }
+
+#[cfg(test)]
+#[path = "stream_state_tests.rs"]
+mod tests;

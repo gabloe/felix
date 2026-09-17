@@ -522,7 +522,7 @@ impl Broker {
                         ));
                         sent += item_count;
                     } else {
-                        closed_subscribers.push(subscriber.id as u64);
+                        closed_subscribers.push(subscriber.id);
                     }
                 }
                 SubQueuePolicy::DropNew | SubQueuePolicy::DropOld => {
@@ -550,7 +550,7 @@ impl Broker {
                             }
                         }
                         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                            closed_subscribers.push(subscriber.id as u64);
+                            closed_subscribers.push(subscriber.id);
                         }
                     }
                 }
@@ -826,7 +826,7 @@ impl Broker {
         // Built the moment the subscriber exists, so every error path below
         // releases the registration by `Drop` instead of stranding a closed
         // sender in the registry for the publish path to reap later. Repeated
-        // rejected subscribes would otherwise grow the slab without ever
+        // rejected subscribes would otherwise grow the registry without ever
         // touching the per-connection subscription cap.
         let guard = SubscriptionGuard {
             stream_state: Arc::downgrade(&stream_state),

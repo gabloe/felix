@@ -21,7 +21,6 @@ felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }
 arc-swap = "1.8"
 ahash = { workspace = true }
 hashbrown = { workspace = true }
-slab = "0.4"
 parking_lot = { workspace = true }
 
 [features]

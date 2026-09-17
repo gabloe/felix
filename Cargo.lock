@@ -1190,7 +1190,6 @@ dependencies = [
  "metrics",
  "parking_lot",
  "serial_test",
- "slab",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
