@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789658437980,
+  "lastUpdate": 1789659202396,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9152,6 +9152,58 @@ window.BENCHMARK_DATA = {
             "range": "11572.50",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 549892.41\nmean: 553548.91\nstdev: 11572.50\ncv: 2.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7c6b86ddd376a5c12f4e8263afdd62e1466b051",
+          "message": "fix(replication): a follower cannot confirm past the batch it was sent (#427)\n\nA wholly-overlapping batch answered with the follower's own tail, which can\nbe past the end of the batch. The leader takes that as the follower's\nconfirmed position and resumes from it, so anything between the batch end\nand that tail is skipped and never compared.\n\nThat is the skip behind the quorum loss in #406. A follower holding an\nuncommitted record from a dead leader has exactly that shape: the orphan\nsits at an offset the new leader will reuse, the cursor jumps past it, and\nthe two logs disagree with nothing to notice.\n\napply now answers with first_offset + payloads.len() — the end of what was\nverified. The partial-overlap path already computed the same value, so the\ntwo agree now rather than only when the batch happens to reach the tail.\n\nship_once clamps to the same bound. The leader knows what it sent and has\ncompared nothing beyond it, so a follower answering higher — buggy, or\nreporting for a shard it does not lead, per #410 — cannot drag the cursor.\n\nWhat this does and does not do: the conflict is now found, and a conflict\nhalts the follower, so a divergence becomes fail-stop instead of silent. It\ndoes not repair anything. The follower still cannot truncate its orphan, so\nit stays halted until an operator acts, which is #412 and #424. Epochs and\ntruncation remain #406's real fix.\n\nBoth new cases in replication_tests.rs fail without the change: the first\nshows the follower confirming offset 3 for a batch that verified 2, and the\nsecond shows the new leader's record landing past the orphan with no\nconflict reported.\n\nRefs #406",
+          "timestamp": "2026-09-17T08:30:47-07:00",
+          "tree_id": "5f30e82cb3d0a43a7f30be30218160c90c377bac",
+          "url": "https://github.com/gabloe/felix/commit/c7c6b86ddd376a5c12f4e8263afdd62e1466b051"
+        },
+        "date": 1789659201861,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 231740.37,
+            "range": "5348.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231740.37\nmean: 230767.53\nstdev: 5348.45\ncv: 2.32%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 231740.37,
+            "range": "5348.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 231740.37\nmean: 230767.53\nstdev: 5348.45\ncv: 2.32%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55747.24,
+            "range": "946.43",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55747.24\nmean: 55813.12\nstdev: 946.43\ncv: 1.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557472.41,
+            "range": "9464.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557472.41\nmean: 558131.24\nstdev: 9464.26\ncv: 1.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
