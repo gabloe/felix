@@ -54,6 +54,7 @@ export default defineConfig({
         {
           label: 'Getting Started',
           items: [
+            { label: 'Why Felix?', slug: 'getting-started/why-felix' },
             { label: 'What Felix Is For', slug: 'getting-started/what-felix-is-for' },
             { label: 'Overview', slug: 'getting-started/overview' },
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
