@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789659683644,
+  "lastUpdate": 1789660216459,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9308,6 +9308,58 @@ window.BENCHMARK_DATA = {
             "range": "33202.17",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 823386.40\nmean: 818396.14\nstdev: 33202.17\ncv: 4.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1a95fc24177f8644ba16cce83036c3b93a136a5c",
+          "message": "Refactor Dependabot configuration for multiple ecosystems (#437)\n\nUpdated Dependabot configuration for various package ecosystems including cargo, npm, pip, and docker. Adjusted schedules and added new directories for better dependency management.",
+          "timestamp": "2026-09-17T08:43:41-07:00",
+          "tree_id": "6411830e37f995d4c53e10a9d7adf9b32bed7e92",
+          "url": "https://github.com/gabloe/felix/commit/1a95fc24177f8644ba16cce83036c3b93a136a5c"
+        },
+        "date": 1789660215678,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 308662.23,
+            "range": "6540.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 308662.23\nmean: 308287.16\nstdev: 6540.36\ncv: 2.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 308662.23,
+            "range": "6540.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 308662.23\nmean: 308287.16\nstdev: 6540.36\ncv: 2.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74585.51,
+            "range": "2895.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74585.51\nmean: 73324.97\nstdev: 2895.58\ncv: 3.95%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 745855.1,
+            "range": "28955.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 745855.10\nmean: 733249.73\nstdev: 28955.81\ncv: 3.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
