@@ -15,7 +15,8 @@ use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+mod common;
 
 static PG_SCHEMA: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 static PG_SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
@@ -25,13 +26,7 @@ static MIGRATOR: Migrator = sqlx::migrate!();
 
 async fn test_schema_name() -> String {
     PG_SCHEMA
-        .get_or_init(|| async {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            format!("felix_test_{}_{}", std::process::id(), nanos)
-        })
+        .get_or_init(|| async { common::unique_schema("felix_test") })
         .await
         .clone()
 }
@@ -896,13 +891,7 @@ async fn pg_store_connect_runs_migrations() {
             return;
         }
     };
-    let schema = {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        format!("felix_migrate_{}_{}", std::process::id(), nanos)
-    };
+    let schema = common::unique_schema("felix_migrate");
     let mut conn = match sqlx::PgConnection::connect(&base_url).await {
         Ok(conn) => conn,
         Err(err) => {

@@ -6,7 +6,7 @@
 //! a tenant's tokens depend on.
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use controlplane::auth::keys::generate_signing_keys;
 use controlplane::model::{
@@ -19,6 +19,8 @@ use controlplane::store::command::{MetaCommand, decode_result, encode_command};
 use controlplane::store::memory::{InMemoryStore, export_state_from};
 use controlplane::store::state_machine::MetadataStateMachine;
 use controlplane::store::{AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig};
+
+mod common;
 use testcontainers::clients::Cli;
 
 fn docker_available() -> bool {
@@ -67,14 +69,7 @@ async fn postgres_store() -> Option<(
         }
     };
 
-    let schema = format!(
-        "felix_migrate_{}_{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
+    let schema = common::unique_schema("felix_migrate");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match sqlx::postgres::PgPoolOptions::new()
