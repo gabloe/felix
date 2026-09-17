@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789657818600,
+  "lastUpdate": 1789658437980,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9100,6 +9100,58 @@ window.BENCHMARK_DATA = {
             "range": "17176.06",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557370.10\nmean: 555164.51\nstdev: 17176.06\ncv: 3.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1a8828cb37941279e25b01468e1743cfdea20ee9",
+          "message": "fix(broker): anchor the lease at the heartbeat's send, not its response (#426)\n\nThe lease was renewed after send_heartbeat returned, so a pause between the\ncontrol plane recording the heartbeat and the broker handling the answer —\na buffered read, a VM pause — extended the lease by the length of that\npause. The broker then keeps serving past the window the control plane\nbelieves it granted, which is the safety interval that makes two leaders\nimpossible.\n\nrenew_at takes the instant the request was sent. That is always at or\nbefore the moment the control plane starts counting, so the round trip is\nspent out of the broker's own lease rather than out of the margin.\n\nAnchoring at send makes an out-of-order response able to move the anchor\nbackwards, which anchoring at arrival could not. fetch_max already handles\nit; there is now a test saying so.\n\nReverting to arrival anchoring fails\na_pause_between_sending_and_handling_does_not_extend_the_lease.\n\nFixes #407",
+          "timestamp": "2026-09-17T08:18:01-07:00",
+          "tree_id": "2089b0fe9c1cea1b2db97545dd6c4b145ed91b70",
+          "url": "https://github.com/gabloe/felix/commit/1a8828cb37941279e25b01468e1743cfdea20ee9"
+        },
+        "date": 1789658437569,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 227664.49,
+            "range": "4977.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227664.49\nmean: 230019.22\nstdev: 4977.50\ncv: 2.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 227664.49,
+            "range": "4977.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227664.49\nmean: 230019.22\nstdev: 4977.50\ncv: 2.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54989.24,
+            "range": "1157.25",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54989.24\nmean: 55354.89\nstdev: 1157.25\ncv: 2.09%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 549892.41,
+            "range": "11572.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 549892.41\nmean: 553548.91\nstdev: 11572.50\ncv: 2.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
