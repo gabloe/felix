@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789677788337,
+  "lastUpdate": 1789680273573,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -12408,6 +12408,72 @@ window.BENCHMARK_DATA = {
             "range": "830.22",
             "unit": "us",
             "extra": "trials: 5\nmedian: 592.00\nmean: 950.40\nstdev: 830.22\ncv: 87.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffa5d5ef425ab1d41d44bb30098ba7c108785bea",
+          "message": "build(deps): clear the open security alerts (#482)\n\npyo3 0.24 -> 0.29 (GHSA-36hh-v3qg-5jq4, an out-of-bounds read in the PyList\nand PyTuple iterators' nth/nth_back, plus GHSA-chgr-c6px-7xpp) and rand to\n0.8.6 / 0.9.3 (GHSA-cq8v-f236-94qc) in the workspace and the two demo locks.\n\nThe pyo3 jump crosses five releases and renames three things the binding\nuses: PyObject is gone in favour of Py<PyAny>, Python::allow_threads is now\nPython::detach, and the automatic FromPyObject derive for a #[pyclass] that\nimplements Clone is becoming opt-in. CacheWatchFilter takes from_py_object\nexplicitly rather than skipping it, so what Python can pass is unchanged.\n\nNothing in CI builds this crate -- release.yml is the only place it appears,\nand only on a tag -- so the binding was checked by hand: maturin develop for\nthe abi3 wheel, then the full pytest suite against a real cluster, 39 passed.\n\nThe demo lockfiles pick up more than rand: they were behind the workspace on\ned25519-dalek, jsonwebtoken and redb, and refreshing one entry re-resolves\nthe rest. Both demos build.\n\nperf-comprehensive.yml and soak.yml also get an explicit read-only token,\nwhich is what CodeQL's actions/missing-workflow-permissions was flagging.\nNeither writes anything; artifact upload does not go through GITHUB_TOKEN.\nci.yml already got its block in #480.",
+          "timestamp": "2026-09-17T14:22:27-07:00",
+          "tree_id": "7bb195aead94c7fe954f8423a65ce4bbdd4db81e",
+          "url": "https://github.com/gabloe/felix/commit/ffa5d5ef425ab1d41d44bb30098ba7c108785bea"
+        },
+        "date": 1789680272114,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 77,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 77.00\nmean: 77.00\nstdev: 0.71\ncv: 0.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 110,
+            "range": "2.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 110.00\nmean: 108.80\nstdev: 2.17\ncv: 1.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 131,
+            "range": "95.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 131.00\nmean: 172.00\nstdev: 95.19\ncv: 55.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 96,
+            "range": "2.51",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 96.00\nmean: 96.60\nstdev: 2.51\ncv: 2.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 204,
+            "range": "6.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 203.80\nstdev: 6.98\ncv: 3.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 312,
+            "range": "119.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 312.00\nmean: 362.40\nstdev: 119.76\ncv: 33.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
