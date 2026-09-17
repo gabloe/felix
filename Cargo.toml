@@ -6,16 +6,13 @@ members = [
   "crates/felix-transport",
   "crates/felix-storage",
   "crates/felix-broker",
-  "crates/felix-metadata",
   "crates/felix-router",
-  "crates/felix-crypto",
   "crates/felix-authz",
   "crates/felix-client",
   "crates/felix-conformance",
   "crates/felix-cluster",
   "crates/felix-loadgen",
   "services/controlplane",
-  "services/agent",
   "services/broker",
 ]
 
@@ -72,6 +69,16 @@ repository = "https://github.com/gabloe/felix"
 homepage = "https://github.com/gabloe/felix"
 readme = "README.md"
 
+[workspace.lints.rust]
+# `pub` that is not actually reachable from outside the crate reads as public
+# API and makes the real surface hard to see. Use `pub(crate)`.
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# One module style: `foo.rs` + `foo/`, never `foo/mod.rs`. `task lint` runs
+# clippy with -D warnings, so this fails CI on a new mod.rs.
+mod_module_files = "warn"
+
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
@@ -83,3 +90,30 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "test-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ahash = "0.8"
+arc-swap = "1"
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.23"
+casbin = { version = "2.20.0", default-features = false, features = ["runtime-tokio", "logging", "incremental"] }
+crc32fast = "1.5"
+dashmap = "6"
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+hashbrown = { version = "0.16", features = ["equivalent"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+libc = "0.2"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
+parking_lot = "0.12"
+quinn = "0.11"
+rcgen = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = "0.23"
+serial_test = "3"
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
+tempfile = "3"
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing-opentelemetry = "0.33.0"

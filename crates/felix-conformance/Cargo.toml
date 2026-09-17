@@ -18,16 +18,19 @@ publish = false
 anyhow = { workspace = true }
 bytes = { workspace = true }
 broker = { path = "../../services/broker", version = "0.4.0-preview" }
-base64 = "0.23"
-ed25519-dalek = { version = "2", features = ["pkcs8"] }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
 felix-authz = { path = "../felix-authz", version = "0.4.0-preview" }
 felix-broker = { path = "../felix-broker", version = "0.4.0-preview" }
 felix-client = { path = "../felix-client", version = "0.4.0-preview" }
 felix-storage = { path = "../felix-storage", version = "0.4.0-preview" }
 felix-transport = { path = "../felix-transport", version = "0.4.0-preview" }
 felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
-quinn = "0.11"
-rcgen = "0.14"
-rustls = "0.23"
+jsonwebtoken = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

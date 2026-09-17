@@ -33,3 +33,6 @@ lifecycle = ["dep:tokio", "dep:tracing", "dep:metrics"]
 # `lifecycle` is off by default so library consumers do not inherit tokio;
 # docs.rs should still show it.
 all-features = true
+
+[lints]
+workspace = true

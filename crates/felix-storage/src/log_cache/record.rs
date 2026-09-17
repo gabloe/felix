@@ -9,7 +9,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::segment::{Corruption, CorruptionKind};
 
 /// The only version this build writes, and the only one it reads.
-pub const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 
 const OP_PUT: u8 = 0;
 const OP_DELETE: u8 = 1;
@@ -18,7 +18,7 @@ const OP_AT: usize = 1;
 const EXPIRES_AT: usize = 2;
 const KEY_LEN_AT: usize = 10;
 /// Version, op, expiry, key length. Every record carries all four.
-pub const HEADER_LEN: usize = 14;
+pub(super) const HEADER_LEN: usize = 14;
 
 /// What one record says happened to one key.
 #[derive(Debug, Clone, PartialEq, Eq)]

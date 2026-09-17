@@ -20,7 +20,7 @@ type Failure = String;
 /// With `--records 0` this runs until the process is killed, which is exactly
 /// what the crash harness wants: it reads acknowledgements from stdout, picks a
 /// moment, and sends `SIGKILL` mid-write.
-pub async fn write(args: WriteArgs) -> Result<(), Failure> {
+pub(crate) async fn write(args: WriteArgs) -> Result<(), Failure> {
     let log = DiskLog::open(&args.dir, "log-tool", args.config.clone()).map_err(fail)?;
     let start_offset = log.tail_offset().await.map_err(fail)?;
 
@@ -79,7 +79,7 @@ pub async fn write(args: WriteArgs) -> Result<(), Failure> {
 }
 
 /// Recover a log and report what survived, checking payload integrity.
-pub async fn verify(args: VerifyArgs) -> Result<(), Failure> {
+pub(crate) async fn verify(args: VerifyArgs) -> Result<(), Failure> {
     let opened = Instant::now();
     let log = DiskLog::open(&args.dir, "log-tool", args.config.clone()).map_err(fail)?;
     let recovery_seconds = opened.elapsed().as_secs_f64();
@@ -160,7 +160,7 @@ pub async fn verify(args: VerifyArgs) -> Result<(), Failure> {
 }
 
 /// Measure append latency and throughput under one durability policy.
-pub async fn bench(args: BenchArgs) -> Result<(), Failure> {
+pub(crate) async fn bench(args: BenchArgs) -> Result<(), Failure> {
     let log = Arc::new(DiskLog::open(&args.dir, "log-tool", args.config.clone()).map_err(fail)?);
 
     // Warm up before measuring: the first appends pay for segment creation,

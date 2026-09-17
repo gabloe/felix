@@ -22,10 +22,10 @@ use super::config::INTERNAL_ALPN;
 
 /// Server name the peer client presents. Certificates are not verified, so this
 /// only has to be a valid DNS name both ends agree on.
-pub const INTERNAL_SERVER_NAME: &str = "felix-internal";
+pub(super) const INTERNAL_SERVER_NAME: &str = "felix-internal";
 
 /// Build the internal listener's TLS config.
-pub fn server_config() -> Result<ServerConfig> {
+pub(super) fn server_config() -> Result<ServerConfig> {
     let cert = rcgen::generate_simple_self_signed(vec![INTERNAL_SERVER_NAME.to_string()])
         .context("generate internal certificate")?;
     let cert_der = cert.cert.der().clone();
@@ -45,7 +45,7 @@ pub fn server_config() -> Result<ServerConfig> {
 }
 
 /// Build the peer client's TLS config.
-pub fn client_config() -> Result<ClientConfig> {
+pub(super) fn client_config() -> Result<ClientConfig> {
     let mut tls = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(rustls::ALL_VERSIONS)
         .context("internal client protocol versions")?

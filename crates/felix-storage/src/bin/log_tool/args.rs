@@ -12,7 +12,7 @@ use std::time::Duration;
 use felix_storage::log::{FsyncMode, LogConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Command {
+pub(crate) enum Command {
     /// Append records until told to stop, for crash and benchmark runs.
     Write(WriteArgs),
     /// Recover a log and report what survived.
@@ -22,7 +22,7 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WriteArgs {
+pub(crate) struct WriteArgs {
     pub dir: PathBuf,
     pub records: u64,
     pub payload_bytes: usize,
@@ -36,7 +36,7 @@ pub struct WriteArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyArgs {
+pub(crate) struct VerifyArgs {
     pub dir: PathBuf,
     pub config: LogConfig,
     /// Fail unless at least this many records survived.
@@ -46,7 +46,7 @@ pub struct VerifyArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BenchArgs {
+pub(crate) struct BenchArgs {
     pub dir: PathBuf,
     pub records: u64,
     pub payload_bytes: usize,
@@ -58,7 +58,7 @@ pub struct BenchArgs {
     pub label: String,
 }
 
-pub const USAGE: &str = "\
+pub(crate) const USAGE: &str = "\
 felix-log-tool — exercise and measure the durable log
 
 USAGE:
@@ -99,7 +99,7 @@ bench OPTIONS:
 ";
 
 /// Parse `args` (excluding the program name).
-pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String> {
+pub(crate) fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String> {
     let mut args = args.into_iter();
     let command = args
         .next()

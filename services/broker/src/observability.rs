@@ -32,7 +32,7 @@ static OBS_INIT: OnceLock<()> = OnceLock::new();
 /// Returns a `PrometheusHandle` for serving metrics.
 ///
 /// In tests, metrics recorder is cached to avoid multiple installations.
-pub fn init_observability(service_name: &str) -> PrometheusHandle {
+pub(crate) fn init_observability(service_name: &str) -> PrometheusHandle {
     OBS_INIT.get_or_init(|| {
         // Set global propagator for trace context propagation across service boundaries.
         global::set_text_map_propagator(
@@ -124,7 +124,7 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
 ///
 /// Runs until `shutdown` resolves, then stops accepting new requests and lets
 /// in-flight ones finish. Returns an I/O error if binding or serving fails.
-pub async fn serve_metrics<F>(
+pub(crate) async fn serve_metrics<F>(
     handle: PrometheusHandle,
     addr: SocketAddr,
     readiness: Readiness,

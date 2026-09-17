@@ -60,48 +60,48 @@ pub(super) mod test_hooks {
     static FORCE_THROTTLE_RESET: AtomicBool = AtomicBool::new(false);
     static FORCE_DRAIN_TIMEOUT: AtomicBool = AtomicBool::new(false);
 
-    pub fn set_force_write_message_error(enabled: bool) {
+    pub(crate) fn set_force_write_message_error(enabled: bool) {
         FORCE_WRITE_MESSAGE_ERROR.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn set_force_write_frame_error(enabled: bool) {
+    pub(crate) fn set_force_write_frame_error(enabled: bool) {
         FORCE_WRITE_FRAME_ERROR.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn set_force_cache_encode_error(enabled: bool) {
+    pub(crate) fn set_force_cache_encode_error(enabled: bool) {
         FORCE_CACHE_ENCODE_ERROR.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn set_force_throttle_reset(enabled: bool) {
+    pub(crate) fn set_force_throttle_reset(enabled: bool) {
         FORCE_THROTTLE_RESET.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn set_force_drain_timeout(enabled: bool) {
+    pub(crate) fn set_force_drain_timeout(enabled: bool) {
         FORCE_DRAIN_TIMEOUT.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn force_write_message_error() -> bool {
+    pub(crate) fn force_write_message_error() -> bool {
         FORCE_WRITE_MESSAGE_ERROR.load(Ordering::Relaxed)
     }
 
-    pub fn force_write_frame_error() -> bool {
+    pub(crate) fn force_write_frame_error() -> bool {
         FORCE_WRITE_FRAME_ERROR.load(Ordering::Relaxed)
     }
 
-    pub fn force_cache_encode_error() -> bool {
+    pub(crate) fn force_cache_encode_error() -> bool {
         FORCE_CACHE_ENCODE_ERROR.load(Ordering::Relaxed)
     }
 
-    pub fn force_throttle_reset() -> bool {
+    pub(crate) fn force_throttle_reset() -> bool {
         FORCE_THROTTLE_RESET.load(Ordering::Relaxed)
     }
 
-    pub fn force_drain_timeout() -> bool {
+    pub(crate) fn force_drain_timeout() -> bool {
         FORCE_DRAIN_TIMEOUT.load(Ordering::Relaxed)
     }
 
     /// Back to a clean slate between tests.
-    pub fn reset() {
+    pub(crate) fn reset() {
         set_force_write_message_error(false);
         set_force_write_frame_error(false);
         set_force_cache_encode_error(false);

@@ -10,34 +10,34 @@ use std::time::Duration;
 /// Microsecond samples, percentiled by sort. Sample counts here are at most a
 /// few hundred thousand, where sorting is cheaper than being clever.
 #[derive(Debug, Default)]
-pub struct Samples {
+pub(crate) struct Samples {
     micros: Vec<u64>,
 }
 
 impl Samples {
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             micros: Vec::with_capacity(capacity),
         }
     }
 
-    pub fn record(&mut self, elapsed: Duration) {
+    pub(crate) fn record(&mut self, elapsed: Duration) {
         self.micros.push(elapsed.as_micros() as u64);
     }
 
-    pub fn merge(&mut self, other: Samples) {
+    pub(crate) fn merge(&mut self, other: Samples) {
         self.micros.extend(other.micros);
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.micros.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.micros.is_empty()
     }
 
-    pub fn percentiles(&mut self) -> Percentiles {
+    pub(crate) fn percentiles(&mut self) -> Percentiles {
         self.micros.sort_unstable();
         let at = |q: f64| -> u64 {
             if self.micros.is_empty() {
@@ -56,7 +56,7 @@ impl Samples {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Percentiles {
+pub(crate) struct Percentiles {
     pub p50_us: u64,
     pub p99_us: u64,
     pub p999_us: u64,
@@ -65,7 +65,7 @@ pub struct Percentiles {
 
 /// `123.4 us` / `12.3 ms`, matching what the matrix runner's duration parser
 /// accepts.
-pub fn fmt_us(micros: u64) -> String {
+pub(crate) fn fmt_us(micros: u64) -> String {
     if micros >= 10_000 {
         format!("{:.1} ms", micros as f64 / 1000.0)
     } else {
@@ -75,6 +75,6 @@ pub fn fmt_us(micros: u64) -> String {
 
 /// The machine contract: one JSON object on one line, prefixed so it survives
 /// being embedded in a log full of prose.
-pub fn emit_json(value: &serde_json::Value) {
+pub(crate) fn emit_json(value: &serde_json::Value) {
     println!("LOADGEN_JSON {value}");
 }

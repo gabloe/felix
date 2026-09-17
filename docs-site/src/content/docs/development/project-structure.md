@@ -35,9 +35,7 @@ crates/
 ├── felix-storage/       # Storage layer (ephemeral + durable)
 ├── felix-client/        # Client SDK
 ├── felix-common/        # Shared types and utilities
-├── felix-metadata/      # Metadata abstractions
 ├── felix-router/        # Region-aware routing
-├── felix-crypto/        # Encryption and key handling
 ├── felix-authz/         # Authentication and authorization
 └── felix-conformance/   # Wire protocol conformance tests
 ```
@@ -195,23 +193,6 @@ publisher
 
 **Principle**: Minimal dependencies, stable API.
 
-#### felix-metadata
-
-**Purpose**: Metadata abstractions for streams, tenants, and routing.
-
-**Responsibilities**:
-- Stream metadata
-- Tenant configuration
-- Routing policies
-- Shard placement
-- Region configuration
-
-**Key types**:
-- `StreamMetadata`: Stream definition
-- `TenantConfig`: Tenant settings
-- `ShardInfo`: Shard placement
-- `RoutingPolicy`: Region-aware routing
-
 #### felix-router
 
 **Purpose**: Region-aware routing and locality policies.
@@ -223,16 +204,6 @@ publisher
 - Request routing logic
 
 **Future**: Control plane integration for dynamic routing.
-
-#### felix-crypto
-
-**Purpose**: Encryption and key management.
-
-**Responsibilities**:
-- TLS certificate handling
-- Key derivation
-- End-to-end encryption (planned)
-- Key rotation (planned)
 
 #### felix-authz
 
@@ -270,8 +241,7 @@ services/
 │   │   ├── config.rs    # Configuration loading
 │   ├── Cargo.toml
 │   └── README.md        # Performance profiles
-├── controlplane/        # Control plane (future)
-└── agent/               # Infrastructure agent (future)
+└── controlplane/        # Control plane service
 
 demos/
 ├── broker/              # Demo binaries for the broker crate
@@ -611,7 +581,23 @@ chmod +x .git/hooks/pre-commit
 
 - **Small, focused crates**: Each crate has a single purpose
 - **Clear boundaries**: Minimal cross-crate dependencies
-- **Public API**: Carefully designed, stable interfaces
+- **Public API**: `pub` means "someone outside this crate uses this."
+  Everything else is `pub(crate)`, and the `unreachable_pub` lint (enforced
+  workspace-wide, promoted to an error by CI's `-D warnings`) catches drift.
+
+### Module style
+
+One style throughout: a module `foo` is `foo.rs` with its submodules in
+`foo/` — never `foo/mod.rs`. Clippy's `mod_module_files` lint enforces it
+workspace-wide. The single exception is `tests/common/mod.rs`, which is the
+standard Cargo pattern for helpers shared between integration-test binaries.
+
+### Dependency versions
+
+Shared dependencies are declared once in the root `[workspace.dependencies]`
+and inherited with `dep = { workspace = true }`; a member adds features on
+top when it needs them. A version bump is one edit, and two crates cannot
+drift onto different versions of the same dependency.
 
 ### Layering
 
@@ -642,14 +628,11 @@ Dependencies flow **downward**:
 
 ## Future Structure Changes
 
-As Felix evolves:
-
-- **More crates**: New features may add crates
-- **Service separation**: Control plane, agents
-- **Language clients**: SDKs in other languages
-- **Deployment**: Helm charts, Kubernetes operators
-
-The core structure (crates/services separation) will remain stable.
+New capabilities may add crates, language SDKs, and deployment packaging
+(Helm charts, operators). The core structure — `crates/` for libraries,
+`services/` for binaries, demos outside the workspace — will remain stable.
+Placeholder crates are not kept around: a crate exists when something uses
+it.
 
 ## Next Steps
 

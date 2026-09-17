@@ -354,14 +354,15 @@ struct Cache {
 ///
 /// Kept as the plain entry point because it is part of this crate's public API
 /// and has consumers outside the workspace — `demos/rbac-live` is a standalone
-/// crate, so `cargo clippy --workspace` cannot see that it is used and reports
-/// this as dead code in the binary target. It is not.
-#[allow(dead_code)]
+/// crate, so a workspace-scoped lint cannot see that it is used. `dead_code`
+/// reports it unused and `unreachable_pub` wants it demoted; both are wrong
+/// here, and demoting it breaks `task demo:check`.
+#[allow(dead_code, unreachable_pub)]
 pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
     start_sync_with_signal(broker, base_url, interval, None).await
 }
 
-pub async fn start_sync_with_signal(
+pub(crate) async fn start_sync_with_signal(
     broker: Arc<Broker>,
     base_url: String,
     interval: Duration,

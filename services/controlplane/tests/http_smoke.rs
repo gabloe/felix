@@ -1,9 +1,9 @@
 mod common;
-mod http_helpers;
 
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::json_request;
 use common::read_json;
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router, build_router};
@@ -18,7 +18,6 @@ use controlplane::model::{
 use controlplane::store::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
 };
-use http_helpers::json_request;
 use std::sync::Arc;
 use tower::ServiceExt;
 

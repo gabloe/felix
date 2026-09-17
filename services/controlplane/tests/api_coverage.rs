@@ -1,14 +1,13 @@
 mod common;
-mod http_helpers;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::json_request;
 use common::read_json;
 use controlplane::api::types::FeatureFlags;
 use controlplane::app::{AppState, build_router};
 use controlplane::model::{RetentionPolicy, StreamKind};
 use controlplane::store::{ControlPlaneStore, StoreConfig};
-use http_helpers::json_request;
 use std::sync::Arc;
 use tower::ServiceExt;
 

@@ -137,7 +137,12 @@ broker does not accept traffic for streams it does not yet know about.
     thing does and what it guarantees, and keep it accurate.
 - **Prefer `pub(crate)`.** Reach for `pub` only when something outside the crate uses it.
   Most of the workspace's public surface is only used internally, which makes the real API
-  hard to see and every item look load-bearing.
+  hard to see and every item look load-bearing. `unreachable_pub` and clippy's
+  `mod_module_files` are enforced through `[workspace.lints]` (every member sets
+  `[lints] workspace = true`), so `task lint` catches unexported `pub` and any new
+  `mod.rs` — the module style is `foo.rs` + `foo/`, with `tests/common/mod.rs` as the
+  one sanctioned exception. Shared dependency versions live in
+  `[workspace.dependencies]`; add features per member rather than re-pinning versions.
 - **Docs are treated as part of the change.** `docs/protocol.md`, `docs/durable-storage.md`,
   `docs/storage-format.md`, `docs/storage-performance.md`, and the status tables in
   `docs-site/src/content/docs/getting-started/what-felix-is-for.md` make specific claims about

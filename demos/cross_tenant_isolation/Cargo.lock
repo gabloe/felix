@@ -650,7 +650,6 @@ dependencies = [
  "redb",
  "reqwest 0.12.28",
  "rustls",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1093,13 +1092,11 @@ name = "felix-authz"
 version = "0.4.0-preview"
 dependencies = [
  "base64 0.23.1",
- "casbin",
  "ed25519-dalek",
  "jsonwebtoken",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]

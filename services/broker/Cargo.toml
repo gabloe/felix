@@ -54,10 +54,10 @@ path = "src/bin/soak/main.rs"
 anyhow = { workspace = true }
 # The shard lifecycle drives local state through a trait object, so its two
 # async methods need boxing.
-async-trait = "0.1"
+async-trait = { workspace = true }
 felix-router = { path = "../../crates/felix-router", version = "0.4.0-preview" }
-arc-swap = "1"
-base64 = "0.23"
+arc-swap = { workspace = true }
+base64 = { workspace = true }
 felix-broker = { path = "../../crates/felix-broker", version = "0.4.0-preview" }
 felix-common = { path = "../../crates/felix-common", version = "0.4.0-preview", features = ["lifecycle"] }
 felix-client = { path = "../../crates/felix-client", version = "0.4.0-preview" }
@@ -66,46 +66,46 @@ felix-transport = { path = "../../crates/felix-transport", version = "0.4.0-prev
 felix-wire = { path = "../../crates/felix-wire", version = "0.4.0-preview" }
 felix-storage = { path = "../../crates/felix-storage", version = "0.4.0-preview" }
 bytes = { workspace = true }
-dashmap = "6"
-ed25519-dalek = { version = "2", features = ["pkcs8"] }
+dashmap = { workspace = true }
+ed25519-dalek = { workspace = true }
 futures = "0.3"
-axum = "0.8"
-metrics = "0.24"
-parking_lot = "0.12"
-metrics-exporter-prometheus = "0.18"
-opentelemetry = "0.32.0"
-opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
-quinn = "0.11"
-rcgen = "0.14"
-rustls = "0.23"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { workspace = true }
+metrics = { workspace = true }
+parking_lot = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+jsonwebtoken = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
 # `TaskTracker` and `CancellationToken` back the graceful drain in `shutdown.rs`.
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-opentelemetry = "0.33.0"
+tracing-opentelemetry = { workspace = true }
 
 # Linux-only core pinning (`core_shards`) and Unix-wide SIGTERM delivery in the
 # soak harness both need libc; the pinning call site stays `target_os = "linux"`
 # gated in code.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { workspace = true }
 # Used by the durable-restart and queue-semantics demo binaries to stage a
 # throwaway storage root.
-tempfile = "3"
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
-serial_test = "3"
-rcgen = "0.14"
-rustls = "0.23"
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
 # The membership integration test drives the real control-plane router rather
 # than a stub, so a mismatch in the HTTP contract between the two services fails
 # here instead of in a cluster.
@@ -116,4 +116,5 @@ default = []
 telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
 perf_debug = ["felix-broker/perf_debug"]
 
-[lints.rust]
+[lints]
+workspace = true
