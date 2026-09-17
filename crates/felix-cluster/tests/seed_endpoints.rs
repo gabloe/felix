@@ -90,8 +90,10 @@ async fn a_seed_list_survives_losing_the_leader() {
     // A seed list gets the client to a live broker, but a broker that is not the
     // shard's owner forwards — and for a short window after a failover its
     // routing view still names the broker that just died, so the forward goes to
-    // a corpse and times out. The cluster recovers within a feed interval; the
-    // client does not know that and has no retry of its own.
+    // a corpse. It now fails inside the ack budget and says what happened rather
+    // than being replaced by "publish commit timeout", but it still fails: the
+    // cluster recovers within a feed interval and the client has no retry of its
+    // own.
     //
     // So this is what an application has to write today, and it is exactly
     // what the planned client-side retry (#119) will absorb: classify the

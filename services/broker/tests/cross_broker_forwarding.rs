@@ -24,6 +24,10 @@ use felix_storage::EphemeralCache;
 use felix_wire::internal::{AckMode, ErrorCode, InternalMessage};
 use tokio_util::sync::CancellationToken;
 
+/// Long enough that nothing here is bounded by it: these cases are about what
+/// the owner answered, not about running out of time.
+const FORWARD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
 const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";
 const STREAM: &str = "orders";
@@ -214,6 +218,7 @@ async fn a_forwarded_publish_is_written_by_the_owner() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"hello")],
+        FORWARD_BUDGET,
     )
     .await
     .expect("the owner must accept a publish for a shard it owns");
@@ -251,6 +256,7 @@ async fn an_owner_behind_the_requester_refuses_rather_than_writing() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"too-new")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("an owner behind the requester must not accept the write");
@@ -289,6 +295,7 @@ async fn a_broker_that_no_longer_owns_the_shard_redirects() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"moved")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("broker-c is not reachable, so this cannot succeed");
@@ -344,6 +351,7 @@ async fn a_redirect_that_loops_back_to_a_tried_owner_is_refused() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"loop")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("a backwards redirect must be refused, not followed");
@@ -400,6 +408,7 @@ async fn a_retryable_refusal_converges() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"retry-me")],
+        FORWARD_BUDGET,
     )
     .await
     .expect("a retryable refusal must be retried");
@@ -449,6 +458,7 @@ async fn a_permanently_refusing_owner_fails_within_the_budget() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"never")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("a permanent refusal must fail, not loop");
@@ -524,6 +534,7 @@ async fn a_lost_answer_is_reported_as_indeterminate_and_never_retried() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"exactly-once")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("a lost answer cannot be reported as success");
@@ -569,6 +580,7 @@ async fn an_unreachable_owner_fails_without_sending() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"nowhere")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("an unreachable owner must fail");
@@ -594,6 +606,7 @@ async fn an_owner_that_has_not_opened_the_shard_refuses() {
         &forward_key(),
         AckMode::OnCommit,
         vec![Bytes::from_static(b"not-yet")],
+        FORWARD_BUDGET,
     )
     .await
     .expect_err("an unopened shard must not accept writes");

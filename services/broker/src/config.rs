@@ -205,6 +205,28 @@ impl BrokerConfig {
             ),
         )
     }
+
+    /// How long a forwarded publish may spend before it must answer.
+    ///
+    /// The same relationship as the quorum wait above, from the other side. A
+    /// forward is the other inner wait a publish can be sitting on, and it is
+    /// the one with no bound of its own that fits: its budget is up to
+    /// `MAX_ATTEMPTS` peer requests, each of which may dial first, so its worst
+    /// case runs to tens of seconds while the waiter gives up in a few.
+    ///
+    /// Raising the ceiling to cover that would make a client wait out the whole
+    /// thing, so the forward is bounded to fit under the ceiling instead. What
+    /// that buys is the same thing the quorum margin buys: the inner wait
+    /// finishes first, so the client is told *why* — the owner was unreachable
+    /// and nothing was sent, or the batch went out and its fate is unknown —
+    /// rather than getting "publish commit timeout", which says nothing and is
+    /// the one answer a client cannot act on.
+    ///
+    /// Derived rather than configured, so the two cannot be tuned apart.
+    pub fn forward_budget(&self) -> std::time::Duration {
+        self.ack_wait_timeout()
+            .saturating_sub(std::time::Duration::from_millis(ACK_WAIT_OVER_QUORUM_MS))
+    }
 }
 
 impl Default for BrokerConfig {
