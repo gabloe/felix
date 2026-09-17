@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789684535794,
+  "lastUpdate": 1789684681379,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -9984,6 +9984,58 @@ window.BENCHMARK_DATA = {
             "range": "45342.48",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 554651.10\nmean: 535687.79\nstdev: 45342.48\ncv: 8.46%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "166d0a900716f370fc70a4990340f8a69e435a1a",
+          "message": "docs(test): the client does have a retry, and not retrying a publish is a choice (#486)\n\nThe comment on `a_seed_list_survives_losing_the_leader` said the client \"has no\nretry of its own\" and pointed at #119 as the planned fix. #119 shipped and is\nclosed: `ClusterClient` carries a `ReconnectPolicy` with jittered backoff, and\na failed publish reconnects before returning so the caller's next call lands on\na live broker. That is why the loop in the test converges quickly rather than\nspending its whole twenty seconds.\n\nWhat the client does *not* do is retry the publish itself, and reading the old\ncomment it sounds like an omission waiting on someone. It is a decision, and\nthe same one `peer/forward.rs` argues at length for the broker: a publish whose\nanswer was lost may already be on the owner's disk, so a retry inside the\nclient manufactures a duplicate that only the client — holding the request id —\ncould ever detect. Idempotent producers (#422) are what would make an absorbing\nretry safe to add.\n\nComment only; the test is unchanged and still asserts what it did.",
+          "timestamp": "2026-09-17T15:35:23-07:00",
+          "tree_id": "ceaf1f454c7b3fd27f8b82a4bd356fc73a08b309",
+          "url": "https://github.com/gabloe/felix/commit/166d0a900716f370fc70a4990340f8a69e435a1a"
+        },
+        "date": 1789684680807,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 314636.93,
+            "range": "5758.77",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 314636.93\nmean: 317678.90\nstdev: 5758.77\ncv: 1.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 314636.93,
+            "range": "5758.77",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 314636.93\nmean: 317678.90\nstdev: 5758.77\ncv: 1.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 69750.56,
+            "range": "1764.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 69750.56\nmean: 70288.37\nstdev: 1764.83\ncv: 2.51%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 697505.58,
+            "range": "17648.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 697505.58\nmean: 702883.68\nstdev: 17648.31\ncv: 2.51%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
