@@ -90,14 +90,22 @@ async fn a_seed_list_survives_losing_the_leader() {
     // A seed list gets the client to a live broker, but a broker that is not the
     // shard's owner forwards — and for a short window after a failover its
     // routing view still names the broker that just died, so the forward goes to
-    // a corpse. It now fails inside the ack budget and says what happened rather
+    // a corpse. It fails inside the ack budget and says what happened rather
     // than being replaced by "publish commit timeout", but it still fails: the
-    // cluster recovers within a feed interval and the client has no retry of its
-    // own.
+    // cluster recovers within a feed interval, and one publish call spans less
+    // than that.
     //
-    // So this is what an application has to write today, and it is exactly
-    // what the planned client-side retry (#119) will absorb: classify the
-    // failure as retryable, back off, and try again.
+    // `ClusterClient` reconnects on a failed publish so the *next* call lands on
+    // a live broker, which is what makes this loop terminate quickly. It does
+    // not retry the publish itself, and that is deliberate rather than missing:
+    // a publish whose answer was lost may already be on the owner's disk, so
+    // retrying it inside the client would manufacture a duplicate the client is
+    // the only layer able to detect. `services/broker/src/peer/forward.rs`
+    // argues the same rule for the broker's own forwarding. Idempotent
+    // producers (#422) are what would make an absorbing retry safe.
+    //
+    // So this loop is what an application writes today, and the assertion is
+    // that it converges — not that a single publish survives a failover.
     let mut published = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let mut last = String::new();
