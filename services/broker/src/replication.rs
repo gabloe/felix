@@ -188,6 +188,7 @@ pub async fn ship_once<R: PeerRequester>(
 
     let first_offset = records[0].offset;
     let payloads: Vec<Bytes> = records.into_iter().map(|record| record.payload).collect();
+    let batch_end = first_offset + payloads.len() as u64;
     let batch = ReplicateRecords {
         // The pool assigns the real id; it owns the connection this lands on.
         correlation_id: 0,
@@ -223,10 +224,12 @@ pub async fn ship_once<R: PeerRequester>(
     let progress = read_answer(&answer);
     match progress {
         Progress::Stored { durable_offset } => {
-            // The follower's own account of where it is. Trusted over the
-            // leader's arithmetic: it is the side that did the writing, and a
-            // partially applied batch would leave the two disagreeing.
-            cursor.next_offset = durable_offset;
+            // The follower's own account of where it is, since it did the
+            // writing and a partially applied batch would leave the two
+            // disagreeing — but never past the end of what was sent. The leader
+            // has compared nothing beyond that, so accepting a higher answer
+            // means resuming past records neither side has checked.
+            cursor.next_offset = durable_offset.min(batch_end);
             metrics::record_shipped(metrics::OUTCOME_OK);
         }
         Progress::Resume { offset } => {

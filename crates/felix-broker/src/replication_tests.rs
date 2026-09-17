@@ -255,3 +255,53 @@ async fn resends_converge_rather_than_accumulate() {
     assert_eq!(last.durable_offset, 4);
     assert_eq!(stored(&log).await, vec!["a", "b", "c", "d"]);
 }
+
+/// **A follower holding more than the batch answers with the batch's end, not
+/// its own tail.**
+///
+/// The answer is what the leader advances its cursor to, so answering `tail`
+/// skips everything between the batch and that tail — and those records were
+/// never compared against anything. A follower that kept an uncommitted record
+/// from a dead leader has exactly that shape (#406): the extra record is at an
+/// offset the new leader will reuse, and the skip means the conflict is never
+/// found.
+#[tokio::test]
+async fn a_batch_wholly_overlapping_does_not_confirm_past_itself() {
+    let (log, _dir) = follower().await;
+    // The follower has three records; the last never reached a majority.
+    ship(&log, 0, &["a", "b", "orphan"]).await.expect("applied");
+
+    // A new leader resends what it has, which stops short of the orphan.
+    let retry = ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    assert_eq!(
+        retry.durable_offset, 2,
+        "the follower confirmed offset {} when the batch only verified up to 2; \
+         the leader will resume past its orphan and never compare it",
+        retry.durable_offset,
+    );
+}
+
+/// The skip above is what lets a conflict go unnoticed.
+///
+/// Same shape, one step further: the new leader writes its own record at the
+/// offset the orphan occupies. If the cursor skipped past it, this batch is
+/// never checked and the two logs silently disagree.
+#[tokio::test]
+async fn an_orphan_at_a_reused_offset_is_reported_as_a_conflict() {
+    let (log, _dir) = follower().await;
+    ship(&log, 0, &["a", "b", "orphan"]).await.expect("applied");
+
+    let confirmed = ship(&log, 0, &["a", "b"]).await.expect("applied");
+
+    // The leader resumes from what the follower confirmed, and writes its own
+    // record at offset 2.
+    let divergence = ship(&log, confirmed.durable_offset, &["committed"])
+        .await
+        .expect_err("the follower holds a different record at this offset");
+
+    assert!(
+        matches!(divergence, Divergence::Conflict { .. }),
+        "expected a conflict at the reused offset, got {divergence:?}",
+    );
+}
