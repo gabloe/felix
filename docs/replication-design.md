@@ -455,6 +455,32 @@ A halted follower counts for nothing: it has stopped rather than fallen behind,
 and letting its last position count would make an acknowledgement mean less than
 it says.
 
+The mark that releases such a publish advances **at the majority, not at the
+last follower**. A pass ships to every follower at once and moves the mark as
+soon as enough of them have answered to make one — with three replicas, the
+moment the first follower has the records. Waiting for all of them put one dead
+or slow replica's whole timeout in front of every acknowledgement on the shard,
+every pass, which is the failure `Quorum` exists to tolerate rather than be
+stalled by (#411). The rest of the set is still shipped to and still finishes
+the pass; what changed is when the acknowledgement is released, not who gets the
+records.
+
+The replica report goes to the control plane **before** the mark is published,
+and is awaited. Releasing the publish first leaves a window in which a leader
+has told a client its record is on a majority and has told the control plane
+nothing about which replica holds it — and a leader that dies in that window is
+replaced by whichever replica scores highest, which may be the one that does not
+have it. A report that did not land leaves the mark where it was, for the same
+reason: the argument rests on the control plane knowing who holds the record, so
+releasing on a failed report reaches the same window by another route.
+
+That costs a control-plane round trip on the path of a quorum publish, which is
+the price of the acknowledgement meaning what it says. It is one round trip per
+shard per pass in the healthy case: the majority report already describes every
+follower, because they finish together. A follower that answers late enough to
+move after that report sends a second one, so a replica that is level does not
+look behind — and so out of promotion — until the next pass.
+
 A wait that runs out is reported as a failure, and the distinction matters: the
 records *are* durable on the leader and may yet reach a majority. The broker is
 not saying the write failed, it is saying it cannot vouch for it at the level the
