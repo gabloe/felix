@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789644360122,
+  "lastUpdate": 1789644527097,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -11286,6 +11286,72 @@ window.BENCHMARK_DATA = {
             "range": "423.82",
             "unit": "us",
             "extra": "trials: 5\nmedian: 372.00\nmean: 648.60\nstdev: 423.82\ncv: 65.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6621d86703833dcaf3ea2d771d62a8f1d02dbaa0",
+          "message": "fix(broker): bound a forwarded publish by the ack budget (#399)\n\nA publish through a broker that does not own the shard is forwarded, and\nthe forward's budget is up to MAX_ATTEMPTS peer requests, each able to dial\nfirst. That runs to tens of seconds. The ack waiter gives up in a few, so\nfor a forward it always won the race: whatever the forward concluded was\ndiscarded and the client got \"publish commit timeout\" instead.\n\nThat is the least useful answer available. It says nothing about why, and\nit is ambiguous about whether the record landed, so a client cannot act on\nit. The forward had already classified the failure — Unavailable means\nnothing was sent and the batch may go again; Disconnected or Timeout means\nit went out and its fate is unknown — and none of that reached the caller.\n\nack_wait_timeout already sits above the quorum wait for exactly this\nreason, with the same reasoning written next to it. Forwarding is the other\ninner wait a publish can sit on and was never covered. Raising the ceiling\nto fit it would make a client wait out tens of seconds, so the forward is\nbounded to fit under the ceiling instead: BrokerConfig::forward_budget is\nthe ack ceiling less the same hop margin, derived rather than configured so\nthe two cannot be tuned apart.\n\nRunning out mid-request is indeterminate, because the request went out.\nRunning out before one is refused, because nothing did — that is the\noutcome a caller may safely act on by going elsewhere.\n\nWithout the bound, a_forward_answers_within_its_budget does not answer in\n60 seconds and a_spent_budget_sends_nothing sends the batch anyway.\n\nThis is the broker half of #269. The client half is #119: nothing retries\na retryable publish failure yet, so seed_endpoints still retries by hand,\nand its comment is corrected to say what the failure now looks like.\n\nRefs #269",
+          "timestamp": "2026-09-17T04:25:10-07:00",
+          "tree_id": "3056b221c1efe1500ffe0378283ac6c1b31967d2",
+          "url": "https://github.com/gabloe/felix/commit/6621d86703833dcaf3ea2d771d62a8f1d02dbaa0"
+        },
+        "date": 1789644523862,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 122,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 122.40\nstdev: 0.55\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 167,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.40\nstdev: 1.52\ncv: 0.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 208,
+            "range": "32.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 222.20\nstdev: 32.35\ncv: 14.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "4.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 166.60\nstdev: 4.83\ncv: 2.90%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 340,
+            "range": "200.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 340.00\nmean: 429.00\nstdev: 200.77\ncv: 46.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 512,
+            "range": "940.08",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 512.00\nmean: 914.80\nstdev: 940.08\ncv: 102.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
