@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789765634047,
+  "lastUpdate": 1789766087241,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14784,6 +14784,72 @@ window.BENCHMARK_DATA = {
             "range": "297.77",
             "unit": "us",
             "extra": "trials: 5\nmedian: 578.00\nmean: 627.60\nstdev: 297.77\ncv: 47.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38b252182f643cbaf58bd45d81854809c5610cc1",
+          "message": "fix(release): build the Intel macOS wheel on Apple Silicon (#545)\n\n`macos-13` is the Intel macOS image, which GitHub is retiring. On the v0.4.1\ntag the x86_64-apple-darwin leg never got an agent and sat queued while the\nother four targets finished in minutes.\n\nThat is not one missing wheel. `attach-wheels` and `publish-pypi` both\n`needs: [python-wheels, python-sdist]`, and a matrix job that never starts\nnever completes, so a single retired runner label holds back *all five* wheels\nand the PyPI publish behind it. v0.4.0 shipped without wheels because the\ninstall step was broken; v0.4.1 was about to ship without them because a runner\nlabel went away.\n\nx86_64-apple-darwin is now cross-compiled from `macos-latest`. maturin-action\ninstalls the rust target, and the wheel is abi3-py39, so nothing about it is\ninterpreter- or host-specific.\n\nLeaves the retired label nowhere in the workflow, which is the point: the\nfailure mode was silent and indefinite rather than a visible error.",
+          "timestamp": "2026-09-18T14:09:49-07:00",
+          "tree_id": "18deb19f54b83268ae112eaac7cedfcce6b21397",
+          "url": "https://github.com/gabloe/felix/commit/38b252182f643cbaf58bd45d81854809c5610cc1"
+        },
+        "date": 1789766084850,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 159.40\nstdev: 1.52\ncv: 0.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "3.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 203.80\nstdev: 3.35\ncv: 1.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 246,
+            "range": "22.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 246.00\nmean: 250.60\nstdev: 22.83\ncv: 9.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "6.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 199.20\nstdev: 6.61\ncv: 3.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 396,
+            "range": "490.23",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 396.00\nmean: 612.20\nstdev: 490.23\ncv: 80.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 492,
+            "range": "1377.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 492.00\nmean: 1347.20\nstdev: 1377.46\ncv: 102.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
