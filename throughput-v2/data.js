@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789747765785,
+  "lastUpdate": 1789749187865,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11232,6 +11232,58 @@ window.BENCHMARK_DATA = {
             "range": "17894.94",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 585354.49\nmean: 584105.29\nstdev: 17894.94\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4767a8859695d7cf9ba439f9af209123e1eae936",
+          "message": "release: 0.4.0 (#531)\n\nWorkspace and every internal path dependency move from `0.4.0-preview` to\n`0.4.0`, with the Helm chart's appVersion. The chart's own version stays at\n0.1.0: it ships for the first time in this release, so there is no published\nversion to bump from.\n\nThe CHANGELOG needed more than a header move. `Unreleased` documented about\nten changes; there are 90 commits since v0.3.1, 54 of them substantive, and\nthe missing ones included the entire Python client, container images, refresh\ntokens, seven replication and storage performance changes, and around twenty\ncorrectness fixes -- four separate cross-host clock bugs among them. Written\nup as a full release entry, with the existing prose kept as it stood.\n\nAdds a Known limitations section naming #527, #130, #529, #524 and the\nRF=1-only performance figures, so the release ships its gaps in writing.\n\nAlso fixes two link refs: `Unreleased` compared against v0.3.0 despite v0.3.1\nexisting, and v0.3.1 had no link at all.\n\nSECURITY.md moves the supported line to 0.4.x and makes the preview row\ngeneric, since `0.4.0-preview` no longer names anything.",
+          "timestamp": "2026-09-18T09:30:24-07:00",
+          "tree_id": "81a64916b9672e1c552fd99f66e96b4ede51056b",
+          "url": "https://github.com/gabloe/felix/commit/4767a8859695d7cf9ba439f9af209123e1eae936"
+        },
+        "date": 1789749187024,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232239.29,
+            "range": "7714.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232239.29\nmean: 230234.52\nstdev: 7714.58\ncv: 3.35%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232239.29,
+            "range": "7714.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232239.29\nmean: 230234.52\nstdev: 7714.58\ncv: 3.35%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54265.5,
+            "range": "900.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54265.50\nmean: 54521.13\nstdev: 900.29\ncv: 1.65%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 542655,
+            "range": "9002.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 542655.00\nmean: 545211.32\nstdev: 9002.92\ncv: 1.65%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
