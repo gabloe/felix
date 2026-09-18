@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789766090736,
+  "lastUpdate": 1789766393352,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11700,6 +11700,58 @@ window.BENCHMARK_DATA = {
             "range": "14393.39",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553145.46\nmean: 546870.98\nstdev: 14393.39\ncv: 2.63%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16a2a078d79f77f10c588eb8a2ce400b27baa9a5",
+          "message": "perf(azure): poll registration with a token that may read /v1/nodes (#546)\n\n`>> 0/N brokers registered` has been reported on every session since #513, and\nwas put down to a flake each time. It is not a flake. The poll authenticates\nwith the load generator's client-scoped token, which deliberately carries no\n`node.view:cluster:*` -- that is #513's scoping working correctly -- so\n/v1/nodes answers:\n\n    HTTP 403 {\"code\":\"forbidden\",\"message\":\"missing node.view:cluster:* permission\"}\n\n`curl -fsS` fails, `|| echo 0` swallows it, and the loop runs its full sixty\niterations before reporting zero. Five minutes, every session, always wrong.\n\nConfirmed against a live cluster: 403 with the client token, HTTP 200 and\n`nodes: 1` with an admin token exchanged from the same IdP credential. The poll\nnow exchanges that admin token, which is the same thing the shard-ownership\nreport added in #544 already does.\n\nIt mattered little while the false zero was cosmetic. #544 made stream creation\ndepend on this check passing, which turned it into a hard failure that\nprovisioned an entire cluster and then created no streams -- exactly what\nhappened on the first v0.4.1 session. Gating new work behind a check known to\nfail was the mistake; this removes the reason it failed.",
+          "timestamp": "2026-09-18T14:15:17-07:00",
+          "tree_id": "7741dffd219b75c6add3cbaeeec4f0fcbe04dce6",
+          "url": "https://github.com/gabloe/felix/commit/16a2a078d79f77f10c588eb8a2ce400b27baa9a5"
+        },
+        "date": 1789766392591,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 319767.23,
+            "range": "5253.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 319767.23\nmean: 320062.72\nstdev: 5253.56\ncv: 1.64%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 319767.23,
+            "range": "5253.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 319767.23\nmean: 320062.72\nstdev: 5253.56\ncv: 1.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75052.6,
+            "range": "1068.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75052.60\nmean: 75299.37\nstdev: 1068.14\ncv: 1.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 750526,
+            "range": "10681.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 750526.00\nmean: 752993.68\nstdev: 10681.36\ncv: 1.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
