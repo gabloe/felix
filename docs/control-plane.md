@@ -567,6 +567,7 @@ Control plane:
 | `felix_shards_placed_total` | shards given a leader by reconciliation |
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
+| `felix_controlplane_auth_rejected_total{reason}` | credentials turned away by any authenticated endpoint: `missing_token`, `malformed_token`, `invalid_token`, `tenant_mismatch`, `forbidden`. Each is also an `info` log line with the reason and the message the caller saw, never the token. A rising `invalid_token` or `forbidden` is a broker with a stale credential, or something that is not a broker |
 
 Broker side:
 

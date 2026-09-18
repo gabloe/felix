@@ -10,6 +10,10 @@
 //!
 //! In both, a permission that does not parse is skipped rather than trusted,
 //! so a malformed entry can never widen what a token allows.
+//!
+//! Every refusal goes through [`refused`], so a credential that was presented
+//! and turned away is counted and logged: an unauthorized attempt is something
+//! an operator gets to see, not only something the caller gets told.
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_unauthorized};
 use crate::app::AppState;
 use crate::auth::felix_token::{FelixClaims, verify_token};
@@ -22,6 +26,56 @@ use axum::http::HeaderMap;
 /// Clock skew tolerated when checking `exp`, in seconds.
 const LEEWAY_SECS: u64 = 5;
 
+/// Counts every credential refusal. `reason` is one of a closed set, so the
+/// label stays bounded.
+pub(crate) const AUTH_REJECTED_TOTAL: &str = "felix_controlplane_auth_rejected_total";
+
+/// Why a credential was turned away.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Refusal {
+    /// No `Authorization: Bearer` at all.
+    MissingToken,
+    /// Not a JWT, or one without a tenant claim.
+    MalformedToken,
+    /// Did not verify against the tenant's keys, or the tenant has none.
+    InvalidToken,
+    /// Verified, but for a different tenant than the one addressed.
+    TenantMismatch,
+    /// Verified, but without the permission the request needs.
+    Forbidden,
+}
+
+impl Refusal {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MissingToken => "missing_token",
+            Self::MalformedToken => "malformed_token",
+            Self::InvalidToken => "invalid_token",
+            Self::TenantMismatch => "tenant_mismatch",
+            Self::Forbidden => "forbidden",
+        }
+    }
+}
+
+/// Turn a credential away: count it, log it, and answer.
+///
+/// Never the token, never the key. What is logged is the reason and the
+/// message the caller also sees.
+pub(crate) fn refused(reason: Refusal, message: &str) -> ApiError {
+    metrics::counter!(AUTH_REJECTED_TOTAL, "reason" => reason.label()).increment(1);
+    tracing::info!(
+        reason = reason.label(),
+        message,
+        "refused a control-plane credential"
+    );
+    match reason {
+        Refusal::MissingToken | Refusal::MalformedToken | Refusal::InvalidToken => {
+            api_unauthorized(message)
+        }
+        Refusal::TenantMismatch | Refusal::Forbidden => api_forbidden(message),
+    }
+}
+
 pub(crate) fn extract_bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
     headers
         .get(axum::http::header::AUTHORIZATION)
@@ -29,7 +83,7 @@ pub(crate) fn extract_bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| api_unauthorized("missing bearer token"))
+        .ok_or_else(|| refused(Refusal::MissingToken, "missing bearer token"))
 }
 
 /// Verify a token against the keys of the tenant it names, and return both.
@@ -60,7 +114,7 @@ pub(crate) async fn tenant_claims(
     let bearer = extract_bearer(headers)?;
     let claims = verify_against(state, tenant_id, bearer).await?;
     if claims.tid != tenant_id {
-        return Err(api_forbidden("tenant mismatch"));
+        return Err(refused(Refusal::TenantMismatch, "tenant mismatch"));
     }
     Ok(claims)
 }
@@ -96,7 +150,7 @@ pub(crate) async fn tenant_scopes_for(
         .map(|perm| perm.object)
         .collect();
     if scopes.is_empty() {
-        return Err(api_forbidden("missing required permission"));
+        return Err(refused(Refusal::Forbidden, "missing required permission"));
     }
     Ok(scopes)
 }
@@ -116,7 +170,7 @@ pub(crate) async fn require_tenant_action(
     {
         Ok(())
     } else {
-        Err(api_forbidden("insufficient scope"))
+        Err(refused(Refusal::Forbidden, "insufficient scope"))
     }
 }
 
@@ -141,9 +195,10 @@ pub(crate) async fn require_cluster_action(
     if allowed {
         Ok(())
     } else {
-        Err(api_forbidden(&format!(
-            "missing {action}:cluster:* permission"
-        )))
+        Err(refused(
+            Refusal::Forbidden,
+            &format!("missing {action}:cluster:* permission"),
+        ))
     }
 }
 
@@ -155,11 +210,13 @@ async fn verify_against(
     let keys = match state.store.get_tenant_signing_keys(tenant_id).await {
         Ok(keys) => keys,
         // No keys means nothing could have signed this token.
-        Err(StoreError::NotFound(_)) => return Err(api_unauthorized("invalid token")),
+        Err(StoreError::NotFound(_)) => {
+            return Err(refused(Refusal::InvalidToken, "invalid token"));
+        }
         Err(ref err) => return Err(api_internal("failed to load signing keys", err)),
     };
     verify_token(&keys, tenant_id, bearer, LEEWAY_SECS)
-        .map_err(|_| api_unauthorized("invalid token"))
+        .map_err(|_| refused(Refusal::InvalidToken, "invalid token"))
 }
 
 /// Read `tid` from an unverified token, only to choose a verification key.
@@ -169,17 +226,17 @@ fn unverified_tenant(token: &str) -> Result<String, ApiError> {
     let payload = token
         .split('.')
         .nth(1)
-        .ok_or_else(|| api_unauthorized("malformed token"))?;
+        .ok_or_else(|| refused(Refusal::MalformedToken, "malformed token"))?;
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
-        .map_err(|_| api_unauthorized("malformed token"))?;
-    let claims: serde_json::Value =
-        serde_json::from_slice(&decoded).map_err(|_| api_unauthorized("malformed token"))?;
+        .map_err(|_| refused(Refusal::MalformedToken, "malformed token"))?;
+    let claims: serde_json::Value = serde_json::from_slice(&decoded)
+        .map_err(|_| refused(Refusal::MalformedToken, "malformed token"))?;
 
     claims
         .get("tid")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| api_unauthorized("token has no tenant claim"))
+        .ok_or_else(|| refused(Refusal::MalformedToken, "token has no tenant claim"))
 }
