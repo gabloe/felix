@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789728843447,
+  "lastUpdate": 1789731104625,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13794,6 +13794,72 @@ window.BENCHMARK_DATA = {
             "range": "24.61",
             "unit": "us",
             "extra": "trials: 5\nmedian: 303.00\nmean: 299.00\nstdev: 24.61\ncv: 8.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ba8a00d1b21b672a72bfb534be7c26fa156b430",
+          "message": "feat(peer): mutually authenticate broker-to-broker connections (#517)\n\nWith FELIX_INTERNAL_TLS_CERT, _KEY and _CA set, every peer connection is\nmTLS against the configured CA, and the certificate's DNS name is the\nbroker's identity, checked both ways: a dialler verifies the listener's\ncertificate against the node id it dials, and the listener checks the node\nid a peer claims in Hello against the certificate it presented. No\ncertificate, another CA, an expired one, or the wrong name is refused. The\ncertificate and key are re-read every 30s so a renewal takes effect on the\nnext handshake without a restart; session resumption is off, or a rotated\ncertificate would go on being accepted. Without the three variables the\ntransport runs as before, and startup warns.\n\nThe cluster harness issues a CA and per-broker certificates, so every\ncluster test now runs under mTLS.\n\nCloses #125.",
+          "timestamp": "2026-09-18T04:28:49-07:00",
+          "tree_id": "3001383a18d37f8f1697ac19ef7def115080d255",
+          "url": "https://github.com/gabloe/felix/commit/7ba8a00d1b21b672a72bfb534be7c26fa156b430"
+        },
+        "date": 1789731101416,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 123,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 123.00\nmean: 122.40\nstdev: 0.89\ncv: 0.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 169,
+            "range": "4.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 170.00\nstdev: 4.69\ncv: 2.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 223,
+            "range": "17.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 223.00\nmean: 226.80\nstdev: 17.21\ncv: 7.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 163.80\nstdev: 0.84\ncv: 0.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 345,
+            "range": "10.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 345.00\nmean: 344.00\nstdev: 10.44\ncv: 3.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1053,
+            "range": "771.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1053.00\nmean: 1170.40\nstdev: 771.11\ncv: 65.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
