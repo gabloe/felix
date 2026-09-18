@@ -44,6 +44,7 @@ TENANT='${TENANT}'
 NAMESPACE='${NAMESPACE}'
 REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'
 SHARDS='${SHARDS:-12}'
+SEED_STREAMS=0
 HDR
 )"
 # Capture without set -e aborting the assignment, so the remote message is
@@ -104,4 +105,56 @@ echo ">> ${registered:-0}/${BROKER_COUNT} brokers registered"
   echo "!! not all brokers registered; inspect with: az vm run-command invoke -g ${GROUP} -n $(broker_vm 0) --command-id RunShellScript --scripts 'journalctl -u felix-broker --no-pager | tail -50'" >&2
   exit 1
 }
+# --- 4. create the streams, now that every broker is registered -------------
+#
+# Placement runs once, when a stream is created, against the brokers the control
+# plane can see at that instant -- and nothing moves a shard afterwards (#130).
+# Creating them before the cluster is up hands every shard to whichever broker
+# registered first, and the rest of the session measures one broker with spare
+# machines attached. A two-broker session measured exactly that: 49/0.
+#
+# The remote script is idempotent, so this second pass re-bootstraps (409),
+# re-exchanges, and this time creates the streams.
+echo ">> creating streams now that ${BROKER_COUNT}/${BROKER_COUNT} brokers are registered"
+stream_header="$(cat <<HDR2
+CP='http://${CONTROLPLANE_IP}:8080'
+BOOTSTRAP='http://${CONTROLPLANE_IP}:8081'
+BOOTSTRAP_TOKEN='${BOOTSTRAP_TOKEN}'
+IDP_TOKEN='${IDP_TOKEN}'
+IDP_JWKS_URL='${IDP_JWKS_URL}'
+IDP_AUDIENCE='${IDP_AUDIENCE}'
+TENANT='${TENANT}'
+NAMESPACE='${NAMESPACE}'
+REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'
+SHARDS='${SHARDS:-12}'
+SEED_STREAMS=1
+HDR2
+)"
+set +e
+stream_out="$(run_on_str "$(loadgen_vm)" "${stream_header}
+$(cat "${here}/seed-remote.sh")")"
+stream_rc=$?
+set -e
+printf '%s\n' "${stream_out}" | grep -vE '^__FTOKEN|^eyJ' || true
+case "${stream_out}" in
+  *__RUNOK__*) ;;
+  *) echo "!! stream creation did not complete" >&2; exit 1 ;;
+esac
+
+# The distribution is the point of the reordering, so report it rather than
+# assume it: an uneven split here means placement still has a problem.
+echo ">> shard ownership"
+run_on_str "$(loadgen_vm)" "ADMIN=\$(curl -s -X POST '${CP_URL:-http://${CONTROLPLANE_IP}:8080}/v1/tenants/${TENANT}/token/exchange' -H 'Authorization: Bearer ${IDP_TOKEN}' -H 'Content-Type: application/json' -d '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"felix_token\"])')
+curl -s '${CP_URL:-http://${CONTROLPLANE_IP}:8080}/v1/shard-assignments/changes?since=0' -H \"Authorization: Bearer \$ADMIN\" | python3 -c '
+import json,sys,collections
+items=json.load(sys.stdin)[\"items\"]
+cur={}
+for it in items:
+    k=it[\"key\"]; kk=(k[\"stream\"],k[\"shard\"],k[\"kind\"])
+    if it[\"op\"]==\"assigned\": cur[kk]=it[\"assignment\"][\"leader\"]
+    else: cur.pop(kk,None)
+c=collections.Counter(cur.values())
+print(\"   per broker:\", dict(c))'
+echo __RUNOK__" 2>/dev/null | grep -E "per broker" || echo "   (could not read assignments)"
+
 echo ">> seeded: tenant ${TENANT}, token on the loadgen at ~/felix-session/token"
