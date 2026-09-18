@@ -75,6 +75,45 @@ also flushes. On macOS this is `F_FULLFSYNC` instead — POSIX `fsync` there lea
 data in the drive's volatile cache, so anything weaker would be measuring a
 promise the platform does not keep.
 
+### 8. Releasing a commit turn wakes one publisher, not all of them
+
+Group commit is what makes many publishers cheap; the commit sequencer is what
+keeps them in order afterwards (see [durable-storage.md](durable-storage.md)).
+Handing the turn on is where that ordering can quietly undo the first technique.
+
+Waking everyone parked behind a turn makes each of them acquire the lock, find
+it is still not their turn, and park again. Only one can proceed, so with N
+publishers in flight a single commit costs N wake-ups to accomplish one — and
+the work per commit grows with load. That is the classic thundering herd, and it
+turns concurrency from a throughput lever into a throughput tax.
+
+Waking the single waiter whose turn it now is costs one wake-up per commit at
+any N. The registry is keyed by offset, so finding that waiter is a lookup, not
+a scan.
+
+End-to-end durable publishes per second, same machine and harness, varying only
+the wake-up:
+
+| Publishers | Wake all | Wake one | Gain |
+| ---: | ---: | ---: | ---: |
+| 1 | 662,086 | 664,694 | 1.00× |
+| 2 | 405,403 | 417,018 | 1.03× |
+| 4 | 255,725 | 474,678 | 1.86× |
+| 8 | 222,222 | 481,490 | 2.17× |
+| 16 | 156,565 | 476,683 | 3.04× |
+| 32 | 82,005 | 475,677 | 5.80× |
+| 64 | 40,320 | 465,560 | **11.5×** |
+
+Read the shapes, not the absolute numbers: an M4 Max laptop, in-process, no QUIC,
+`FsyncMode::None` so no device flush hides the effect. Waking all of them decays
+without a floor — at 64 publishers it retains 6% of its single-publisher rate,
+so adding publishers makes the broker slower in absolute terms. Waking one holds
+flat at ~0.72× from four publishers on.
+
+The step from one publisher to two costs ~38% in **both** columns. That is not
+the herd — it is the price of parking and waking at all, which an uncontended
+publisher never pays. Everything past two is the herd.
+
 ## Where the time goes
 
 ```mermaid

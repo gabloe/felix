@@ -162,6 +162,12 @@ This deliberately does not serialise the durable append: offsets are still
 assigned concurrently and flushes are still shared, so group commit keeps its
 fan-in. Only the cheap post-flush half is ordered.
 
+Releasing a turn wakes exactly the publisher whose turn it now is, not every
+publisher parked behind it. The distinction only shows up under concurrency, and
+then it dominates — waking all of them makes the work per commit grow with the
+number in flight, so throughput falls as load rises. Measured at
+[storage-performance.md](storage-performance.md#8-releasing-a-commit-turn-wakes-one-publisher-not-all-of-them).
+
 The append happens **before** fanout and **before** the acknowledgement. The
 alternative is unrecoverable: a record delivered to subscribers and acknowledged
 to the publisher but lost in a crash is a silent hole in a log that consumers
