@@ -60,9 +60,6 @@ async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&LIVENESS),
-        ),
     };
     (build_router(state).into_service(), store, keys)
 }

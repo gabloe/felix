@@ -82,9 +82,6 @@ fn state_with_token() -> AppState {
             controlplane::readiness::AlwaysReady,
         ))),
         in_flight: Default::default(),
-        replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-            &Default::default(),
-        )),
     }
 }
 

@@ -39,9 +39,6 @@ fn build_state(store: Arc<InMemoryStore>) -> AppState {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     }
 }
 

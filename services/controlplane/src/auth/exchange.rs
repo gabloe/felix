@@ -335,9 +335,6 @@ mod tests {
                 crate::readiness::AlwaysReady,
             ))),
             in_flight: Default::default(),
-            replica_positions: std::sync::Arc::new(
-                crate::replica_positions::ReplicaPositions::new(&Default::default()),
-            ),
         }
     }
 

@@ -581,7 +581,7 @@ pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> Sh
 /// it on a timer does not churn the persisted rows or the changefeed.
 pub async fn reconcile_once(
     store: &dyn crate::store::ControlPlaneStore,
-    positions: &crate::replica_positions::ReplicaPositions,
+    liveness: &crate::config::NodeLivenessConfig,
 ) -> ReconcileOutcome {
     let (streams, caches, nodes, existing) = match load(store).await {
         Ok(loaded) => loaded,
@@ -592,11 +592,16 @@ pub async fn reconcile_once(
         }
     };
 
-    // One instant for the whole pass, so a report cannot be fresh for one shard
-    // and stale for the next within the same plan.
-    let caught_up = crate::replica_positions::CaughtUpAt {
-        positions,
-        now_millis: crate::api::nodes::now_millis(),
+    // Read once, as of the store's clock: one instant for the whole pass, so a
+    // report cannot be fresh for one shard and stale for the next within the
+    // same plan, and the same clock the reports were stamped with.
+    let caught_up = match crate::replica_positions::ReplicaPositions::load(store, liveness).await {
+        Ok(positions) => positions,
+        Err(err) => {
+            tracing::error!(error = %err, "could not read replica reports to place shards");
+            metrics::counter!(RECONCILE_FAILURES_TOTAL).increment(1);
+            return ReconcileOutcome::default();
+        }
     };
     let plan = plan(&streams, &caches, &nodes, &existing, &caught_up);
     let mut outcome = ReconcileOutcome {
@@ -685,7 +690,7 @@ pub const RECONCILE_FAILURES_TOTAL: &str = "felix_shard_reconcile_failures_total
 /// Place shards on an interval until `shutdown` fires.
 pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
-    positions: std::sync::Arc<crate::replica_positions::ReplicaPositions>,
+    liveness: crate::config::NodeLivenessConfig,
     interval: std::time::Duration,
     gate: crate::raft::LeadershipGate,
     shutdown: tokio_util::sync::CancellationToken,
@@ -704,7 +709,7 @@ pub fn spawn_reconciler(
                     if !gate.holds().await {
                         continue;
                     }
-                    reconcile_once(store.as_ref(), positions.as_ref()).await;
+                    reconcile_once(store.as_ref(), &liveness).await;
                 }
             }
         }

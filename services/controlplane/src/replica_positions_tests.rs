@@ -1,4 +1,10 @@
 //! What the control plane believes about replicas, and for how long.
+//!
+//! The reading side only. Which report the store keeps when two arrive --
+//! generations, updates, a deleted assignment -- is the store's contract, in
+//! `store::shard_contract`, and holds on every backend.
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::*;
 use crate::config::NodeLivenessConfig;
 
@@ -7,12 +13,12 @@ const EXPIRY_MS: u64 = 1_500;
 /// Reports are believed for twice the expiry plus one heartbeat.
 const TTL_MS: u64 = EXPIRY_MS * 2 + HEARTBEAT_MS;
 
-fn positions() -> ReplicaPositions {
-    ReplicaPositions::new(&NodeLivenessConfig {
+fn liveness() -> NodeLivenessConfig {
+    NodeLivenessConfig {
         heartbeat_interval_ms: HEARTBEAT_MS,
         expiry_timeout_ms: EXPIRY_MS,
         ..Default::default()
-    })
+    }
 }
 
 fn key(stream: &str) -> ShardKey {
@@ -25,47 +31,41 @@ fn key(stream: &str) -> ShardKey {
     }
 }
 
-fn caught_up(nodes: &[&str]) -> BTreeSet<String> {
-    nodes.iter().map(|n| n.to_string()).collect()
-}
-
 /// Every caught-up node at the same offset, for tests that are about freshness
-/// and generations rather than about which replica is furthest ahead.
-fn offsets_for(nodes: &BTreeSet<String>) -> std::collections::HashMap<String, u64> {
-    nodes.iter().map(|n| (n.clone(), 10)).collect()
+/// rather than about which replica is furthest ahead.
+fn report(stream: &str, caught_up: &[&str], reported_at_millis: u64) -> ReplicaReport {
+    let caught_up: BTreeSet<String> = caught_up.iter().map(|n| n.to_string()).collect();
+    ReplicaReport {
+        key: key(stream),
+        generation: 4,
+        offsets: caught_up
+            .iter()
+            .map(|n| (n.clone(), 10))
+            .collect::<BTreeMap<_, _>>(),
+        caught_up,
+        reported_at_millis,
+    }
 }
 
-fn at(positions: &ReplicaPositions, now_millis: u64) -> CaughtUpAt<'_> {
-    CaughtUpAt {
-        positions,
-        now_millis,
-    }
+fn at(reports: Vec<ReplicaReport>, now_millis: u64) -> ReplicaPositions {
+    ReplicaPositions::new(reports, &liveness(), now_millis)
 }
 
 /// A reported follower can take over; one that was not reported cannot.
 #[test]
 fn a_reported_follower_is_caught_up_and_others_are_not() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-
-    let view = at(&positions, 1_000);
+    let view = at(vec![report("orders", &["broker-b"], 1_000)], 1_000);
     assert!(view.is_caught_up(&key("orders"), "broker-b"));
     assert!(!view.is_caught_up(&key("orders"), "broker-c"));
+    assert_eq!(view.reported_offset(&key("orders"), "broker-b"), Some(10));
+    assert_eq!(view.reported_offset(&key("orders"), "broker-c"), None);
 }
 
 /// **Nothing is caught up until a leader says so.** The absence of a report is
 /// not permission to promote.
 #[test]
 fn an_unreported_shard_has_nothing_caught_up() {
-    let positions = positions();
-
-    assert!(!at(&positions, 1_000).is_caught_up(&key("orders"), "broker-b"));
+    assert!(!at(Vec::new(), 1_000).is_caught_up(&key("orders"), "broker-b"));
 }
 
 /// **A report expires.** It says a follower *was* caught up; the leader kept
@@ -73,22 +73,19 @@ fn an_unreported_shard_has_nothing_caught_up() {
 /// was written since.
 #[test]
 fn a_report_is_not_believed_forever() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-
+    let reports = || vec![report("orders", &["broker-b"], 1_000)];
     assert!(
-        at(&positions, 1_000 + TTL_MS).is_caught_up(&key("orders"), "broker-b"),
+        at(reports(), 1_000 + TTL_MS).is_caught_up(&key("orders"), "broker-b"),
         "a report expired before the window it has to survive",
     );
     assert!(
-        !at(&positions, 1_000 + TTL_MS + 1).is_caught_up(&key("orders"), "broker-b"),
+        !at(reports(), 1_000 + TTL_MS + 1).is_caught_up(&key("orders"), "broker-b"),
         "a stale report was still believed",
+    );
+    assert_eq!(
+        at(reports(), 1_000 + TTL_MS + 1).reported_offset(&key("orders"), "broker-b"),
+        None,
+        "a stale report's offset was still used to rank a candidate",
     );
 }
 
@@ -98,156 +95,18 @@ fn a_report_is_not_believed_forever() {
 /// expired sooner could never be used for the failover it exists for.
 #[test]
 fn a_report_outlives_the_window_a_dead_leader_is_noticed_in() {
-    let positions = positions();
     let last_report = 1_000;
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        last_report,
-    );
-
     // The leader dies just after reporting; the cluster notices an expiry
     // timeout later and plans then.
     let planning_at = last_report + EXPIRY_MS;
-
     assert!(
-        at(&positions, planning_at).is_caught_up(&key("orders"), "broker-b"),
+        at(
+            vec![report("orders", &["broker-b"], last_report)],
+            planning_at
+        )
+        .is_caught_up(&key("orders"), "broker-b"),
         "the report expired before failover could use it",
     );
-}
-
-/// A later report replaces an earlier one, so a follower that falls behind
-/// stops being promotable.
-#[test]
-fn a_later_report_replaces_an_earlier_one() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&[]),
-        offsets_for(&caught_up(&[])),
-        1_100,
-    );
-
-    assert!(!at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"));
-}
-
-/// **An older generation's report is dropped.** Leadership has moved on, and
-/// the old leader's view is about a replica set that may no longer exist.
-#[test]
-fn a_report_from_a_superseded_leader_is_dropped() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        5,
-        caught_up(&[]),
-        offsets_for(&caught_up(&[])),
-        1_000,
-    );
-
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_100,
-    );
-
-    assert!(
-        !at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"),
-        "a superseded leader's report overwrote the current one",
-    );
-}
-
-/// A report at the same generation is an update, not a stale duplicate: the
-/// same leader reporting again is exactly the normal case.
-#[test]
-fn a_report_at_the_same_generation_is_an_update() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&[]),
-        offsets_for(&caught_up(&[])),
-        1_000,
-    );
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_100,
-    );
-
-    assert!(at(&positions, 1_100).is_caught_up(&key("orders"), "broker-b"));
-}
-
-/// Shards are independent: one shard's replicas say nothing about another's.
-#[test]
-fn shards_do_not_share_reports() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-
-    assert!(!at(&positions, 1_000).is_caught_up(&key("payments"), "broker-b"));
-}
-
-/// A planning pass judges every shard against one instant, so a report cannot
-/// be fresh for one shard and stale for the next within the same pass.
-#[test]
-fn one_pass_judges_every_shard_at_the_same_instant() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-    positions.record(
-        key("payments"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-
-    let view = at(&positions, 1_000 + TTL_MS);
-
-    assert!(view.is_caught_up(&key("orders"), "broker-b"));
-    assert!(view.is_caught_up(&key("payments"), "broker-b"));
-}
-
-/// A forgotten shard reports nothing, so a shard that is deleted and recreated
-/// does not inherit the old one's promotability.
-#[test]
-fn a_forgotten_shard_reports_nothing() {
-    let positions = positions();
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        1_000,
-    );
-
-    positions.forget(&key("orders"));
-
-    assert!(!at(&positions, 1_000).is_caught_up(&key("orders"), "broker-b"));
 }
 
 /// **A report has to outlive the detection of the leader that made it.**
@@ -258,64 +117,104 @@ fn a_forgotten_shard_reports_nothing() {
 /// the only broker that could is the one that died.
 #[test]
 fn a_report_outlives_the_detection_of_the_leader_that_made_it() {
-    let positions = positions();
     // The worst realistic case: the leader reports, then survives a further
     // heartbeat interval before dying, and is declared down an expiry timeout
     // after that.
     let reported_at = 1_000;
-    positions.record(
-        key("orders"),
-        4,
-        caught_up(&["broker-b"]),
-        offsets_for(&caught_up(&["broker-b"])),
-        reported_at,
-    );
     let declared_down_at = reported_at + HEARTBEAT_MS + EXPIRY_MS;
-
     assert!(
-        at(&positions, declared_down_at).is_caught_up(&key("orders"), "broker-b"),
+        at(
+            vec![report("orders", &["broker-b"], reported_at)],
+            declared_down_at
+        )
+        .is_caught_up(&key("orders"), "broker-b"),
         "the report expired before the leader was even known to be gone, which \
          leaves the shard unpromotable for good",
     );
 }
 
+/// Shards are independent: one shard's replicas say nothing about another's.
+#[test]
+fn shards_do_not_share_reports() {
+    let view = at(vec![report("orders", &["broker-b"], 1_000)], 1_000);
+    assert!(!view.is_caught_up(&key("payments"), "broker-b"));
+}
+
+/// A planning pass judges every shard against one instant, so a report cannot
+/// be fresh for one shard and stale for the next within the same pass.
+#[test]
+fn one_pass_judges_every_shard_at_the_same_instant() {
+    let view = at(
+        vec![
+            report("orders", &["broker-b"], 1_000),
+            report("payments", &["broker-b"], 1_000),
+        ],
+        1_000 + TTL_MS,
+    );
+    assert!(view.is_caught_up(&key("orders"), "broker-b"));
+    assert!(view.is_caught_up(&key("payments"), "broker-b"));
+}
+
 /// **Both sides have to read the same clock.**
 ///
-/// Freshness here is a subtraction: the stamp a report was recorded with,
-/// against the cutoff the placement pass computes. Nothing in the types says
-/// the two came from the same source, and they did not — the report was
-/// stamped with `ControlPlaneStore::now_millis` while placement read this
-/// process's own clock. Those agree under memory and Raft and are two
-/// different hosts' clocks under Postgres.
-///
-/// This is what that costs, in the direction that matters: a report stamped by
-/// a clock behind the reader's reads as older than it is, so a replica that is
-/// level with its leader is called stale and is not considered for promotion.
+/// Freshness is a subtraction: the stamp a report was recorded with, against
+/// the instant the placement pass reads. `ReplicaPositions::load` takes both
+/// from the store, which is what makes the subtraction single-clock under
+/// Postgres, where the instance that recorded the report and the one planning
+/// may be different hosts. This is what a skew would cost, in the direction
+/// that matters: a report stamped by a clock behind the reader's reads as older
+/// than it is, so a replica that is level with its leader is called stale and
+/// is not considered for promotion.
 #[test]
 fn a_stamp_from_a_clock_behind_the_readers_looks_stale_while_it_is_fresh() {
-    let positions = positions();
-    let nodes = caught_up(&["broker-b"]);
     let reader_now = 10_000_000;
-    // Recorded the instant the reader would call "now", by a clock a minute
-    // behind it. Well inside the TTL; entirely outside it once skewed — which
-    // the compiler holds to, so the test cannot quietly stop demonstrating
-    // anything if the window is widened.
+    // Well inside the TTL; entirely outside it once skewed — which the compiler
+    // holds to, so the test cannot quietly stop demonstrating anything if the
+    // window is widened.
     const SKEW_MS: u64 = 60_000;
     const _: () = assert!(SKEW_MS > TTL_MS);
     let writer_now = reader_now - SKEW_MS;
-
-    positions.record(
-        key("orders"),
-        4,
-        nodes.clone(),
-        offsets_for(&nodes),
-        writer_now,
-    );
+    let reports = || vec![report("orders", &["broker-b"], writer_now)];
 
     assert!(
-        !at(&positions, reader_now).is_caught_up(&key("orders"), "broker-b"),
+        !at(reports(), reader_now).is_caught_up(&key("orders"), "broker-b"),
         "a skew this large has to be visible, or the test proves nothing",
     );
     // The same report, judged on the clock that wrote it.
-    assert!(at(&positions, writer_now).is_caught_up(&key("orders"), "broker-b"));
+    assert!(at(reports(), writer_now).is_caught_up(&key("orders"), "broker-b"));
+}
+
+/// Every report the store holds is read, and the store's clock is the instant
+/// they are judged at.
+#[tokio::test]
+async fn load_reads_the_store_on_the_stores_clock() {
+    use crate::store::ControlPlaneStore;
+
+    let store = crate::store::memory::InMemoryStore::new(crate::store::StoreConfig {
+        changes_limit: 100,
+        change_retention_max_rows: Some(100),
+    });
+    crate::store::shard_contract::seed(&store).await;
+    let key = crate::store::shard_contract::key(0);
+    store
+        .put_shard_assignment(crate::store::shard_contract::assignment(0, "broker-x"))
+        .await
+        .expect("assign");
+    let now = store.now_millis().await.expect("clock");
+    store
+        .record_replica_report(ReplicaReport {
+            key: key.clone(),
+            generation: 0,
+            caught_up: ["broker-b".to_string()].into_iter().collect(),
+            offsets: [("broker-b".to_string(), 7)].into_iter().collect(),
+            reported_at_millis: now,
+        })
+        .await
+        .expect("record");
+
+    let view = ReplicaPositions::load(&store, &liveness())
+        .await
+        .expect("load");
+    assert!(view.is_caught_up(&key, "broker-b"));
+    assert_eq!(view.reported_offset(&key, "broker-b"), Some(7));
 }

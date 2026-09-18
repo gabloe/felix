@@ -17,8 +17,8 @@ pub use node::{
     NodeStatus, NodeValidationError,
 };
 pub use shard::{
-    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind,
-    ShardState, ShardValidationError,
+    ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
+    ShardKind, ShardState, ShardValidationError,
 };
 pub use stream::{
     ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, Stream, StreamChange, StreamChangeOp,

@@ -28,7 +28,8 @@ use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheKey, CachePatchRequest, Namespace, NamespaceKey, Node, NodeLifecycle,
-    NodePatchRequest, ShardAssignment, ShardKey, Stream, StreamKey, StreamPatchRequest, Tenant,
+    NodePatchRequest, ReplicaReport, ShardAssignment, ShardKey, Stream, StreamKey,
+    StreamPatchRequest, Tenant,
 };
 use crate::store::{StoreError, TenantAuthSeed};
 
@@ -113,6 +114,13 @@ pub enum MetaCommand {
     },
     DeleteShardAssignment {
         key: ShardKey,
+    },
+    /// `report.reported_at_millis` is the leader's clock, for the same
+    /// reason as a heartbeat's `at_millis`: placement judges its freshness on
+    /// the leader, and the instance the broker's report happened to reach is
+    /// not necessarily that one.
+    RecordReplicaReport {
+        report: ReplicaReport,
     },
     UpsertIdpIssuer {
         tenant_id: String,
@@ -313,6 +321,8 @@ pub fn encode_command(command: &MetaCommand) -> Vec<u8> {
 /// [`MetaCommand`]; `a_heartbeat_is_restamped` is what keeps it honest if the
 /// variant is ever renamed.
 const HEARTBEAT_OP: &str = "record_node_heartbeat";
+/// The other command carrying a clock reading the leader replaces.
+const REPLICA_REPORT_OP: &str = "record_replica_report";
 
 /// Replace the proposer's clock reading in `command` with `now_millis`.
 ///
@@ -331,10 +341,18 @@ const HEARTBEAT_OP: &str = "record_node_heartbeat";
 pub fn restamp(command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
     let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
     let object = value.as_object_mut()?;
-    if object.get("op").and_then(serde_json::Value::as_str) != Some(HEARTBEAT_OP) {
-        return None;
+    match object.get("op").and_then(serde_json::Value::as_str) {
+        Some(HEARTBEAT_OP) => {
+            object.insert("at_millis".to_string(), now_millis.into());
+        }
+        Some(REPLICA_REPORT_OP) => {
+            object
+                .get_mut("report")?
+                .as_object_mut()?
+                .insert("reported_at_millis".to_string(), now_millis.into());
+        }
+        _ => return None,
     }
-    object.insert("at_millis".to_string(), now_millis.into());
     serde_json::to_vec(&value).ok()
 }
 

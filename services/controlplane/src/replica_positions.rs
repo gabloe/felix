@@ -10,6 +10,16 @@
 //! tail, and how far each follower has acknowledged. A follower knows only where
 //! it is, not whether that is caught up.
 //!
+//! # Why the reports live in the store
+//!
+//! The instance a report reaches and the instance that later promotes a
+//! replica need not be the same process. Under Postgres every instance
+//! serves, so a report held in one instance's memory was a position no other
+//! promoter could use — an acknowledgement resting on it could not be made
+//! good at failover. Reports go through [`ControlPlaneStore`] like every
+//! other fact placement decides on, and this module is only the reading of
+//! them: which replicas a plan may promote, as of one instant.
+//!
 //! # Why reports expire
 //!
 //! A report says a follower *was* caught up at the moment it was made. The
@@ -21,141 +31,93 @@
 //! derived from the liveness settings rather than configured separately: those
 //! already say how quickly a dead leader is detected, and a report has to
 //! survive exactly that long to be usable.
-use std::collections::{BTreeSet, HashMap};
+//!
+//! [`ControlPlaneStore`]: crate::store::ControlPlaneStore
+use std::collections::HashMap;
 
-use std::sync::Mutex;
-
-use crate::model::ShardKey;
+use crate::config::NodeLivenessConfig;
+use crate::model::{ReplicaReport, ShardKey};
 use crate::placement::CaughtUp;
 
-/// One leader's account of its followers for one shard.
-#[derive(Debug, Clone)]
-struct Report {
-    /// The assignment generation the leader held when it reported. A report
-    /// from an older generation says nothing about this one: the replica set
-    /// may be different.
-    generation: u64,
-    caught_up: BTreeSet<String>,
-    /// How far each replica had got when this was reported.
-    offsets: HashMap<String, u64>,
-    reported_at_millis: u64,
+/// Believe a report for twice the expiry timeout plus one heartbeat.
+///
+/// It has to outlive the *detection* of a dead leader, and detection is
+/// slower than it first looks. A leader is declared down an expiry timeout
+/// after its last **heartbeat**, and its last **report** is older still —
+/// by up to one reporting interval, which the control plane does not know
+/// and cannot bound.
+///
+/// A window of `expiry + heartbeat` therefore closes at almost exactly the
+/// moment the leader becomes eligible for replacement, and a report that
+/// expires a moment too early makes the shard unpromotable *forever*:
+/// nothing else will ever report on it, because the only broker that could
+/// is the one that died. That failure is permanent, where believing a report
+/// slightly too long costs at most the records written between the last
+/// report and the death — which is the loss window `Leader` already
+/// documents, and which `Quorum` bounds by requiring a majority anyway.
+///
+/// So the asymmetry decides it: too short is a shard that never comes back,
+/// too long is a bounded and already-documented exposure.
+pub fn report_ttl_millis(liveness: &NodeLivenessConfig) -> u64 {
+    liveness.expiry_timeout_ms * 2 + liveness.heartbeat_interval_ms
 }
 
-/// The control plane's view of which replicas can take over.
-#[derive(Debug)]
-pub struct ReplicaPositions {
-    shards: Mutex<HashMap<ShardKey, Report>>,
-    /// How long a report is believed.
-    ttl_millis: u64,
-}
-
-impl ReplicaPositions {
-    /// Believe a report for twice the expiry timeout plus one heartbeat.
-    ///
-    /// It has to outlive the *detection* of a dead leader, and detection is
-    /// slower than it first looks. A leader is declared down an expiry timeout
-    /// after its last **heartbeat**, and its last **report** is older still —
-    /// by up to one reporting interval, which the control plane does not know
-    /// and cannot bound.
-    ///
-    /// A window of `expiry + heartbeat` therefore closes at almost exactly the
-    /// moment the leader becomes eligible for replacement, and a report that
-    /// expires a moment too early makes the shard unpromotable *forever*:
-    /// nothing else will ever report on it, because the only broker that could
-    /// is the one that died. That failure is permanent, where believing a report
-    /// slightly too long costs at most the records written between the last
-    /// report and the death — which is the loss window `Leader` already
-    /// documents, and which `Quorum` bounds by requiring a majority anyway.
-    ///
-    /// So the asymmetry decides it: too short is a shard that never comes back,
-    /// too long is a bounded and already-documented exposure.
-    pub fn new(liveness: &crate::config::NodeLivenessConfig) -> Self {
-        Self {
-            shards: Mutex::new(HashMap::new()),
-            ttl_millis: liveness.expiry_timeout_ms * 2 + liveness.heartbeat_interval_ms,
-        }
-    }
-
-    /// Record what a leader reports about one shard.
-    ///
-    /// A report at an older generation than the one already held is dropped:
-    /// leadership has moved on, and the old leader's view of its followers is
-    /// no longer about the current replica set.
-    pub fn record(
-        &self,
-        key: ShardKey,
-        generation: u64,
-        caught_up: BTreeSet<String>,
-        offsets: HashMap<String, u64>,
-        now_millis: u64,
-    ) {
-        let mut shards = self.shards.lock().expect("replica positions lock");
-        if let Some(held) = shards.get(&key)
-            && held.generation > generation
-        {
-            return;
-        }
-        shards.insert(
-            key,
-            Report {
-                generation,
-                caught_up,
-                offsets,
-                reported_at_millis: now_millis,
-            },
-        );
-    }
-
-    /// Forget everything about a shard.
-    pub fn forget(&self, key: &ShardKey) {
-        self.shards
-            .lock()
-            .expect("replica positions lock")
-            .remove(key);
-    }
-
-    /// How far `node_id` had got for `key`, as last reported and still believed.
-    ///
-    /// `None` when there is no fresh report, which is also "do not promote it".
-    fn offset_at(&self, key: &ShardKey, node_id: &str, now_millis: u64) -> Option<u64> {
-        let shards = self.shards.lock().expect("replica positions lock");
-        let report = shards.get(key)?;
-        if now_millis.saturating_sub(report.reported_at_millis) > self.ttl_millis {
-            return None;
-        }
-        report.offsets.get(node_id).copied()
-    }
-
-    fn is_caught_up_at(&self, key: &ShardKey, node_id: &str, now_millis: u64) -> bool {
-        let shards = self.shards.lock().expect("replica positions lock");
-        let Some(report) = shards.get(key) else {
-            return false;
-        };
-        if now_millis.saturating_sub(report.reported_at_millis) > self.ttl_millis {
-            return false;
-        }
-        report.caught_up.contains(node_id)
-    }
-}
-
-/// The reports as of `now_millis`.
+/// The store's reports, read as of one instant.
 ///
 /// A snapshot rather than a live view, so every shard in one planning pass is
 /// judged against the same instant. Planning that read the clock per shard
 /// could promote on one side of a report's expiry and refuse on the other.
-pub struct CaughtUpAt<'a> {
-    pub positions: &'a ReplicaPositions,
-    pub now_millis: u64,
+///
+/// `now_millis` must come from the same clock the reports were stamped with —
+/// the store's — or freshness is a subtraction between two hosts' clocks.
+pub struct ReplicaPositions {
+    reports: HashMap<ShardKey, ReplicaReport>,
+    ttl_millis: u64,
+    now_millis: u64,
 }
 
-impl CaughtUp for CaughtUpAt<'_> {
+impl ReplicaPositions {
+    pub fn new(
+        reports: Vec<ReplicaReport>,
+        liveness: &NodeLivenessConfig,
+        now_millis: u64,
+    ) -> Self {
+        Self {
+            reports: reports
+                .into_iter()
+                .map(|report| (report.key.clone(), report))
+                .collect(),
+            ttl_millis: report_ttl_millis(liveness),
+            now_millis,
+        }
+    }
+
+    /// Read every report the store holds, as of the store's clock.
+    pub async fn load(
+        store: &dyn crate::store::ControlPlaneStore,
+        liveness: &NodeLivenessConfig,
+    ) -> crate::store::StoreResult<Self> {
+        let reports = store.list_replica_reports().await?;
+        let now_millis = store.now_millis().await?;
+        Ok(Self::new(reports, liveness, now_millis))
+    }
+
+    /// The report for `key`, if there is one and it is still believed.
+    fn fresh(&self, key: &ShardKey) -> Option<&ReplicaReport> {
+        let report = self.reports.get(key)?;
+        (self.now_millis.saturating_sub(report.reported_at_millis) <= self.ttl_millis)
+            .then_some(report)
+    }
+}
+
+impl CaughtUp for ReplicaPositions {
     fn is_caught_up(&self, key: &ShardKey, node_id: &str) -> bool {
-        self.positions
-            .is_caught_up_at(key, node_id, self.now_millis)
+        self.fresh(key)
+            .is_some_and(|report| report.caught_up.contains(node_id))
     }
 
     fn reported_offset(&self, key: &ShardKey, node_id: &str) -> Option<u64> {
-        self.positions.offset_at(key, node_id, self.now_millis)
+        self.fresh(key)?.offsets.get(node_id).copied()
     }
 }
 

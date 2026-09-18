@@ -182,11 +182,13 @@ same margin. The fencing story does not change; it gains a second
 well-defined epoch (Raft term) underneath the one it already has
 (assignment generation).
 
-`ReplicaPositions` stay volatile and per-instance, exactly as documented
-today — they expire in about a second and are advisory. The existing caveat
-(a new instance cannot promote until leaders report to *it*) becomes "a new
-Raft leader waits up to one report interval before promoting", which is the
-same bound with less ambiguity about who "it" is.
+Replica reports go through the log like everything else placement decides
+on — `RecordReplicaReport`, restamped with the leader's clock on the way in,
+exactly as a heartbeat is — so every member holds them and a new Raft leader
+promotes from what the old one knew rather than waiting for leaders to report
+to *it*. They are not in snapshots: a report expires within seconds and the
+next one replaces it, so a member restored from a snapshot has current
+reports again after one reporting interval.
 
 ### Snapshots, compaction, recovery
 

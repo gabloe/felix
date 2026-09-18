@@ -11,6 +11,19 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Fixed
+
+- Replica reports — what a shard's leader says about which replicas hold its
+  log — are now written to the control plane's store rather than kept in the
+  memory of the instance that received them. With several control-plane
+  instances over one Postgres, promotion could run on an instance that had
+  never seen the report, so a `Quorum` acknowledgement released on it could
+  not be made good at failover (#409). Under Raft the report is a log command,
+  restamped with the leader's clock like a heartbeat. A report is stamped with
+  the store's clock and judged against it, so freshness is no longer a
+  subtraction between two hosts' clocks under Postgres; a deleted assignment
+  now takes its report with it.
+
 ### Security
 
 - The control-plane resource API now requires a Felix bearer token on every

@@ -42,9 +42,6 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
 pub struct ControlPlane {
     pub base_url: String,
     pub store: Arc<InMemoryStore>,
-    /// Shared with the running API, so a harness driving placement by hand sees
-    /// the same reports leaders have sent.
-    pub replica_positions: Arc<controlplane::replica_positions::ReplicaPositions>,
     keys: TenantSigningKeys,
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<()>,
@@ -71,16 +68,6 @@ impl ControlPlane {
             .await
             .context("seed tenant signing keys")?;
 
-        // Shared with `place_shards`, so a harness driving placement by hand
-        // sees the same reports the API recorded.
-        // Built from this harness's own liveness settings, not the defaults.
-        // The report TTL is derived from them, so `Default::default()` here gave
-        // reports a 20-second life against a cluster tuned to notice a dead
-        // broker in one — long enough that a follower reported caught up at one
-        // tail was still promoted after the leader had written past it.
-        let replica_positions = Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-            &LIVENESS,
-        ));
         let state = AppState {
             region: Region {
                 region_id: "local".to_string(),
@@ -102,7 +89,6 @@ impl ControlPlane {
                 std::sync::Arc::new(::controlplane::readiness::AlwaysReady),
             )),
             in_flight: Default::default(),
-            replica_positions: Arc::clone(&replica_positions),
         };
 
         let addr = ports::free_tcp()?;
@@ -134,7 +120,6 @@ impl ControlPlane {
         Ok(Self {
             base_url: format!("http://{addr}"),
             store,
-            replica_positions,
             keys,
             shutdown,
             task,
@@ -269,12 +254,13 @@ impl ControlPlane {
     /// Driven explicitly rather than waited for: the reconciler runs on a timer,
     /// and a harness that slept for one would be timing-dependent in exactly the
     /// way the acceptance criteria rule out.
+    ///
+    /// Reads the reports leaders sent to the API from the same store, judged
+    /// by this harness's own liveness settings: the report TTL is derived from
+    /// them, and the defaults would give a report a 20-second life against a
+    /// cluster tuned to notice a dead broker in one.
     pub async fn place_shards(&self) -> controlplane::placement::ReconcileOutcome {
-        controlplane::placement::reconcile_once(
-            self.store.as_ref(),
-            self.replica_positions.as_ref(),
-        )
-        .await
+        controlplane::placement::reconcile_once(self.store.as_ref(), &LIVENESS).await
     }
 
     pub async fn shutdown(self) {

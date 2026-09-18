@@ -317,6 +317,38 @@ States are `assigning` (placement decided, the leader has not confirmed),
 shard someone is actually serving can drain, and a drained shard does not return
 to the same leader — placement writes a new assignment at a new generation.
 
+#### Replica reports
+
+`POST /v1/nodes/{node_id}/replica-status` is how a shard's leader tells the
+control plane which replicas hold its log and how far each has got. Promotion
+is gated on it: a lost leader is replaced only by a replica reported caught up,
+and among those by the one reported furthest ahead. Requires `node.manage` over
+the reporting node, and the node must lead the shard it reports on; a report
+naming a generation ahead of the assignment is refused, since one claiming
+`u64::MAX` would otherwise block every real report after it.
+
+**Reports live in the store**, keyed like the assignment they describe and
+cascading from it, not in the memory of the instance that received them. With
+several instances over one Postgres, the instance a report reaches and the
+instance that runs placement need not be the same process, and a report only
+one of them had seen was a position no promoter could use — a `Quorum`
+acknowledgement released on it could not be made good at failover. Under Raft
+the report is a log command, restamped with the leader's clock as a heartbeat
+is. The latest report replaces the previous one; one from an older generation
+is dropped, because leadership moved on and it describes a replica set that
+may no longer exist.
+
+**One clock on both sides.** A report is stamped with the store's clock and its
+freshness is judged, by whichever instance plans, against the store's clock —
+`clock_timestamp()` under Postgres, the leader's process clock under Raft. A
+report is believed for twice the expiry timeout plus one heartbeat interval:
+long enough to outlive the detection of the leader that made it, since a
+report that expired sooner would leave a shard unpromotable forever, and no
+longer, since a stale one is how a failover loses the records written after
+it. Nothing about a report survives the assignment it describes: deleting the
+assignment deletes the report, so a shard removed and recreated does not
+inherit the old one's promotability.
+
 #### How shards get placed
 
 Rendezvous hashing: every eligible node is scored against the shard, and the

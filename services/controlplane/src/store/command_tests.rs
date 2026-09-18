@@ -73,3 +73,42 @@ fn restamping_twice_is_the_same_as_once() {
     let twice = restamp(&once, 222).expect("restamps again");
     assert_eq!(once, twice);
 }
+
+/// A replica report carries a clock reading for the same reason a heartbeat
+/// does, and gets the same treatment: the leader's reading, not the
+/// proposer's, is what enters the log.
+#[test]
+fn a_replica_report_is_restamped() {
+    let report = crate::model::ReplicaReport {
+        key: crate::model::ShardKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            shard: 0,
+            kind: crate::model::ShardKind::Stream,
+        },
+        generation: 4,
+        caught_up: ["broker-b".to_string()].into_iter().collect(),
+        offsets: [("broker-b".to_string(), 10)].into_iter().collect(),
+        reported_at_millis: 111,
+    };
+    let encoded = encode_command(&MetaCommand::RecordReplicaReport {
+        report: report.clone(),
+    });
+
+    let restamped = restamp(&encoded, 222).expect("a report carries a clock");
+    match decode_command(&restamped).expect("decodes") {
+        MetaCommand::RecordReplicaReport { report: stamped } => {
+            assert_eq!(stamped.reported_at_millis, 222);
+            assert_eq!(
+                crate::model::ReplicaReport {
+                    reported_at_millis: 111,
+                    ..stamped
+                },
+                report,
+                "something besides the clock changed",
+            );
+        }
+        other => panic!("restamping changed the command: {other:?}"),
+    }
+}

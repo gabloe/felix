@@ -12,8 +12,9 @@ use controlplane::auth::idp_registry::IdpIssuerConfig;
 use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use controlplane::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodeLifecycle, NodePatchRequest, ShardAssignment, ShardAssignmentChange,
-    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodeLifecycle, NodePatchRequest, ReplicaReport, ShardAssignment,
+    ShardAssignmentChange, ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant,
+    TenantChange,
 };
 use controlplane::store::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
@@ -85,9 +86,6 @@ async fn harness(region_id: &str) -> Harness {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     Harness {
         app: build_router(state).into_service(),
@@ -1074,6 +1072,14 @@ impl ControlPlaneStore for FailingStore {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
+    async fn record_replica_report(&self, _report: ReplicaReport) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
     async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
@@ -1251,9 +1257,6 @@ async fn system_health_reports_unavailable_on_store_failure() {
             std::sync::Arc::new(controlplane::readiness::StoreProbe(Arc::clone(&failing))),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1306,9 +1309,6 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1388,9 +1388,6 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1526,9 +1523,6 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1597,9 +1591,6 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_bootstrap_router(state).into_service();
