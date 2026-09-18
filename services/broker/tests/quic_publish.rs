@@ -695,8 +695,15 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
             .await?;
     assert!(matches!(response, Some(Message::Ok)));
 
-    // 0x0040 is not defined by this protocol version.
-    let header = FrameHeader::new(0x0040, 2);
+    // Derived rather than hardcoded: the lowest bit outside `KNOWN_FLAGS`. A
+    // literal here becomes a defined bit the moment the next flag lands, and the
+    // test then quietly stops testing anything -- which is what 0x0040 did.
+    let undefined = !felix_wire::KNOWN_FLAGS & (!felix_wire::KNOWN_FLAGS).wrapping_neg();
+    assert_ne!(
+        undefined, 0,
+        "every flag bit is defined; pick another probe"
+    );
+    let header = FrameHeader::new(undefined, 2);
     let mut header_bytes = [0u8; FrameHeader::LEN];
     header.encode_into(&mut header_bytes);
     send.write_all(&header_bytes).await?;
