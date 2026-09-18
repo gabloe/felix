@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789765267484,
+  "lastUpdate": 1789765634047,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14718,6 +14718,72 @@ window.BENCHMARK_DATA = {
             "range": "398.11",
             "unit": "us",
             "extra": "trials: 5\nmedian: 960.00\nmean: 985.00\nstdev: 398.11\ncv: 40.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "095533b13663b9b9dc2a3d930173fa26f4ce169b",
+          "message": "perf(azure): create the streams after every broker has registered (#544)\n\nPlacement runs once, when a stream is created, against whatever brokers the\ncontrol plane can see at that instant -- and nothing ever moves a shard\nafterwards (#130). The seed created streams in step 1, before step 2 started\nany broker, so the first broker to register took everything and the rest of the\ncluster sat idle for the whole session.\n\nThe two-broker session measured exactly that: 49 shards on broker-0 and 0 on\nbroker-1, with broker-1 healthy, registered, and seeing all 49 assignments it\ndid not own. The only remedy available was deleting and re-creating the streams\n-- fine for a benchmark, data loss anywhere else. Every multi-broker number\nFelix has was taken on a skewed cluster for this reason: 48/0 on nvme2, 11/5/8\non nvme1.\n\nStream creation now happens on a second pass, gated by SEED_STREAMS, after the\nexisting \"wait for the brokers to register\" step has confirmed all of them.\nThe remote script is idempotent -- bootstrap answers 409 and the exchange\nre-runs -- so the second pass costs a few seconds. Default stays 1, so any\nother caller behaves as before.\n\nThe seed then reports shard ownership per broker, because an even split is the\nproperty the reordering exists to produce and it should be visible rather than\nassumed. An uneven one now means placement has a problem, instead of meaning\nthe seed raced the cluster.\n\nThis is a harness fix, not a product one: #130 is still that a transient\nregistration race becomes permanent because nothing rebalances.",
+          "timestamp": "2026-09-18T13:54:54-07:00",
+          "tree_id": "38c3934908b85580208bf89219369cd8db56742e",
+          "url": "https://github.com/gabloe/felix/commit/095533b13663b9b9dc2a3d930173fa26f4ce169b"
+        },
+        "date": 1789765631576,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 97,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 97.00\nmean: 96.60\nstdev: 0.55\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 131,
+            "range": "1.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 131.00\nmean: 130.40\nstdev: 1.82\ncv: 1.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 164,
+            "range": "13.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 165.20\nstdev: 13.41\ncv: 8.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 129,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 129.00\nstdev: 1.00\ncv: 0.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 261,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 261.00\nmean: 261.40\nstdev: 1.52\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 578,
+            "range": "297.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 578.00\nmean: 627.60\nstdev: 297.77\ncv: 47.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
