@@ -125,6 +125,20 @@ same log, with the same fsync policy. What changes is what the acknowledgement
 > A `Quorum` acknowledgement survives losing the leader. A `Leader`
 > acknowledgement is a promise only that one broker can keep.
 
+:::caution[One interleaving does not yet honour this]
+The guarantee holds against every fault the suite injects — kill, graceful
+stop, freeze and partition. A model check of the promotion protocol
+(`task tla:check`) finds one it does not reach: promotion picks from the
+leader's **last report**, so a leader that acknowledges a `Quorum` write and
+then dies before its next report leaves the control plane a *fresh* report
+naming a replica that never received the record. Report expiry does not
+close it — the report is recent, it is only older than the acknowledgement.
+
+Promotion by greatest (last generation, length) closes it, and the model
+finds no violating trace under that rule.
+[#527](https://github.com/gabloe/felix/issues/527) tracks the change.
+:::
+
 #### What each one costs
 
 `Quorum` costs latency, and it costs availability at the other end: a stream

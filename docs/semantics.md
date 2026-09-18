@@ -60,6 +60,13 @@ claims it failed.
 > `a_quorum_acknowledged_record_survives_its_leader` — the acknowledged record
 > is readable after the acknowledging broker is killed.
 
+That last one holds for the faults the suite injects. A model check of the
+promotion protocol finds an interleaving it does not reach — a leader that
+acknowledges and then dies before its next report leaves a fresh report naming
+a replica without the record, and promotion picks from that report. See
+`docs/replication-design.md` under "Who may be promoted", and #527 for the
+rule change that closes it.
+
 **The `Leader` loss window is bounded by replication lag**, exported as
 `felix_broker_replication_lag_records`. An operator choosing `Leader` is
 choosing that window, and a bound nobody can observe is not a bound.
