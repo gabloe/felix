@@ -78,8 +78,7 @@ neither peer authentication nor a tenant check.
 for *what*: a forwarding broker should not be able to write a tenant the
 original client could not. The cheapest form is to carry the client's
 authorization decision with the forwarded request and re-check it at the owner,
-so the owner's check does not depend on the forwarder's honesty. **No issue
-covers that today**; it is the residual risk mTLS alone does not close.
+so the owner's check does not depend on the forwarder's honesty. Filed as **#503**; it is the residual risk mTLS alone does not close.
 
 ### 2. Write arbitrary bytes into a shard's log, through replication — **partly mitigated**
 
@@ -134,9 +133,9 @@ memory; the ceiling is 64 MiB × 1024 streams × unbounded connections.
 `max_inflight_per_peer` does not help: it is an *outbound* shed, applied by this
 broker's pool to requests it is sending, not a bound on what it will accept.
 
-**Mitigation: none exists.** An accept-side connection cap and per-peer
-accounting are worth an issue of their own, and are useful even after mTLS
-because a *compromised* peer is authenticated. Filed as part of this review.
+**Mitigation: #504.** An accept-side connection cap and per-peer accounting,
+useful even after mTLS because an authenticated peer looping on a bug is still
+unbounded.
 
 ### 6. Amplification — **low**
 
@@ -167,11 +166,11 @@ the connection. Neither leaves the reader mid-frame.
 
 | # | Abuse case | Status | Owner |
 |---|---|---|---|
-| 1 | Publish to any tenant via forwarding | **Unmitigated** | #125, #126, plus an unfiled control for tenant authority |
+| 1 | Publish to any tenant via forwarding | **Unmitigated** | #125, #126, and #503 for tenant authority |
 | 2 | Inject records via replication | Partly (role + generation) | #125 |
 | 3 | Truncate a follower via bootstrap | Mitigated | — |
 | 4 | Memory exhaustion via lengths | Mitigated | — |
-| 5 | Connection exhaustion | **Unmitigated** | needs an issue |
+| 5 | Connection exhaustion | **Unmitigated** | #504 |
 | 6 | Amplification | Low | — |
 | 7 | Replay of a forwarded publish | Unmitigated | #422 |
 | 8 | Malformed frames | Mitigated | — |
