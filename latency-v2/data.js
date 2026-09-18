@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789766087241,
+  "lastUpdate": 1789766389831,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14850,6 +14850,72 @@ window.BENCHMARK_DATA = {
             "range": "1377.46",
             "unit": "us",
             "extra": "trials: 5\nmedian: 492.00\nmean: 1347.20\nstdev: 1377.46\ncv: 102.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16a2a078d79f77f10c588eb8a2ce400b27baa9a5",
+          "message": "perf(azure): poll registration with a token that may read /v1/nodes (#546)\n\n`>> 0/N brokers registered` has been reported on every session since #513, and\nwas put down to a flake each time. It is not a flake. The poll authenticates\nwith the load generator's client-scoped token, which deliberately carries no\n`node.view:cluster:*` -- that is #513's scoping working correctly -- so\n/v1/nodes answers:\n\n    HTTP 403 {\"code\":\"forbidden\",\"message\":\"missing node.view:cluster:* permission\"}\n\n`curl -fsS` fails, `|| echo 0` swallows it, and the loop runs its full sixty\niterations before reporting zero. Five minutes, every session, always wrong.\n\nConfirmed against a live cluster: 403 with the client token, HTTP 200 and\n`nodes: 1` with an admin token exchanged from the same IdP credential. The poll\nnow exchanges that admin token, which is the same thing the shard-ownership\nreport added in #544 already does.\n\nIt mattered little while the false zero was cosmetic. #544 made stream creation\ndepend on this check passing, which turned it into a hard failure that\nprovisioned an entire cluster and then created no streams -- exactly what\nhappened on the first v0.4.1 session. Gating new work behind a check known to\nfail was the mistake; this removes the reason it failed.",
+          "timestamp": "2026-09-18T14:15:17-07:00",
+          "tree_id": "7741dffd219b75c6add3cbaeeec4f0fcbe04dce6",
+          "url": "https://github.com/gabloe/felix/commit/16a2a078d79f77f10c588eb8a2ce400b27baa9a5"
+        },
+        "date": 1789766387290,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 95,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 95.00\nmean: 94.60\nstdev: 0.55\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 128,
+            "range": "2.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 128.40\nstdev: 2.19\ncv: 1.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 169,
+            "range": "11.74",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 167.60\nstdev: 11.74\ncv: 7.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 128,
+            "range": "5.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 130.40\nstdev: 5.94\ncv: 4.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 263,
+            "range": "519.60",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 263.00\nmean: 493.60\nstdev: 519.60\ncv: 105.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 837,
+            "range": "1028.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 837.00\nmean: 1144.20\nstdev: 1028.10\ncv: 89.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
