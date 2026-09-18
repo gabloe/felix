@@ -140,11 +140,10 @@ impl Cluster {
     }
 }
 
-fn config(node_id: &str, port: u16, token: &str) -> MembershipConfig {
+fn config(node_id: &str, port: u16) -> MembershipConfig {
     MembershipConfig {
         refresh_token_file: None,
         node_id: node_id.to_string(),
-        token: token.to_string(),
         advertise_addr: format!("10.0.0.4:{port}"),
         client_advertise_addr: None,
         region: "us-west-2".to_string(),
@@ -160,7 +159,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
     let first = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, &cluster.token),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
@@ -172,7 +171,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
     let second = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, &cluster.token),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
@@ -200,7 +199,7 @@ async fn graceful_shutdown_leaves_rather_than_expiring() {
     membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, &cluster.token),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
@@ -225,7 +224,7 @@ async fn an_abrupt_stop_is_detected_by_expiry() {
     let registered = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, &cluster.token),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
@@ -263,7 +262,7 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
     membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, &cluster.token),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
@@ -275,7 +274,7 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
     let err = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-b", 7001, &fleet_token),
+        &config("broker-b", 7001),
         &broker::credential::NodeCredential::new(fleet_token.clone()),
     )
     .await
@@ -300,7 +299,7 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
     let task = membership::spawn(
         cluster.client.clone(),
         cluster.base_url.clone(),
-        config("broker-a", 7001, &cluster.token),
+        config("broker-a", 7001),
         broker::credential::NodeCredential::new(cluster.token.clone()),
         serving,
         shutdown.clone(),
@@ -349,7 +348,7 @@ async fn a_brokers_credential_cannot_deregister_another_broker() {
     membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-b", 7002, &fleet_token),
+        &config("broker-b", 7002),
         &broker::credential::NodeCredential::new(fleet_token.clone()),
     )
     .await
@@ -385,7 +384,7 @@ async fn an_unauthenticated_broker_cannot_register() {
     let err = membership::register(
         &cluster.client,
         &cluster.base_url,
-        &config("broker-a", 7001, ""),
+        &config("broker-a", 7001),
         &broker::credential::NodeCredential::new(""),
     )
     .await

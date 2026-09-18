@@ -1714,20 +1714,9 @@ async fn seed_metadata(
     token: &str,
 ) -> Result<()> {
     let base = &control_plane.base_url;
-    post(
-        http,
-        &format!("{base}/v1/tenants"),
-        token,
-        serde_json::json!({
-            "tenant_id": config.tenant_id,
-            "display_name": config.tenant_id,
-        }),
-    )
-    .await
-    .context("create tenant")?;
-    // The tenant now exists; bind the signing keys to it so every token this
-    // harness mints verifies.
-    control_plane.seed_tenant_keys(&config.tenant_id).await?;
+    // The tenant itself was seeded with the control plane: see
+    // `ControlPlane::seed_tenant` for why it does not go through the API.
+    control_plane.seed_tenant(&config.tenant_id).await?;
 
     post(
         http,

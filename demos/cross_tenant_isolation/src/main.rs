@@ -60,6 +60,9 @@ const STREAM: &str = "orders";
 const CACHE: &str = "primary";
 const ALICE_SUB: &str = "p:alice";
 const ADMIN_SUB: &str = "p:admin";
+/// The broker's own principal, minted in t1 with `node.view:cluster:*` --
+/// which tenant signs a cluster-scoped token is immaterial.
+const BROKER_SUB: &str = "p:broker";
 const IDP_KID: &str = "kid-1";
 
 const EC_PRIVATE_KEY_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkcZLhh5bmc6yfv8ZrDxWybm+E+aoz2euIJD3fM73VSyhRANCAAQRkD6ZJEwqBms4JDddpbTjl4Ro49h8WRoNVnEcR/Tp6LhwGGZ8Ku1Gw9spY/BCsiW+5AqIqVlNVgGgJFMRbR1V";
@@ -130,11 +133,9 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
     wait_for_controlplane(&http, &cp_base).await?;
     report.pass("STEP 2 control plane up", format!("addr={cp_addr}"));
 
-    let (broker_addr, broker_cert, broker, broker_handles) = spawn_broker(&cp_base).await?;
-    report.pass("STEP 3 broker up", format!("addr={broker_addr}"));
-
     let admin_principal = principal_id(&idp_base, ADMIN_SUB);
     let alice_principal = principal_id(&idp_base, ALICE_SUB);
+    let broker_principal = principal_id(&idp_base, BROKER_SUB);
 
     let status = bootstrap_tenant_t1(
         &http,
@@ -142,52 +143,66 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
         &idp_base,
         &admin_principal,
         &alice_principal,
+        &broker_principal,
     )
     .await?;
-    report.check_http("STEP 4 bootstrap tenant t1", status, StatusCode::OK)?;
+    report.check_http("STEP 3 bootstrap tenant t1", status, StatusCode::OK)?;
 
     let status = bootstrap_tenant_t2(&http, &cp_base, &idp_base, &admin_principal).await?;
-    report.check_http("STEP 5 bootstrap tenant t2", status, StatusCode::OK)?;
+    report.check_http("STEP 4 bootstrap tenant t2", status, StatusCode::OK)?;
+
+    // The broker reads the metadata feeds with a credential of its own; the
+    // admin creates the metadata with theirs. Neither works without a token.
+    let broker_id_token = mint_id_token(&idp_base, BROKER_SUB, &["role:broker"])?;
+    let broker_token = exchange_token(&http, &cp_base, TENANT_T1, &broker_id_token).await?;
+    let admin_id_token = mint_id_token(&idp_base, ADMIN_SUB, &[])?;
+    let t1_admin = exchange_token(&http, &cp_base, TENANT_T1, &admin_id_token).await?;
+    let t2_admin = exchange_token(&http, &cp_base, TENANT_T2, &admin_id_token).await?;
+    report.pass("STEP 5 broker and admin token exchange", "status=200");
+
+    let (broker_addr, broker_cert, broker, broker_handles) =
+        spawn_broker(&cp_base, &broker_token).await?;
+    report.pass("STEP 6 broker up", format!("addr={broker_addr}"));
 
     report.check_http(
-        "STEP 6 create t1 namespace",
-        create_namespace(&http, &cp_base, TENANT_T1).await?,
+        "STEP 7 create t1 namespace",
+        create_namespace(&http, &cp_base, TENANT_T1, &t1_admin).await?,
         StatusCode::CREATED,
     )?;
     report.check_http(
-        "STEP 7 create t1 stream",
-        create_stream(&http, &cp_base, TENANT_T1).await?,
+        "STEP 8 create t1 stream",
+        create_stream(&http, &cp_base, TENANT_T1, &t1_admin).await?,
         StatusCode::CREATED,
     )?;
     report.check_http(
-        "STEP 8 create t1 cache",
-        create_cache(&http, &cp_base, TENANT_T1).await?,
+        "STEP 9 create t1 cache",
+        create_cache(&http, &cp_base, TENANT_T1, &t1_admin).await?,
         StatusCode::CREATED,
     )?;
 
     report.check_http(
-        "STEP 9 create t2 namespace",
-        create_namespace(&http, &cp_base, TENANT_T2).await?,
+        "STEP 10 create t2 namespace",
+        create_namespace(&http, &cp_base, TENANT_T2, &t2_admin).await?,
         StatusCode::CREATED,
     )?;
     report.check_http(
-        "STEP 10 create t2 stream",
-        create_stream(&http, &cp_base, TENANT_T2).await?,
+        "STEP 11 create t2 stream",
+        create_stream(&http, &cp_base, TENANT_T2, &t2_admin).await?,
         StatusCode::CREATED,
     )?;
     report.check_http(
-        "STEP 11 create t2 cache",
-        create_cache(&http, &cp_base, TENANT_T2).await?,
+        "STEP 12 create t2 cache",
+        create_cache(&http, &cp_base, TENANT_T2, &t2_admin).await?,
         StatusCode::CREATED,
     )?;
     wait_for_broker_metadata(&broker, Duration::from_secs(12)).await?;
 
     let alice_id_token = mint_id_token(&idp_base, ALICE_SUB, &[])?;
     let t1_token = exchange_token(&http, &cp_base, TENANT_T1, &alice_id_token).await?;
-    report.pass("STEP 12 token exchange t1", "status=200");
+    report.pass("STEP 13 token exchange t1", "status=200");
 
     let t2_token = exchange_token(&http, &cp_base, TENANT_T2, &alice_id_token).await?;
-    report.pass("STEP 13 token exchange t2", "status=200");
+    report.pass("STEP 14 token exchange t2", "status=200");
 
     let t1_client = build_client(&broker_addr, &broker_cert, TENANT_T1, &t1_token).await?;
     let t2_client = build_client(&broker_addr, &broker_cert, TENANT_T2, &t2_token).await?;
@@ -198,19 +213,19 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
         publish_once(&t1_client, TENANT_T1)
     })
     .await;
-    report.check_op("STEP 14 t1 publish allowed", t1_publish, true)?;
+    report.check_op("STEP 15 t1 publish allowed", t1_publish, true)?;
 
     let t1_sub = retry_op("subscribe", Duration::from_secs(6), || {
         subscribe_and_receive(&t1_client, TENANT_T1)
     })
     .await;
-    report.check_op("STEP 15 t1 subscribe allowed", t1_sub, true)?;
+    report.check_op("STEP 16 t1 subscribe allowed", t1_sub, true)?;
 
     let t1_cache = retry_op("cache", Duration::from_secs(6), || {
         cache_roundtrip(&t1_client, TENANT_T1)
     })
     .await;
-    report.check_op("STEP 16 t1 cache allowed", t1_cache, true)?;
+    report.check_op("STEP 17 t1 cache allowed", t1_cache, true)?;
 
     let t1_on_t2_publish = retry_op("publish", Duration::from_secs(6), || async {
         match &t1_token_on_t2_client {
@@ -220,7 +235,7 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
     })
     .await;
     report.check_op(
-        "STEP 17 t1 token on t2 publish denied",
+        "STEP 18 t1 token on t2 publish denied",
         t1_on_t2_publish,
         false,
     )?;
@@ -233,7 +248,7 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
     })
     .await;
     report.check_op(
-        "STEP 18 t1 token on t2 subscribe denied",
+        "STEP 19 t1 token on t2 subscribe denied",
         t1_on_t2_sub,
         false,
     )?;
@@ -245,25 +260,25 @@ async fn run_demo(report: &mut DemoReport) -> Result<()> {
         }
     })
     .await;
-    report.check_op("STEP 19 t1 token on t2 cache denied", t1_on_t2_cache, false)?;
+    report.check_op("STEP 20 t1 token on t2 cache denied", t1_on_t2_cache, false)?;
 
     let t2_publish = retry_op("publish", Duration::from_secs(6), || {
         publish_once(&t2_client, TENANT_T2)
     })
     .await;
-    report.check_op("STEP 20 t2 token publish denied", t2_publish, false)?;
+    report.check_op("STEP 21 t2 token publish denied", t2_publish, false)?;
 
     let t2_sub = retry_op("subscribe", Duration::from_secs(6), || {
         subscribe_once(&t2_client, TENANT_T2)
     })
     .await;
-    report.check_op("STEP 21 t2 token subscribe denied", t2_sub, false)?;
+    report.check_op("STEP 22 t2 token subscribe denied", t2_sub, false)?;
 
     let t2_cache = retry_op("cache", Duration::from_secs(6), || {
         cache_roundtrip(&t2_client, TENANT_T2)
     })
     .await;
-    report.check_op("STEP 22 t2 token cache denied", t2_cache, false)?;
+    report.check_op("STEP 23 t2 token cache denied", t2_cache, false)?;
 
     idp_handle.abort();
     cp_handle.abort();
@@ -459,6 +474,7 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
 /// Starts a real broker QUIC server and a control-plane sync loop.
 async fn spawn_broker(
     controlplane_url: &str,
+    credential: &str,
 ) -> Result<(
     SocketAddr,
     CertificateDer<'static>,
@@ -493,10 +509,16 @@ async fn spawn_broker(
         }
     });
 
+    let credential = broker::credential::NodeCredential::new(credential);
     let sync_task = tokio::spawn(async move {
         let interval = Duration::from_millis(sync_interval_ms);
-        if let Err(err) =
-            broker_controlplane::start_sync(broker_sync, controlplane_url, interval).await
+        if let Err(err) = broker_controlplane::start_sync(
+            broker_sync,
+            controlplane_url,
+            interval,
+            Some(credential),
+        )
+        .await
         {
             eprintln!("controlplane sync error: {err}");
         }
@@ -561,6 +583,7 @@ async fn bootstrap_tenant_t1(
     idp_base: &str,
     admin_principal: &str,
     alice_principal: &str,
+    broker_principal: &str,
 ) -> Result<StatusCode> {
     let idp = IdpIssuerConfig {
         issuer: idp_base.to_string(),
@@ -573,7 +596,7 @@ async fn bootstrap_tenant_t1(
         },
     };
 
-    let policies = vec![
+    let mut policies = vec![
         PolicyRule {
             subject: "role:reader".to_string(),
             // Canonical tenant-qualified stream object.
@@ -598,10 +621,24 @@ async fn bootstrap_tenant_t1(
         },
     ];
 
-    let groupings = vec![GroupingRule {
-        user: alice_principal.to_string(),
-        role: "role:reader".to_string(),
-    }];
+    // Cluster scope sits outside the tenant hierarchy, so no tenant admin can
+    // grant it later; bootstrap is where the broker's read access enters.
+    policies.push(PolicyRule {
+        subject: "role:broker".to_string(),
+        object: "cluster:*".to_string(),
+        action: "node.view".to_string(),
+    });
+
+    let groupings = vec![
+        GroupingRule {
+            user: alice_principal.to_string(),
+            role: "role:reader".to_string(),
+        },
+        GroupingRule {
+            user: broker_principal.to_string(),
+            role: "role:broker".to_string(),
+        },
+    ];
 
     let body = BootstrapInitializeRequest {
         display_name: "Tenant One".to_string(),
@@ -670,13 +707,19 @@ async fn create_namespace(
     http: &reqwest::Client,
     cp_base: &str,
     tenant_id: &str,
+    admin_token: &str,
 ) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{tenant_id}/namespaces");
     let body = NamespaceCreateRequest {
         namespace: NAMESPACE.to_string(),
         display_name: "Default".to_string(),
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 
@@ -684,6 +727,7 @@ async fn create_stream(
     http: &reqwest::Client,
     cp_base: &str,
     tenant_id: &str,
+    admin_token: &str,
 ) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{tenant_id}/namespaces/{NAMESPACE}/streams");
     let body = StreamCreateRequest {
@@ -700,7 +744,12 @@ async fn create_stream(
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 
@@ -708,6 +757,7 @@ async fn create_cache(
     http: &reqwest::Client,
     cp_base: &str,
     tenant_id: &str,
+    admin_token: &str,
 ) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{tenant_id}/namespaces/{NAMESPACE}/caches");
     let body = CacheCreateRequest {
@@ -715,7 +765,12 @@ async fn create_cache(
         display_name: "Primary".to_string(),
         ..Default::default()
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 

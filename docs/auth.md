@@ -87,14 +87,17 @@ Casbin is used with domains for tenant scoping.
 Objects:
 - Tenant: `tenant:{tenant_id}`
 - Namespace: `namespace:{tenant_id}/{namespace}` or `namespace:{tenant_id}/*`
-- Stream: `stream:{tenant_id}/{namespace}/{stream}` or `stream:{tenant_id}/{namespace}/*`
-- Cache: `cache:{tenant_id}/{namespace}/{cache}` or `cache:{tenant_id}/{namespace}/*`
+- Stream: `stream:{tenant_id}/{namespace}/{stream}`, `stream:{tenant_id}/{namespace}/*`, or `stream:{tenant_id}/*/*`
+- Cache: `cache:{tenant_id}/{namespace}/{cache}`, `cache:{tenant_id}/{namespace}/*`, or `cache:{tenant_id}/*/*`
 - Cluster: `cluster:*` — see [Cluster scope](#cluster-scope)
 - Node: `node:{node_id}` — one broker
 
 Actions:
 - `rbac.view`, `rbac.policy.manage`, `rbac.assignment.manage`
-- `tenant.manage`, `ns.manage`, `stream.manage`, `cache.manage`
+- `tenant.manage` — over `tenant:{tenant_id}` for the tenant's own settings, or
+  over `cluster:*` for the tenant catalog (create, list, delete)
+- `ns.manage`, `stream.manage`, `cache.manage` — the control plane's resource
+  API, over the namespace, stream or cache being changed
 - `stream.publish`, `stream.subscribe`
 - `cache.read`, `cache.write`
 - `node.view` — cluster-scoped only
@@ -108,7 +111,8 @@ requests are all authorized as **`stream.subscribe`** on the stream being read.
 
 One object sits outside the tenant hierarchy:
 
-- Cluster: `cluster:*` — broker membership, liveness, and placement standing.
+- Cluster: `cluster:*` — broker membership, liveness, and placement standing;
+  the tenant catalog; and the metadata feeds brokers seed from.
 
 It is an island in both directions, and that is the whole security property:
 
@@ -118,11 +122,19 @@ It is an island in both directions, and that is the whole security property:
 - **It contains no tenant object.** Cluster scope confers nothing inside a
   tenant, so it is not a backdoor into tenant data.
 
-`node.view:cluster:*` is required by `GET /v1/nodes` and `GET /v1/nodes/{node_id}`.
-The tenant comes from the token's own `tid` claim rather than a path segment,
-because the cluster is not a tenant resource; that claim only selects which
-tenant's signing keys to verify against, exactly as `kid` selects a key without
+`node.view:cluster:*` is required by `GET /v1/nodes`, `GET /v1/nodes/{node_id}`,
+and every `snapshot` and `changes` feed; `tenant.manage:cluster:*` by
+`GET`/`POST /v1/tenants` and `DELETE /v1/tenants/{tenant_id}`. The tenant comes
+from the token's own `tid` claim rather than a path segment, because the
+cluster is not a tenant resource; that claim only selects which tenant's
+signing keys to verify against, exactly as `kid` selects a key without
 conferring one.
+
+Cluster scope reaches a token only through bootstrap: initialize an operator
+tenant with policies granting the cluster actions to a role, assign the
+operator principal to it, and exchange. A tenant admin cannot write those rules
+later, for the reason above. The full per-endpoint table is in
+[control-plane.md](control-plane.md#metadata-api-authorization).
 
 ### RBAC Security Model
 

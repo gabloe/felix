@@ -41,15 +41,6 @@ use std::net::SocketAddr;
 pub struct MembershipConfig {
     /// Stable across restarts. This is the identity, not the process.
     pub node_id: String,
-    /// Credential proving this broker may act for `node_id`.
-    ///
-    /// Required, not optional. A broker with an identity and no credential
-    /// cannot register, and starting one that will fail every control-plane
-    /// call on a loop is worse than refusing to start.
-    ///
-    /// Never printed. `--print-config` exists to be pasted into an issue.
-    #[serde(serialize_with = "redacted")]
-    pub token: String,
     /// `host:port` peers reach this broker on. Not the bind address: a broker
     /// bound to 0.0.0.0 has to advertise something routable.
     pub advertise_addr: String,
@@ -120,6 +111,19 @@ pub struct BrokerConfig {
     pub metrics_bind: SocketAddr,
     // Optional control-plane base URL.
     pub controlplane_url: Option<String>,
+    /// Credential this broker presents to the control plane; empty when none
+    /// was given.
+    ///
+    /// Every control-plane call carries it: the metadata feeds, and -- for a
+    /// cluster member -- registration, heartbeat, the assignment watch and
+    /// replica reports. A member cannot start without one, since a broker
+    /// that will fail every call on a loop is worse than one that refuses. A
+    /// standalone broker may run without it, but then its metadata sync is
+    /// refused, and it is told so at startup.
+    ///
+    /// Never printed. `--print-config` exists to be pasted into an issue.
+    #[serde(serialize_with = "redacted")]
+    pub controlplane_token: String,
     // Poll interval for control-plane changes.
     pub controlplane_sync_interval_ms: u64,
     // Cluster membership identity, when this broker joins one.
@@ -286,6 +290,7 @@ impl Default for BrokerConfig {
             quic_bind: SocketAddr::from(([0, 0, 0, 0], 5000)),
             metrics_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
             controlplane_url: None,
+            controlplane_token: String::new(),
             controlplane_sync_interval_ms: 2000,
             membership: None,
             peer_transport: None,
@@ -371,6 +376,33 @@ impl SubscriberLaneShard {
     }
 }
 
+/// The control-plane credential, from `FELIX_NODE_TOKEN_FILE` or
+/// `FELIX_NODE_TOKEN`; empty when neither is set.
+///
+/// The file form exists so a token can arrive as a mounted secret rather than
+/// an environment variable visible in a process listing. Whitespace is trimmed,
+/// and a blank value is treated as no credential rather than as an empty one.
+fn controlplane_token_from_env() -> std::io::Result<String> {
+    match std::env::var("FELIX_NODE_TOKEN_FILE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(path) => Ok(std::fs::read_to_string(&path)
+            .map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("read FELIX_NODE_TOKEN_FILE {path}: {err}"),
+                )
+            })?
+            .trim()
+            .to_string()),
+        None => Ok(std::env::var("FELIX_NODE_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default()),
+    }
+}
+
 /// Read the cluster identity, or `None` when this broker is not joining one.
 ///
 /// Fails rather than defaults on a half-configured identity. A broker that
@@ -379,6 +411,7 @@ impl SubscriberLaneShard {
 /// catalog says is live.
 fn membership_from_env(
     controlplane_url: &Option<String>,
+    controlplane_token: &str,
 ) -> std::io::Result<Option<MembershipConfig>> {
     let Some(node_id) = std::env::var("FELIX_NODE_ID")
         .ok()
@@ -415,27 +448,7 @@ fn membership_from_env(
         ));
     }
 
-    // Read from a file when given one, so a token can arrive as a mounted
-    // secret rather than an environment variable visible in a process listing.
-    let token = match std::env::var("FELIX_NODE_TOKEN_FILE")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        Some(path) => std::fs::read_to_string(&path)
-            .map_err(|err| {
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("read FELIX_NODE_TOKEN_FILE {path}: {err}"),
-                )
-            })?
-            .trim()
-            .to_string(),
-        None => std::env::var("FELIX_NODE_TOKEN")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .unwrap_or_default(),
-    };
-    if token.is_empty() {
+    if controlplane_token.is_empty() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
             "FELIX_NODE_ID is set but no node credential was provided; \
@@ -465,7 +478,6 @@ fn membership_from_env(
 
     Ok(Some(MembershipConfig {
         node_id,
-        token,
         refresh_token_file,
         advertise_addr,
         client_advertise_addr: std::env::var("FELIX_CLIENT_ADVERTISE_ADDR")
@@ -602,7 +614,8 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(2000);
-        let membership = membership_from_env(&controlplane_url)?;
+        let controlplane_token = controlplane_token_from_env()?;
+        let membership = membership_from_env(&controlplane_url, &controlplane_token)?;
         let peer_transport = match &membership {
             Some(membership) => {
                 let peer = crate::peer::PeerTransportConfig::from_env(quic_bind)?;
@@ -798,6 +811,7 @@ impl BrokerConfig {
             quic_bind,
             metrics_bind,
             controlplane_url,
+            controlplane_token,
             controlplane_sync_interval_ms,
             membership,
             peer_transport,
@@ -1175,7 +1189,6 @@ mod tests {
         assert_eq!(membership.node_id, "broker-a");
         assert_eq!(membership.advertise_addr, "10.0.0.4:7000");
         assert_eq!(membership.region, "eu-central-1");
-        assert_eq!(membership.token, "a-node-token");
     }
 
     /// A broker with an identity and no credential cannot register. Starting it
@@ -1256,14 +1269,27 @@ mod tests {
             env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
             env::set_var("FELIX_NODE_TOKEN_FILE", path.to_str().expect("path"));
         }
-        let membership = BrokerConfig::from_env()
-            .expect("config")
-            .membership
-            .expect("membership");
+        let config = BrokerConfig::from_env().expect("config");
+        assert!(config.membership.is_some(), "membership");
         assert_eq!(
-            membership.token, "file-token",
+            config.controlplane_token, "file-token",
             "surrounding whitespace is trimmed"
         );
+    }
+
+    /// A standalone broker can still carry a credential: the metadata feeds
+    /// it syncs from require one, whether or not it joins a cluster.
+    #[serial]
+    #[test]
+    fn a_credential_without_a_node_id_is_kept_for_the_sync() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "sync-token");
+        }
+        let config = BrokerConfig::from_env().expect("config");
+        assert!(config.membership.is_none());
+        assert_eq!(config.controlplane_token, "sync-token");
     }
 
     #[serial]
@@ -1860,9 +1886,9 @@ subscriber_single_writer_per_conn: false
 
         fn with_membership(token: &str) -> BrokerConfig {
             BrokerConfig {
+                controlplane_token: token.to_string(),
                 membership: Some(MembershipConfig {
                     node_id: "broker-a".to_string(),
-                    token: token.to_string(),
                     advertise_addr: "10.0.0.1:5000".to_string(),
                     client_advertise_addr: None,
                     refresh_token_file: None,
@@ -1885,7 +1911,7 @@ subscriber_single_writer_per_conn: false
                 !rendered.contains("super-secret-value"),
                 "the credential reached the output:\n{rendered}",
             );
-            assert!(rendered.contains("token: <redacted>"));
+            assert!(rendered.contains("controlplane_token: <redacted>"));
         }
 
         /// Redacted, not omitted: whether a token is set at all is exactly what
@@ -1893,7 +1919,10 @@ subscriber_single_writer_per_conn: false
         #[test]
         fn an_absent_credential_says_so_rather_than_vanishing() {
             let rendered = serde_yaml_ng::to_string(&with_membership("")).expect("render");
-            assert!(rendered.contains("token: <unset>"), "{rendered}");
+            assert!(
+                rendered.contains("controlplane_token: <unset>"),
+                "{rendered}"
+            );
         }
 
         /// Durations come out in the unit their variables are named for.

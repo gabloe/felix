@@ -23,6 +23,7 @@
 //!
 //! NOTE: This file is a *client* of the control-plane. Persisting control-plane data
 //! (e.g., in Postgres) is implemented on the **control-plane service**, not here.
+use crate::credential::NodeCredential;
 use anyhow::{Context, Result, anyhow};
 use felix_broker::{Broker, BrokerError, CacheMetadata, ConsistencyLevel, StreamMetadata};
 use serde::{Deserialize, Serialize};
@@ -358,21 +359,39 @@ struct Cache {
 /// reports it unused and `unreachable_pub` wants it demoted; both are wrong
 /// here, and demoting it breaks `task demo:check`.
 #[allow(dead_code, unreachable_pub)]
-pub async fn start_sync(broker: Arc<Broker>, base_url: String, interval: Duration) -> Result<()> {
-    start_sync_with_signal(broker, base_url, interval, None).await
+pub async fn start_sync(
+    broker: Arc<Broker>,
+    base_url: String,
+    interval: Duration,
+    credential: Option<NodeCredential>,
+) -> Result<()> {
+    start_sync_with_signal(broker, base_url, interval, None, credential).await
 }
 
+/// `credential` is what the feeds are read with. They require
+/// `node.view:cluster:*`, so without one every poll is refused; the holder is
+/// read on each iteration, so a refresh is picked up without a restart.
 pub(crate) async fn start_sync_with_signal(
     broker: Arc<Broker>,
     base_url: String,
     interval: Duration,
     mut seeded: Option<tokio::sync::oneshot::Sender<()>>,
+    credential: Option<NodeCredential>,
 ) -> Result<()> {
     let client = reqwest::Client::new();
     // Sequence cursors for each change feed; 0 means "not yet seeded".
     let mut state = SyncState::new();
     loop {
-        match sync_once(&broker, &client, &base_url, state).await {
+        let bearer = credential.as_ref().map(NodeCredential::bearer);
+        match sync_once(
+            &broker,
+            &client,
+            &base_url,
+            bearer.as_deref().map(String::as_str),
+            state,
+        )
+        .await
+        {
             Ok(next_state) => {
                 state = next_state;
                 // Only signal once the catalog is genuinely in place. An
@@ -416,13 +435,14 @@ async fn sync_once(
     broker: &Arc<Broker>,
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
     mut state: SyncState,
 ) -> Result<SyncState> {
     let log_as_debug = cfg!(test) || std::env::var_os("RUST_TEST_THREADS").is_some();
     // === Cold start snapshot seeding ===
     // 1. Seed tenants first.
     if !state.seeded.tenants {
-        match fetch_tenant_snapshot(client, base_url).await {
+        match fetch_tenant_snapshot(client, base_url, bearer).await {
             Ok(snapshot) => {
                 for tenant in snapshot.items {
                     broker.register_tenant(tenant.tenant_id).await?;
@@ -442,7 +462,7 @@ async fn sync_once(
 
     // 2. Seed namespaces after tenants.
     if !state.seeded.namespaces {
-        match fetch_namespace_snapshot(client, base_url).await {
+        match fetch_namespace_snapshot(client, base_url, bearer).await {
             Ok(snapshot) => {
                 for namespace in snapshot.items {
                     apply_namespace_create(broker, namespace.tenant_id, namespace.namespace)
@@ -463,7 +483,7 @@ async fn sync_once(
 
     // 3. Seed caches after namespaces.
     if !state.seeded.caches {
-        match fetch_cache_snapshot(client, base_url).await {
+        match fetch_cache_snapshot(client, base_url, bearer).await {
             Ok(snapshot) => {
                 for cache in snapshot.items {
                     apply_cache_upsert(broker, cache.tenant_id, cache.namespace, cache.cache)
@@ -484,7 +504,7 @@ async fn sync_once(
 
     // 4. Seed streams after caches.
     if !state.seeded.streams {
-        match fetch_snapshot(client, base_url).await {
+        match fetch_snapshot(client, base_url, bearer).await {
             Ok(snapshot) => {
                 for stream in snapshot.items {
                     apply_stream_upsert(
@@ -515,7 +535,7 @@ async fn sync_once(
 
     // === Incremental change feed application ===
     // 1. Apply tenant changes first (ensures proper revocation/creation).
-    match fetch_tenant_changes(client, base_url, state.next_tenant_seq).await {
+    match fetch_tenant_changes(client, base_url, bearer, state.next_tenant_seq).await {
         Ok(changes) => {
             for change in changes.items {
                 match change.op {
@@ -541,7 +561,7 @@ async fn sync_once(
     }
 
     // 2. Apply namespace changes after tenants.
-    match fetch_namespace_changes(client, base_url, state.next_namespace_seq).await {
+    match fetch_namespace_changes(client, base_url, bearer, state.next_namespace_seq).await {
         Ok(changes) => {
             for change in changes.items {
                 match change.op {
@@ -580,7 +600,7 @@ async fn sync_once(
 
     // 3. Apply cache changes after namespaces.
     //    (Caches depend on tenant/namespace existence.)
-    match fetch_cache_changes(client, base_url, state.next_cache_seq).await {
+    match fetch_cache_changes(client, base_url, bearer, state.next_cache_seq).await {
         Ok(changes) => {
             for change in changes.items {
                 match change.op {
@@ -624,7 +644,7 @@ async fn sync_once(
     }
 
     // 4. Apply stream changes last so existence checks have up-to-date scopes.
-    match fetch_changes(client, base_url, state.next_stream_seq).await {
+    match fetch_changes(client, base_url, bearer, state.next_stream_seq).await {
         Ok(changes) => {
             for change in changes.items {
                 match change.op {
@@ -821,15 +841,22 @@ async fn apply_stream_upsert(
     }
 }
 
+fn with_bearer(request: reqwest::RequestBuilder, bearer: Option<&str>) -> reqwest::RequestBuilder {
+    match bearer {
+        Some(bearer) => request.bearer_auth(bearer),
+        None => request,
+    }
+}
+
 /// Fetches the full stream snapshot from `/v1/streams/snapshot`.
 /// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 async fn fetch_snapshot(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
 ) -> Result<StreamSnapshotResponse> {
     let url = format!("{}/v1/streams/snapshot", base_url.trim_end_matches('/'));
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("snapshot request")?
@@ -843,10 +870,10 @@ async fn fetch_snapshot(
 async fn fetch_cache_snapshot(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
 ) -> Result<CacheSnapshotResponse> {
     let url = format!("{}/v1/caches/snapshot", base_url.trim_end_matches('/'));
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("cache snapshot request")?
@@ -860,10 +887,10 @@ async fn fetch_cache_snapshot(
 async fn fetch_tenant_snapshot(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
 ) -> Result<TenantSnapshotResponse> {
     let url = format!("{}/v1/tenants/snapshot", base_url.trim_end_matches('/'));
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("tenant snapshot request")?
@@ -877,10 +904,10 @@ async fn fetch_tenant_snapshot(
 async fn fetch_namespace_snapshot(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
 ) -> Result<NamespaceSnapshotResponse> {
     let url = format!("{}/v1/namespaces/snapshot", base_url.trim_end_matches('/'));
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("namespace snapshot request")?
@@ -894,6 +921,7 @@ async fn fetch_namespace_snapshot(
 async fn fetch_changes(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
     since: u64,
 ) -> Result<StreamChangesResponse> {
     let url = format!(
@@ -901,8 +929,7 @@ async fn fetch_changes(
         base_url.trim_end_matches('/'),
         since
     );
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("changes request")?
@@ -916,6 +943,7 @@ async fn fetch_changes(
 async fn fetch_cache_changes(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
     since: u64,
 ) -> Result<CacheChangesResponse> {
     let url = format!(
@@ -923,8 +951,7 @@ async fn fetch_cache_changes(
         base_url.trim_end_matches('/'),
         since
     );
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("cache changes request")?
@@ -938,6 +965,7 @@ async fn fetch_cache_changes(
 async fn fetch_tenant_changes(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
     since: u64,
 ) -> Result<TenantChangesResponse> {
     let url = format!(
@@ -945,8 +973,7 @@ async fn fetch_tenant_changes(
         base_url.trim_end_matches('/'),
         since
     );
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("tenant changes request")?
@@ -960,6 +987,7 @@ async fn fetch_tenant_changes(
 async fn fetch_namespace_changes(
     client: &reqwest::Client,
     base_url: &str,
+    bearer: Option<&str>,
     since: u64,
 ) -> Result<NamespaceChangesResponse> {
     let url = format!(
@@ -967,8 +995,7 @@ async fn fetch_namespace_changes(
         base_url.trim_end_matches('/'),
         since
     );
-    let response = client
-        .get(url)
+    let response = with_bearer(client.get(url), bearer)
         .send()
         .await
         .context("namespace changes request")?
@@ -1018,7 +1045,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            let state = sync_once(&broker, &client, &base_url, None, SyncState::new()).await?;
             assert_eq!(state.next_tenant_seq, 0);
             assert_eq!(state.next_namespace_seq, 0);
             assert_eq!(state.next_cache_seq, 0);
@@ -1124,7 +1151,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            let state = sync_once(&broker, &client, &base_url, None, SyncState::new()).await?;
             assert_eq!(state.next_tenant_seq, 2);
             let err = broker.register_namespace("t1", "ns").await;
             assert!(err.is_err());
@@ -1232,7 +1259,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            let state = sync_once(&broker, &client, &base_url, None, SyncState::new()).await?;
             assert_eq!(state.next_namespace_seq, 2);
             assert!(!broker.namespace_exists("t1", "ns").await);
 
@@ -1370,7 +1397,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let state = sync_once(&broker, &client, &base_url, SyncState::new()).await?;
+            let state = sync_once(&broker, &client, &base_url, None, SyncState::new()).await?;
             assert_eq!(state.next_tenant_seq, 2);
             assert_eq!(state.next_namespace_seq, 2);
             assert_eq!(state.next_cache_seq, 2);
@@ -1403,7 +1430,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let result = fetch_cache_snapshot(&client, &base_url).await;
+            let result = fetch_cache_snapshot(&client, &base_url, None).await;
             assert!(result.is_err());
 
             let _ = shutdown_tx.send(());
@@ -1621,6 +1648,7 @@ mod tests {
             &broker,
             &client,
             &format!("http://{addr}"),
+            None,
             SyncState::new(),
         )
         .await?;
@@ -1664,6 +1692,7 @@ mod tests {
             &broker,
             &client,
             &format!("http://{addr}"),
+            None,
             SyncState::new(),
         )
         .await?;
@@ -1796,7 +1825,7 @@ mod tests {
             let base_url = format!("http://{}", addr);
             let client = build_test_client()?;
 
-            let result = fetch_changes(&client, &base_url, 0).await;
+            let result = fetch_changes(&client, &base_url, None, 0).await;
             assert!(result.is_err());
 
             let _ = shutdown_tx.send(());
@@ -1917,6 +1946,7 @@ mod tests {
                 Arc::clone(&broker),
                 base_url,
                 Duration::from_millis(10),
+                None,
                 None,
             ));
 

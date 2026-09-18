@@ -197,6 +197,10 @@ Set up broker to connect to a local control plane:
 ```bash
 export FELIX_CONTROLPLANE_URL="http://localhost:8443"
 export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="1000"
+# A Felix token carrying node.view:cluster:*; the metadata feeds refuse
+# anything else. See "Broker credential" on the Docker Compose page for how
+# bootstrap and token exchange produce one.
+export FELIX_NODE_TOKEN="<felix token>"
 
 cargo run --release -p broker
 ```

@@ -8,18 +8,18 @@
 //!
 //! # Delegation model
 //! Callers can only read/mutate rules within the scope encoded in their token
-//! permissions. Scope checks happen server-side before store writes.
+//! permissions. Scope checks happen server-side before store writes, and the
+//! credential is checked before the tenant's existence, so an unauthenticated
+//! caller cannot probe for tenants.
 use crate::api::ensure_tenant_exists;
-use crate::api::error::{
-    ApiError, api_forbidden, api_internal, api_unauthorized, api_validation_error,
-};
+use crate::api::error::{ApiError, api_forbidden, api_internal, api_validation_error};
 use crate::app::AppState;
-use crate::auth::felix_token::verify_token;
+use crate::auth::bearer::tenant_permissions;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::authorize::{
     ACTION_RBAC_ASSIGNMENT_MANAGE, ACTION_RBAC_POLICY_MANAGE, ACTION_RBAC_VIEW,
-    ACTION_TENANT_MANAGE, ParsedObject, ParsedPermission, canonical_action, object_within_scope,
-    parse_object, parse_permission, validate_assignment_allowed, validate_new_rule_allowed,
+    ACTION_TENANT_MANAGE, ParsedObject, canonical_action, object_within_scope, parse_object,
+    validate_assignment_allowed, validate_new_rule_allowed,
 };
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use axum::Json;
@@ -62,7 +62,6 @@ pub async fn upsert_idp_issuer(
     headers: HeaderMap,
     Json(body): Json<IdpIssuerConfig>,
 ) -> Result<StatusCode, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     require_action_for_object(
         &state,
         &tenant_id,
@@ -71,6 +70,7 @@ pub async fn upsert_idp_issuer(
         &format!("tenant:{tenant_id}"),
     )
     .await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     state
         .store
         .upsert_idp_issuer(&tenant_id, body)
@@ -91,7 +91,6 @@ pub async fn delete_idp_issuer(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     require_action_for_object(
         &state,
         &tenant_id,
@@ -100,6 +99,7 @@ pub async fn delete_idp_issuer(
         &format!("tenant:{tenant_id}"),
     )
     .await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     state
         .store
         .delete_idp_issuer(&tenant_id, &issuer)
@@ -120,8 +120,8 @@ pub async fn list_policies(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<PolicyRule>>, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     let scope = require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_VIEW).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     let policies = state
         .store
         .list_rbac_policies(&tenant_id)
@@ -146,8 +146,8 @@ pub async fn list_groupings(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<GroupingRule>>, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     let scope = require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_VIEW).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     let policies = state
         .store
         .list_rbac_policies(&tenant_id)
@@ -186,9 +186,9 @@ pub async fn add_policy(
     headers: HeaderMap,
     Json(body): Json<PolicyRequest>,
 ) -> Result<StatusCode, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     let scope =
         require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_POLICY_MANAGE).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     let rule = PolicyRule {
         subject: body.subject,
         object: body.object,
@@ -225,9 +225,9 @@ pub async fn add_grouping(
     headers: HeaderMap,
     Json(body): Json<GroupingRequest>,
 ) -> Result<StatusCode, ApiError> {
-    ensure_tenant_exists(&state, &tenant_id).await?;
     let scope =
         require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_ASSIGNMENT_MANAGE).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
     let grouping = GroupingRule {
         user: body.user,
         role: body.role,
@@ -256,32 +256,6 @@ struct ActionScope {
     scopes: Vec<ParsedObject>,
 }
 
-/// Load and parse caller permissions from the Felix bearer token.
-///
-/// Invalid permissions are ignored so malformed entries cannot escalate access.
-async fn load_permissions(
-    state: &AppState,
-    tenant_id: &str,
-    headers: &HeaderMap,
-) -> Result<Vec<ParsedPermission>, ApiError> {
-    let bearer = extract_bearer(headers).ok_or_else(|| api_unauthorized("missing bearer token"))?;
-    let keys = state
-        .store
-        .get_tenant_signing_keys(tenant_id)
-        .await
-        .map_err(|err| api_internal("failed to load signing keys", &err))?;
-    let claims =
-        verify_token(&keys, tenant_id, bearer, 5).map_err(|_| api_unauthorized("invalid token"))?;
-    if claims.tid != tenant_id {
-        return Err(api_forbidden("tenant mismatch"));
-    }
-    Ok(claims
-        .perms
-        .iter()
-        .filter_map(|perm| parse_permission(perm, tenant_id).ok())
-        .collect())
-}
-
 /// Require that caller has at least one scope for the requested action.
 async fn require_action_scope(
     state: &AppState,
@@ -289,7 +263,7 @@ async fn require_action_scope(
     headers: &HeaderMap,
     action: &str,
 ) -> Result<ActionScope, ApiError> {
-    let scopes = load_permissions(state, tenant_id, headers)
+    let scopes = tenant_permissions(state, tenant_id, headers)
         .await?
         .into_iter()
         .filter(|perm| perm.action == action)
@@ -343,10 +317,4 @@ fn filter_policies_by_scope(
         })
         .cloned()
         .collect()
-}
-
-fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?;
-    let value = value.to_str().ok()?;
-    value.strip_prefix("Bearer ")
 }

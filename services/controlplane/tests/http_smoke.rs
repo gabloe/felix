@@ -3,8 +3,8 @@ mod common;
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::json_request;
 use common::read_json;
+use common::{Credentials, json_request_as, request_as, seed_credentials};
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_bootstrap_router, build_router};
 use controlplane::auth::felix_token::TenantSigningKeys;
@@ -21,11 +21,49 @@ use controlplane::store::{
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum::body::Body, ()> {
-    let store = controlplane::store::memory::InMemoryStore::new(controlplane::store::StoreConfig {
-        changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
-        change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-    });
+struct Harness {
+    app: axum::routing::RouterIntoService<axum::body::Body, ()>,
+    store: Arc<controlplane::store::memory::InMemoryStore>,
+    credentials: Credentials,
+}
+
+impl Harness {
+    fn operator(&self) -> String {
+        self.credentials.operator()
+    }
+
+    fn admin(&self, tenant_id: &str) -> String {
+        self.credentials.tenant_admin(tenant_id)
+    }
+
+    /// Create `tenant_id` through the API, as an operator, and bind the test
+    /// keys to it so the admin tokens minted here verify.
+    async fn create_tenant(&self, tenant_id: &str) {
+        let create = json_request_as(
+            "POST",
+            "/v1/tenants",
+            &self.operator(),
+            serde_json::json!({
+                "tenant_id": tenant_id,
+                "display_name": "Tenant One"
+            }),
+        );
+        let response = self.app.clone().oneshot(create).await.expect("tenant");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        self.credentials.adopt(self.store.as_ref(), tenant_id).await;
+    }
+}
+
+async fn harness(region_id: &str) -> Harness {
+    let store = Arc::new(controlplane::store::memory::InMemoryStore::new(
+        controlplane::store::StoreConfig {
+            changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: Some(
+                controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS,
+            ),
+        },
+    ));
+    let credentials = seed_credentials(store.as_ref()).await;
     let state = AppState {
         region: Region {
             region_id: region_id.to_string(),
@@ -37,7 +75,8 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(store),
+        store: Arc::clone(&store)
+            as Arc<dyn controlplane::store::ControlPlaneAuthStore + Send + Sync>,
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
@@ -50,27 +89,26 @@ fn app_with_region_id(region_id: &str) -> axum::routing::RouterIntoService<axum:
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
     };
-    build_router(state).into_service()
+    Harness {
+        app: build_router(state).into_service(),
+        store,
+        credentials,
+    }
 }
 
 #[tokio::test]
 async fn streams_crud_and_changes_smoke() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -83,9 +121,10 @@ async fn streams_crud_and_changes_smoke() {
         .expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create = json_request(
+    let create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -101,6 +140,7 @@ async fn streams_crud_and_changes_smoke() {
 
     let list = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list");
     let response = app.clone().oneshot(list).await.expect("list");
@@ -110,14 +150,16 @@ async fn streams_crud_and_changes_smoke() {
 
     let get = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get");
     let response = app.clone().oneshot(get).await.expect("get");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let patch = json_request(
+    let patch = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/streams/orders",
+        &admin,
         serde_json::json!({
             "retention": { "max_age_seconds": 7200, "max_size_bytes": null }
         }),
@@ -127,6 +169,7 @@ async fn streams_crud_and_changes_smoke() {
 
     let changes = Request::builder()
         .uri("/v1/streams/changes?since=0")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");
@@ -137,6 +180,7 @@ async fn streams_crud_and_changes_smoke() {
     let delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete).await.expect("delete");
@@ -145,22 +189,17 @@ async fn streams_crud_and_changes_smoke() {
 
 #[tokio::test]
 async fn caches_crud_and_changes_smoke() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -173,9 +212,10 @@ async fn caches_crud_and_changes_smoke() {
         .expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create = json_request(
+    let create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary Cache"
@@ -186,6 +226,7 @@ async fn caches_crud_and_changes_smoke() {
 
     let list = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list");
     let response = app.clone().oneshot(list).await.expect("list");
@@ -195,14 +236,16 @@ async fn caches_crud_and_changes_smoke() {
 
     let get = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get");
     let response = app.clone().oneshot(get).await.expect("get");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let patch = json_request(
+    let patch = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/caches/primary",
+        &admin,
         serde_json::json!({
             "display_name": "Primary Cache Updated"
         }),
@@ -212,6 +255,7 @@ async fn caches_crud_and_changes_smoke() {
 
     let changes = Request::builder()
         .uri("/v1/caches/changes?since=0")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");
@@ -222,6 +266,7 @@ async fn caches_crud_and_changes_smoke() {
     let delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete).await.expect("delete");
@@ -230,7 +275,8 @@ async fn caches_crud_and_changes_smoke() {
 
 #[tokio::test]
 async fn system_and_region_endpoints() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
 
     let info = Request::builder()
         .uri("/v1/system/info")
@@ -281,29 +327,25 @@ async fn system_and_region_endpoints() {
 
 #[tokio::test]
 async fn tenant_and_namespace_errors() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
 
     let list = Request::builder()
         .uri("/v1/tenants")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("list tenants");
     let response = app.clone().oneshot(list).await.expect("list tenants");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let conflict = json_request(
+    let conflict = json_request_as(
         "POST",
         "/v1/tenants",
+        &op,
         serde_json::json!({
             "tenant_id": "t1",
             "display_name": "Tenant One Again"
@@ -314,6 +356,7 @@ async fn tenant_and_namespace_errors() {
 
     let list_missing_ns = Request::builder()
         .uri("/v1/tenants/missing/namespaces")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list missing ns");
     let response = app
@@ -321,11 +364,14 @@ async fn tenant_and_namespace_errors() {
         .oneshot(list_missing_ns)
         .await
         .expect("list missing ns");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // No keys, so no credential can be valid for it: 401, not a 404 that
+    // would say whether the tenant exists.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    let create_missing_ns = json_request(
+    let create_missing_ns = json_request_as(
         "POST",
         "/v1/tenants/missing/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -336,11 +382,12 @@ async fn tenant_and_namespace_errors() {
         .oneshot(create_missing_ns)
         .await
         .expect("missing ns");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -356,6 +403,7 @@ async fn tenant_and_namespace_errors() {
     let delete_namespace = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete namespace");
     let response = app
@@ -368,6 +416,7 @@ async fn tenant_and_namespace_errors() {
     let delete_namespace_missing = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete namespace missing");
     let response = app
@@ -380,6 +429,7 @@ async fn tenant_and_namespace_errors() {
     let delete_tenant = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("delete tenant");
     let response = app
@@ -392,6 +442,7 @@ async fn tenant_and_namespace_errors() {
     let delete_tenant_missing = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("delete tenant missing");
     let response = app
@@ -404,22 +455,16 @@ async fn tenant_and_namespace_errors() {
 
 #[tokio::test]
 async fn stream_and_cache_not_found_paths() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -434,14 +479,16 @@ async fn stream_and_cache_not_found_paths() {
 
     let get_stream = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get stream");
     let response = app.clone().oneshot(get_stream).await.expect("get stream");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let patch_stream = json_request(
+    let patch_stream = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/streams/missing",
+        &admin,
         serde_json::json!({
             "durable": true
         }),
@@ -455,14 +502,16 @@ async fn stream_and_cache_not_found_paths() {
 
     let get_cache = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get cache");
     let response = app.clone().oneshot(get_cache).await.expect("get cache");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let patch_cache = json_request(
+    let patch_cache = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/caches/missing",
+        &admin,
         serde_json::json!({
             "display_name": "Updated"
         }),
@@ -472,6 +521,7 @@ async fn stream_and_cache_not_found_paths() {
 
     let list_missing_namespace_streams = Request::builder()
         .uri("/v1/tenants/t1/namespaces/missing/streams")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list missing streams");
     let response = app
@@ -483,6 +533,7 @@ async fn stream_and_cache_not_found_paths() {
 
     let list_missing_namespace_caches = Request::builder()
         .uri("/v1/tenants/t1/namespaces/missing/caches")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list missing caches");
     let response = app
@@ -495,22 +546,17 @@ async fn stream_and_cache_not_found_paths() {
 
 #[tokio::test]
 async fn snapshots_and_changes_endpoints() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -523,9 +569,10 @@ async fn snapshots_and_changes_endpoints() {
         .expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create_stream = json_request(
+    let create_stream = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -539,9 +586,10 @@ async fn snapshots_and_changes_endpoints() {
     let response = app.clone().oneshot(create_stream).await.expect("stream");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create_cache = json_request(
+    let create_cache = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"
@@ -560,7 +608,7 @@ async fn snapshots_and_changes_endpoints() {
         "/v1/caches/snapshot",
         "/v1/caches/changes?since=0",
     ] {
-        let req = Request::builder().uri(path).body(Body::empty()).unwrap();
+        let req = request_as("GET", path, &op);
         let response = app.clone().oneshot(req).await.expect("snapshot/changes");
         assert_eq!(response.status(), StatusCode::OK);
         let payload = read_json(response).await;
@@ -570,22 +618,16 @@ async fn snapshots_and_changes_endpoints() {
 
 #[tokio::test]
 async fn stream_and_cache_conflict_and_delete_errors() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -598,9 +640,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
         .expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create_stream = json_request(
+    let create_stream = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -614,9 +657,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
     let response = app.clone().oneshot(create_stream).await.expect("stream");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let conflict_stream = json_request(
+    let conflict_stream = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -634,9 +678,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
         .expect("stream conflict");
     assert_eq!(response.status(), StatusCode::CONFLICT);
 
-    let patch_stream = json_request(
+    let patch_stream = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/streams/orders",
+        &admin,
         serde_json::json!({
             "retention": { "max_age_seconds": 7200, "max_size_bytes": 1024 },
             "consistency": "Quorum",
@@ -651,9 +696,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
         .expect("patch stream");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let create_cache = json_request(
+    let create_cache = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"
@@ -662,9 +708,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
     let response = app.clone().oneshot(create_cache).await.expect("cache");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let conflict_cache = json_request(
+    let conflict_cache = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"
@@ -677,9 +724,10 @@ async fn stream_and_cache_conflict_and_delete_errors() {
         .expect("cache conflict");
     assert_eq!(response.status(), StatusCode::CONFLICT);
 
-    let patch_cache = json_request(
+    let patch_cache = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/caches/primary",
+        &admin,
         serde_json::json!({ "display_name": "Primary Updated" }),
     );
     let response = app.clone().oneshot(patch_cache).await.expect("patch cache");
@@ -688,6 +736,7 @@ async fn stream_and_cache_conflict_and_delete_errors() {
     let delete_stream = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete stream");
     let response = app
@@ -700,6 +749,7 @@ async fn stream_and_cache_conflict_and_delete_errors() {
     let delete_cache = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete cache");
     let response = app
@@ -712,22 +762,17 @@ async fn stream_and_cache_conflict_and_delete_errors() {
 
 #[tokio::test]
 async fn list_endpoints_return_items() {
-    let app: axum::routing::RouterIntoService<axum::body::Body, ()> = app_with_region_id("local");
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
 
-    let create_tenant = json_request(
-        "POST",
-        "/v1/tenants",
-        serde_json::json!({
-            "tenant_id": "t1",
-            "display_name": "Tenant One"
-        }),
-    );
-    let response = app.clone().oneshot(create_tenant).await.expect("tenant");
-    assert_eq!(response.status(), StatusCode::CREATED);
+    h.create_tenant("t1").await;
 
-    let create_namespace = json_request(
+    let create_namespace = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -740,9 +785,10 @@ async fn list_endpoints_return_items() {
         .expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create_stream = json_request(
+    let create_stream = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -756,9 +802,10 @@ async fn list_endpoints_return_items() {
     let response = app.clone().oneshot(create_stream).await.expect("stream");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let create_cache = json_request(
+    let create_cache = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"
@@ -769,6 +816,7 @@ async fn list_endpoints_return_items() {
 
     let list_tenants = Request::builder()
         .uri("/v1/tenants")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("list tenants");
     let response = app
@@ -780,6 +828,7 @@ async fn list_endpoints_return_items() {
 
     let list_namespaces = Request::builder()
         .uri("/v1/tenants/t1/namespaces")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list namespaces");
     let response = app
@@ -791,6 +840,7 @@ async fn list_endpoints_return_items() {
 
     let list_streams = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list streams");
     let response = app
@@ -802,14 +852,18 @@ async fn list_endpoints_return_items() {
 
     let list_caches = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list caches");
     let response = app.clone().oneshot(list_caches).await.expect("list caches");
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct FailingStore {
+    /// When set, the credential check passes and the failure surfaces from
+    /// the operation itself, which is what these tests are about.
+    signing_keys: Option<TenantSigningKeys>,
     tenant_exists: bool,
     namespace_exists: bool,
     stream_create_not_found: bool,
@@ -1091,7 +1145,9 @@ impl AuthStore for FailingStore {
     }
 
     async fn get_tenant_signing_keys(&self, _tenant_id: &str) -> StoreResult<TenantSigningKeys> {
-        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+        self.signing_keys
+            .clone()
+            .ok_or_else(|| StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 
     async fn set_tenant_signing_keys(
@@ -1223,6 +1279,10 @@ async fn system_health_reports_unavailable_on_store_failure() {
 
 #[tokio::test]
 async fn tenant_endpoints_report_internal_error_on_store_failure() {
+    let credentials = Credentials {
+        keys: controlplane::auth::keys::generate_signing_keys().expect("keys"),
+    };
+    let op = credentials.operator();
     let state = AppState {
         region: Region {
             region_id: "local".to_string(),
@@ -1234,7 +1294,10 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore::default()),
+        store: Arc::new(FailingStore {
+            signing_keys: Some(credentials.keys.clone()),
+            ..FailingStore::default()
+        }),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
@@ -1252,14 +1315,16 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
 
     let list = Request::builder()
         .uri("/v1/tenants")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("list tenants");
     let response = app.clone().oneshot(list).await.expect("list tenants");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let create = json_request(
+    let create = json_request_as(
         "POST",
         "/v1/tenants",
+        &op,
         serde_json::json!({
             "tenant_id": "t1",
             "display_name": "Tenant One"
@@ -1271,6 +1336,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
     let delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("delete tenant");
     let response = app.clone().oneshot(delete).await.expect("delete tenant");
@@ -1278,6 +1344,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
 
     let snapshot = Request::builder()
         .uri("/v1/tenants/snapshot")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("snapshot");
     let response = app.clone().oneshot(snapshot).await.expect("snapshot");
@@ -1285,6 +1352,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
 
     let changes = Request::builder()
         .uri("/v1/tenants/changes?since=0")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");
@@ -1293,6 +1361,10 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
 
 #[tokio::test]
 async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
+    let credentials = Credentials {
+        keys: controlplane::auth::keys::generate_signing_keys().expect("keys"),
+    };
+    let admin = credentials.tenant_admin("t1");
     let state = AppState {
         region: Region {
             region_id: "local".to_string(),
@@ -1304,7 +1376,10 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore::with_namespace_checks_succeeding()),
+        store: Arc::new(FailingStore {
+            signing_keys: Some(credentials.keys.clone()),
+            ..FailingStore::with_namespace_checks_succeeding()
+        }),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
@@ -1320,9 +1395,10 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
 
-    let stream_create = json_request(
+    let stream_create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -1342,14 +1418,16 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
 
     let stream_get = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get stream");
     let response = app.clone().oneshot(stream_get).await.expect("get stream");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let stream_patch = json_request(
+    let stream_patch = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/streams/orders",
+        &admin,
         serde_json::json!({ "durable": true }),
     );
     let response = app
@@ -1362,6 +1440,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
     let stream_delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/streams/orders")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete stream");
     let response = app
@@ -1371,9 +1450,10 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
         .expect("delete stream");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let cache_create = json_request(
+    let cache_create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"
@@ -1388,14 +1468,16 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
 
     let cache_get = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get cache");
     let response = app.clone().oneshot(cache_get).await.expect("get cache");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let cache_patch = json_request(
+    let cache_patch = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/caches/primary",
+        &admin,
         serde_json::json!({ "display_name": "Updated" }),
     );
     let response = app.clone().oneshot(cache_patch).await.expect("patch cache");
@@ -1404,6 +1486,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
     let cache_delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/caches/primary")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete cache");
     let response = app
@@ -1416,6 +1499,10 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
 
 #[tokio::test]
 async fn stream_and_cache_create_report_not_found_when_store_reports_missing_namespace() {
+    let credentials = Credentials {
+        keys: controlplane::auth::keys::generate_signing_keys().expect("keys"),
+    };
+    let admin = credentials.tenant_admin("t1");
     let state = AppState {
         region: Region {
             region_id: "local".to_string(),
@@ -1427,7 +1514,10 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(FailingStore::with_create_not_found()),
+        store: Arc::new(FailingStore {
+            signing_keys: Some(credentials.keys.clone()),
+            ..FailingStore::with_create_not_found()
+        }),
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
@@ -1443,9 +1533,10 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
 
-    let stream_create = json_request(
+    let stream_create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": "Stream",
@@ -1463,9 +1554,10 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
         .expect("create stream");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let cache_create = json_request(
+    let cache_create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary"

@@ -5,6 +5,7 @@ use axum::http::Request;
 use axum::http::StatusCode;
 use common::json_request;
 use common::read_json;
+use common::{json_request_as, seed_credentials};
 use controlplane::api::types::{FeatureFlags, Region};
 use controlplane::app::{AppState, build_router};
 use controlplane::auth::felix_token::{TenantSigningKeys, mint_token};
@@ -53,11 +54,13 @@ async fn setup() -> (
         changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
         change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
     }));
+    let operator = seed_credentials(store.as_ref()).await.operator();
     let app = build_router(build_state(store.clone())).into_service();
 
-    let create_tenant = json_request(
+    let create_tenant = json_request_as(
         "POST",
         "/v1/tenants",
+        &operator,
         serde_json::json!({
             "tenant_id": "t1",
             "display_name": "Tenant One"

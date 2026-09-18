@@ -423,12 +423,31 @@ where
 
     // Optional: start a periodic control-plane sync to keep tenant/namespace/stream metadata
     // refreshed. When disabled, the broker relies solely on local registrations.
+    // One holder, shared by every control-plane caller: the metadata sync
+    // here, and membership below. A refresh swaps what is inside it, so a
+    // caller handed it at startup keeps presenting a current token for the
+    // life of the process rather than the one token it was given.
+    let credential = (!config.controlplane_token.is_empty())
+        .then(|| credential::NodeCredential::new(config.controlplane_token.clone()));
     let (seeded_tx, seeded_rx) = tokio::sync::oneshot::channel();
     let controlplane_task = if let Some(base_url) = config.controlplane_url.clone() {
+        let sync_credential = credential.clone();
         let interval_ms = config.controlplane_sync_interval_ms;
         let broker = Arc::clone(&broker);
         let sync_shutdown = sync_shutdown.clone();
         let seeded_tx = gate_readiness_on_sync.then_some(seeded_tx);
+        // The feeds require `node.view:cluster:*`, so a sync with nothing to
+        // present is refused on every poll. Said once here, at startup, rather
+        // than discovered from a wall of 401s -- and as a warning, because the
+        // JWKS fetch that verifies client tokens is unauthenticated and still
+        // works.
+        if sync_credential.is_none() {
+            tracing::warn!(
+                "FELIX_CONTROLPLANE_URL is set but no FELIX_NODE_TOKEN: the control \
+                 plane will refuse the metadata sync, so no tenant, namespace, stream \
+                 or cache will be learned from it"
+            );
+        }
         Some(tokio::spawn(async move {
             // `start_sync` polls forever, so cancellation is what ends it. Dropping
             // it mid-iteration is safe: the sync is a read-only metadata refresh
@@ -443,6 +462,7 @@ where
                     base_url,
                     Duration::from_millis(interval_ms),
                     seeded_tx,
+                    sync_credential,
                 ) => {
                     if let Err(err) = result {
                         tracing::warn!(error = %err, "control plane sync exited");
@@ -501,14 +521,6 @@ where
     // for `serving`, because advertising a node placement can route to before
     // it can answer is worse than advertising it a moment late.
     let membership_client = reqwest::Client::new();
-    // One holder, shared by every control-plane caller below. A refresh swaps
-    // what is inside it, so a caller handed it at startup keeps presenting a
-    // current token for the life of the process rather than the one token it
-    // was given.
-    let credential = config
-        .membership
-        .as_ref()
-        .map(|membership| credential::NodeCredential::new(membership.token.clone()));
     let membership = match (&config.membership, &config.controlplane_url) {
         (Some(membership_config), Some(base_url)) => {
             let serving = if gate_readiness_on_sync {
