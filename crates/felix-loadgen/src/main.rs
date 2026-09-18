@@ -41,6 +41,8 @@ fn main() -> Result<()> {
 
 struct Args {
     common: Common,
+    /// Distinct routing keys for `ingest`; 0 publishes unkeyed.
+    keys: usize,
     scenario: String,
     stream: String,
     cache: String,
@@ -57,6 +59,8 @@ fn usage() -> ! {
   --namespace <ns>            default: default
   --scenario <name>           pubsub | cache | counter | watch | queue | retained (required)
   --stream <name>             stream for pubsub (default: perf)
+  --keys <n>                  ingest: spread batches over n routing keys (default 0,
+                              unkeyed -- every record lands on shard 0)
   --cache <name>              cache scope for cache/counter/watch (default: perf)
   --warmup <n>                discarded operations (default: 2000)
   --total <n>                 measured operations (default: 20000)
@@ -91,6 +95,7 @@ fn parse_args() -> Result<Args> {
     let mut batch = 1usize;
     let mut binary = false;
     let mut concurrency = 8usize;
+    let mut keys = 0usize;
     let mut environment = "unknown".to_string();
     let mut slow_subscribers = 0usize;
     let mut slow_delay_ms = 0u64;
@@ -145,6 +150,11 @@ fn parse_args() -> Result<Args> {
             }
             "--batch" => batch = value("--batch")?.parse().context("--batch")?,
             "--binary" => binary = true,
+            // How many distinct routing keys to spread the batches over.
+            // 0 keeps the unkeyed behaviour, where every record resolves to
+            // shard 0 regardless of the stream's shard count -- which is what
+            // made every multi-shard measurement so far a single-shard one.
+            "--keys" => keys = value("--keys")?.parse().context("--keys")?,
             "--concurrency" => {
                 concurrency = value("--concurrency")?.parse().context("--concurrency")?
             }
@@ -165,6 +175,7 @@ fn parse_args() -> Result<Args> {
     let scenario = scenario.context("--scenario is required")?;
 
     Ok(Args {
+        keys,
         common: Common {
             brokers,
             tenant,
@@ -196,7 +207,7 @@ async fn run() -> Result<()> {
         "watch" => scenarios::watch(&args.common, &args.cache).await,
         "queue" => scenarios::queue(&args.common, &args.stream).await,
         "retained" => scenarios::retained(&args.common, &args.cache).await,
-        "ingest" => scenarios::ingest(&args.common, &args.stream).await,
+        "ingest" => scenarios::ingest(&args.common, &args.stream, args.keys).await,
         other => bail!(
             "unknown scenario {other:?} (pubsub | cache | counter | watch | queue | retained | ingest)"
         ),

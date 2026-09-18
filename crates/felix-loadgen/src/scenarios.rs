@@ -984,7 +984,11 @@ pub(crate) async fn retained(common: &Common, cache: &str) -> Result<()> {
 /// scaling is visible. A single publisher on one shard is the least-parallel
 /// configuration possible; this is the opposite, and it is what actually
 /// stresses the brokers.
-pub(crate) async fn ingest(common: &Common, stream: &str) -> Result<()> {
+/// `keys` spreads batches over that many routing keys. At 0 the batches are
+/// unkeyed, and a record with no key resolves to shard 0 -- so a 12-shard
+/// stream is exercised as a single log, which is how every multi-shard
+/// measurement before this one was really a single-shard one.
+pub(crate) async fn ingest(common: &Common, stream: &str, keys: usize) -> Result<()> {
     let publishers = common.concurrency.max(1);
     let per = (common.total / publishers).max(1);
     let batch = common.batch.max(1);
@@ -1043,10 +1047,26 @@ pub(crate) async fn ingest(common: &Common, stream: &str) -> Result<()> {
                 let payloads: Vec<Vec<u8>> = std::iter::repeat_with(|| template.clone())
                     .take(this)
                     .collect();
-                match publisher
-                    .publish_batch(&tenant, &namespace, &stream, payloads, AckMode::None)
-                    .await
-                {
+                let sent_batches = sent / batch.max(1);
+                match if keys > 0 {
+                    // The key decides the shard, so cycling keys spreads the
+                    // load across logs instead of piling it on shard 0.
+                    let key = format!("k{}", (p * 1_000_003 + sent_batches) % keys);
+                    publisher
+                        .publish_batch_keyed(
+                            &tenant,
+                            &namespace,
+                            &stream,
+                            bytes::Bytes::from(key.into_bytes()),
+                            payloads,
+                            AckMode::None,
+                        )
+                        .await
+                } else {
+                    publisher
+                        .publish_batch(&tenant, &namespace, &stream, payloads, AckMode::None)
+                        .await
+                } {
                     Ok(()) => sent += this,
                     Err(err) if is_retriable_transient(&err) => {
                         retries += 1;
