@@ -59,16 +59,10 @@ async fn fan_in(cluster: &Cluster, node: &str) -> Option<f64> {
 
 /// **Concurrent publishers over QUIC should share device flushes.**
 ///
-/// **Currently fails, deliberately committed as the reproduction for #535.**
-/// Measured fan-in is 1.000 with 16 publishers over 16 connections, against
-/// 7.25x in `felix-storage` and 10.97x in `felix-broker` at the same
-/// concurrency. Ignored rather than deleted: it is the only reproduction that
-/// reaches the transport, and it runs on a laptop in ~2s, which is what makes
-/// the remaining question debuggable without a cluster session.
-///
-/// Un-ignore when the serialisation is fixed, and raise the threshold to the
-/// >= 8 that `docs/storage-performance.md` budgets.
-#[ignore = "reproduces #535: publish ingress serialises, fan-in 1.0"]
+/// This measured 1.000 before the publish path was split into a claim and a
+/// completion (#535): one worker owned each shard and awaited every flush, so
+/// nothing was ever concurrent at the sync point. It is the regression test for
+/// that fix, and it fails immediately if the split is undone.
 #[serial]
 #[tokio::test]
 async fn concurrent_publishers_over_quic_share_a_flush() {
@@ -155,13 +149,11 @@ async fn concurrent_publishers_over_quic_share_a_flush() {
     let after = after.expect("the broker recorded no device flushes at all");
     eprintln!("  => group-commit fan-in {after:.3}");
 
-    // `docs/storage-performance.md` budgets this at >= 8. Asserting the budget
-    // outright would fail today for a reason already filed (#535), so this
-    // guards the far weaker claim the two lower-layer tests already meet: that
-    // *some* coalescing happens. A value near 1.0 with 16 publishers in flight
-    // means the transport is admitting them one at a time.
+    // The budget from `docs/storage-performance.md`, asserted rather than
+    // merely documented -- that it was written down and never gated is how a
+    // fan-in of 1 survived unnoticed across two releases.
     assert!(
-        after > 2.0,
+        after >= 8.0,
         "group-commit fan-in was {after:.3} with {PUBLISHERS} concurrent publishers over QUIC. \
          felix-storage coalesces at 7.25x and felix-broker at 10.97x under the same concurrency, \
          so the serialisation is in the publish ingress (#535)."

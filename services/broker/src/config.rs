@@ -182,6 +182,11 @@ pub struct BrokerConfig {
     pub fanout_batch_size: usize,
     // Publish worker count per QUIC connection.
     pub pub_workers_per_conn: usize,
+    /// Durable publishes one worker may have awaiting their device flush at
+    /// once. Offsets are still claimed serially, so this does not affect the
+    /// order records land in -- it decides how many flushes group commit gets
+    /// to coalesce. `1` restores the old behaviour of one flush at a time.
+    pub pub_flush_concurrency: usize,
     // Per-worker publish queue depth.
     pub pub_queue_depth: usize,
     // Shared in-flight publish byte budget across all publish workers (process-wide).
@@ -318,6 +323,7 @@ impl Default for BrokerConfig {
             event_batch_max_delay_us: DEFAULT_EVENT_BATCH_MAX_DELAY_US,
             fanout_batch_size: 64,
             pub_workers_per_conn: DEFAULT_PUB_WORKERS_PER_CONN,
+            pub_flush_concurrency: DEFAULT_PUB_FLUSH_CONCURRENCY,
             pub_queue_depth: DEFAULT_PUB_QUEUE_DEPTH,
             pub_inflight_bytes: DEFAULT_PUB_INFLIGHT_BYTES,
             pub_conn_inflight_bytes: DEFAULT_PUB_CONN_INFLIGHT_BYTES,
@@ -542,6 +548,10 @@ const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 // this to match.
 const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
+// Enough to keep a device flush busy with company without letting a burst put
+// unbounded concurrent callers into shared broker state. `sync_batch_appends`
+// is the number to watch: the budget in docs/storage-performance.md is >= 8.
+const DEFAULT_PUB_FLUSH_CONCURRENCY: usize = 32;
 const DEFAULT_PUB_QUEUE_DEPTH: usize = 64;
 const DEFAULT_PUB_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_PUB_CONN_INFLIGHT_BYTES: usize = 16 * 1024 * 1024;
@@ -740,6 +750,10 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_PUB_WORKERS_PER_CONN);
+        let pub_flush_concurrency = std::env::var("FELIX_BROKER_PUB_FLUSH_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PUB_FLUSH_CONCURRENCY);
         let pub_queue_depth = std::env::var("FELIX_BROKER_PUB_QUEUE_DEPTH")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -872,6 +886,7 @@ impl BrokerConfig {
             event_batch_max_delay_us,
             fanout_batch_size,
             pub_workers_per_conn,
+            pub_flush_concurrency,
             pub_queue_depth,
             pub_inflight_bytes,
             pub_conn_inflight_bytes,

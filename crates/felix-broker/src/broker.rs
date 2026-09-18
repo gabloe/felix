@@ -195,6 +195,37 @@ pub struct PublishOutcome {
     pub offsets: Option<(u64, u64)>,
 }
 
+/// A publish that has consumed its offsets and taken its place in the commit
+/// order, but is not yet durable.
+///
+/// The point of the split is that the first half must be ordered and the second
+/// half must not be: claiming is a few microseconds of offset arithmetic, while
+/// completing waits on a device flush. Holding a claim does not hold the log --
+/// other publishes claim and complete freely around it -- so several
+/// completions overlap and group commit has something to coalesce (#535).
+///
+/// Complete it. Dropping a claim releases its commit range so later publishes
+/// are not stranded, but the offsets it consumed are gone either way.
+pub struct ClaimedPublish {
+    handle: StreamHandle,
+    payloads: Vec<Bytes>,
+    durable: Option<ClaimedDurable>,
+    sample: bool,
+}
+
+impl ClaimedPublish {
+    /// The first offset this batch consumed, on a durable stream.
+    pub fn first_offset(&self) -> Option<u64> {
+        self.durable.as_ref().map(|d| d.pending.first_offset())
+    }
+}
+
+struct ClaimedDurable {
+    pending: felix_storage::disk_log::PendingAppend,
+    turn: felix_storage::CommitTurn<'static>,
+    durable_start: Option<std::time::Instant>,
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamHandle {
     pub(crate) state: Arc<StreamState>,
@@ -208,6 +239,14 @@ impl StreamHandle {
 }
 
 impl StreamHandle {
+    /// Whether a publish through this handle waits on a device flush.
+    ///
+    /// The transport uses it to decide which publishes are worth splitting into
+    /// a claim and a completion: only a durable stream has a flush to overlap.
+    pub fn is_durable(&self) -> bool {
+        self.state.durable.is_some()
+    }
+
     pub fn id(&self) -> u64 {
         self.state.handle_id
     }
@@ -495,19 +534,77 @@ impl Broker {
     ///
     /// Same path as [`Self::publish_batch_to_handle`]; the offsets are what a
     /// forwarding broker relays to the requester, which cannot see this log.
-    pub async fn publish_batch_with_outcome(
+    /// Claim this batch's offsets and its place in the commit order.
+    ///
+    /// Split out of [`Broker::publish_batch_with_outcome`] so a caller that
+    /// must preserve arrival order can do *this* part serially and let the
+    /// durability wait overlap. That wait is a device flush under
+    /// `FsyncMode::OnCommit` -- hundreds of microseconds against the handful
+    /// this costs -- and group commit only has something to coalesce when
+    /// several of them are in flight at once (#535).
+    ///
+    /// Offsets are consumed here, so the order calls return in *is* the order
+    /// records land on disk. Complete every claim: dropping one releases its
+    /// commit range, but the offsets it consumed stay consumed.
+    pub async fn claim_publish(
         &self,
         handle: &StreamHandle,
         payloads: &[Bytes],
-    ) -> Result<PublishOutcome> {
+    ) -> Result<ClaimedPublish> {
         if !handle.state.active.load(Ordering::Acquire) {
             return Err(BrokerError::StreamHandleInactive(handle.id()));
         }
 
-        // Fan-out to current subscribers.
-        // We intentionally avoid a global broadcast channel here:
-        // each subscriber has a bounded queue and publish uses try_send so a slow consumer
-        // drops locally instead of stalling all publishers.
+        let sample = t_should_sample();
+        let mut claimed = ClaimedPublish {
+            handle: handle.clone(),
+            payloads: payloads.to_vec(),
+            durable: None,
+            sample,
+        };
+        if payloads.is_empty() {
+            return Ok(claimed);
+        }
+
+        if let Some(durable) = &handle.state.durable {
+            let durable_start = t_now_if(sample);
+            // Offsets are consumed here. The commit order has to be claimed
+            // against them immediately, before the durability wait, because
+            // from this point the records exist on disk and everything
+            // behind them queues on this range. Claiming it only after a
+            // *successful* wait stranded the stream: a failed or cancelled
+            // publish abandoned its range, and every later publish waited
+            // on a turn that could never arrive.
+            let pending = durable.begin_append(payloads).await?;
+            let turn = handle
+                .state
+                .commit_sequencer
+                .reserve_owned(pending.first_offset(), pending.last_offset() + 1);
+            claimed.durable = Some(ClaimedDurable {
+                pending,
+                turn,
+                durable_start,
+            });
+        }
+        Ok(claimed)
+    }
+
+    /// Make a [`ClaimedPublish`] durable, then append and fan it out.
+    ///
+    /// Safe to run concurrently with other completions on the same stream:
+    /// the commit turn claimed in [`Broker::claim_publish`] is what keeps disk
+    /// order, cursor order and delivery order in agreement, so overlapping the
+    /// flushes does not disturb what anybody observes.
+    pub async fn complete_publish(&self, claimed: ClaimedPublish) -> Result<PublishOutcome> {
+        let ClaimedPublish {
+            handle,
+            payloads,
+            durable,
+            sample,
+        } = claimed;
+        let payloads = payloads.as_slice();
+        let stream_state = &handle.state;
+
         if payloads.is_empty() {
             return Ok(PublishOutcome {
                 subscribers: 0,
@@ -515,45 +612,19 @@ impl Broker {
             });
         }
 
-        let sample = t_should_sample();
-        let stream_state = &handle.state;
-
-        // Durable streams persist before anything else observes the batch.
-        //
-        // Fanout and the acknowledgement both happen after this returns Ok, so a
-        // storage failure fails the publish instead of delivering a record that
-        // a crash would erase. Under `FsyncMode::OnCommit` this await includes
-        // the device flush; that latency is the guarantee being bought.
-        //
-        // The commit turn taken afterwards is what keeps the three orders in
-        // agreement. Offsets are assigned concurrently and flushes are shared —
-        // group commit is untouched — but the half that everything else
-        // observes runs strictly in disk order. It is held across the fanout
-        // below, not just the replay-ring append, because a subscriber's
-        // delivery order is as much a part of the stream's order as its
-        // cursors are.
         let mut durable_first_offset = None;
-        let _commit_turn = match &stream_state.durable {
-            None => None,
-            Some(durable) => {
-                let durable_start = t_now_if(sample);
-
-                // Offsets are consumed here. The commit order has to be claimed
-                // against them immediately, before the durability wait, because
-                // from this point the records exist on disk and everything
-                // behind them queues on this range. Claiming it only after a
-                // *successful* wait stranded the stream: a failed or cancelled
-                // publish abandoned its range, and every later publish waited
-                // on a turn that could never arrive.
-                let pending = durable.begin_append(payloads).await?;
+        let _commit_turn = match (durable, &stream_state.durable) {
+            (Some(claimed), Some(log)) => {
+                let ClaimedDurable {
+                    pending,
+                    turn,
+                    durable_start,
+                } = claimed;
                 durable_first_offset = Some(pending.first_offset());
-                let turn = stream_state
-                    .commit_sequencer
-                    .reserve(pending.first_offset(), pending.last_offset() + 1);
 
-                // From here every exit path — `?`, a panic, or this future being
-                // dropped mid-await — releases the range through `turn`.
-                durable.commit(&pending).await?;
+                // From here every exit path -- `?`, a panic, or this future
+                // being dropped mid-await -- releases the range through `turn`.
+                log.commit(&pending).await?;
                 turn.wait().await;
                 // Replication waits on this. Under `Quorum` the publish is
                 // about to block on a majority, so the shipping that produces
@@ -564,7 +635,7 @@ impl Broker {
                 // waiters already registered, so an append landing while
                 // replication is mid-pass would be lost and that record would
                 // wait for the tick after all. `notify_one` leaves a permit, so
-                // the next wait returns at once — and it stores only one, so a
+                // the next wait returns at once -- and it stores only one, so a
                 // burst becomes a single extra pass rather than a storm.
                 self.appended.notify_one();
 
@@ -574,6 +645,7 @@ impl Broker {
                 }
                 Some(turn)
             }
+            _ => None,
         };
 
         let append_start = t_now_if(sample);
@@ -709,6 +781,20 @@ impl Broker {
             // run of offsets.
             offsets: durable_first_offset.map(|first| (first, first + item_count as u64 - 1)),
         })
+    }
+
+    /// Persist, append and fan out one batch.
+    ///
+    /// The two phases back to back. A caller that needs the claim ordered
+    /// against other publishes while the flushes overlap should call
+    /// [`Broker::claim_publish`] and [`Broker::complete_publish`] itself.
+    pub async fn publish_batch_with_outcome(
+        &self,
+        handle: &StreamHandle,
+        payloads: &[Bytes],
+    ) -> Result<PublishOutcome> {
+        let claimed = self.claim_publish(handle, payloads).await?;
+        self.complete_publish(claimed).await
     }
 
     pub async fn subscribe(

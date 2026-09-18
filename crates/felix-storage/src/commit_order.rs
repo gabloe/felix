@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
@@ -166,7 +167,27 @@ impl CommitSequencer {
     /// subsequent publish waited on a turn that could not arrive.
     pub fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
         CommitTurn {
-            sequencer: self,
+            sequencer: SequencerRef::Borrowed(self),
+            first_offset,
+            next_offset,
+            generation: self.state.lock().generation,
+        }
+    }
+
+    /// [`CommitSequencer::reserve`], but the turn owns its sequencer and so has
+    /// no lifetime tying it to this call.
+    ///
+    /// Same guarantees, including the one that matters: the range is claimed
+    /// the moment offsets are consumed, and `Drop` releases it however the
+    /// caller exits. The difference is only that the claim can be moved into
+    /// another task, which is what lets durability waits overlap.
+    pub fn reserve_owned(
+        self: &Arc<Self>,
+        first_offset: Offset,
+        next_offset: Offset,
+    ) -> CommitTurn<'static> {
+        CommitTurn {
+            sequencer: SequencerRef::Owned(Arc::clone(self)),
             first_offset,
             next_offset,
             generation: self.state.lock().generation,
@@ -174,9 +195,32 @@ impl CommitSequencer {
     }
 }
 
+/// How a turn holds the sequencer it will release into.
+///
+/// A borrowed turn is the common case and costs nothing. An owned one exists so
+/// a claim can outlive the stack frame that made it -- which is what lets a
+/// caller claim its offsets in order and then await the device flush
+/// concurrently with other publishes, instead of holding the whole stream
+/// behind one flush at a time (#535).
+enum SequencerRef<'a> {
+    Borrowed(&'a CommitSequencer),
+    Owned(Arc<CommitSequencer>),
+}
+
+impl std::ops::Deref for SequencerRef<'_> {
+    type Target = CommitSequencer;
+
+    fn deref(&self) -> &CommitSequencer {
+        match self {
+            SequencerRef::Borrowed(sequencer) => sequencer,
+            SequencerRef::Owned(sequencer) => sequencer,
+        }
+    }
+}
+
 /// A claim on one offset range. Releasing it lets the next range proceed.
 pub struct CommitTurn<'a> {
-    sequencer: &'a CommitSequencer,
+    sequencer: SequencerRef<'a>,
     first_offset: Offset,
     next_offset: Offset,
     /// Generation this range was claimed in.
