@@ -225,7 +225,15 @@ pub struct ControlPlaneConfig {
     pub readiness_cache_ttl_ms: u64,
 }
 
+/// The settings a config file may override.
+///
+/// `deny_unknown_fields`, here and on every nested override, because a key
+/// nobody reads is a lie: an operator who writes `bind_adrr` gets the default,
+/// no error, and an instance listening somewhere they did not ask for. A typo
+/// inside `postgres:` is just as silent, which is why the nested ones carry it
+/// too.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ControlPlaneConfigOverride {
     bind_addr: Option<String>,
     metrics_bind: Option<String>,
@@ -242,6 +250,7 @@ struct ControlPlaneConfigOverride {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NodeLivenessOverride {
     heartbeat_interval_ms: Option<u64>,
     expiry_timeout_ms: Option<u64>,
@@ -250,11 +259,13 @@ struct NodeLivenessOverride {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StorageOverride {
     backend: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PostgresOverride {
     url: Option<String>,
     max_connections: Option<u32>,
@@ -302,6 +313,7 @@ pub struct BootstrapTlsConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BootstrapOverride {
     enabled: Option<bool>,
     bind_addr: Option<String>,

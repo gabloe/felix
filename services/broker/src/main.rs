@@ -80,6 +80,15 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let metrics_handle = observability::init_observability("felix-broker");
+    // A `FELIX_*` name nothing reads is a typo, and a typo is a default quietly
+    // taking effect. Reported after logging is up so the warning is actually
+    // seen, and as a warning rather than a refusal: an orchestrator may inject
+    // variables meant for something else, and refusing to start over one is
+    // worse than the mistake it guards against.
+    for warning in felix_common::env_registry::unrecognised_warnings() {
+        tracing::warn!("{warning}");
+    }
+
     // Observability is initialized first so any subsequent startup logs/metrics are captured.
 
     let config = config::BrokerConfig::from_env_or_yaml()?;

@@ -499,7 +499,14 @@ const DEFAULT_SUBSCRIBER_MAX_BYTES_PER_WRITE: usize = 64 * 1024;
 const DEFAULT_SUB_STREAMS_PER_CONN: usize = 4;
 const DEFAULT_SUB_STREAM_MODE: SubStreamMode = SubStreamMode::PerSubscriber;
 
+/// The settings a config file may override.
+///
+/// `deny_unknown_fields` because a key nobody reads is a lie: an operator who
+/// writes `metrics_bnid` gets the default, no error, and a broker listening
+/// somewhere they did not ask for. The same reasoning as the wire protocol's
+/// unknown flag bits — a thing not understood is refused, never ignored.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BrokerConfigOverride {
     quic_bind: Option<String>,
     metrics_bind: Option<String>,
@@ -1706,6 +1713,24 @@ subscriber_single_writer_per_conn: false
 
         fn parse(yaml: &str) -> BrokerConfigOverride {
             serde_yaml_ng::from_str(yaml).expect("parse the override")
+        }
+
+        /// **A key nobody reads is refused, not ignored.**
+        ///
+        /// The test above proves every key that parses reaches the config. This
+        /// is the other half: a key that does *not* parse must say so. Without
+        /// it an operator who writes `metrics_bnid` gets the default, no error,
+        /// and a broker listening somewhere they did not ask for — and the file
+        /// they are looking at says otherwise.
+        #[test]
+        fn a_key_the_broker_does_not_know_is_refused() {
+            let err =
+                serde_yaml_ng::from_str::<BrokerConfigOverride>("metrics_bnid: \"0.0.0.0:1\"")
+                    .expect_err("a misspelled key must not be accepted");
+            assert!(
+                err.to_string().contains("metrics_bnid"),
+                "the error has to name the key, or it cannot be acted on: {err}",
+            );
         }
 
         /// **Every key in the file has to reach the config.** A key that
