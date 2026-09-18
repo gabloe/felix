@@ -27,14 +27,13 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use parking_lot::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::oneshot;
 
 use crate::log::Offset;
 
 /// Orders the post-durability half of writes by their disk offset.
 pub struct CommitSequencer {
     state: Mutex<SequenceState>,
-    ready: Notify,
 }
 
 #[derive(Debug)]
@@ -56,6 +55,18 @@ struct SequenceState {
     /// pre-reset offsets, so releasing it must not move the sequence: the
     /// reset is authoritative about where the log now ends.
     generation: u64,
+    /// One sender per parked waiter, keyed by the offset it is waiting for.
+    ///
+    /// This is what makes a release wake *the* waiter rather than all of them.
+    /// Broadcasting cost every parked publisher a wake-up, a lock acquisition
+    /// and a re-park per commit — so the work per commit grew with the number
+    /// of publishers in flight, and throughput fell as concurrency rose.
+    ///
+    /// At most one waiter becomes eligible per release, which is what lets this
+    /// be a single wake rather than a scan: `next` only advances past a range
+    /// once that range's own waiter has finished with it, so the waiter at
+    /// `next` is the only one whose condition can have just become true.
+    waiters: BTreeMap<Offset, oneshot::Sender<()>>,
 }
 
 impl SequenceState {
@@ -69,6 +80,24 @@ impl SequenceState {
         // stops the walk, which is exactly the range still in flight.
         while let Some(end) = self.resolved.remove(&self.next) {
             self.next = self.next.max(end);
+        }
+    }
+
+    /// The waiter whose turn it now is, removed from the registry.
+    ///
+    /// Returned rather than fired here so the send happens outside the lock:
+    /// waking a task while holding the mutex it is about to want is how a
+    /// wake-up turns into a hand-off stall.
+    fn take_ready(&mut self) -> Option<oneshot::Sender<()>> {
+        // Every waiter at or below `next` is eligible. Normally that is one —
+        // a range's successor cannot be eligible until the range resolves — but
+        // a reset can move `next` arbitrarily, and a waiter left parked behind
+        // one would never be released.
+        let first = *self.waiters.keys().next()?;
+        if first <= self.next {
+            self.waiters.remove(&first)
+        } else {
+            None
         }
     }
 }
@@ -91,24 +120,28 @@ impl CommitSequencer {
                 next,
                 resolved: BTreeMap::new(),
                 generation: 0,
+                waiters: BTreeMap::new(),
             }),
-            ready: Notify::new(),
         }
     }
 
     /// Restart the sequence at `next`, used when a stream adopts a recovered
     /// log and its offsets resume from the durable tail.
     pub fn reset(&self, next: Offset) {
-        {
+        let orphaned: Vec<oneshot::Sender<()>> = {
             let mut state = self.state.lock();
             state.next = next;
             // Pending resolutions describe a sequence that no longer exists.
             state.resolved.clear();
             state.generation += 1;
+            // Wake everyone: a waiter parked on an offset the reset just
+            // discarded would otherwise never be released. Its `wait` sees the
+            // generation has moved and returns.
+            state.waiters.split_off(&0).into_values().collect()
+        };
+        for waiter in orphaned {
+            let _ = waiter.send(());
         }
-        // Wake everyone: a waiter parked on an offset the reset just discarded
-        // would otherwise never be released.
-        self.ready.notify_waiters();
     }
 
     /// The offset whose turn it is — everything below it has applied.
@@ -156,31 +189,38 @@ impl CommitTurn<'_> {
     /// Cancellation-safe: dropping the guard mid-wait releases this range too,
     /// so a cancelled publisher cannot block the ones behind it.
     pub async fn wait(&self) {
-        loop {
-            // Register interest *before* testing, or a release landing between
-            // the test and the await would be missed and this publisher would
-            // sleep until the next unrelated publish woke it.
-            let notified = self.sequencer.ready.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-
-            {
-                let state = self.sequencer.state.lock();
-                // A reset means the log was rewritten underneath this range, so
-                // there is nothing left to wait for.
-                if state.next >= self.first_offset || state.generation != self.generation {
-                    return;
-                }
+        // Registered and tested under one lock, so a release landing between
+        // the two cannot be missed: whoever resolves next either sees this
+        // waiter in the registry and wakes it, or has already moved `next` past
+        // it and the test below returns.
+        let receiver = {
+            let mut state = self.sequencer.state.lock();
+            // A reset means the log was rewritten underneath this range, so
+            // there is nothing left to wait for.
+            if state.next >= self.first_offset || state.generation != self.generation {
+                return;
             }
-            notified.await;
-        }
+            let (sender, receiver) = oneshot::channel();
+            state.waiters.insert(self.first_offset, sender);
+            receiver
+        };
+
+        // A closed channel means the sender was dropped rather than fired —
+        // only possible if this waiter's entry was replaced, which needs two
+        // live turns on one offset. Returning is right either way: the caller
+        // re-tests nothing, but its own `Drop` still resolves its range, so the
+        // sequence cannot strand.
+        let _ = receiver.await;
     }
 }
 
 impl Drop for CommitTurn<'_> {
     fn drop(&mut self) {
-        {
+        let ready = {
             let mut state = self.sequencer.state.lock();
+            // Dropped mid-wait: take this range's own registration with it, or
+            // the entry outlives the waiter and a later release wakes nobody.
+            state.waiters.remove(&self.first_offset);
             // A reset while this range was held means the log was rewritten
             // underneath it. Its offsets describe a sequence that no longer
             // exists, so resolving on them would step the stream past records
@@ -188,8 +228,12 @@ impl Drop for CommitTurn<'_> {
             if state.generation == self.generation {
                 state.resolve(self.first_offset, self.next_offset);
             }
+            state.take_ready()
+        };
+        // Outside the lock: the woken task wants this mutex immediately.
+        if let Some(waiter) = ready {
+            let _ = waiter.send(());
         }
-        self.sequencer.ready.notify_waiters();
     }
 }
 
@@ -263,6 +307,80 @@ mod tests {
         }
 
         assert_eq!(*observed.lock(), (0..8).collect::<Vec<_>>());
+    }
+
+    /// **A crowd parks, then drains one wake-up at a time, in order.**
+    ///
+    /// Waking one waiter instead of all of them can fail two ways: wake the
+    /// wrong one and the order breaks, wake nobody and the drain stops dead.
+    ///
+    /// Holding offset 0 is what makes the crowd real. Left alone the tasks run
+    /// in spawn order and each finds its turn already current, so nothing parks
+    /// and the test passes against any wake-up at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_parked_crowd_drains_in_offset_order() {
+        const WAITERS: u64 = 64;
+        let sequencer = Arc::new(CommitSequencer::new(0));
+        let observed = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+        let head = sequencer.reserve(0, 1);
+        head.wait().await;
+
+        let mut tasks = Vec::new();
+        for offset in 1..=WAITERS {
+            let sequencer = Arc::clone(&sequencer);
+            let observed = Arc::clone(&observed);
+            tasks.push(tokio::spawn(async move {
+                let turn = sequencer.reserve(offset, offset + 1);
+                turn.wait().await;
+                observed.lock().push(offset);
+                drop(turn);
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            observed.lock().is_empty(),
+            "a turn was granted while offset 0 was still held"
+        );
+
+        drop(head);
+
+        for task in tasks {
+            tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .expect("the drain stopped: a waiter was never woken")
+                .expect("join");
+        }
+        assert_eq!(*observed.lock(), (1..=WAITERS).collect::<Vec<_>>());
+        assert_eq!(sequencer.next_offset(), WAITERS + 1);
+    }
+
+    /// The one case that still needs to wake everybody: a reset moves `next`
+    /// somewhere unrelated, so waiters parked on offsets it discarded are not
+    /// next in any order and would otherwise wait forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_reset_releases_a_whole_crowd() {
+        let sequencer = Arc::new(CommitSequencer::new(0));
+        let mut tasks = Vec::new();
+        // Every one of these is behind offset 0, which nobody holds, so all of
+        // them park.
+        for offset in 1..32u64 {
+            let sequencer = Arc::clone(&sequencer);
+            tasks.push(tokio::spawn(async move {
+                let turn = sequencer.reserve(offset, offset + 1);
+                turn.wait().await;
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        sequencer.reset(1000);
+
+        for task in tasks {
+            tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .expect("a waiter was left parked behind a reset")
+                .expect("join");
+        }
     }
 
     #[tokio::test]
