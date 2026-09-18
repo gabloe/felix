@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789763335523,
+  "lastUpdate": 1789764024490,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14586,6 +14586,72 @@ window.BENCHMARK_DATA = {
             "range": "204.76",
             "unit": "us",
             "extra": "trials: 5\nmedian: 594.00\nmean: 707.20\nstdev: 204.76\ncv: 28.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d5b7df150848dcdedb3e719777b82e8bb8f8eac",
+          "message": "release: 0.4.1 (#542)\n\nWorkspace and every internal path dependency move from 0.4.0 to 0.4.1, with the\nHelm chart's appVersion. SECURITY.md needs no change: the supported line is\nalready 0.4.x, which a patch release does not move.\n\nThe changelog leads with what the release means rather than what it touched.\nDurable publishes to one shard were processed strictly one at a time, so group\ncommit -- the mechanism that lets one device flush serve many waiters -- never\nhad more than one waiter, and every publish paid a full flush alone. Nothing\nwas lost and nothing was misordered; the broker simply used about half a\nmachine and refused the rest.\n\nDocuments FELIX_BROKER_PUB_FLUSH_CONCURRENCY, including that 1 restores the old\nbehaviour and is how the regression test proves itself, and records that\nPUB_WORKERS_PER_CONN is process-wide rather than per connection.\n\nA Performance notes section states that the ~977 MB/s at ~48% CPU published for\n0.4.0, and the conclusion drawn from it that durable throughput scales by\nadding brokers rather than cores, describe the defect rather than the design.\nThe measurements were accurate; the inference was not. No replacement numbers\nare guessed at -- those need a rig session against this release.",
+          "timestamp": "2026-09-18T13:37:41-07:00",
+          "tree_id": "e3cdf9a7aa3415a5a1d8e9bbcae955d06d2a9b45",
+          "url": "https://github.com/gabloe/felix/commit/3d5b7df150848dcdedb3e719777b82e8bb8f8eac"
+        },
+        "date": 1789764021731,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 166,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 166.00\nmean: 165.80\nstdev: 1.64\ncv: 0.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "6.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 213.20\nstdev: 6.06\ncv: 2.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 263,
+            "range": "34.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 263.00\nmean: 267.40\nstdev: 34.33\ncv: 12.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 203,
+            "range": "6.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 205.20\nstdev: 6.06\ncv: 2.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 433,
+            "range": "200.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 433.00\nmean: 512.20\nstdev: 200.37\ncv: 39.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 680,
+            "range": "817.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 680.00\nmean: 1218.40\nstdev: 817.67\ncv: 67.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
