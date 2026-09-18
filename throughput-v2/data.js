@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789746399861,
+  "lastUpdate": 1789747765785,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11180,6 +11180,58 @@ window.BENCHMARK_DATA = {
             "range": "11467.88",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 536568.38\nmean: 539209.49\nstdev: 11467.88\ncv: 2.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eaef262dddda4d7e01b7a0cf17c4efa25acb0f48",
+          "message": "test(controlplane): a 409 is the write reporting itself, wherever the retry happened (#530)\n\n`the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write`\nfailed about 60% of the time locally (3 of 5, then 3 of 3 under\ninstrumentation on CI), always the same way: one call, zero failovers,\n`409 already exists` on `POST /v1/tenants`, landing within ~30ms of a\nfault phase.\n\nThe harness already understood the ambiguity -- a create that commits and\nthen loses its answer comes back as 409, and with ids used once (`t-chaos-N`)\nthat conflict can only be the call's own earlier attempt. But it gated the\nrule on `retried`, meaning the *harness* had retried after a dead connection.\n\n`RaftStore::write` retries too. An attempt that exceeds `ATTEMPT_CAP` is\nre-proposed, so a command that committed just as the cap expired is proposed\na second time and answered 409 -- on the caller's first HTTP attempt, with no\ndead connection and no harness retry. `retried` is false and the call scored\nas a failure, tripping `assert_eq!(failures, 0)` before the durability\nassertion below it ever ran.\n\nDrops the condition. The reasoning the comment already gives does not depend\non which layer retried. `retried` is then write-only, and `failovers` already\ncounts the harness retry, so it goes.\n\nThis makes the test stricter, not weaker: a 409 counts as acknowledged, so\nthe tenant is pushed to `acked` and the final-state check now has to find it\non every member, including the one rebuilt from a wiped volume.\n\n10/10 locally, from ~40% before. Full controlplane suite green.\n\nThe spurious 409 itself is real and filed separately: a client can be told\nits own committed write already exists.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-18T09:06:38-07:00",
+          "tree_id": "fd14aab2ba186288458fd31975203d9d13e65ebc",
+          "url": "https://github.com/gabloe/felix/commit/eaef262dddda4d7e01b7a0cf17c4efa25acb0f48"
+        },
+        "date": 1789747764969,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 266295.94,
+            "range": "9036.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 266295.94\nmean: 262451.40\nstdev: 9036.48\ncv: 3.44%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 266295.94,
+            "range": "9036.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 266295.94\nmean: 262451.40\nstdev: 9036.48\ncv: 3.44%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 58535.45,
+            "range": "1789.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 58535.45\nmean: 58410.53\nstdev: 1789.49\ncv: 3.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 585354.49,
+            "range": "17894.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 585354.49\nmean: 584105.29\nstdev: 17894.94\ncv: 3.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
