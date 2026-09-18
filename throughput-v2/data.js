@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789689015878,
+  "lastUpdate": 1789689963980,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10296,6 +10296,58 @@ window.BENCHMARK_DATA = {
             "range": "17360.12",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 752869.66\nmean: 755568.30\nstdev: 17360.12\ncv: 2.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e4023bc59852c8d6c196f9e8e5134a582eae11a",
+          "message": "spike(kafka): what a Kafka wire shim would take, measured against librdkafka (#498)\n\n* spike(kafka): a read-only Kafka front door over a Felix shard log\n\nEvidence for #488, committed before it is measured further so it cannot be\nlost again.\n\nApiVersions, Metadata, ListOffsets and Fetch, hand-rolled — a crate that\nalready implemented them would answer a different question than 'how much work\nis this'. Records come from shard_log(..).read_from(), the call the replication\ndriver ships with.\n\n* docs(kafka): the shim spike, its result, and the recommendation\n\nAnswers #488 with what the spike did rather than with an estimate.\n\n`kcat` reads records out of a Felix shard log with correct offsets, from 533\nlines and four API keys. The parts that looked hard were not: Felix offsets are\ncontiguous per shard and needed no translation, a shard mapped to a partition\nunchanged, and `Fetch` turned out to be `read_from` — the call replication\nalready ships with.\n\nWhat cost time was the protocol's own bootstrapping. librdkafka opens with\n`ApiVersions` v3, the flexible encoding, and a broker that does not speak it\nmust answer `UNSUPPORTED_VERSION` in the *v0* response format, because the\nclient cannot know which format to parse until it learns the version was\nrefused. Get that wrong and it reports \"Bad message format\" and stops — before\nanything else in the protocol can be reached. Then CRC-32C rather than IEEE,\nand the v2 record batch's varints and length framing.\n\nThe finding that decides it is where it stops. Asked to join a group, `kcat`\nprints \"Waiting for group rebalance\" and hangs: there is no protocol-level way\nto tell a consumer that a broker has no coordinator. That is precisely the\nfailure the issue said in advance would make the answer no.\n\nSo: option A is worth shipping only as a read-only export and only with the\ngroup case made to fail loudly; option B is blocked on idempotent producers\n(#422) rather than on protocol work, because modern clients default to\n`enable.idempotence=true` and the shim's other two choices are refusing them or\nlying about a durability guarantee; option C should not be attempted.\n\n`why-felix.md` already told readers to use something else. It now says so\ndeliberately, with the reason and a pointer.",
+          "timestamp": "2026-09-17T17:03:26-07:00",
+          "tree_id": "219d7f38cfc15d58afe5cd0a61be457b47564521",
+          "url": "https://github.com/gabloe/felix/commit/0e4023bc59852c8d6c196f9e8e5134a582eae11a"
+        },
+        "date": 1789689962939,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232729.02,
+            "range": "4423.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232729.02\nmean: 232289.79\nstdev: 4423.01\ncv: 1.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232729.02,
+            "range": "4423.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232729.02\nmean: 232289.79\nstdev: 4423.01\ncv: 1.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57051.86,
+            "range": "2109.15",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57051.86\nmean: 56275.09\nstdev: 2109.15\ncv: 3.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 570518.62,
+            "range": "21091.54",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 570518.62\nmean: 562750.95\nstdev: 21091.54\ncv: 3.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
