@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789728845733,
+  "lastUpdate": 1789731108249,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10868,6 +10868,58 @@ window.BENCHMARK_DATA = {
             "range": "33335.61",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 834749.16\nmean: 817427.59\nstdev: 33335.61\ncv: 4.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ba8a00d1b21b672a72bfb534be7c26fa156b430",
+          "message": "feat(peer): mutually authenticate broker-to-broker connections (#517)\n\nWith FELIX_INTERNAL_TLS_CERT, _KEY and _CA set, every peer connection is\nmTLS against the configured CA, and the certificate's DNS name is the\nbroker's identity, checked both ways: a dialler verifies the listener's\ncertificate against the node id it dials, and the listener checks the node\nid a peer claims in Hello against the certificate it presented. No\ncertificate, another CA, an expired one, or the wrong name is refused. The\ncertificate and key are re-read every 30s so a renewal takes effect on the\nnext handshake without a restart; session resumption is off, or a rotated\ncertificate would go on being accepted. Without the three variables the\ntransport runs as before, and startup warns.\n\nThe cluster harness issues a CA and per-broker certificates, so every\ncluster test now runs under mTLS.\n\nCloses #125.",
+          "timestamp": "2026-09-18T04:28:49-07:00",
+          "tree_id": "3001383a18d37f8f1697ac19ef7def115080d255",
+          "url": "https://github.com/gabloe/felix/commit/7ba8a00d1b21b672a72bfb534be7c26fa156b430"
+        },
+        "date": 1789731107477,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 251950.57,
+            "range": "2472.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251950.57\nmean: 250314.11\nstdev: 2472.03\ncv: 0.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 251950.57,
+            "range": "2472.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 251950.57\nmean: 250314.11\nstdev: 2472.03\ncv: 0.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60038.81,
+            "range": "588.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60038.81\nmean: 59665.75\nstdev: 588.23\ncv: 0.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 600388.1,
+            "range": "5882.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 600388.10\nmean: 596657.54\nstdev: 5882.31\ncv: 0.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
