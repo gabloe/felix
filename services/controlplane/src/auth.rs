@@ -2,6 +2,7 @@
 //! publishing, and tenant-scoped RBAC. Private signing keys stay inside this
 //! boundary; only public keys leave, via JWKS.
 pub mod admin;
+pub(crate) mod bearer;
 pub mod exchange;
 pub mod felix_token;
 pub mod idp_registry;

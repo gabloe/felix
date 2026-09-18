@@ -74,6 +74,9 @@ const STREAM: &str = "orders";
 const CACHE: &str = "primary";
 const ALICE_SUB: &str = "p:alice";
 const ADMIN_SUB: &str = "p:admin";
+/// The broker's own principal. Its Felix token carries `node.view:cluster:*`,
+/// which the metadata feeds require, and nothing a client could use.
+const BROKER_SUB: &str = "p:broker";
 const IDP_KID: &str = "kid-1";
 
 const EC_PRIVATE_KEY_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkcZLhh5bmc6yfv8ZrDxWybm+E+aoz2euIJD3fM73VSyhRANCAAQRkD6ZJEwqBms4JDddpbTjl4Ro49h8WRoNVnEcR/Tp6LhwGGZ8Ku1Gw9spY/BCsiW+5AqIqVlNVgGgJFMRbR1V";
@@ -114,61 +117,72 @@ async fn run_demo() -> Result<()> {
     wait_for_controlplane(&http, &cp_base).await?;
     println!("STEP 1 control plane up: PASS (addr={cp_addr})");
 
-    let (broker_addr, broker_cert, broker_handles) = spawn_broker(&cp_base).await?;
-    println!("STEP 2 broker up: PASS (addr={broker_addr})");
-
     let admin_principal = principal_id(&idp_base, ADMIN_SUB);
     let alice_principal = principal_id(&idp_base, ALICE_SUB);
+    let broker_principal = principal_id(&idp_base, BROKER_SUB);
 
+    // Day 0: the bootstrap listener is the only thing that works before any
+    // Felix token exists. It creates the tenant, its keys, and the roles the
+    // rest of the demo is minted from -- including the broker's.
     let bootstrap_status = bootstrap_tenant(
         &http,
         &cp_base,
         &idp_base,
         &admin_principal,
         &alice_principal,
+        &broker_principal,
     )
     .await?;
-    print_http("STEP 3 bootstrap tenant", bootstrap_status, StatusCode::OK)?;
-
-    let ns_status = create_namespace(&http, &cp_base).await?;
-    print_http("STEP 4 create namespace", ns_status, StatusCode::CREATED)?;
-
-    let stream_status = create_stream(&http, &cp_base).await?;
-    print_http("STEP 5 create stream", stream_status, StatusCode::CREATED)?;
-
-    let cache_status = create_cache(&http, &cp_base).await?;
-    print_http("STEP 6 create cache", cache_status, StatusCode::CREATED)?;
-
-    // Allow broker to sync metadata before client ops.
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    print_http("STEP 2 bootstrap tenant", bootstrap_status, StatusCode::OK)?;
 
     let admin_id_token = mint_id_token(&idp_base, ADMIN_SUB, &["role:tenant-admin"])?;
     let alice_id_token = mint_id_token(&idp_base, ALICE_SUB, &["role:reader"])?;
+    let broker_id_token = mint_id_token(&idp_base, BROKER_SUB, &["role:broker"])?;
 
     let admin_felix = exchange_token(&http, &cp_base, &admin_id_token).await?;
-    println!("STEP 7 admin token exchange: PASS (status=200)");
+    println!("STEP 3 admin token exchange: PASS (status=200)");
 
     let alice_felix = exchange_token(&http, &cp_base, &alice_id_token).await?;
-    println!("STEP 8 alice token exchange: PASS (status=200)");
+    println!("STEP 4 alice token exchange: PASS (status=200)");
+
+    let broker_felix = exchange_token(&http, &cp_base, &broker_id_token).await?;
+    println!("STEP 5 broker token exchange: PASS (status=200)");
+
+    let (broker_addr, broker_cert, broker_handles) = spawn_broker(&cp_base, &broker_felix).await?;
+    println!("STEP 6 broker up: PASS (addr={broker_addr})");
+
+    // Metadata is managed with the admin's token: the control plane refuses
+    // a create with no credential, or with one that lacks the manage action.
+    let ns_status = create_namespace(&http, &cp_base, &admin_felix).await?;
+    print_http("STEP 7 create namespace", ns_status, StatusCode::CREATED)?;
+
+    let stream_status = create_stream(&http, &cp_base, &admin_felix).await?;
+    print_http("STEP 8 create stream", stream_status, StatusCode::CREATED)?;
+
+    let cache_status = create_cache(&http, &cp_base, &admin_felix).await?;
+    print_http("STEP 10 create cache", cache_status, StatusCode::CREATED)?;
+
+    // Allow broker to sync metadata before client ops.
+    tokio::time::sleep(Duration::from_millis(600)).await;
 
     let client = build_client(&broker_addr, &broker_cert, &alice_felix).await?;
 
     let publish_denied =
         retry_op("publish", Duration::from_secs(5), || publish_once(&client)).await;
-    print_op("STEP 9 publish denied", publish_denied, false)?;
+    print_op("STEP 10 publish denied", publish_denied, false)?;
 
     let subscribe_denied = retry_op("subscribe", Duration::from_secs(5), || {
         subscribe_once(&client)
     })
     .await;
-    print_op("STEP 10 subscribe denied", subscribe_denied, false)?;
+    print_op("STEP 11 subscribe denied", subscribe_denied, false)?;
 
     let cache_denied = retry_op("cache", Duration::from_secs(5), || cache_roundtrip(&client)).await;
-    print_op("STEP 11 cache denied", cache_denied, false)?;
+    print_op("STEP 12 cache denied", cache_denied, false)?;
 
     let policy_status = add_rbac_policies(&http, &cp_base, &admin_felix).await?;
     print_http(
-        "STEP 12 RBAC policies added",
+        "STEP 13 RBAC policies added",
         policy_status,
         StatusCode::NO_CONTENT,
     )?;
@@ -176,29 +190,29 @@ async fn run_demo() -> Result<()> {
     let grouping_status =
         add_rbac_grouping(&http, &cp_base, &admin_felix, &alice_principal).await?;
     print_http(
-        "STEP 13 RBAC grouping added",
+        "STEP 14 RBAC grouping added",
         grouping_status,
         StatusCode::NO_CONTENT,
     )?;
 
     println!(
-        "STEP 14 re-exchange alice token: Felix tokens embed permissions; reissuing to reflect RBAC changes."
+        "STEP 15 re-exchange alice token: Felix tokens embed permissions; reissuing to reflect RBAC changes."
     );
     let alice_felix_updated = exchange_token(&http, &cp_base, &alice_id_token).await?;
 
     let client = build_client(&broker_addr, &broker_cert, &alice_felix_updated).await?;
 
     let publish_ok = retry_op("publish", Duration::from_secs(5), || publish_once(&client)).await;
-    print_op("STEP 15 publish allowed", publish_ok, true)?;
+    print_op("STEP 16 publish allowed", publish_ok, true)?;
 
     let subscribe_ok = retry_op("subscribe", Duration::from_secs(6), || {
         subscribe_and_receive(&client)
     })
     .await;
-    print_op("STEP 16 subscribe allowed", subscribe_ok, true)?;
+    print_op("STEP 17 subscribe allowed", subscribe_ok, true)?;
 
     let cache_ok = retry_op("cache", Duration::from_secs(5), || cache_roundtrip(&client)).await;
-    print_op("STEP 17 cache allowed", cache_ok, true)?;
+    print_op("STEP 18 cache allowed", cache_ok, true)?;
 
     idp_handle.abort();
     cp_handle.abort();
@@ -337,6 +351,7 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
 /// - Uses an ephemeral cache backend.
 async fn spawn_broker(
     controlplane_url: &str,
+    credential: &str,
 ) -> Result<(SocketAddr, CertificateDer<'static>, Vec<JoinHandle<()>>)> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let mut config = broker::config::BrokerConfig::from_env()?;
@@ -366,10 +381,16 @@ async fn spawn_broker(
         }
     });
 
+    let credential = broker::credential::NodeCredential::new(credential);
     let sync_task = tokio::spawn(async move {
         let interval = Duration::from_millis(sync_interval_ms);
-        if let Err(err) =
-            broker_controlplane::start_sync(broker_sync, controlplane_url, interval).await
+        if let Err(err) = broker_controlplane::start_sync(
+            broker_sync,
+            controlplane_url,
+            interval,
+            Some(credential),
+        )
+        .await
         {
             eprintln!("controlplane sync error: {err}");
         }
@@ -416,6 +437,7 @@ async fn bootstrap_tenant(
     idp_base: &str,
     admin_principal: &str,
     alice_principal: &str,
+    broker_principal: &str,
 ) -> Result<StatusCode> {
     let idp = IdpIssuerConfig {
         issuer: idp_base.to_string(),
@@ -428,17 +450,32 @@ async fn bootstrap_tenant(
         },
     };
 
-    let policies = vec![PolicyRule {
-        subject: "role:reader".to_string(),
-        // Canonical RBAC objects are tenant-qualified.
-        object: format!("stream:{TENANT_ID}/{NAMESPACE}/other"),
-        action: "stream.subscribe".to_string(),
-    }];
+    let policies = vec![
+        PolicyRule {
+            subject: "role:reader".to_string(),
+            // Canonical RBAC objects are tenant-qualified.
+            object: format!("stream:{TENANT_ID}/{NAMESPACE}/other"),
+            action: "stream.subscribe".to_string(),
+        },
+        // Cluster scope sits outside the tenant hierarchy, so no tenant admin
+        // can grant it later; bootstrap is where it enters.
+        PolicyRule {
+            subject: "role:broker".to_string(),
+            object: "cluster:*".to_string(),
+            action: "node.view".to_string(),
+        },
+    ];
 
-    let groupings = vec![GroupingRule {
-        user: alice_principal.to_string(),
-        role: "role:reader".to_string(),
-    }];
+    let groupings = vec![
+        GroupingRule {
+            user: alice_principal.to_string(),
+            role: "role:reader".to_string(),
+        },
+        GroupingRule {
+            user: broker_principal.to_string(),
+            role: "role:broker".to_string(),
+        },
+    ];
 
     let body = BootstrapInitializeRequest {
         display_name: "Tenant One".to_string(),
@@ -458,17 +495,30 @@ async fn bootstrap_tenant(
     Ok(response.status())
 }
 
-async fn create_namespace(http: &reqwest::Client, cp_base: &str) -> Result<StatusCode> {
+async fn create_namespace(
+    http: &reqwest::Client,
+    cp_base: &str,
+    admin_token: &str,
+) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{TENANT_ID}/namespaces");
     let body = NamespaceCreateRequest {
         namespace: NAMESPACE.to_string(),
         display_name: "Default".to_string(),
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 
-async fn create_stream(http: &reqwest::Client, cp_base: &str) -> Result<StatusCode> {
+async fn create_stream(
+    http: &reqwest::Client,
+    cp_base: &str,
+    admin_token: &str,
+) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{TENANT_ID}/namespaces/{NAMESPACE}/streams");
     let body = StreamCreateRequest {
         stream: STREAM.to_string(),
@@ -484,18 +534,32 @@ async fn create_stream(http: &reqwest::Client, cp_base: &str) -> Result<StatusCo
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 
-async fn create_cache(http: &reqwest::Client, cp_base: &str) -> Result<StatusCode> {
+async fn create_cache(
+    http: &reqwest::Client,
+    cp_base: &str,
+    admin_token: &str,
+) -> Result<StatusCode> {
     let url = format!("{cp_base}/v1/tenants/{TENANT_ID}/namespaces/{NAMESPACE}/caches");
     let body = CacheCreateRequest {
         cache: CACHE.to_string(),
         display_name: "Primary".to_string(),
         ..Default::default()
     };
-    let response = http.post(url).json(&body).send().await?;
+    let response = http
+        .post(url)
+        .bearer_auth(admin_token)
+        .json(&body)
+        .send()
+        .await?;
     Ok(response.status())
 }
 

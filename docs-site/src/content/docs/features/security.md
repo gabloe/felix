@@ -149,8 +149,16 @@ After bootstrap, admin actions require explicit Felix permissions:
 - RBAC list: `rbac.view:<scoped object>`
 - RBAC policy writes: `rbac.policy.manage:<scoped object>`
 - RBAC assignment writes: `rbac.assignment.manage:<scoped object>`
+- Namespaces, streams and caches: `ns.manage`, `stream.manage` or `cache.manage`
+  over the object, from a token minted for that tenant; listings are filtered
+  to the caller's scope
+- Tenant catalog (create, list, delete): `tenant.manage:cluster:*`
+- Metadata feeds brokers seed from (`snapshot`, `changes`): `node.view:cluster:*`
 - Cluster membership reads: `node.view:cluster:*`
 - Cluster membership writes: `node.manage:node:{node_id}` or `node.manage:cluster:*`
+
+The credential is checked before existence, so nothing about what exists can
+be learned without one: a tenant with no signing keys answers `401`, not `404`.
 
 ### RBAC Object Grammar and Delegation
 
@@ -171,9 +179,10 @@ This prevents common privilege-escalation footguns when delegating namespace or 
 
 #### Cluster scope
 
-`cluster:*` covers broker membership: which brokers exist, whether they are
-alive, and whether placement can use them. It is an island in both directions,
-and that is the property it exists for:
+`cluster:*` covers broker membership — which brokers exist, whether they are
+alive, and whether placement can use them — plus the tenant catalog and the
+metadata feeds. It is an island in both directions, and that is the property
+it exists for:
 
 ```mermaid
 flowchart TB
@@ -209,6 +218,11 @@ deregister — require `node.manage` over the node being changed, held either as
 `node:{node_id}` by that broker or as `cluster:*` by an operator. A node is an
 RBAC object rather than a field the caller asserts, which is what stops one
 broker acting for another.
+
+Cluster scope reaches a token only through bootstrap: initialize an operator
+tenant whose policies grant the cluster actions to a role, assign the operator
+principal to it, and exchange. The same route gives a broker its
+`node.view:cluster:*`.
 
 ### Supported Identity Providers
 

@@ -11,6 +11,31 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Security
+
+- The control-plane resource API now requires a Felix bearer token on every
+  endpoint. Tenants were created, listed and deleted — and namespaces, streams
+  and caches managed — with no credential at all, while `/v1/nodes` next to
+  them returned `401`. Namespaces, streams and caches take `ns.manage`,
+  `stream.manage` or `cache.manage` over the object from a token minted for
+  that tenant, with listings filtered to the caller's scope; the tenant catalog
+  takes `tenant.manage:cluster:*`; the `snapshot` and `changes` feeds take
+  `node.view:cluster:*`, the broker credential that already read the
+  shard-assignment watch. The credential is checked before existence, so a
+  tenant with no keys answers `401` rather than a `404` that says whether it
+  exists.
+
+### Changed
+
+- A broker presents `FELIX_NODE_TOKEN` / `FELIX_NODE_TOKEN_FILE` on the
+  metadata sync as well, and accepts one without `FELIX_NODE_ID`: a standalone
+  broker pointed at a control plane needs it to learn any stream. Without one
+  it still starts, warns once, and has its sync refused.
+- The RBAC object grammar accepts `stream:{tenant}/*/*` and `cache:{tenant}/*/*`,
+  the tenant-wide forms token exchange already expanded `tenant.manage` to;
+  the control plane's own parser had refused them. A wildcard namespace under
+  a named leaf is still refused.
+
 ## [0.3.1] - 2026-09-16
 
 A real-IdP patch. The 0.3.0 token exchange quietly assumed two things that were

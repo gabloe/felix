@@ -1,7 +1,11 @@
 //! Tenant API handlers.
 //!
-//! Implements tenant CRUD, snapshot, and changefeed endpoints with consistent
-//! error mapping for store conflicts and missing records.
+//! The catalog -- which tenants exist -- is cluster metadata, not something
+//! any one tenant owns, so every endpoint here is cluster-scoped: creating,
+//! listing and deleting take `tenant.manage:cluster:*`, and the feeds the
+//! brokers consume take `node.view:cluster:*` like the rest of the metadata
+//! they sync. Day 0, before any operator credential exists, goes through the
+//! bootstrap listener instead.
 use crate::api::error::{
     ApiError, api_conflict, api_internal, api_internal_message, api_not_found,
 };
@@ -9,12 +13,14 @@ use crate::api::types::{
     TenantChangesResponse, TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
 };
 use crate::app::AppState;
+use crate::auth::bearer::require_cluster_action;
 use crate::auth::keys::generate_signing_keys;
+use crate::auth::rbac::authorize::{ACTION_NODE_VIEW, ACTION_TENANT_MANAGE};
 use crate::model::Tenant;
 use crate::store::StoreError;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::collections::HashMap;
 
@@ -23,12 +29,16 @@ use std::collections::HashMap;
     path = "/v1/tenants",
     tag = "tenants",
     responses(
-        (status = 200, description = "List tenants", body = TenantListResponse)
+        (status = 200, description = "List tenants", body = TenantListResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = crate::api::types::ErrorResponse),
+        (status = 403, description = "Missing tenant.manage:cluster:*", body = crate::api::types::ErrorResponse)
     )
 )]
 pub(crate) async fn list_tenants(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<TenantListResponse>, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_TENANT_MANAGE).await?;
     let items = state
         .store
         .list_tenants()
@@ -44,13 +54,17 @@ pub(crate) async fn list_tenants(
     request_body = TenantCreateRequest,
     responses(
         (status = 201, description = "Tenant created", body = Tenant),
+        (status = 401, description = "Missing or invalid bearer token", body = crate::api::types::ErrorResponse),
+        (status = 403, description = "Missing tenant.manage:cluster:*", body = crate::api::types::ErrorResponse),
         (status = 409, description = "Tenant already exists", body = crate::api::types::ErrorResponse)
     )
 )]
 pub(crate) async fn create_tenant(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<TenantCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_TENANT_MANAGE).await?;
     let tenant = Tenant {
         tenant_id: body.tenant_id,
         display_name: body.display_name,
@@ -84,13 +98,21 @@ pub(crate) async fn create_tenant(
     ),
     responses(
         (status = 204, description = "Tenant deleted"),
+        (status = 401, description = "Missing or invalid bearer token", body = crate::api::types::ErrorResponse),
+        (status = 403, description = "Missing tenant.manage:cluster:*", body = crate::api::types::ErrorResponse),
         (status = 404, description = "Tenant not found", body = crate::api::types::ErrorResponse)
     )
 )]
 pub(crate) async fn delete_tenant(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
+    // Operator-only, deliberately. A tenant's own admin holds
+    // `tenant.manage:tenant:{id}` and can empty it, but removing the tenant --
+    // its keys included -- is a catalog change, and the catalog is the
+    // operator's.
+    require_cluster_action(&state, &headers, ACTION_TENANT_MANAGE).await?;
     match state.store.delete_tenant(&tenant_id).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(StoreError::NotFound(_)) => Err(api_not_found("tenant not found")),
@@ -103,12 +125,16 @@ pub(crate) async fn delete_tenant(
     path = "/v1/tenants/snapshot",
     tag = "tenants",
     responses(
-        (status = 200, description = "Full tenant snapshot", body = TenantSnapshotResponse)
+        (status = 200, description = "Full tenant snapshot", body = TenantSnapshotResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = crate::api::types::ErrorResponse),
+        (status = 403, description = "Missing node.view:cluster:*", body = crate::api::types::ErrorResponse)
     )
 )]
 pub(crate) async fn tenant_snapshot(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<TenantSnapshotResponse>, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_NODE_VIEW).await?;
     let snapshot = state
         .store
         .tenant_snapshot()
@@ -128,13 +154,17 @@ pub(crate) async fn tenant_snapshot(
         ("since" = Option<u64>, Query, description = "Last seen sequence")
     ),
     responses(
-        (status = 200, description = "Tenant change list", body = TenantChangesResponse)
+        (status = 200, description = "Tenant change list", body = TenantChangesResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = crate::api::types::ErrorResponse),
+        (status = 403, description = "Missing node.view:cluster:*", body = crate::api::types::ErrorResponse)
     )
 )]
 pub(crate) async fn tenant_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<TenantChangesResponse>, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_NODE_VIEW).await?;
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())

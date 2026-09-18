@@ -140,6 +140,44 @@ The registration, heartbeat, drain, and deregister endpoints require
 the request body, so a broker cannot claim a name its credential does not
 cover.
 
+### Tenants, namespaces, streams and caches
+
+Every resource endpoint takes a Felix bearer token, checked before anything
+else — a tenant that does not exist has no signing keys, so a request against
+it answers `401` whatever the token says, rather than a `404` that would say
+whether it exists.
+
+| Endpoint | Requires |
+| --- | --- |
+| `GET`/`POST /v1/tenants`, `DELETE /v1/tenants/{id}` | `tenant.manage:cluster:*` |
+| `/v1/tenants/{t}/namespaces[/{ns}]` | `ns.manage` over `namespace:{t}/{ns}`, from a `t` token |
+| `/v1/tenants/{t}/namespaces/{ns}/streams[/{s}]` | `stream.manage` over `stream:{t}/{ns}/{s}`, from a `t` token |
+| `/v1/tenants/{t}/namespaces/{ns}/caches[/{c}]` | `cache.manage` over `cache:{t}/{ns}/{c}`, from a `t` token |
+| `/v1/{tenants,namespaces,streams,caches}/{snapshot,changes}` | `node.view:cluster:*` |
+
+```http
+POST /v1/tenants/t1/namespaces/payments/streams
+Authorization: Bearer <felix-token with stream.manage over stream:t1/payments/orders>
+Content-Type: application/json
+
+{ "stream": "orders", "kind": "Stream", "shards": 1, "replication_factor": 1,
+  "retention": { "max_age_seconds": null, "max_size_bytes": null },
+  "consistency": "Leader", "delivery": "AtLeastOnce", "durable": true }
+```
+
+A tenant admin's token already carries the manage actions: exchange expands
+`tenant.manage:tenant:t1` to `ns.manage:namespace:t1/*`,
+`stream.manage:stream:t1/*/*` and `cache.manage:cache:t1/*/*`. Listings return
+only what the caller could manage.
+
+The tenant catalog — which tenants exist — is cluster metadata, so creating,
+listing and deleting tenants takes the same kind of operator credential as
+managing the fleet, and deleting is operator-only even for the tenant's own
+admin. The feeds are what brokers seed from, and take the broker's own
+credential (`FELIX_NODE_TOKEN`), the same one that reads the shard-assignment
+watch. An operator credential comes out of bootstrap the same way a broker's
+does: a policy granting the cluster actions to a role, and an exchange.
+
 ### Internal Bootstrap API (Day-0)
 
 Used once per tenant to seed auth before any admin tokens exist. Disabled by default and bound to a separate internal address when enabled; the listener can additionally require mTLS (see [Security](/felix/features/security/#bootstrap-mode-day-0)).
@@ -578,7 +616,10 @@ message HealthStatus {
 
 ## Metadata Synchronization API
 
-Brokers consume metadata via watch streams.
+Brokers consume metadata via watch streams. Today that is the HTTP
+`/v1/{tenants,namespaces,streams,caches}/snapshot` and `/changes?since=` feeds
+above, read with the broker's credential; the gRPC shape below is the design
+sketch.
 
 ### GetSnapshot
 
