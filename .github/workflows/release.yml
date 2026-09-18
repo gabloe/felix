@@ -276,7 +276,14 @@ jobs:
           - { runner: ubuntu-latest, target: x86_64-unknown-linux-gnu, maturin: x86_64 }
           - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, maturin: aarch64 }
           - { runner: macos-latest, target: aarch64-apple-darwin, maturin: aarch64 }
-          - { runner: macos-13, target: x86_64-apple-darwin, maturin: x86_64 }
+          # Cross-compiled from Apple Silicon rather than built on an Intel
+          # runner. `macos-13` is the Intel image, which GitHub is retiring: a
+          # job asking for it can sit queued with no agent forever, and because
+          # the attach and publish jobs need *every* wheel target, one stuck
+          # matrix leg holds back all five. That is what happened on the v0.4.1
+          # tag. maturin-action installs the rust target, and the wheel is
+          # abi3-py39 so nothing here is interpreter-specific.
+          - { runner: macos-latest, target: x86_64-apple-darwin, maturin: x86_64 }
           - { runner: windows-latest, target: x86_64-pc-windows-msvc, maturin: x64 }
 
     steps:
