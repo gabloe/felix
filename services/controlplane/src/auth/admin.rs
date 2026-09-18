@@ -14,7 +14,7 @@
 use crate::api::ensure_tenant_exists;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_validation_error};
 use crate::app::AppState;
-use crate::auth::bearer::tenant_permissions;
+use crate::auth::bearer::{Refusal, refused, tenant_permissions};
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::authorize::{
     ACTION_RBAC_ASSIGNMENT_MANAGE, ACTION_RBAC_POLICY_MANAGE, ACTION_RBAC_VIEW,
@@ -270,7 +270,7 @@ async fn require_action_scope(
         .map(|perm| perm.object)
         .collect::<Vec<ParsedObject>>();
     if scopes.is_empty() {
-        return Err(api_forbidden("missing required permission"));
+        return Err(refused(Refusal::Forbidden, "missing required permission"));
     }
     Ok(ActionScope { scopes })
 }
@@ -294,7 +294,7 @@ async fn require_action_for_object(
     {
         return Ok(());
     }
-    Err(api_forbidden("insufficient scope"))
+    Err(refused(Refusal::Forbidden, "insufficient scope"))
 }
 
 /// Return only policies that fall within one of the caller's scopes.
