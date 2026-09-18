@@ -11,6 +11,24 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-18
+
+The multi-node hardening release. 0.3.0 made a cache into something you can
+subscribe to; 0.4.0 makes the cluster something you can authenticate, package,
+and reason about formally. Every broker-to-broker link can now be mutually
+authenticated, every control-plane endpoint requires a credential, the whole
+deployment ships as a Helm chart, and a TLA+ model of the lease and promotion
+protocol found a safety defect that reading had not.
+
+Felix also stopped being a Rust-only project: there is a **Python client**, a
+binding over the Rust one rather than a reimplementation, gated by a
+conformance catalogue that the next language will have to pass too.
+
+**No wire-protocol break.** `felix-wire` `VERSION` remains `1` and
+`INTERNAL_VERSION` remains `1`. The one new capability is a negotiated feature
+bit, `FEATURE_IDEMPOTENT_PRODUCER` — a 0.3.x client and a 0.4.0 broker
+interoperate byte-for-byte on everything they both know.
+
 ### Added
 
 - A TLA+ model of one shard's lease, replication and promotion protocol, at
@@ -78,6 +96,57 @@ for what the current release actually guarantees.
   than its grace period, a backend without its store) refuse to render.
   `task chart:check` lints and renders it every way `ci/` describes and
   asserts those properties on the output; CI runs it (#131, #132).
+- **A Python client** (#392, #393, #395), as a binding over the Rust client
+  rather than a reimplementation, so the two cannot drift in behaviour. Both a
+  synchronous and an asyncio surface, covering publish and subscribe, consumer
+  groups, cache watches and multi-shard subscriptions. It is gated by a
+  conformance catalogue (`scenarios.toml`) that every future client must pass:
+  Python claims every required scenario and leaves two optional ones
+  unclaimed rather than pretending — `at_least_once` does not carry a routing
+  key, and a prefix watch over a multi-shard cache needs one watch per shard.
+  Release wheels are built in CI.
+- **Container images** for the broker and the control plane (#405), built and
+  smoke-tested in CI, which is what the Helm chart above deploys.
+- **Refresh tokens and `POST /token/refresh`** (#402). 0.3.1 raised the
+  exchanged-token TTL as a stopgap because a broker read its credential once
+  and held it forever; this is the real fix. A refresh rotates within a family,
+  re-evaluates RBAC on every use — so a grant removed since the last exchange
+  stops working without waiting for a re-exchange — and a replayed token
+  revokes the whole chain. Brokers refresh their node credential rather than
+  holding it for their lifetime (#404).
+- **Configuration that refuses to be wrong quietly.** An unrecognised
+  `FELIX_*` variable is reported as a typo instead of silently taking a default
+  (#499), and settings that are each fine alone and wrong together are refused
+  at startup (#509). `--print-config` prints the effective configuration with
+  every credential redacted, so it can be pasted into an issue (#500).
+- **Day-0 bootstrap is audited** (#506), with its scope containment pinned by
+  test — it logged nothing at all before.
+- **A broker names the replicas replication has stopped for** (#485), so a
+  halted follower is visible rather than inferred from lag.
+- **Segments record where each leadership generation began** (#466), which is
+  what lets a follower resume at a generation boundary and a leader drop a
+  divergent suffix.
+- **An unknown internal frame kind is refused rather than fatal** (#496). A
+  newer peer sending a kind an older one does not know no longer ends its
+  control loop.
+- `--slow-subscribers` in the load generator (#382), for measuring
+  slow-consumer isolation rather than asserting it.
+- The protocol decoders are fuzzed, with every target run in CI (#480).
+
+### Performance
+
+- **Replication stopped being a timer.** A pass ships on a durable append
+  instead of waiting for the next tick (#457), ships every shard concurrently
+  rather than one after another (#471), and advances the quorum mark at the
+  **majority** instead of at the slowest follower (#478). A pass's replica
+  reports now share one control-plane request (#494). Together these are what
+  make a `Quorum` acknowledgement a measurement of replication rather than of a
+  2s sweep.
+- **The cache write path group-commits** like the stream path (#390).
+- **A commit turn is released to one publisher rather than all of them**
+  (#511), so a wake-up does not thunder.
+- **Placement uses bounded-load rendezvous hashing** (#388), so shards spread
+  evenly instead of piling onto whichever node scores highest.
 
 ### Fixed
 
@@ -91,6 +160,28 @@ for what the current release actually guarantees.
   the store's clock and judged against it, so freshness is no longer a
   subtraction between two hosts' clocks under Postgres; a deleted assignment
   now takes its report with it.
+- **A `Quorum` acknowledgement could outrun what the replicas actually held.**
+  A follower can no longer confirm past the batch it was sent (#427), the
+  leader holds the quorum mark when a replica report did not land (#434), and
+  a broker may only report positions for shards it actually leads (#430).
+- **Clocks are no longer compared across hosts.** The lease is anchored at the
+  heartbeat's *send*, not its response (#426); liveness expiry is judged by one
+  clock rather than one per instance (#439); the leader stamps a heartbeat
+  rather than whichever instance received it (#475); and a replica report is
+  judged on the clock that stamped it (#484).
+- **Storage durability gaps.** A failed fsync now poisons the segment writer
+  rather than letting the next append proceed as if the disk had kept its word
+  (#428); the compaction directory swap is crash-safe (#429); and a sparse
+  index entry may not point inside the segment header (#483).
+- **A follower resumes at the generation boundary rather than at zero** (#477),
+  and a leader drops a divergent suffix left by a previous generation (#467).
+- A subscriber id is never reused (#397).
+- A forwarded publish is bounded by the ack budget (#399).
+- An unknown stream reports zero shards rather than one (#400).
+- A bootstrap whose ranges *meet* is accepted, rather than requiring an exact
+  match (#432).
+- Shard assignments cascade on delete in the in-memory store too (#398).
+- `felix-common` builds on its own default features (#468).
 
 ### Security
 
@@ -117,6 +208,13 @@ for what the current release actually guarantees.
   shard-assignment watch. The credential is checked before existence, so a
   tenant with no keys answers `401` rather than a `404` that says whether it
   exists.
+- **Inbound connections on the internal listener are bounded** (#505), by
+  `FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS` and
+  `FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE`. This outlives mTLS: an
+  authenticated peer looping on a bug exhausts a listener exactly as a hostile
+  one does.
+- **Every refused credential is counted and logged** (#519), so a
+  misconfigured broker or an attacker is visible rather than silent.
 
 ### Changed
 
@@ -128,6 +226,35 @@ for what the current release actually guarantees.
   the tenant-wide forms token exchange already expanded `tenant.manage` to;
   the control plane's own parser had refused them. A wildcard namespace under
   a named leaf is still refused.
+- The workspace was reorganised to Rust conventions (#391): `foo.rs` + `foo/`
+  throughout, with `unreachable_pub` and `mod_module_files` enforced through
+  `[workspace.lints]`.
+- The replica-report shapes are shared rather than redeclared, and the
+  lifecycle is typed (#447).
+
+### Known limitations
+
+- **Promotion can pick a replica missing an acknowledged `Quorum` record**
+  (#527). Promotion reads the leader's last report, so a leader that
+  acknowledges and then dies before its next report leaves a fresh report
+  naming a replica that never received it. Report expiry does not close it —
+  the report is recent, only older than the acknowledgement. The guarantee still
+  holds against every fault the suite injects — the TLA+ model added in this
+  release is what found the interleaving the suite does not reach. Promotion by greatest (last generation,
+  length) closes it and is the rule to move to.
+- **Shard rebalancing is not implemented** (#130). A shard whose leader is
+  alive is never moved, so adding a broker adds capacity for *new* placements
+  only — scaling a broker StatefulSet up will not migrate existing shards onto
+  the new pods.
+- **A retried Raft proposal can answer `409` for a write that succeeded**
+  (#529), so a provisioning script can be told a tenant it just created already
+  exists.
+- **There is no rate limiting in the control plane** (#524), and an
+  unauthenticated caller can force a JWKS fetch per request by presenting a
+  token with an unknown `kid`.
+- Published throughput and latency figures remain **RF=1 `Leader`**. The
+  harness can now seed `Quorum` streams (#526), but the numbers are not taken
+  yet (#425, #375).
 
 ## [0.3.1] - 2026-09-16
 
@@ -454,7 +581,9 @@ isolation, ephemeral cache, tenant/namespace/stream registries, RBAC and Felix
 token authorization, a control plane with a Postgres-backed store, a Rust client
 SDK, and a protocol conformance runner.
 
-[Unreleased]: https://github.com/gabloe/felix/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/gabloe/felix/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/gabloe/felix/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/gabloe/felix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/gabloe/felix/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gabloe/felix/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/gabloe/felix/compare/v0.1.0...v0.1.1

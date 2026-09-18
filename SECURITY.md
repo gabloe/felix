@@ -54,10 +54,10 @@ minor versions, and there are no long-term support branches.
 
 | Version | Supported |
 |---|---|
-| Latest released minor line (currently `0.3.x`) | Security fixes |
+| Latest released minor line (currently `0.4.x`) | Security fixes |
 | `main` | Security fixes |
-| Older minor lines (`0.2.x`, `0.1.x`) | Not supported — upgrade |
-| Pre-release / preview builds (`0.4.0-preview`) | Fixed on `main`, no separate patch release |
+| Older minor lines (`0.3.x`, `0.2.x`, `0.1.x`) | Not supported — upgrade |
+| Pre-release / preview builds (`*-preview`) | Fixed on `main`, no separate patch release |
 
 Fixes land on `main` and ship in the next patch release of the current minor
 line. We do not backport to earlier minor lines.
