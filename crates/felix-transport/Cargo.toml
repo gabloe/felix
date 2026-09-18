@@ -14,13 +14,13 @@ categories = ["network-programming", "asynchronous"]
 [dependencies]
 anyhow = { workspace = true }
 quinn = { workspace = true }
+rustls = { workspace = true }
 socket2 = "0.6"
 tokio = { workspace = true, features = ["io-util"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }
-rustls = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.189"

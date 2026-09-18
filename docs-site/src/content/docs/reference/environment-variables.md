@@ -1512,6 +1512,9 @@ absent; they are listed in that script rather than here.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FELIX_INTERNAL_BIND` | — | Address for the broker-to-broker QUIC endpoint. Separate from the client one. |
+| `FELIX_INTERNAL_TLS_CERT` | — | PEM certificate chain this broker presents to peers, leaf first. Its DNS name must be the broker's `FELIX_NODE_ID`. Set with the two below, or none of the three. |
+| `FELIX_INTERNAL_TLS_KEY` | — | PEM private key for that certificate. Re-read with the certificate every 30s, so a renewal on disk is picked up by the next handshake without a restart. |
+| `FELIX_INTERNAL_TLS_CA` | — | PEM bundle every peer's certificate must chain to. With all three set, every peer connection is mutually authenticated and the certificate's name is checked against the node id in both directions. Without them the peer link is encrypted but unauthenticated, and startup warns. |
 | `FELIX_INTERNAL_CONNS_PER_PEER` | `1` | Connections held to each peer. |
 | `FELIX_INTERNAL_STREAMS_PER_CONN` | `4` | Multiplexed streams per peer connection, so one large forwarded batch does not block smaller requests. |
 | `FELIX_INTERNAL_MAX_INFLIGHT` | `1024` | Outstanding requests allowed per peer. |

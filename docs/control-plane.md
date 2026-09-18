@@ -107,6 +107,7 @@ put a node in the catalog that placement would then try to use.
 | `FELIX_CONTROLPLANE_URL` | with `FELIX_NODE_ID` | Where to register. |
 | `FELIX_REGION_ID` | no | Defaults to `local`. |
 | `FELIX_INTERNAL_BIND` | no | Where the internal listener binds. Defaults to `0.0.0.0:5001`. Must not share a port with `FELIX_QUIC_BIND`. |
+| `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY`, `FELIX_INTERNAL_TLS_CA` | recommended | Peer mTLS: this broker's certificate (its DNS name must be `FELIX_NODE_ID`), its key, and the CA every peer must chain to. All three or none; without them the peer link is encrypted but unauthenticated. See `docs/internal-protocol.md`. |
 
 The advertised address is the internal listener's, not the client-facing one:
 peers are the only thing that reads it. A broker that advertises a port it does
@@ -567,6 +568,7 @@ Control plane:
 | `felix_shards_placed_total` | shards given a leader by reconciliation |
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
+| `felix_controlplane_auth_rejected_total{reason}` | credentials turned away by any authenticated endpoint: `missing_token`, `malformed_token`, `invalid_token`, `tenant_mismatch`, `forbidden`. Each is also an `info` log line with the reason and the message the caller saw, never the token. A rising `invalid_token` or `forbidden` is a broker with a stale credential, or something that is not a broker |
 
 Broker side:
 

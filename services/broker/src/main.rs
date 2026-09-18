@@ -201,12 +201,29 @@ where
     // client may connect.
     let client_endpoints = Arc::new(broker::client_endpoints::ClientEndpoints::new());
     let peer_shutdown = CancellationToken::new();
+    // One identity for both ends of the peer transport, so a rotation
+    // reaches the listener and the dialler together. Loaded before either
+    // binds: unreadable key material is a misconfiguration to refuse at
+    // startup, not a handshake to fail later.
+    let peer_tls = match config
+        .peer_transport
+        .as_ref()
+        .and_then(|peer| peer.tls.as_ref())
+    {
+        Some(paths) => {
+            let tls = Arc::new(peer::tls::PeerTls::load(paths).context("load peer mTLS material")?);
+            drop(Arc::clone(&tls).spawn_reload(peer_shutdown.clone()));
+            Some(tls)
+        }
+        None => None,
+    };
     let peers = match (&config.peer_transport, &config.membership) {
         (Some(peer_config), Some(membership_config)) => Some(
-            peer::PeerPool::new(
+            peer::PeerPool::new_with_tls(
                 membership_config.node_id.clone(),
                 peer_config.clone(),
                 peer_shutdown.clone(),
+                peer_tls.clone(),
             )
             .context("bind peer transport")?,
         ),
@@ -583,7 +600,7 @@ where
     // reach this node at all.
     let peer_task = match (&config.peer_transport, &config.membership, &cluster) {
         (Some(peer_config), Some(membership_config), Some((router, ingress, _, _))) => {
-            let server = peer::PeerServer::bind(
+            let server = peer::PeerServer::bind_with_tls(
                 membership_config.node_id.clone(),
                 peer_config,
                 Arc::new(peer::BrokerPeerHandler::new(
@@ -598,13 +615,24 @@ where
                     ),
                     peer::ReplicaHandler::new(Arc::clone(&broker), Arc::clone(router)),
                 )),
+                peer_tls.clone(),
             )
             .context("bind broker-internal listener")?;
-            tracing::info!(
-                addr = %server.local_addr()?,
-                "broker-internal listener started (peer connections are encrypted but \
-                 not yet authenticated; see docs/internal-protocol.md)",
-            );
+            match &peer_config.tls {
+                Some(tls) => tracing::info!(
+                    addr = %server.local_addr()?,
+                    ca = %tls.ca_path,
+                    "broker-internal listener started; peers must present a certificate \
+                     from this CA issued to their node id",
+                ),
+                None => tracing::warn!(
+                    addr = %server.local_addr()?,
+                    "broker-internal listener started WITHOUT peer authentication: \
+                     anything that can reach it is a peer. Set FELIX_INTERNAL_TLS_CERT, \
+                     FELIX_INTERNAL_TLS_KEY and FELIX_INTERNAL_TLS_CA, or keep the port \
+                     reachable from brokers only; see docs/internal-protocol.md",
+                ),
+            }
             Some(tokio::spawn(server.serve(peer_shutdown.clone())))
         }
         _ => None,

@@ -38,23 +38,36 @@ them is authentication:
    misdirected frame fails to decode rather than parsing into something
    plausible.
 
-All three stop *accidents*. None stops an attacker, because the TLS
-configuration accepts any certificate — peer authentication is mTLS, which is
-**#125 and not implemented**.
+All three stop *accidents*. What stops an attacker is **mTLS**, configured
+with `FELIX_INTERNAL_TLS_CERT`, `_KEY` and `_CA` (#125): every peer connection
+is mutually authenticated against the configured CA, and the certificate's DNS
+name is checked against the node id in both directions. A peer with no
+certificate, an untrusted or expired one, or one issued to a different name is
+refused before any request is read.
 
-**So the current security boundary is the network.** Anyone who can reach the
-peer port is a peer. Every abuse case below should be read with that in mind:
-they describe what a *reachable* attacker can do, not what a *compromised* one
-can do, because today those are the same thing.
+**Without those three variables, the security boundary is the network.** The
+transport then runs encrypted but unauthenticated — brokers present self-signed
+certificates and accept any — and anyone who can reach the peer port is a peer.
+Startup warns. Every abuse case below should be read against the mode in use:
+under mTLS they describe what a *compromised broker* can do; without it, what
+any *reachable* attacker can do, because those are then the same thing.
 
 ## Identity
 
-`Hello` carries a `node_id` and nothing verifies it. The check runs in the other
-direction only: the dialling side compares `HelloOk`'s id against the node it
-meant to reach, so a catalog entry that has been reassigned is caught. An
-inbound peer's claimed identity is not checked against the catalog, and is not
-used for any decision — which is, in a narrow sense, a mercy: nothing is granted
-on the strength of a name nobody verified.
+Under mTLS, identity is the certificate. The listener checks the `node_id` a
+peer claims in `Hello` against the DNS name on the certificate it presented,
+and refuses a mismatch with `Unauthorized` and a closed connection; the
+dialling side verifies the listener's certificate against the node id it meant
+to reach, so a catalog entry that has been reassigned fails in the handshake
+rather than after a `HelloOk`. A broker can therefore speak only as the name
+its certificate carries, which is what makes the catalog's node ids trustworthy
+across the peer link.
+
+Without mTLS, `Hello` carries a `node_id` and nothing verifies it. The check
+runs in the other direction only — `HelloOk`'s id against the node dialled —
+and an inbound peer's claimed identity is not used for any decision, which is,
+in a narrow sense, a mercy: nothing is granted on the strength of a name nobody
+verified.
 
 ## Abuse cases
 
@@ -165,8 +178,8 @@ the connection. Neither leaves the reader mid-frame.
 
 | # | Abuse case | Status | Owner |
 |---|---|---|---|
-| 1 | Publish to any tenant via forwarding | Mitigated (the owner verifies the client's credential) | #125, #126 for peer identity |
-| 2 | Inject records via replication | Partly (role + generation) | #125 |
+| 1 | Publish to any tenant via forwarding | Mitigated: the owner verifies the client's credential (#503), and mTLS proves which broker forwarded it (#125) | #126 for the broker's relationship with the control plane |
+| 2 | Inject records via replication | Mitigated under mTLS (peer identity) plus role + generation | — |
 | 3 | Truncate a follower via bootstrap | Mitigated | — |
 | 4 | Memory exhaustion via lengths | Mitigated | — |
 | 5 | Connection exhaustion | **Unmitigated** | #504 |
@@ -176,10 +189,12 @@ the connection. Neither leaves the reader mid-frame.
 
 ## Residual risk and operating assumptions
 
-Until #125 and #126 land, **the peer port must be treated as a trusted
-network**: reachable from other brokers and nothing else. That is an operational
-control, not a product one, and it should be stated wherever deployment is
-documented rather than assumed.
+**Configure mTLS.** Without `FELIX_INTERNAL_TLS_*` the peer port must be
+treated as a trusted network — reachable from other brokers and nothing else —
+which is an operational control rather than a product one. With it, a peer is a
+broker holding a certificate the cluster's CA issued to its own node id, and
+reachability is no longer the boundary. #126 (the broker's relationship with
+the control plane) is separate and still open.
 
 One gap will remain after mTLS:
 

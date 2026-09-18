@@ -789,6 +789,16 @@ impl QuicConnection {
     /// endpoint that uses ALPN to separate roles must therefore check this
     /// rather than assume the handshake did it — see the broker's internal
     /// listener.
+    /// The certificate chain the peer presented, leaf first, when the
+    /// endpoint's TLS config asked for one.
+    pub fn peer_certificates(&self) -> Option<Vec<rustls::pki_types::CertificateDer<'static>>> {
+        self.inner
+            .peer_identity()?
+            .downcast::<Vec<rustls::pki_types::CertificateDer<'static>>>()
+            .ok()
+            .map(|certs| *certs)
+    }
+
     pub fn negotiated_protocol(&self) -> Option<Vec<u8>> {
         self.inner
             .handshake_data()?

@@ -631,6 +631,24 @@ impl BrokerConfig {
             Some(membership) => {
                 let peer = crate::peer::PeerTransportConfig::from_env(quic_bind)?;
                 warn_on_unreachable_advertise(membership, &peer);
+                // Under mTLS the node id is the name on the certificate, and a
+                // dialler verifies a peer's certificate against the node id it
+                // means to reach -- so it has to be a name a certificate can
+                // carry. Refused here rather than at the first dial.
+                if peer.tls.is_some()
+                    && rustls::pki_types::DnsName::try_from(membership.node_id.as_str()).is_err()
+                {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "FELIX_NODE_ID {:?} is not a valid DNS name; with peer mTLS the node \
+                             id is the certificate's DNS name, so no label may start or end \
+                             with '-' or be empty",
+                            membership.node_id
+                        ),
+                    )
+                    .into());
+                }
                 Some(peer)
             }
             None => None,
@@ -1313,6 +1331,80 @@ mod tests {
         let config = BrokerConfig::from_env().expect("config");
         assert!(config.membership.is_none());
         assert_eq!(config.controlplane_token, "sync-token");
+    }
+
+    /// Peer mTLS is all three variables or none: one or two would look
+    /// secured while either presenting nothing or verifying nothing.
+    #[serial]
+    #[test]
+    fn a_partly_configured_peer_mtls_is_refused() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_INTERNAL_TLS_CERT", "/etc/felix/peer/tls.crt");
+            env::set_var("FELIX_INTERNAL_TLS_KEY", "/etc/felix/peer/tls.key");
+        }
+        let err = BrokerConfig::from_env().expect_err("two of three accepted");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("FELIX_INTERNAL_TLS_CA not set"),
+            "{rendered}"
+        );
+    }
+
+    /// With peer mTLS the node id is the certificate's DNS name, so a node id
+    /// no certificate can carry -- here a label ending in a hyphen -- is
+    /// refused at startup, not at the first dial.
+    #[serial]
+    #[test]
+    fn a_node_id_that_is_not_a_dns_name_is_refused_under_peer_mtls() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_INTERNAL_TLS_CERT", "/etc/felix/peer/tls.crt");
+            env::set_var("FELIX_INTERNAL_TLS_KEY", "/etc/felix/peer/tls.key");
+            env::set_var("FELIX_INTERNAL_TLS_CA", "/etc/felix/peer/ca.crt");
+        }
+        let err = BrokerConfig::from_env().expect_err("a trailing hyphen is not a DNS name");
+        assert!(
+            format!("{err:#}").contains("not a valid DNS name"),
+            "{err:#}"
+        );
+
+        // The same id is fine without mTLS, where nothing names it.
+        unsafe {
+            env::remove_var("FELIX_INTERNAL_TLS_CERT");
+            env::remove_var("FELIX_INTERNAL_TLS_KEY");
+            env::remove_var("FELIX_INTERNAL_TLS_CA");
+        }
+        let config = BrokerConfig::from_env().expect("config");
+        assert!(config.peer_transport.expect("peer").tls.is_none());
+    }
+
+    #[serial]
+    #[test]
+    fn the_three_peer_mtls_paths_reach_the_config() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_INTERNAL_TLS_CERT", "/etc/felix/peer/tls.crt");
+            env::set_var("FELIX_INTERNAL_TLS_KEY", "/etc/felix/peer/tls.key");
+            env::set_var("FELIX_INTERNAL_TLS_CA", "/etc/felix/peer/ca.crt");
+        }
+        let config = BrokerConfig::from_env().expect("config");
+        let tls = config.peer_transport.expect("peer").tls.expect("tls");
+        assert_eq!(tls.cert_path, "/etc/felix/peer/tls.crt");
+        assert_eq!(tls.key_path, "/etc/felix/peer/tls.key");
+        assert_eq!(tls.ca_path, "/etc/felix/peer/ca.crt");
     }
 
     #[serial]

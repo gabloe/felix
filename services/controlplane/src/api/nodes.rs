@@ -13,7 +13,7 @@
 //! `cluster:*` can manage the whole fleet. Reads require
 //! `node.view:cluster:*`, since the listing exposes the cluster's network
 //! layout.
-use crate::api::error::{ApiError, api_conflict, api_forbidden, api_internal, api_not_found};
+use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{
     NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
     NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ReplicaStatusRequest,
@@ -618,9 +618,10 @@ async fn require_node_manage(
     if allowed {
         Ok(())
     } else {
-        Err(api_forbidden(&format!(
-            "missing node.manage on node:{node_id} or cluster:*"
-        )))
+        Err(crate::auth::bearer::refused(
+            crate::auth::bearer::Refusal::Forbidden,
+            &format!("missing node.manage on node:{node_id} or cluster:*"),
+        ))
     }
 }
 

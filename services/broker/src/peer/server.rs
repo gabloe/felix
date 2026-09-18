@@ -131,23 +131,43 @@ pub struct PeerServer {
     handler: Arc<dyn PeerRequestHandler>,
     max_inbound_connections: usize,
     max_inbound_per_source: usize,
+    /// `Some` when peers must present a certificate, and the name a peer
+    /// claims in `Hello` is held to it.
+    tls: Option<Arc<tls::PeerTls>>,
 }
 
 impl PeerServer {
-    /// Bind the internal listener.
+    /// Bind the internal listener without peer authentication: encrypted, and
+    /// anything that can reach the port is a peer. See [`Self::bind_with_tls`].
     pub fn bind(
         node_id: String,
         config: &PeerTransportConfig,
         handler: Arc<dyn PeerRequestHandler>,
     ) -> Result<Self> {
-        let server = QuicServer::bind(config.bind, tls::server_config()?, config.quic_transport())
-            .context("bind internal QUIC listener")?;
+        Self::bind_with_tls(node_id, config, handler, None)
+    }
+
+    /// Bind the internal listener, requiring every peer to present a
+    /// certificate from the configured CA when `tls` is set.
+    pub fn bind_with_tls(
+        node_id: String,
+        config: &PeerTransportConfig,
+        handler: Arc<dyn PeerRequestHandler>,
+        tls: Option<Arc<tls::PeerTls>>,
+    ) -> Result<Self> {
+        let server = QuicServer::bind(
+            config.bind,
+            tls::server_config(tls.as_deref())?,
+            config.quic_transport(),
+        )
+        .context("bind internal QUIC listener")?;
         Ok(Self {
             server,
             node_id,
             handler,
             max_inbound_connections: config.max_inbound_connections,
             max_inbound_per_source: config.max_inbound_per_source,
+            tls,
         })
     }
 
@@ -229,11 +249,12 @@ impl PeerServer {
             let handler = Arc::clone(&self.handler);
             let shutdown = shutdown.clone();
             let served = connection.clone();
+            let tls = self.tls.clone();
             connection.spawn_pump(async move {
                 // The guard lives as long as the connection is served, and
                 // gives its place back however that ends.
                 let _admission = admission;
-                serve_connection(served, node_id, handler, shutdown).await;
+                serve_connection(served, node_id, handler, tls, shutdown).await;
             });
         }
     }
@@ -244,8 +265,11 @@ async fn serve_connection(
     connection: QuicConnection,
     node_id: String,
     handler: Arc<dyn PeerRequestHandler>,
+    tls: Option<Arc<tls::PeerTls>>,
     shutdown: CancellationToken,
 ) {
+    // Read once: the chain does not change for the life of a connection.
+    let peer_certs = tls.as_ref().and_then(|_| connection.peer_certificates());
     loop {
         let stream = tokio::select! {
             _ = shutdown.cancelled() => break,
@@ -260,7 +284,11 @@ async fn serve_connection(
         let node_id = node_id.clone();
         let handler = Arc::clone(&handler);
         let shutdown = shutdown.clone();
+        let tls = tls.clone();
+        let peer_certs = peer_certs.clone();
+        let stream_connection = connection.clone();
         connection.spawn_pump(async move {
+            let connection = stream_connection;
             let (mut send, mut recv) = stream;
             loop {
                 let request = tokio::select! {
@@ -303,6 +331,37 @@ async fn serve_connection(
                     // transport's to assert, and it must work before the broker
                     // is able to serve anything.
                     InternalMessage::Hello(hello) => {
+                        // The handshake proved the peer holds a certificate
+                        // from the CA; this proves it is the broker it says it
+                        // is. A refusal closes the connection: a peer that
+                        // claims a name its certificate does not carry is not
+                        // a peer that gets to try again on the next stream.
+                        if let Some(tls) = &tls
+                            && let Err(detail) =
+                                tls.verify_identity(peer_certs.as_deref(), &hello.node_id)
+                        {
+                            tracing::warn!(
+                                claimed = %hello.node_id,
+                                peer = %connection.info().peer_addr,
+                                %detail,
+                                "refusing an internal peer: its certificate does not match \
+                                 the identity it claims",
+                            );
+                            metrics::record_inbound_rejected("identity");
+                            let refusal =
+                                InternalMessage::ForwardPublishError(ForwardPublishError {
+                                    correlation_id: hello.correlation_id,
+                                    code: ErrorCode::Unauthorized,
+                                    detail,
+                                });
+                            let _ = write_frame(&mut send, &refusal).await;
+                            let _ = send.finish();
+                            connection.close(
+                                3u32.into(),
+                                b"peer identity does not match its certificate",
+                            );
+                            return;
+                        }
                         tracing::debug!(peer = %hello.node_id, "internal peer connected");
                         InternalMessage::HelloOk(HelloOk {
                             correlation_id: hello.correlation_id,

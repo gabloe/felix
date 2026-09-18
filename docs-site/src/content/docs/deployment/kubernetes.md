@@ -459,23 +459,56 @@ volumeClaimTemplates:
 
 ## Networking
 
-:::danger[The internal port is unauthenticated]
+:::caution[Give the internal port certificates]
 `FELIX_INTERNAL_BIND` is the port brokers use to forward publishes and ship
-replication to each other. **It has no peer authentication yet** — mTLS is
-[#125](https://github.com/gabloe/felix/issues/125) — so anything that can reach
-it is treated as a broker. A caller on that port can append to any stream this
-broker owns, for any tenant, with no credential.
+replication to each other. With `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY`
+and `FELIX_INTERNAL_TLS_CA` set, every peer connection is mutually
+authenticated: a peer is a broker holding a certificate the cluster's CA issued
+to its own node id, checked in both directions. **Without them the port is
+encrypted but unauthenticated** — anything that can reach it is a broker, and a
+caller on it can forward into any stream — and startup warns.
 
-Until that lands, reachability *is* the security boundary. Restrict it to the
-brokers themselves — a `NetworkPolicy` selecting the broker pods, a private
-subnet, or both — and never expose it through a `LoadBalancer` or `Ingress`.
-The client port (`FELIX_QUIC_BIND`) is the one clients use, and it does
-authenticate.
+With cert-manager, one `Certificate` per broker whose `dnsNames` is the pod's
+node id, mounted where the three variables point:
 
-Startup refuses a configuration where the two share a port, so they cannot be
-confused by accident; this is about not exposing the internal one on purpose.
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: felix-broker-0-peer
+spec:
+  secretName: felix-broker-0-peer
+  issuerRef:
+    name: felix-peer-ca
+    kind: Issuer
+  # The DNS name is the identity: it must equal FELIX_NODE_ID.
+  dnsNames:
+    - felix-broker-0
+  duration: 24h
+  renewBefore: 8h
+```
+
+```yaml
+env:
+  - name: FELIX_INTERNAL_TLS_CERT
+    value: /etc/felix/peer/tls.crt
+  - name: FELIX_INTERNAL_TLS_KEY
+    value: /etc/felix/peer/tls.key
+  - name: FELIX_INTERNAL_TLS_CA
+    value: /etc/felix/peer/ca.crt
+```
+
+Renewals are picked up from disk without a restart, and connections already up
+keep working, so a rolling renewal never drops traffic. Node ids must be valid
+DNS names for this; a StatefulSet's pod names are.
+
+Whichever mode, restrict the port to the brokers themselves — a `NetworkPolicy`
+selecting the broker pods, a private subnet, or both — and never expose it
+through a `LoadBalancer` or `Ingress`. The client port (`FELIX_QUIC_BIND`) is
+the one clients use. Startup refuses a configuration where the two share a
+port.
 [`docs/threat-model-internal.md`](https://github.com/gabloe/felix/blob/main/docs/threat-model-internal.md)
-sets out what is and is not defended.
+sets out what is and is not defended in each mode.
 :::
 
 ### Service for External Access
