@@ -5,9 +5,9 @@ title: "Security"
 What Felix secures today, exactly how the authentication chain works, and
 what is not built yet. The one-line summary: every connection is TLS 1.3
 because QUIC allows nothing less; identity comes from your own IdP via OIDC
-token exchange; authorization is tenant-scoped RBAC enforced at the broker.
-Encryption at rest, audit logging, and broker-to-broker mTLS are **not**
-built.
+token exchange; authorization is tenant-scoped RBAC enforced at the broker;
+brokers authenticate each other with mTLS when given certificates. Encryption
+at rest and audit logging are **not** built.
 
 :::note[Security Maturity]
 Felix is in early development and has not been through an external security
@@ -26,10 +26,12 @@ everything — is encrypted in transit.
 **Certificates, honestly.** Today the broker generates a **self-signed
 certificate at startup**; there is no configuration key for operator-supplied
 certificates yet. The demos and the cluster harness distribute trust for that
-certificate to their clients. The same is true of the broker-internal
-transport: peers encrypt with generated certificates but do not authenticate
-each other — a broker cannot yet prove to another broker who it is. That is
-the "mTLS between brokers" line item in the not-built list, and it matters
+certificate to their clients. The broker-internal transport is different:
+given `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY` and
+`FELIX_INTERNAL_TLS_CA`, peers authenticate each other with mTLS, and the
+certificate's DNS name is the broker's identity, checked against its node id
+in both directions. Without those three the internal link is encrypted with
+generated certificates and not authenticated, and startup warns — so set them
 for any deployment where the network between brokers is not already trusted.
 
 The one place operator-supplied certificates *are* wired up is the control
@@ -365,8 +367,9 @@ Stated plainly, so nobody designs around a protection that is not there:
   client can of course encrypt its own payloads before publishing — the
   broker treats them as opaque bytes either way — but Felix ships no key
   management for it.
-- **Broker-to-broker authentication (mTLS).** Peers encrypt but do not
-  authenticate each other; the internal network is trusted.
+- **Broker-to-broker authentication without certificates.** mTLS is built
+  and is the recommended mode; without `FELIX_INTERNAL_TLS_*` peers encrypt
+  but do not authenticate each other and the internal network is trusted.
 - **Operator-supplied broker certificates.** The client-facing certificate
   is generated at startup.
 - **Audit logging, quotas, and rate limits.**

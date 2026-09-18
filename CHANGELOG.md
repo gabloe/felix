@@ -11,6 +11,22 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Added
+
+- Broker-to-broker mTLS (#125). With `FELIX_INTERNAL_TLS_CERT`,
+  `FELIX_INTERNAL_TLS_KEY` and `FELIX_INTERNAL_TLS_CA` set — all three or
+  none — every peer connection is mutually authenticated against the CA, and
+  the certificate's DNS name is the broker's identity: a dialler verifies the
+  listener's certificate against the node id it dials, and the listener checks
+  the node id a peer claims in `Hello` against the certificate it presented. A
+  peer with no certificate, an untrusted or expired one, or one issued to a
+  different name is refused. The certificate and key are re-read every 30s,
+  so a renewal is picked up by the next handshake without a restart and
+  without dropping connections already up. Without the three variables the
+  peer link is encrypted but unauthenticated, as before, and startup now
+  warns. Node ids must be valid DNS names under mTLS. The cluster test
+  harness runs every cluster test under mTLS.
+
 ### Fixed
 
 - Replica reports — what a shard's leader says about which replicas hold its

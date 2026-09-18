@@ -22,6 +22,7 @@
 //! rather than proceeding into a confusing failure later.
 pub mod client;
 pub mod controlplane;
+pub mod pki;
 pub mod ports;
 pub mod scenarios;
 pub mod session;
@@ -1822,9 +1823,15 @@ fn spawn_broker(
         .with_context(|| format!("create data dir {}", data_dir.display()))?;
 
     let token = control_plane.node_token(&config.tenant_id, &node_id)?;
+    // Its own certificate, issued to its node id by the cluster's CA, so the
+    // peer transport runs authenticated the way a deployment does.
+    let cert = pki::issue(root, &node_id)?;
     let mut command = Command::new(binary);
     command
         .env("FELIX_NODE_ID", &node_id)
+        .env("FELIX_INTERNAL_TLS_CERT", &cert.cert)
+        .env("FELIX_INTERNAL_TLS_KEY", &cert.key)
+        .env("FELIX_INTERNAL_TLS_CA", &cert.ca)
         // The advertised address is the internal listener's: it is what peers
         // forward to, not what clients connect to.
         .env("FELIX_NODE_ADVERTISE_ADDR", internal_addr.to_string())

@@ -17,6 +17,9 @@ path = "src/bin/felix-cluster.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+# Peer certificates for the brokers this harness spawns: every cluster test
+# runs under broker-to-broker mTLS.
+rcgen = { workspace = true, features = ["x509-parser"] }
 controlplane = { path = "../../services/controlplane", version = "0.4.0-preview" }
 felix-client = { path = "../felix-client", version = "0.4.0-preview" }
 felix-wire = { path = "../felix-wire", version = "0.4.0-preview" }

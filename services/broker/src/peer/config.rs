@@ -97,6 +97,9 @@ pub struct PeerTransportConfig {
     /// Where the internal listener binds. Distinct from `quic_bind`, and
     /// startup refuses if they are equal.
     pub bind: SocketAddr,
+    /// Certificates for peer connections. `None` is the unauthenticated mode:
+    /// encrypted, and anything that can reach the port is a peer.
+    pub tls: Option<PeerTlsConfig>,
     pub conns_per_peer: usize,
     pub streams_per_conn: usize,
     pub max_inflight_per_peer: usize,
@@ -130,10 +133,25 @@ pub struct PeerTransportConfig {
     pub partition_file: Option<std::path::PathBuf>,
 }
 
+/// Where a broker's peer identity comes from. All three or none: a listener
+/// that verifies peers against a CA but presents no certificate of its own
+/// would be refused by every peer it verified, and one that presents a
+/// certificate but verifies nothing would look secured while accepting anyone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PeerTlsConfig {
+    /// PEM certificate chain, leaf first. Its DNS name is this broker's node id.
+    pub cert_path: String,
+    /// PEM private key for the leaf.
+    pub key_path: String,
+    /// PEM bundle every peer's certificate must chain to.
+    pub ca_path: String,
+}
+
 impl Default for PeerTransportConfig {
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:5001".parse().expect("literal address"),
+            tls: None,
             conns_per_peer: DEFAULT_CONNS_PER_PEER,
             streams_per_conn: DEFAULT_STREAMS_PER_CONN,
             max_inflight_per_peer: DEFAULT_MAX_INFLIGHT_PER_PEER,
@@ -145,6 +163,44 @@ impl Default for PeerTransportConfig {
             reconnect_max: Duration::from_millis(DEFAULT_RECONNECT_MAX_MS),
             handshake_timeout: Duration::from_millis(DEFAULT_HANDSHAKE_TIMEOUT_MS),
             partition_file: None,
+        }
+    }
+}
+
+/// The three certificate paths, or none. One or two is refused: see
+/// [`PeerTlsConfig`].
+fn tls_from_env() -> std::io::Result<Option<PeerTlsConfig>> {
+    let read = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let (cert, key, ca) = (
+        read("FELIX_INTERNAL_TLS_CERT"),
+        read("FELIX_INTERNAL_TLS_KEY"),
+        read("FELIX_INTERNAL_TLS_CA"),
+    );
+    match (cert, key, ca) {
+        (None, None, None) => Ok(None),
+        (Some(cert_path), Some(key_path), Some(ca_path)) => Ok(Some(PeerTlsConfig {
+            cert_path,
+            key_path,
+            ca_path,
+        })),
+        (cert, key, ca) => {
+            let missing: Vec<&str> = [
+                ("FELIX_INTERNAL_TLS_CERT", cert.is_none()),
+                ("FELIX_INTERNAL_TLS_KEY", key.is_none()),
+                ("FELIX_INTERNAL_TLS_CA", ca.is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(name, missing)| missing.then_some(name))
+            .collect();
+            Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "peer mTLS is partly configured: {} not set; set all of \
+                     FELIX_INTERNAL_TLS_CERT, FELIX_INTERNAL_TLS_KEY and FELIX_INTERNAL_TLS_CA, \
+                     or none of them",
+                    missing.join(" and ")
+                ),
+            ))
         }
     }
 }
@@ -175,6 +231,7 @@ impl PeerTransportConfig {
                 )
             })?;
         }
+        config.tls = tls_from_env()?;
         config.partition_file = std::env::var("FELIX_PEER_PARTITION_FILE")
             .ok()
             .filter(|value| !value.trim().is_empty())
