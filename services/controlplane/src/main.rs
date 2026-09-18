@@ -42,6 +42,14 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let metrics_handle = observability::init_observability("felix-controlplane");
+    // A `FELIX_*` name nothing reads is a typo, and a typo is a default quietly
+    // taking effect. Reported after logging is up so the warning is actually
+    // seen, and as a warning rather than a refusal: an orchestrator may inject
+    // variables meant for something else, and refusing to start over one is
+    // worse than the mistake it guards against.
+    for warning in felix_common::env_registry::unrecognised_warnings() {
+        tracing::warn!("{warning}");
+    }
 
     // One flag for the whole process. The metrics endpoint's `/ready` and the
     // API's `/v1/system/ready` both read it, so a drain is visible on both at
