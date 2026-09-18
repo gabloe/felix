@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789749184492,
+  "lastUpdate": 1789749665699,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14322,6 +14322,72 @@ window.BENCHMARK_DATA = {
             "range": "605.13",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1157.00\nmean: 1184.80\nstdev: 605.13\ncv: 51.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7918503d395a0f62904aa485fd3995a27a00b5a2",
+          "message": "perf(azure): the 0.4.0 matrix — a durable pass, a quorum pass, and a plan (#533)\n\nThree questions this run has to answer, and two of them had no script.\n\n`run-durable-matrix.sh` (#375). `run.sh` publishes only to `perf` at the\nbroker default fsync and has no durable or fsync handling at all, so the\ndurable path has never been measured on Azure. Three rows on one topology --\nin-memory, durable + Periodic, durable + OnCommit -- plus a retake of the\ncache write path at both fsync modes, since the committed cache-oncommit rows\npredate #390 and describe code that no longer exists.\n\n`run-quorum-matrix.sh` (#425). Every published figure is RF=1 Leader. This\nruns the identical sweep against RF=3 Leader, RF=3 Quorum, and RF=3 Quorum +\ndurable, so the only variable is what the broker waits for before it answers.\nIt refuses to run outside t2: on t1 every broker sits in one proximity\nplacement group, so the inter-zone RTT the guarantee buys is absent and the\ndelta would be measuring the placement group. Each pass carries a concurrency\npoint, because Quorum's cost is a queueing cost a single in-flight publisher\ncannot show.\n\nBoth follow run.sh's contract that a failing case is a data point rather than\na reason to lose hours of paid cluster, and report what produced no result at\nthe end. Checked with `bash -n`.\n\nThe plan doc records the success criteria before the run, so they are not\nchosen after seeing the numbers. The one that matters: the old ceiling was\nO(N) wake-ups per commit with N publishers in flight (#511), so the\nimprovement has to *widen* with concurrency -- a single-concurrency\ncomparison proves nothing either way, and MB/s alone is not the metric.\n\nStorage moves to Standard_L8as_v3 with local NVMe, which needs no code change:\nBROKER_VM_SIZE and USE_LOCAL_NVME already reach the bicep through session.sh,\nand cloudinit/broker.yaml already RAID0s what Azure exposes under\n/dev/disk/azure/local/by-index. Because that is different hardware from the\nD4ads box behind the published 977 MB/s, the A/B runs v0.3.1 and v0.4.0 both\non L8as rather than comparing across boxes.",
+          "timestamp": "2026-09-18T09:37:14-07:00",
+          "tree_id": "61f7ea37dad7301f172aa463f8e7555187568d5a",
+          "url": "https://github.com/gabloe/felix/commit/7918503d395a0f62904aa485fd3995a27a00b5a2"
+        },
+        "date": 1789749662591,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 123,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 123.00\nmean: 122.60\nstdev: 0.55\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 168,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 168.00\nmean: 168.40\nstdev: 1.67\ncv: 0.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 216,
+            "range": "10.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 216.00\nmean: 216.60\nstdev: 10.41\ncv: 4.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "5.15",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 166.00\nstdev: 5.15\ncv: 3.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 348,
+            "range": "122.62",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 348.00\nmean: 407.40\nstdev: 122.62\ncv: 30.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 681,
+            "range": "533.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 681.00\nmean: 878.00\nstdev: 533.78\ncv: 60.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
