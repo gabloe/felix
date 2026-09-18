@@ -193,6 +193,26 @@ jobs:
       - name: Lint, render, and check
         run: python3 scripts/check_chart.py
 
+  # The formal model of one shard's lease, replication and promotion, checked
+  # with TLC. Bounded, so it finishes in minutes; each configuration says
+  # whether it must pass or which invariant it must violate, so the trace
+  # that shows a check is load-bearing stays a trace.
+  formal:
+    name: TLA+ model
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Model-check
+        run: scripts/check_tla.sh
+
   # The decoders that parse input from outside the process, on a time budget.
   #
   # Separate from `test` because it needs nightly (libFuzzer links a runtime the

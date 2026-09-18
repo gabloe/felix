@@ -13,6 +13,19 @@ for what the current release actually guarantees.
 
 ### Added
 
+- A TLA+ model of one shard's lease, replication and promotion protocol, at
+  `docs/formal/FelixShard.tla`, checked with TLC by `task tla:check` and in
+  CI. It holds no-two-leaders, acknowledged-records-survive,
+  acknowledged-records-agree and no-truncation-below-the-mark under clock
+  drift, lost heartbeats, lost reports, and a broker paused between admitting
+  a write and committing it. Three configurations are expected to fail and
+  are held to it: one with no safety interval and one with the commit-time
+  lease check removed, which show each is load-bearing, and one with
+  promotion as the design writes it, which finds that a leader report older
+  than the last acknowledgement can promote a replica missing an
+  acknowledged `Quorum` record. Promotion by (last generation, length)
+  passes, and is the rule to move to (#420).
+
 - Idempotent producers (#422). A client asks the broker for a producer id
   (`producer_init`) and sends its batches as `publish_idempotent` with a
   per-shard sequence; the shard's leader appends the sequence it expects,

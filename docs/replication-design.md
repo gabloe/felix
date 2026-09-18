@@ -370,6 +370,17 @@ exactly one thing: the time it takes to notice the leader is gone.
 A halted follower is never reported, however close its last position was. It has
 stopped rather than fallen behind.
 
+**A model check says this rule is not enough.** The report travels on its own,
+after the acknowledgements it describes. A leader that reports two followers
+level, then acknowledges a `Quorum` write held by only one of them, then dies,
+leaves the control plane a fresh report naming the other — and promoting it
+loses the acknowledged record. Report expiry does not close this: the report is
+recent, it is just older than the acknowledgement. `docs/formal/FelixShard.tla`
+finds the trace in a second (`task tla:check`), and finds none when
+promotion instead picks the live replica with the greatest (last generation,
+length) — Raft's election restriction, which needs no report at all. That is the
+rule to move to; see [`docs/formal/README.md`](formal/README.md).
+
 **If no replica qualifies, the shard is left unplaced.** The alternative is what
 the code used to do: fall back to ordinary scoring and hand the shard to
 whichever node scores highest, which may never have seen it. That broker then

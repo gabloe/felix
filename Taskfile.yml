@@ -200,6 +200,14 @@ tasks:
       # it names a project-board row the reader has never seen — so unlike the
       # status-claim report this one can fail.
       - "python3 scripts/check_public_docs_refs.py"
+  tla:check:
+    desc: "Model-check the lease, replication and promotion protocol (docs/formal) with TLC"
+    # Java or Docker; the TLA+ tools are fetched once, pinned, into target/tla.
+    # Each configuration declares whether it must pass or which invariant it
+    # must violate, so a finding cannot quietly turn into a pass.
+    cmds:
+      - "scripts/check_tla.sh"
+
   chart:check:
     desc: "Lint and render the Helm chart every way ci/ describes, and check the result keeps its promises"
     # helm and PyYAML; no cluster. The refusals are checked too, so a value
