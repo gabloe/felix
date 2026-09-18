@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789732279958,
+  "lastUpdate": 1789733822482,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10972,6 +10972,58 @@ window.BENCHMARK_DATA = {
             "range": "10902.06",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 772111.97\nmean: 770666.83\nstdev: 10902.06\ncv: 1.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08a1282bd232998e511c3ea301c2f34e027dc314",
+          "message": "feat(replication): rebuild halted followers under a policy (#520)\n\nA follower that halted -- because its log diverged from the leader's, or\nbecause it held records and refused a bootstrap -- stayed halted until an\noperator discarded its copy by hand, and the replication factor drifted\ntoward one across failovers with nothing calling it a failure.\n\nThe leader now repairs it. ReplicateRebuild (kind 24) tells a follower of\nthe shard, at the leader's generation, to discard one of its logs and\nstart again at the leader's oldest surviving offset; shipping resumes\nfrom there and the follower is caught up when it reaches the tail. The\nsame fence applies as to storing records, since a superseded leader\nmaking a follower discard its copy is the most damage a stale leader\ncould do.\n\nIt happens under a policy, because a rebuild is a full transfer and\nevery halted follower at once is an outage:\nFELIX_REPLICATION_REBUILD_MAX_CONCURRENT caps rebuilds in flight per\nleader (default 1, 0 leaves every halt to an operator as before) and\nFELIX_REPLICATION_REBUILD_BYTES_PER_SEC paces a rebuilding follower.\nA fenced halt is never rebuilt; a refusal is remembered for the\ngeneration; an unreachable follower is asked again.\n\nCloses #424.",
+          "timestamp": "2026-09-18T05:14:38-07:00",
+          "tree_id": "d5494df26fc9dc8b411ab641c860dbb09467bc9b",
+          "url": "https://github.com/gabloe/felix/commit/08a1282bd232998e511c3ea301c2f34e027dc314"
+        },
+        "date": 1789733821417,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 327326.51,
+            "range": "8996.41",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 327326.51\nmean: 331868.32\nstdev: 8996.41\ncv: 2.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 327326.51,
+            "range": "8996.41",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 327326.51\nmean: 331868.32\nstdev: 8996.41\ncv: 2.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74709.07,
+            "range": "1587.78",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74709.07\nmean: 74276.49\nstdev: 1587.78\ncv: 2.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 747090.75,
+            "range": "15877.81",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 747090.75\nmean: 742764.89\nstdev: 15877.81\ncv: 2.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
