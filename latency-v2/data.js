@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789746397261,
+  "lastUpdate": 1789747763062,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14190,6 +14190,72 @@ window.BENCHMARK_DATA = {
             "range": "321.96",
             "unit": "us",
             "extra": "trials: 5\nmedian: 676.00\nmean: 825.00\nstdev: 321.96\ncv: 39.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eaef262dddda4d7e01b7a0cf17c4efa25acb0f48",
+          "message": "test(controlplane): a 409 is the write reporting itself, wherever the retry happened (#530)\n\n`the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write`\nfailed about 60% of the time locally (3 of 5, then 3 of 3 under\ninstrumentation on CI), always the same way: one call, zero failovers,\n`409 already exists` on `POST /v1/tenants`, landing within ~30ms of a\nfault phase.\n\nThe harness already understood the ambiguity -- a create that commits and\nthen loses its answer comes back as 409, and with ids used once (`t-chaos-N`)\nthat conflict can only be the call's own earlier attempt. But it gated the\nrule on `retried`, meaning the *harness* had retried after a dead connection.\n\n`RaftStore::write` retries too. An attempt that exceeds `ATTEMPT_CAP` is\nre-proposed, so a command that committed just as the cap expired is proposed\na second time and answered 409 -- on the caller's first HTTP attempt, with no\ndead connection and no harness retry. `retried` is false and the call scored\nas a failure, tripping `assert_eq!(failures, 0)` before the durability\nassertion below it ever ran.\n\nDrops the condition. The reasoning the comment already gives does not depend\non which layer retried. `retried` is then write-only, and `failovers` already\ncounts the harness retry, so it goes.\n\nThis makes the test stricter, not weaker: a 409 counts as acknowledged, so\nthe tenant is pushed to `acked` and the final-state check now has to find it\non every member, including the one rebuilt from a wiped volume.\n\n10/10 locally, from ~40% before. Full controlplane suite green.\n\nThe spurious 409 itself is real and filed separately: a client can be told\nits own committed write already exists.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-18T09:06:38-07:00",
+          "tree_id": "fd14aab2ba186288458fd31975203d9d13e65ebc",
+          "url": "https://github.com/gabloe/felix/commit/eaef262dddda4d7e01b7a0cf17c4efa25acb0f48"
+        },
+        "date": 1789747759650,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 110,
+            "range": "2.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 110.00\nmean: 110.60\nstdev: 2.70\ncv: 2.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 156,
+            "range": "5.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 156.00\nmean: 154.20\nstdev: 5.85\ncv: 3.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 191,
+            "range": "62.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 191.00\nmean: 220.80\nstdev: 62.44\ncv: 28.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 138,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 138.00\nmean: 137.80\nstdev: 1.10\ncv: 0.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 310,
+            "range": "10.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 310.00\nmean: 308.80\nstdev: 10.45\ncv: 3.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 437,
+            "range": "526.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 437.00\nmean: 777.20\nstdev: 526.29\ncv: 67.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
