@@ -5,8 +5,8 @@ use crate::binary;
 use crate::error::Error;
 use crate::frame::{
     FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
-    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_EVENT_BATCH_OFFSETS, Frame,
-    FrameHeader, KNOWN_FLAGS, MAGIC, VERSION, has_unknown_flags,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_BINARY_PUBLISH_KEYED,
+    FLAG_EVENT_BATCH_OFFSETS, Frame, FrameHeader, KNOWN_FLAGS, MAGIC, VERSION, has_unknown_flags,
 };
 use crate::message::{AckMode, Message};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -145,6 +145,104 @@ fn binary_publish_batch_round_trip() {
     assert_eq!(decoded.namespace, "default");
     assert_eq!(decoded.stream, "orders");
     assert_eq!(decoded.payloads, payloads);
+}
+
+#[test]
+fn keyed_publish_batch_round_trip() {
+    let payloads = vec![b"one".to_vec(), b"two".to_vec()];
+    let frame =
+        binary::encode_publish_batch_keyed(Some(b"orders-7"), "t1", "default", "orders", &payloads)
+            .expect("encode");
+    assert_eq!(
+        frame.header.flags,
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_KEYED
+    );
+    let decoded = binary::decode_publish_batch(&frame).expect("decode");
+    assert_eq!(decoded.key.as_deref(), Some(b"orders-7".as_slice()));
+    assert_eq!(decoded.tenant_id, "t1");
+    assert_eq!(decoded.namespace, "default");
+    assert_eq!(decoded.stream, "orders");
+    assert_eq!(decoded.payloads, payloads);
+}
+
+// An empty key is a key: it hashes to a shard like any other, which is not what
+// an unkeyed publish does.
+#[test]
+fn an_empty_key_is_not_an_absent_key() {
+    let payloads = vec![b"one".to_vec()];
+    let keyed = binary::encode_publish_batch_keyed(Some(b""), "t1", "default", "orders", &payloads)
+        .expect("encode");
+    assert_eq!(
+        binary::decode_publish_batch(&keyed).expect("decode").key,
+        Some(Bytes::new())
+    );
+    let unkeyed =
+        binary::encode_publish_batch("t1", "default", "orders", &payloads).expect("encode");
+    assert_eq!(
+        binary::decode_publish_batch(&unkeyed).expect("decode").key,
+        None
+    );
+}
+
+// The keyed bit changes where the body starts, so a decoder that ignored it
+// would read the key length as a tenant length. This is the frame that catches
+// that: the same bytes, read both ways.
+#[test]
+fn the_keyed_bit_is_what_shifts_the_body() {
+    let payloads = vec![b"one".to_vec()];
+    let keyed =
+        binary::encode_publish_batch_keyed(Some(b"k1"), "t1", "default", "orders", &payloads)
+            .expect("encode");
+    let as_unkeyed = Frame::new(FLAG_BINARY_PUBLISH_BATCH, keyed.payload.clone()).expect("frame");
+    let misread = binary::decode_publish_batch(&as_unkeyed);
+    assert!(
+        misread.is_err() || misread.expect("decoded").tenant_id != "t1",
+        "the key prefix must not parse as a tenant id"
+    );
+}
+
+#[test]
+fn keyed_publish_batch_rejects_truncated_key() {
+    // A key length of four with only two bytes behind it.
+    let mut buf = BytesMut::new();
+    buf.put_u16(4);
+    buf.extend_from_slice(b"ab");
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_KEYED,
+        buf.freeze(),
+    )
+    .expect("frame");
+    assert!(matches!(
+        binary::decode_publish_batch(&frame).expect_err("truncated key"),
+        Error::Incomplete
+    ));
+}
+
+#[test]
+fn acked_keyed_publish_batch_round_trip() {
+    let payloads = vec![b"one".to_vec()];
+    let bytes = binary::encode_acked_publish_batch_bytes_keyed(
+        42,
+        AckMode::PerBatch,
+        Some(b"orders-7"),
+        "t1",
+        "default",
+        "orders",
+        &payloads,
+    )
+    .expect("encode");
+    let frame = Frame::decode(bytes).expect("frame");
+    assert_eq!(
+        frame.header.flags,
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED | FLAG_BINARY_PUBLISH_KEYED
+    );
+    // The correlation prefix still reads at offset 0 with a key behind it.
+    let (request_id, ack) = binary::peek_acked_publish_prefix(&frame).expect("peek");
+    assert_eq!(request_id, 42);
+    assert_eq!(ack, AckMode::PerBatch);
+    let decoded = binary::decode_acked_publish_batch(&frame).expect("decode");
+    assert_eq!(decoded.batch.key.as_deref(), Some(b"orders-7".as_slice()));
+    assert_eq!(decoded.batch.payloads, payloads);
 }
 
 #[test]

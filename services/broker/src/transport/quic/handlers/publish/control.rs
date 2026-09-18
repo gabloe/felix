@@ -21,8 +21,8 @@ use crate::transport::quic::handlers::publish::ack::{
 };
 use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, PublishRoute, StreamHandleCache, UNKEYED_SHARD, internal_ack,
-    publish_target, resolve_route,
+    PublishContext, PublishJob, PublishRoute, StreamHandleCache, internal_ack, publish_target,
+    resolve_route,
 };
 use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
 
@@ -82,6 +82,15 @@ pub(crate) async fn handle_binary_publish_batch_control(
         timings::record_decode_ns(decode_ns);
         t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
     }
+    // An unkeyed frame still resolves to shard 0, so this is the same routing
+    // decision the JSON path makes -- the key just arrives in a cheaper frame.
+    let shard = resolve_shard(
+        publish_ctx,
+        &batch.tenant_id,
+        &batch.namespace,
+        &batch.stream,
+        batch.key.as_deref(),
+    );
     let Some(target) = publish_target(
         resolve_route(
             broker,
@@ -91,17 +100,14 @@ pub(crate) async fn handle_binary_publish_batch_control(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
-            // The binary frames carry no routing key: their layout is fixed and
-            // adding one is a new flag, not an optional field. A caller that
-            // needs a key uses the JSON encoding.
-            UNKEYED_SHARD,
+            shard,
         )
         .await,
         publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
-        UNKEYED_SHARD,
+        shard,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
@@ -279,10 +285,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         batch.namespace,
         batch.stream,
         batch.payloads,
-        // The binary frames carry no routing key: their layout is fixed, so
-        // adding one is a new frame flag rather than an optional field. A
-        // caller that needs a key uses the JSON encoding.
-        None,
+        batch.key,
         Some(request_id),
         Some(ack),
         sample,
@@ -302,7 +305,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
 /// A broker with no cluster behind it has one shard, so every key lands on 0 —
 /// which is also what a stream placed with one shard does, and is why adding a
 /// key to a single-shard stream changes nothing.
-fn resolve_shard(
+pub(crate) fn resolve_shard(
     publish_ctx: &PublishContext,
     tenant_id: &str,
     namespace: &str,

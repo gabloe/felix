@@ -319,9 +319,7 @@ pub(crate) fn local_shard_key(
 
 /// The shard a publish that carries no routing key belongs to.
 ///
-/// The binary frame layouts are fixed and have no room for a key, so every
-/// publish on those paths is unkeyed and a stream's shard 0 is where it lands —
-/// the same answer `shard_for` gives for `None`. Named so the keyless paths say
+/// The same answer `shard_for` gives for `None`. Named so the keyless paths say
 /// which shard they mean instead of each recomputing it, because route and batch
 /// disagreeing about the shard is precisely the bug this replaced.
 pub(crate) const UNKEYED_SHARD: u32 = 0;

@@ -6,8 +6,8 @@
 use crate::error::{Error, Result};
 use crate::frame::{
     FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
-    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_EVENT_BATCH_OFFSETS, Frame,
-    FrameHeader,
+    FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH, FLAG_BINARY_PUBLISH_KEYED,
+    FLAG_EVENT_BATCH_OFFSETS, Frame, FrameHeader,
 };
 use crate::message::AckMode;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -40,11 +40,58 @@ pub struct PublishBatch {
     pub tenant_id: String,
     pub namespace: String,
     pub stream: String,
+    /// The routing key, present only when the frame carried
+    /// `FLAG_BINARY_PUBLISH_KEYED`. `None` means unkeyed, which is not the same
+    /// as an empty key: an empty key is a key, and hashes like any other.
+    pub key: Option<Bytes>,
     pub payloads: Vec<Vec<u8>>,
+}
+
+// A keyed frame prefixes the body with a u16 length and the key bytes.
+const KEY_LEN_PREFIX: usize = 2;
+
+// Flags for a publish batch with or without a key.
+fn publish_flags(key: Option<&[u8]>) -> u16 {
+    if key.is_some() {
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_KEYED
+    } else {
+        FLAG_BINARY_PUBLISH_BATCH
+    }
+}
+
+// Bytes the key prefix adds to a payload, and a `FrameTooLarge` for a key that
+// cannot state its own length.
+fn key_prefix_len(key: Option<&[u8]>) -> Result<usize> {
+    match key {
+        None => Ok(0),
+        Some(key) => {
+            u16::try_from(key.len()).map_err(|_| Error::FrameTooLarge)?;
+            Ok(KEY_LEN_PREFIX + key.len())
+        }
+    }
+}
+
+fn put_key_prefix(buf: &mut BytesMut, key: Option<&[u8]>) {
+    if let Some(key) = key {
+        // Length already validated by `key_prefix_len`.
+        buf.put_u16(key.len() as u16);
+        buf.extend_from_slice(key);
+    }
 }
 
 // Encode a publish batch into a binary frame (payload only).
 pub fn encode_publish_batch(
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Frame> {
+    encode_publish_batch_keyed(None, tenant_id, namespace, stream, payloads)
+}
+
+// Encode a publish batch into a binary frame (payload only), optionally keyed.
+pub fn encode_publish_batch_keyed(
+    key: Option<&[u8]>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
@@ -56,8 +103,14 @@ pub fn encode_publish_batch(
     let namespace_len = u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let stream_bytes = stream.as_bytes();
     let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
-    let mut payload_len =
-        2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+    let mut payload_len = key_prefix_len(key)?
+        + 2usize
+        + tenant_bytes.len()
+        + 2
+        + namespace_bytes.len()
+        + 2
+        + stream_bytes.len()
+        + 4;
     for payload in payloads {
         let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
         payload_len = payload_len
@@ -68,6 +121,7 @@ pub fn encode_publish_batch(
         return Err(Error::FrameTooLarge);
     }
     let mut buf = BytesMut::with_capacity(payload_len);
+    put_key_prefix(&mut buf, key);
     buf.put_u16(tenant_len);
     buf.extend_from_slice(tenant_bytes);
     buf.put_u16(namespace_len);
@@ -80,7 +134,7 @@ pub fn encode_publish_batch(
         buf.put_u32(len);
         buf.extend_from_slice(payload);
     }
-    Frame::new(FLAG_BINARY_PUBLISH_BATCH, buf.freeze())
+    Frame::new(publish_flags(key), buf.freeze())
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -118,14 +172,34 @@ pub fn encode_publish_batch_bytes_with_stats(
     stream: &str,
     payloads: &[Vec<u8>],
 ) -> Result<(Bytes, EncodeStats)> {
+    encode_publish_batch_bytes_with_stats_keyed(None, tenant_id, namespace, stream, payloads)
+}
+
+/// The keyed form of [`encode_publish_batch_bytes_with_stats`].
+///
+/// The key rides in the frame rather than forcing the caller onto the JSON
+/// encoding, which is what a keyed publish used to cost.
+pub fn encode_publish_batch_bytes_with_stats_keyed(
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<(Bytes, EncodeStats)> {
     let tenant_bytes = tenant_id.as_bytes();
     let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let namespace_bytes = namespace.as_bytes();
     let namespace_len = u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let stream_bytes = stream.as_bytes();
     let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
-    let mut payload_len =
-        2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+    let mut payload_len = key_prefix_len(key)?
+        + 2usize
+        + tenant_bytes.len()
+        + 2
+        + namespace_bytes.len()
+        + 2
+        + stream_bytes.len()
+        + 4;
     for payload in payloads {
         let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
         payload_len = payload_len
@@ -138,8 +212,9 @@ pub fn encode_publish_batch_bytes_with_stats(
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
     let mut reallocs = 0u64;
     let mut cap = buf.capacity();
-    let header = FrameHeader::new(FLAG_BINARY_PUBLISH_BATCH, payload_len as u32);
+    let header = FrameHeader::new(publish_flags(key), payload_len as u32);
     header.encode(&mut buf);
+    put_key_prefix(&mut buf, key);
     buf.put_u16(tenant_len);
     buf.extend_from_slice(tenant_bytes);
     buf.put_u16(namespace_len);
@@ -166,14 +241,33 @@ pub fn encode_publish_batch_bytes_with_stats_from_bytes(
     stream: &str,
     payloads: &[Bytes],
 ) -> Result<(Bytes, EncodeStats)> {
+    encode_publish_batch_bytes_with_stats_keyed_from_bytes(
+        None, tenant_id, namespace, stream, payloads,
+    )
+}
+
+/// The keyed form of [`encode_publish_batch_bytes_with_stats_from_bytes`].
+pub fn encode_publish_batch_bytes_with_stats_keyed_from_bytes(
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Bytes],
+) -> Result<(Bytes, EncodeStats)> {
     let tenant_bytes = tenant_id.as_bytes();
     let tenant_len = u16::try_from(tenant_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let namespace_bytes = namespace.as_bytes();
     let namespace_len = u16::try_from(namespace_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let stream_bytes = stream.as_bytes();
     let stream_len = u16::try_from(stream_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
-    let mut payload_len =
-        2usize + tenant_bytes.len() + 2 + namespace_bytes.len() + 2 + stream_bytes.len() + 4;
+    let mut payload_len = key_prefix_len(key)?
+        + 2usize
+        + tenant_bytes.len()
+        + 2
+        + namespace_bytes.len()
+        + 2
+        + stream_bytes.len()
+        + 4;
     for payload in payloads {
         let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
         payload_len = payload_len
@@ -186,8 +280,9 @@ pub fn encode_publish_batch_bytes_with_stats_from_bytes(
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
     let mut reallocs = 0u64;
     let mut cap = buf.capacity();
-    let header = FrameHeader::new(FLAG_BINARY_PUBLISH_BATCH, payload_len as u32);
+    let header = FrameHeader::new(publish_flags(key), payload_len as u32);
     header.encode(&mut buf);
+    put_key_prefix(&mut buf, key);
     buf.put_u16(tenant_len);
     buf.extend_from_slice(tenant_bytes);
     buf.put_u16(namespace_len);
@@ -212,6 +307,20 @@ pub fn encode_publish_batch_bytes_with_stats_from_bytes(
 // Decode a binary publish batch frame into its structured form.
 pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
     let mut buf = frame.payload.clone();
+    // The key prefix comes first, so everything after it is the ordinary body
+    // at a shifted offset rather than a second layout to parse.
+    let key = if frame.header.flags & FLAG_BINARY_PUBLISH_KEYED != 0 {
+        if buf.remaining() < KEY_LEN_PREFIX {
+            return Err(Error::Incomplete);
+        }
+        let key_len = buf.get_u16() as usize;
+        if buf.remaining() < key_len {
+            return Err(Error::Incomplete);
+        }
+        Some(buf.copy_to_bytes(key_len))
+    } else {
+        None
+    };
     if buf.remaining() < 2 {
         return Err(Error::Incomplete);
     }
@@ -253,6 +362,7 @@ pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
         tenant_id,
         namespace,
         stream,
+        key,
         payloads,
     })
 }
@@ -315,10 +425,29 @@ pub fn encode_acked_publish_batch_bytes(
     stream: &str,
     payloads: &[Vec<u8>],
 ) -> Result<Bytes> {
+    encode_acked_publish_batch_bytes_keyed(
+        request_id, ack, None, tenant_id, namespace, stream, payloads,
+    )
+}
+
+/// The keyed form of [`encode_acked_publish_batch_bytes`].
+///
+/// The key prefix sits *after* the correlation prefix, so
+/// [`peek_acked_publish_prefix`] still reads the request id at offset 0 whether
+/// or not a key follows.
+pub fn encode_acked_publish_batch_bytes_keyed(
+    request_id: u64,
+    ack: AckMode,
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Bytes> {
     let ack_byte = ack_mode_to_wire(ack)?;
     // Reuse the unacked body encoder rather than duplicating its bounds checks,
     // then splice the prefix in front and restate the header with both flags.
-    let body = encode_publish_batch(tenant_id, namespace, stream, payloads)?.payload;
+    let body = encode_publish_batch_keyed(key, tenant_id, namespace, stream, payloads)?.payload;
     let payload_len = ACKED_PREFIX_LEN
         .checked_add(body.len())
         .ok_or(Error::FrameTooLarge)?;
@@ -327,7 +456,7 @@ pub fn encode_acked_publish_batch_bytes(
     }
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
     FrameHeader::new(
-        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_ACKED,
+        publish_flags(key) | FLAG_BINARY_PUBLISH_ACKED,
         payload_len as u32,
     )
     .encode(&mut buf);
@@ -359,7 +488,9 @@ pub fn decode_acked_publish_batch(frame: &Frame) -> Result<AckedPublishBatch> {
     // body parser, and with it one set of bounds checks.
     let body = Frame {
         header: FrameHeader::new(
-            FLAG_BINARY_PUBLISH_BATCH,
+            // Carry the keyed bit across: it is what tells the body parser a key
+            // prefix comes before the tenant id.
+            FLAG_BINARY_PUBLISH_BATCH | (frame.header.flags & FLAG_BINARY_PUBLISH_KEYED),
             (frame.payload.len() - ACKED_PREFIX_LEN) as u32,
         ),
         payload: frame.payload.slice(ACKED_PREFIX_LEN..),

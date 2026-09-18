@@ -264,14 +264,28 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
     // only thing that could set it.
     let binary_acked_seen = Arc::new(AtomicUsize::new(0));
     let json_acked_seen = Arc::new(AtomicUsize::new(0));
-    let binary_seen_task = Arc::clone(&binary_acked_seen);
-    let json_seen_task = Arc::clone(&json_acked_seen);
+    // The same contract for a keyed publish: it is binary against a broker that
+    // advertised 0x0040 and JSON against one that did not.
+    let binary_keyed_seen = Arc::new(AtomicUsize::new(0));
+    let json_keyed_seen = Arc::new(AtomicUsize::new(0));
+    #[derive(Clone)]
+    struct StubCounters {
+        binary_acked: Arc<AtomicUsize>,
+        json_acked: Arc<AtomicUsize>,
+        binary_keyed: Arc<AtomicUsize>,
+        json_keyed: Arc<AtomicUsize>,
+    }
+    let counters_task = StubCounters {
+        binary_acked: Arc::clone(&binary_acked_seen),
+        json_acked: Arc::clone(&json_acked_seen),
+        binary_keyed: Arc::clone(&binary_keyed_seen),
+        json_keyed: Arc::clone(&json_keyed_seen),
+    };
 
     let server_task = tokio::spawn(async move {
         async fn handle_connection(
             connection: felix_transport::QuicConnection,
-            binary_acked_seen: Arc<AtomicUsize>,
-            json_acked_seen: Arc<AtomicUsize>,
+            counters: StubCounters,
         ) -> Result<()> {
             let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
             loop {
@@ -302,8 +316,15 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                     else {
                         break;
                     };
+                    if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_KEYED != 0 {
+                        counters
+                            .binary_keyed
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0 {
-                        binary_acked_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        counters
+                            .binary_acked
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let batch = felix_wire::binary::decode_acked_publish_batch(&frame)?;
                         send.write_all(&felix_wire::binary::encode_publish_ack_bytes(
                             batch.request_id,
@@ -322,9 +343,15 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                         }
                         Some(Message::PublishBatch {
                             request_id: Some(id),
+                            key,
                             ..
                         }) => {
-                            json_acked_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let counter = if key.is_some() {
+                                &counters.json_keyed
+                            } else {
+                                &counters.json_acked
+                            };
+                            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             write_message(&mut send, Message::PublishOk { request_id: id }).await?;
                         }
                         Some(Message::Subscribe {
@@ -400,8 +427,7 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
             };
             tasks.push(tokio::spawn(handle_connection(
                 connection,
-                Arc::clone(&binary_seen_task),
-                Arc::clone(&json_seen_task),
+                counters_task.clone(),
             )));
         }
         for task in tasks {
@@ -442,6 +468,28 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
         json_acked_seen.load(AtomicOrdering::Relaxed),
         1,
         "expected the acked publish to fall back to the JSON encoding"
+    );
+
+    publisher
+        .publish_keyed(
+            "t1",
+            "default",
+            "updates",
+            Bytes::from_static(b"customer-1"),
+            b"payload".to_vec(),
+            AckMode::PerMessage,
+        )
+        .await?;
+    assert_eq!(
+        binary_keyed_seen.load(AtomicOrdering::Relaxed),
+        0,
+        "client sent a keyed binary frame to a broker that never advertised 0x0040; \
+         such a broker reads the key prefix as a tenant length"
+    );
+    assert_eq!(
+        json_keyed_seen.load(AtomicOrdering::Relaxed),
+        1,
+        "expected the keyed publish to fall back to the JSON encoding, key intact"
     );
 
     let mut subscription = client.subscribe("t1", "default", "updates").await?;

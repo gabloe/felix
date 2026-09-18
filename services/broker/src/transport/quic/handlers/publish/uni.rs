@@ -9,6 +9,7 @@ use felix_wire::Frame;
 use std::sync::atomic::Ordering;
 
 use crate::auth::AuthContext;
+use crate::transport::quic::handlers::publish::control::resolve_shard;
 use crate::transport::quic::handlers::publish::ingress::enqueue_publish;
 use crate::transport::quic::handlers::publish::{
     PublishContext, PublishJob, StreamHandleCache, UNKEYED_SHARD, publish_target, resolve_route,
@@ -63,6 +64,13 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             .pub_items_in_ok
             .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
     }
+    let shard = resolve_shard(
+        publish_ctx,
+        &batch.tenant_id,
+        &batch.namespace,
+        &batch.stream,
+        batch.key.as_deref(),
+    );
     let Some(target) = publish_target(
         resolve_route(
             broker,
@@ -72,14 +80,14 @@ pub(crate) async fn handle_binary_publish_batch_uni(
             &batch.tenant_id,
             &batch.namespace,
             &batch.stream,
-            UNKEYED_SHARD,
+            shard,
         )
         .await,
         publish_ctx,
         &batch.tenant_id,
         &batch.namespace,
         &batch.stream,
-        UNKEYED_SHARD,
+        shard,
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,

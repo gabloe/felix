@@ -131,9 +131,13 @@ before keys existed and what a single-shard stream does regardless.
 
 > `an_unkeyed_publish_still_lands_on_shard_zero`.
 
-Keyed publishes use the JSON encoding. The binary publish frames are fixed
-layouts with no room for a key, so adding one there is a new frame flag rather
-than an optional field, and is not done.
+Keyed publishes use the binary encoding, like unkeyed ones. The key rides in the
+frame under `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`), negotiated on the handshake;
+a broker that predates the bit gets the JSON encoding instead, which costs
+throughput rather than correctness.
+
+> `a_keyed_publish_negotiates_the_binary_frame`,
+> `an_unacked_keyed_publish_reaches_its_shard`.
 
 ## Delivery to subscribers
 

@@ -1,0 +1,16 @@
+{
+  "name": "binary_publish_acked_keyed",
+  "kind": "binary_acked_publish_batch",
+  "flags": 73,
+  "request_id": 7,
+  "ack_mode": "per_batch",
+  "key_utf8": "k7",
+  "tenant_id": "t1",
+  "namespace": "default",
+  "stream": "demo",
+  "payloads_utf8": [
+    "hello"
+  ],
+  "payload_hex": "00000000000000070200026b3700027431000764656661756c74000464656d6f000000010000000568656c6c6f",
+  "frame_hex": "464c5831000100490000002d00000000000000070200026b3700027431000764656661756c74000464656d6f000000010000000568656c6c6f"
+}

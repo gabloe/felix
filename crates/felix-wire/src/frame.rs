@@ -27,6 +27,19 @@ pub const FLAG_BINARY_PUBLISH_ACK: u16 = 0x0010;
 /// the bit.
 pub const FLAG_EVENT_BATCH_OFFSETS: u16 = 0x0020;
 
+/// Modifier on `FLAG_BINARY_PUBLISH_BATCH`: the payload is prefixed with a
+/// length-delimited routing key, which decides the batch's shard.
+///
+/// Without this bit a keyed publish had to fall back to the JSON encoding — the
+/// binary layouts had nowhere to put a key — and a perf session measured that
+/// fallback at roughly 30% of throughput (#549). The key prefix goes *after* the
+/// `FLAG_BINARY_PUBLISH_ACKED` prefix when both are set, so the correlation id
+/// stays readable at offset 0 without parsing anything else.
+///
+/// An empty key is a key: it hashes like any other, and is not the same as an
+/// unkeyed frame.
+pub const FLAG_BINARY_PUBLISH_KEYED: u16 = 0x0040;
+
 /// Every flag bit this version understands.
 ///
 /// Frames carrying bits outside this mask are rejected rather than parsed with
@@ -42,7 +55,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_EVENT_BATCH_SHARED
     | FLAG_BINARY_PUBLISH_ACKED
     | FLAG_BINARY_PUBLISH_ACK
-    | FLAG_EVENT_BATCH_OFFSETS;
+    | FLAG_EVENT_BATCH_OFFSETS
+    | FLAG_BINARY_PUBLISH_KEYED;
 
 /// The flag bits that existed before capability negotiation.
 ///

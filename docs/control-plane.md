@@ -527,9 +527,9 @@ what may be written.
 **Sharding is reachable from the wire.** A publish may carry a routing key, and
 the key picks the shard through `shard_for`, so a stream placed across brokers
 spreads across them. Ordering is per key once a stream has more than one shard;
-a single-shard stream keeps total order. The key rides the JSON encoding — the
-binary frames have no room for one — which is the remaining limitation rather
-than the routing itself.
+a single-shard stream keeps total order. The key rides the binary frame under
+`FLAG_BINARY_PUBLISH_KEYED`, so routing a publish no longer costs the binary fast
+path; JSON remains the fallback for a broker that predates the bit.
 
 #### Referential integrity
 
