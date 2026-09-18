@@ -83,6 +83,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
+        &auth_ctx.token,
     ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
@@ -129,6 +130,8 @@ pub(crate) async fn handle_publish_message_uni(
     namespace: String,
     stream: String,
     payload: Vec<u8>,
+    // The publisher's token, carried on a forward for the owner to verify.
+    credential: String,
 ) -> Result<bool> {
     #[cfg(feature = "telemetry")]
     {
@@ -157,6 +160,7 @@ pub(crate) async fn handle_publish_message_uni(
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
+        &credential,
     ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);
@@ -200,6 +204,8 @@ pub(crate) async fn handle_publish_batch_message_uni(
     namespace: String,
     stream: String,
     payloads: Vec<Vec<u8>>,
+    // The publisher's token, carried on a forward for the owner to verify.
+    credential: String,
 ) -> Result<bool> {
     #[cfg(feature = "telemetry")]
     {
@@ -230,6 +236,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
+        &credential,
     ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(true);

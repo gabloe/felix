@@ -11,6 +11,21 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Security
+
+- A forwarded publish or cache operation now carries the client's own bearer
+  token, and the owning broker verifies it before writing — against the
+  tenant's keys, for `stream.publish` on that stream or `cache.read` /
+  `cache.write` on that cache. The owner used to re-check ownership and
+  generation only, so anything that could reach the internal port could
+  append to any tenant's stream with no credential (#503). The credential
+  rides two new internal kinds, `AuthorizedForwardPublish` (22) and
+  `AuthorizedForwardCacheOp` (23); the legacy kinds still decode and are
+  refused `Unauthorized`. During a rolling upgrade, an upgraded broker falls
+  back to the legacy kind toward an owner that predates it, while an old
+  broker's forwards to an upgraded owner fail until it is upgraded — see the
+  upgrade notes.
+
 ## [0.3.1] - 2026-09-16
 
 A real-IdP patch. The 0.3.0 token exchange quietly assumed two things that were

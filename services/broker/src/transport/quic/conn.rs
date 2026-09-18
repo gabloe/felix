@@ -243,7 +243,12 @@ fn build_publish_context(
                         .await
                         .map(|_| ())
                         .map_err(Into::into),
-                    PublishTarget::Forward { target, key, ack } => {
+                    PublishTarget::Forward {
+                        target,
+                        key,
+                        ack,
+                        credential,
+                    } => {
                         // Forwarding runs on the publish worker, not inline on
                         // the read loop, so a slow peer backs up the same queue
                         // a slow disk would and the existing backpressure and
@@ -254,6 +259,7 @@ fn build_publish_context(
                                 target,
                                 key,
                                 *ack,
+                                credential,
                                 job.payloads.clone(),
                                 forward_budget,
                             )

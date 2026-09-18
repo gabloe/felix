@@ -14,6 +14,7 @@ use super::*;
 struct ScriptedOwner {
     answers: Mutex<std::collections::VecDeque<std::result::Result<InternalMessage, PeerError>>>,
     asked: Mutex<Vec<(String, u64)>>,
+    kinds: Mutex<Vec<felix_wire::internal::Kind>>,
 }
 
 impl ScriptedOwner {
@@ -23,7 +24,13 @@ impl ScriptedOwner {
         Self {
             answers: Mutex::new(answers.into_iter().collect()),
             asked: Mutex::new(Vec::new()),
+            kinds: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The frame kind of each request, in order.
+    fn kinds(&self) -> Vec<felix_wire::internal::Kind> {
+        self.kinds.lock().expect("lock").clone()
     }
 
     /// Who was asked, and at which generation.
@@ -51,6 +58,7 @@ impl PeerRequester for ScriptedOwner {
             .lock()
             .expect("lock")
             .push((node_id.to_string(), generation));
+        self.kinds.lock().expect("lock").push(message.kind());
         self.answers
             .lock()
             .expect("lock")
@@ -110,6 +118,7 @@ async fn forward(owner: &ScriptedOwner) -> std::result::Result<Option<(u64, u64)
         &target(),
         &key(),
         AckMode::OnCommit,
+        "token",
         vec![Bytes::from_static(b"an order")],
         // Generous: the cases here are about what the owner answered, not about
         // running out of time. `a_forward_answers_within_its_budget` is where
@@ -352,6 +361,7 @@ async fn a_forward_answers_within_its_budget() {
         &target(),
         &key(),
         AckMode::OnCommit,
+        "token",
         vec![Bytes::from_static(b"an order")],
         budget,
     )
@@ -391,6 +401,7 @@ async fn a_spent_budget_sends_nothing() {
         &target(),
         &key(),
         AckMode::OnCommit,
+        "token",
         vec![Bytes::from_static(b"an order")],
         Duration::ZERO,
     )
@@ -403,4 +414,31 @@ async fn a_spent_budget_sends_nothing() {
         0,
         "a batch went out on a budget that was already spent",
     );
+}
+
+/// **A forward carries the publisher's credential, on the kind an owner
+/// checks it on.** An owner from before that kind refuses it as unsupported;
+/// the forwarder then sends the legacy kind, which is all that owner can read,
+/// so a rolling upgrade keeps forwarding. Once, not on every answer: a second
+/// `UnsupportedKind` is a refusal like any other.
+#[tokio::test]
+async fn an_owner_that_predates_the_credentialed_kind_gets_the_legacy_one() {
+    use felix_wire::internal::Kind;
+
+    let owner = ScriptedOwner::new([Ok(refused(ErrorCode::UnsupportedKind)), Ok(accepted(1, 1))]);
+    let offsets = forward(&owner).await.expect("accepted on the legacy kind");
+    assert_eq!(offsets, Some((1, 1)));
+    assert_eq!(
+        owner.kinds(),
+        vec![Kind::AuthorizedForwardPublish, Kind::ForwardPublish],
+    );
+
+    let owner = ScriptedOwner::new([
+        Ok(refused(ErrorCode::UnsupportedKind)),
+        Ok(refused(ErrorCode::UnsupportedKind)),
+    ]);
+    forward(&owner)
+        .await
+        .expect_err("an owner that knows neither kind is refused, not looped on");
+    assert_eq!(owner.attempts(), 2);
 }

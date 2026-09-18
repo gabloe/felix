@@ -14,18 +14,32 @@ fn shard() -> ShardRef {
     }
 }
 
+/// The legacy kind: no credential. Kept as a fixture because its layout is
+/// frozen and the golden vector below pins it.
 fn forward() -> InternalMessage {
     InternalMessage::ForwardPublish(ForwardPublish {
         correlation_id: 42,
         shard: shard(),
         ack: AckMode::OnCommit,
         payloads: vec![Bytes::from_static(b"a"), Bytes::from_static(b"bb")],
+        credential: String::new(),
+    })
+}
+
+fn authorized_forward() -> InternalMessage {
+    InternalMessage::ForwardPublish(ForwardPublish {
+        correlation_id: 42,
+        shard: shard(),
+        ack: AckMode::OnCommit,
+        payloads: vec![Bytes::from_static(b"a"), Bytes::from_static(b"bb")],
+        credential: "eyJ.token.sig".to_string(),
     })
 }
 
 fn every_message() -> Vec<InternalMessage> {
     vec![
         forward(),
+        authorized_forward(),
         InternalMessage::ForwardPublishOk(ForwardPublishOk {
             correlation_id: 42,
             first_offset: 100,
@@ -73,6 +87,16 @@ fn every_message() -> Vec<InternalMessage> {
             key: "session:abc".to_string(),
             value: Bytes::from_static(b"payload"),
             ttl_ms: 30_000,
+            credential: String::new(),
+        }),
+        InternalMessage::ForwardCacheOp(ForwardCacheOp {
+            correlation_id: 42,
+            shard: shard(),
+            op: CacheOpKind::Put,
+            key: "session:abc".to_string(),
+            value: Bytes::from_static(b"payload"),
+            ttl_ms: 30_000,
+            credential: "eyJ.token.sig".to_string(),
         }),
         InternalMessage::ForwardCacheOp(ForwardCacheOp {
             correlation_id: 42,
@@ -81,6 +105,7 @@ fn every_message() -> Vec<InternalMessage> {
             key: "session:abc".to_string(),
             value: Bytes::new(),
             ttl_ms: 0,
+            credential: String::new(),
         }),
         InternalMessage::ForwardCacheOk(ForwardCacheOk {
             correlation_id: 42,
@@ -403,6 +428,7 @@ fn an_over_large_batch_is_refused_on_encode() {
         shard: shard(),
         ack: AckMode::None,
         payloads: vec![Bytes::new(); MAX_BATCH_PAYLOADS + 1],
+        credential: String::new(),
     });
     assert!(matches!(message.encode(), Err(Error::FrameTooLarge)));
 }
@@ -414,6 +440,7 @@ fn an_empty_batch_round_trips() {
         shard: shard(),
         ack: AckMode::None,
         payloads: Vec::new(),
+        credential: String::new(),
     });
     let decoded = InternalMessage::decode(message.encode().expect("encode")).expect("decode");
     assert_eq!(decoded, message);
@@ -424,7 +451,7 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(22).is_err());
+    assert!(Kind::from_u16(24).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
@@ -576,6 +603,8 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (19, Kind::ReplicateDeadLetterBootstrap),
         (20, Kind::ReplicateCounterRecords),
         (21, Kind::ReplicateCounterBootstrap),
+        (22, Kind::AuthorizedForwardPublish),
+        (23, Kind::AuthorizedForwardCacheOp),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);
@@ -628,6 +657,7 @@ fn an_unknown_cache_operation_is_refused() {
         key: "k".to_string(),
         value: Bytes::new(),
         ttl_ms: 0,
+        credential: String::new(),
     });
     let bytes = op.encode().expect("encode").to_vec();
     let position = bytes
@@ -807,4 +837,54 @@ fn a_frame_that_is_not_ours_has_no_envelope_to_read() {
     future.put_u16(1);
     future.put_u32(0);
     assert!(FrameEnvelope::decode(&future.freeze()).is_err());
+}
+
+/// The credential picks the kind, so a forwarder holding one cannot send it
+/// on the kind an owner does not check.
+#[test]
+fn a_credential_selects_the_authorized_kind() {
+    assert_eq!(forward().kind(), Kind::ForwardPublish);
+    assert_eq!(authorized_forward().kind(), Kind::AuthorizedForwardPublish);
+    let decoded =
+        InternalMessage::decode(authorized_forward().encode().expect("encode")).expect("decode");
+    assert_eq!(decoded, authorized_forward());
+}
+
+/// The legacy layout is a prefix of the authorized one, so an authorized frame
+/// relabelled as the legacy kind has trailing bytes and is refused -- a peer
+/// cannot downgrade a frame by rewriting its kind.
+#[test]
+fn an_authorized_frame_relabelled_as_legacy_is_refused() {
+    let mut bytes = authorized_forward().encode().expect("encode").to_vec();
+    // kind sits after the 4-byte magic and 2-byte version
+    bytes[6..8].copy_from_slice(&(Kind::ForwardPublish as u16).to_be_bytes());
+    assert!(InternalMessage::decode(Bytes::from(bytes)).is_err());
+}
+
+/// And the other way: a legacy frame relabelled as authorized has no
+/// credential to read, and an authorized kind with an empty one is refused
+/// rather than read as "no credential".
+#[test]
+fn an_authorized_kind_without_a_credential_is_refused() {
+    let mut bytes = forward().encode().expect("encode").to_vec();
+    bytes[6..8].copy_from_slice(&(Kind::AuthorizedForwardPublish as u16).to_be_bytes());
+    assert!(InternalMessage::decode(Bytes::from(bytes.clone())).is_err());
+
+    // Explicitly zero-length, with the header length fixed up to match.
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    let body_len = (bytes.len() - InternalHeader::LEN) as u32;
+    bytes[8..12].copy_from_slice(&body_len.to_be_bytes());
+    assert!(InternalMessage::decode(Bytes::from(bytes)).is_err());
+}
+
+#[test]
+fn an_over_long_credential_is_refused_on_encode() {
+    let message = InternalMessage::ForwardPublish(ForwardPublish {
+        correlation_id: 1,
+        shard: shard(),
+        ack: AckMode::None,
+        payloads: Vec::new(),
+        credential: "x".repeat(MAX_CREDENTIAL_BYTES + 1),
+    });
+    assert!(matches!(message.encode(), Err(Error::FrameTooLarge)));
 }

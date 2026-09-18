@@ -47,6 +47,7 @@ fn forward() -> InternalMessage {
         shard: shard(),
         ack: AckMode::OnCommit,
         payloads: vec![bytes::Bytes::from_static(b"payload")],
+        credential: String::new(),
     })
 }
 
@@ -203,6 +204,7 @@ async fn concurrent_requests_do_not_cross_responses() {
                 shard: message,
                 ack: AckMode::None,
                 payloads: vec![],
+                credential: String::new(),
             });
             let response = pool.request(PEER, addr, request).await.expect("request");
             match response {

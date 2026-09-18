@@ -77,6 +77,7 @@ impl BrokerAuth {
         Ok(AuthContext {
             tenant_id: tenant_id.to_string(),
             matcher,
+            token: token.to_string(),
         })
     }
 }
@@ -86,6 +87,9 @@ impl BrokerAuth {
 pub struct AuthContext {
     pub tenant_id: String,
     pub matcher: PermissionMatcher,
+    /// The token itself, kept so a request this broker forwards carries it
+    /// and the owner can verify it again. Never logged.
+    pub token: String,
 }
 
 /// Fetches and caches per-tenant JWKS from the control plane, and exposes the

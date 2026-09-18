@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use felix_wire::internal::{
-    AckMode, CacheOpKind, ForwardCacheOp, ForwardPublish, InternalMessage, ShardRef,
+    AckMode, CacheOpKind, ErrorCode, ForwardCacheOp, ForwardPublish, InternalMessage, ShardRef,
 };
 
 use super::metrics;
@@ -123,12 +123,18 @@ pub async fn forward_publish(
     target: &ForwardTarget,
     key: &ForwardKey,
     ack: AckMode,
+    credential: &str,
     payloads: Vec<Bytes>,
     budget: Duration,
 ) -> Result<Option<(u64, u64)>, ForwardError> {
     let deadline = Instant::now() + budget;
     let mut target = target.clone();
     let mut last = String::new();
+    // Set once an owner has said it does not know the credentialed kind: it
+    // predates it, and the only frame it can serve is the legacy one. That
+    // owner checks nothing either way, so falling back costs no protection
+    // this broker could have had -- it only keeps a rolling upgrade forwarding.
+    let mut legacy = false;
     // Every (node, generation) this batch has already been sent to. A redirect
     // back to one of them is a loop and is refused; a redirect to a new one is
     // followed even when the generation has not advanced — on a freshly formed
@@ -163,6 +169,11 @@ pub async fn forward_publish(
             },
             ack,
             payloads: payloads.clone(),
+            credential: if legacy {
+                String::new()
+            } else {
+                credential.to_string()
+            },
         });
 
         let answer = tokio::time::timeout(
@@ -223,6 +234,14 @@ pub async fn forward_publish(
                     advertise_addr,
                     generation: moved.generation,
                 };
+            }
+            Ok(InternalMessage::ForwardPublishError(err))
+                if err.code == ErrorCode::UnsupportedKind && !legacy =>
+            {
+                // An owner from before credentialed forwards. Nothing was
+                // applied; send what it can read.
+                last = format!("{:?}: {}", err.code, err.detail);
+                legacy = true;
             }
             Ok(InternalMessage::ForwardPublishError(err)) => {
                 last = format!("{:?}: {}", err.code, err.detail);
@@ -361,11 +380,15 @@ pub async fn forward_cache_op(
     target: &ForwardTarget,
     key: &ForwardKey,
     cache_key: &str,
+    credential: &str,
     request: &CacheRequest,
 ) -> Result<Option<Bytes>, ForwardError> {
     let mut target = target.clone();
     let mut last = String::new();
     let (op, value, ttl_ms) = request.parts();
+    // See `forward_publish`: an owner that predates the credentialed kind gets
+    // the legacy one, which is all it can read.
+    let mut legacy = false;
     // See `forward_publish`: a redirect to a node not yet tried is followed even
     // at the same generation, and only a loop back to a tried (node, generation)
     // is refused.
@@ -388,6 +411,11 @@ pub async fn forward_cache_op(
             key: cache_key.to_string(),
             value: value.clone(),
             ttl_ms,
+            credential: if legacy {
+                String::new()
+            } else {
+                credential.to_string()
+            },
         });
 
         match PeerRequester::request(pool, &target.node_id, target.advertise_addr, message).await {
@@ -429,6 +457,15 @@ pub async fn forward_cache_op(
                     advertise_addr,
                     generation: moved.generation,
                 };
+            }
+            // An unknown kind is refused before the responder knows which
+            // request it was, so the answer arrives in the publish error's
+            // shape whatever was asked.
+            Ok(InternalMessage::ForwardPublishError(err))
+                if err.code == ErrorCode::UnsupportedKind && !legacy =>
+            {
+                last = format!("{:?}: {}", err.code, err.detail);
+                legacy = true;
             }
             Ok(InternalMessage::ForwardCacheError(err)) => {
                 last = format!("{:?}: {}", err.code, err.detail);

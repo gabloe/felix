@@ -58,27 +58,26 @@ on the strength of a name nobody verified.
 
 ## Abuse cases
 
-### 1. Publish to any tenant, through the forwarding path — **unmitigated**
+### 1. Publish to any tenant, through the forwarding path — **mitigated (#503)**
 
-`ForwardPublish` carries the tenant, namespace and stream, and the payloads. The
-owner re-checks **ownership and generation** and nothing else: there is no
-authorization check in `peer/handler.rs`. The client's credential is not
-forwarded, and no peer-level authority is consulted.
+A forwarded publish or cache operation carries the client's own bearer token,
+and the owner verifies it itself — against the tenant's keys, for the action
+the request performs on the stream or cache it names — before it writes
+anything (`peer/handler.rs`, `ForwardingHandler::authorize`). A forward with
+no credential, a credential that does not verify, or one that does not allow
+the action is refused `Unauthorized`. The legacy credential-less kinds are still
+decoded, so the refusal is typed rather than a decode failure, but they are
+refused all the same.
 
-So a caller that can reach the port can append to any stream on this broker,
-for any tenant, with no credential at all.
+So the owner's write depends on what the *client* was entitled to, not on
+whether the forwarder checked. That is the control #128's acceptance criteria
+asked for — *"peer authentication alone is not treated as authorization for
+arbitrary tenant operations"* — and it holds today, before #125 and #126 land,
+because it does not rest on knowing who the forwarder is at all.
 
-This is exactly what #128's own acceptance criteria warn about —
-*"peer authentication alone is not treated as authorization for arbitrary tenant
-operations"* — and the state is worse than that sentence assumes: there is
-neither peer authentication nor a tenant check.
-
-**Mitigation: #126** (authenticate the broker↔control-plane relationship) and
-#125 (mTLS between brokers) establish *who*. A separate control is still needed
-for *what*: a forwarding broker should not be able to write a tenant the
-original client could not. The cheapest form is to carry the client's
-authorization decision with the forwarded request and re-check it at the owner,
-so the owner's check does not depend on the forwarder's honesty. Filed as **#503**; it is the residual risk mTLS alone does not close.
+What it does not do: a compromised forwarder that holds a *client's* valid
+token can still forward what that client could have published. That is the
+client's authority, correctly applied; the token's lifetime and scope bound it.
 
 ### 2. Write arbitrary bytes into a shard's log, through replication — **partly mitigated**
 
@@ -166,7 +165,7 @@ the connection. Neither leaves the reader mid-frame.
 
 | # | Abuse case | Status | Owner |
 |---|---|---|---|
-| 1 | Publish to any tenant via forwarding | **Unmitigated** | #125, #126, and #503 for tenant authority |
+| 1 | Publish to any tenant via forwarding | Mitigated (the owner verifies the client's credential) | #125, #126 for peer identity |
 | 2 | Inject records via replication | Partly (role + generation) | #125 |
 | 3 | Truncate a follower via bootstrap | Mitigated | — |
 | 4 | Memory exhaustion via lengths | Mitigated | — |
@@ -182,12 +181,14 @@ network**: reachable from other brokers and nothing else. That is an operational
 control, not a product one, and it should be stated wherever deployment is
 documented rather than assumed.
 
-Two gaps will remain after mTLS:
+One gap will remain after mTLS:
 
-- **Tenant authority across a forward.** Authenticating the peer says which
-  broker is calling, not which tenant the original client was entitled to write.
 - **Connection admission.** An authenticated peer that misbehaves — compromised,
   or simply looping on a bug — is still unbounded in connections.
+
+Tenant authority across a forward is no longer one: the owner verifies the
+client's credential itself, so authenticating the peer is about *who is
+calling*, not about what may be written.
 
 The milestone signal for this review is *"no unauthenticated internal RPC and no
 unencrypted cluster-internal link"*. Encryption is satisfied: QUIC requires TLS,

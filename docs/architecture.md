@@ -266,8 +266,8 @@ sequenceDiagram
 
   Client->>B0: Publish(stream, key, batch)
   B0->>B0: hash the key, resolve the owner locally
-  B0->>Bp: ForwardPublish(shard, generation, payloads)
-  Bp->>Bp: check ownership at that generation, commit
+  B0->>Bp: AuthorizedForwardPublish(shard, generation, payloads, client credential)
+  Bp->>Bp: check ownership at that generation, verify the credential, commit
   Bp->>S: Fanout (batched events on uni streams)
   Bp-->>B0: ForwardPublishOk(offsets)
   B0-->>Client: Ack

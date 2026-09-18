@@ -48,6 +48,8 @@ pub const OUTCOME_DISCONNECTED: &str = "disconnected";
 pub const OUTCOME_NOT_LEADER: &str = "not_leader";
 /// This broker refused before applying anything.
 pub const OUTCOME_REFUSED: &str = "refused";
+/// The request carried no credential, or one that does not allow the write.
+pub const OUTCOME_UNAUTHORIZED: &str = "unauthorized";
 
 pub fn record_connect_attempt(outcome: &'static str) {
     metrics::counter!(CONNECT_ATTEMPTS_TOTAL, "outcome" => outcome).increment(1);

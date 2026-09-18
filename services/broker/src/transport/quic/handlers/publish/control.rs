@@ -105,6 +105,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         // Fire-and-forget: the owner is told no acknowledgement is expected, the
         // same contract the client gave this broker.
         felix_wire::internal::AckMode::None,
+        &auth_ctx.token,
     ) else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         return Ok(());
@@ -285,6 +286,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         Some(request_id),
         Some(ack),
         sample,
+        auth_ctx.token.clone(),
     )
     .await
 }
@@ -345,6 +347,8 @@ pub(crate) async fn handle_publish_message(
     request_id: Option<u64>,
     ack: Option<felix_wire::AckMode>,
     sample: bool,
+    // The publisher's token, carried on a forward for the owner to verify.
+    credential: String,
 ) -> Result<()> {
     #[cfg(feature = "telemetry")]
     {
@@ -463,6 +467,7 @@ pub(crate) async fn handle_publish_message(
         &stream,
         shard,
         internal_ack(ack),
+        &credential,
     );
 
     // A forwarded publish is acknowledged only once the owner has answered,
@@ -746,6 +751,8 @@ pub(crate) async fn handle_publish_batch_message(
     request_id: Option<u64>,
     ack: Option<felix_wire::AckMode>,
     sample: bool,
+    // The publisher's token, carried on a forward for the owner to verify.
+    credential: String,
 ) -> Result<()> {
     #[cfg(feature = "telemetry")]
     {
@@ -866,6 +873,7 @@ pub(crate) async fn handle_publish_batch_message(
         &stream,
         shard,
         internal_ack(ack),
+        &credential,
     );
     // See the single-publish path: a forward is acknowledged only once the owner
     // has answered, whatever `ack_on_commit` says, and a `Quorum` publish only
