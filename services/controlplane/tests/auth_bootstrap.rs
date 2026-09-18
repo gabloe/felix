@@ -40,9 +40,6 @@ fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, A
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     (store, state)
 }

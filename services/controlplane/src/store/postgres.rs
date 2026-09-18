@@ -34,9 +34,9 @@ use crate::config::PostgresConfig;
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle,
-    NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, RetentionPolicy, ShardAssignment,
-    ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind, ShardState,
-    ShardValidationError, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind,
+    NodePatchRequest, NodeSpec, NodeStatus, NodeValidationError, ReplicaReport, RetentionPolicy,
+    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind,
+    ShardState, ShardValidationError, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind,
     StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
 };
 use anyhow::anyhow;
@@ -1847,6 +1847,57 @@ impl ControlPlaneStore for PostgresStore {
         Ok(())
     }
 
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
+        // The upsert keeps the newer generation: an older leader's report is
+        // dropped by the WHERE, which is a no-op rather than an error. The
+        // foreign key is what answers "no assignment" -- and what removes the
+        // report when the assignment goes.
+        let result = sqlx::query(
+            r#"INSERT INTO replica_reports
+                   (tenant_id, namespace, kind, stream, shard, generation, caught_up, offsets,
+                    reported_at_millis)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE
+               SET generation = EXCLUDED.generation,
+                   caught_up = EXCLUDED.caught_up,
+                   offsets = EXCLUDED.offsets,
+                   reported_at_millis = EXCLUDED.reported_at_millis
+               WHERE EXCLUDED.generation >= replica_reports.generation"#,
+        )
+        .bind(&report.key.tenant_id)
+        .bind(&report.key.namespace)
+        .bind(shard_kind_to_str(report.key.kind))
+        .bind(&report.key.stream)
+        .bind(report.key.shard as i32)
+        .bind(report.generation as i64)
+        .bind(serde_json::to_value(&report.caught_up).expect("a set of strings serializes"))
+        .bind(serde_json::to_value(&report.offsets).expect("a map of integers serializes"))
+        .bind(report.reported_at_millis as i64)
+        .execute(&self.pool)
+        .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(err)) if err.is_foreign_key_violation() => {
+                Err(StoreError::NotFound("shard assignment".into()))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        sqlx::query_as::<_, DbReplicaReport>(
+            r#"SELECT tenant_id, namespace, stream, shard, kind, generation, caught_up, offsets,
+                      reported_at_millis
+               FROM replica_reports
+               ORDER BY tenant_id, namespace, kind, stream, shard"#,
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(replica_report_from_db)
+        .collect()
+    }
+
     async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
         // REPEATABLE READ for the same reason as `node_snapshot`: under READ
         // COMMITTED the two reads below see different snapshots, so an
@@ -2030,6 +2081,37 @@ async fn record_node_change(
 }
 
 #[derive(Debug, Clone, FromRow)]
+struct DbReplicaReport {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    shard: i32,
+    kind: String,
+    generation: i64,
+    caught_up: serde_json::Value,
+    offsets: serde_json::Value,
+    reported_at_millis: i64,
+}
+
+fn replica_report_from_db(row: DbReplicaReport) -> StoreResult<ReplicaReport> {
+    Ok(ReplicaReport {
+        key: ShardKey {
+            tenant_id: row.tenant_id,
+            namespace: row.namespace,
+            stream: row.stream,
+            shard: row.shard as u32,
+            kind: parse_shard_kind(&row.kind)?,
+        },
+        generation: row.generation as u64,
+        caught_up: serde_json::from_value(row.caught_up)
+            .map_err(|err| StoreError::Unexpected(anyhow!("decode caught_up: {err}")))?,
+        offsets: serde_json::from_value(row.offsets)
+            .map_err(|err| StoreError::Unexpected(anyhow!("decode offsets: {err}")))?,
+        reported_at_millis: row.reported_at_millis as u64,
+    })
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct DbShardAssignment {
     tenant_id: String,
     namespace: String,
@@ -2075,6 +2157,13 @@ fn shard_state_to_str(state: ShardState) -> &'static str {
         ShardState::Assigning => "assigning",
         ShardState::Active => "active",
         ShardState::Draining => "draining",
+    }
+}
+
+fn shard_kind_to_str(kind: ShardKind) -> &'static str {
+    match kind {
+        ShardKind::Stream => "stream",
+        ShardKind::Cache => "cache",
     }
 }
 

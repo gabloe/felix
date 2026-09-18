@@ -79,9 +79,6 @@ impl Cluster {
                 std::sync::Arc::new(controlplane::readiness::AlwaysReady),
             )),
             in_flight: Default::default(),
-            replica_positions: std::sync::Arc::new(
-                controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-            ),
         };
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

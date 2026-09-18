@@ -40,9 +40,9 @@ use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
     NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
-    NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
-    ShardKind, Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest, Tenant,
-    TenantChange, TenantChangeOp,
+    NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
+    ShardAssignmentChangeOp, ShardKey, ShardKind, Stream, StreamChange, StreamChangeOp, StreamKey,
+    StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
@@ -189,6 +189,11 @@ pub struct InMemoryStore {
     /// Shard ownership and its change log, under one lock for the same reason
     /// as `nodes`: a snapshot must read records and log position as one value.
     shards: Arc<RwLock<ShardState>>,
+    /// What each shard's leader last reported about its replicas. Transient:
+    /// not exported, because a report expires within seconds and the next one
+    /// replaces it, and a report a restored snapshot carried would be judged
+    /// stale by then anyway.
+    replica_reports: Arc<RwLock<HashMap<ShardKey, ReplicaReport>>>,
     /// Bounded change log for tenant changes.
     ///
     /// `next_seq` is per-entity-type (not a global sequence across all entities).
@@ -279,6 +284,7 @@ impl InMemoryStore {
                 records: HashMap::new(),
                 changes: ChangeLog::new(capacity),
             })),
+            replica_reports: Arc::new(RwLock::new(HashMap::new())),
             tenant_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
             namespace_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
             stream_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
@@ -1197,9 +1203,40 @@ impl ControlPlaneStore for InMemoryStore {
             return Err(StoreError::NotFound("shard assignment".into()));
         }
         state.record(ShardAssignmentChangeOp::Unassigned, key, None);
+        // Taken under the assignment lock, so a report cannot slip in between.
+        self.replica_reports.write().await.remove(key);
         metrics::counter!("felix_shard_assignment_changes_total", "op" => "unassigned")
             .increment(1);
         Ok(())
+    }
+
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
+        // Held across the existence check so a concurrent delete either sees
+        // the report and removes it, or runs after this and finds nothing.
+        let shards = self.shards.read().await;
+        if !shards.records.contains_key(&report.key) {
+            return Err(StoreError::NotFound("shard assignment".into()));
+        }
+        let mut reports = self.replica_reports.write().await;
+        if let Some(held) = reports.get(&report.key)
+            && held.generation > report.generation
+        {
+            return Ok(());
+        }
+        reports.insert(report.key.clone(), report);
+        Ok(())
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        let mut reports: Vec<ReplicaReport> = self
+            .replica_reports
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        reports.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
+        Ok(reports)
     }
 
     async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {

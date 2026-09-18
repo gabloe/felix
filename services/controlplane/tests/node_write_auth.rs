@@ -27,22 +27,12 @@ const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
 
 type App = axum::routing::RouterIntoService<Body, ()>;
 
-type Positions = std::sync::Arc<controlplane::replica_positions::ReplicaPositions>;
-
 async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
-    let (app, store, keys, _positions) = setup_with_positions().await;
-    (app, store, keys)
-}
-
-async fn setup_with_positions() -> (App, Arc<InMemoryStore>, TenantSigningKeys, Positions) {
     let store = Arc::new(InMemoryStore::new(StoreConfig {
         changes_limit: 1000,
         change_retention_max_rows: Some(1000),
     }));
     let keys = generate_signing_keys().expect("keys");
-    let positions: Positions = std::sync::Arc::new(
-        controlplane::replica_positions::ReplicaPositions::new(&LIVENESS),
-    );
     store
         .set_tenant_signing_keys("t1", keys.clone())
         .await
@@ -68,9 +58,8 @@ async fn setup_with_positions() -> (App, Arc<InMemoryStore>, TenantSigningKeys, 
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: positions.clone(),
     };
-    (build_router(state).into_service(), store, keys, positions)
+    (build_router(state).into_service(), store, keys)
 }
 
 fn token(keys: &TenantSigningKeys, perms: Vec<&str>) -> String {
@@ -438,7 +427,7 @@ fn replica_report(generation: u64, caught_up: &[&str]) -> serde_json::Value {
 /// yourself for promotion, so the identity check on its own is not enough.
 #[tokio::test]
 async fn a_broker_cannot_report_positions_for_a_shard_it_does_not_lead() {
-    let (app, store, keys, positions) = setup_with_positions().await;
+    let (app, store, keys) = setup().await;
     seed_node(&store, "broker-a", 7001).await;
     seed_node(&store, "broker-b", 7002).await;
     seed_shard(&store, "broker-a", 0).await;
@@ -464,7 +453,7 @@ async fn a_broker_cannot_report_positions_for_a_shard_it_does_not_lead() {
         kind: controlplane::model::ShardKind::Stream,
     };
     assert!(
-        !reported_caught_up(&positions, &key, "broker-b"),
+        !reported_caught_up(store.as_ref(), &key, "broker-b").await,
         "a broker that leads nothing had its report recorded, so it can \
          nominate itself for promotion",
     );
@@ -476,7 +465,7 @@ async fn a_broker_cannot_report_positions_for_a_shard_it_does_not_lead() {
 /// `u64::MAX` would block every genuine report for that shard from then on.
 #[tokio::test]
 async fn a_generation_ahead_of_the_assignment_is_refused() {
-    let (app, store, keys, positions) = setup_with_positions().await;
+    let (app, store, keys) = setup().await;
     seed_node(&store, "broker-a", 7001).await;
     seed_shard(&store, "broker-a", 0).await;
     let bearer = token(&keys, vec!["node.manage:cluster:*"]);
@@ -512,7 +501,7 @@ async fn a_generation_ahead_of_the_assignment_is_refused() {
         kind: controlplane::model::ShardKind::Stream,
     };
     assert!(
-        reported_caught_up(&positions, &key, "broker-a"),
+        reported_caught_up(store.as_ref(), &key, "broker-a").await,
         "the genuine report was dropped as older than the bogus one, so a \
          single claim of u64::MAX wedges the shard's positions for good",
     );
@@ -522,7 +511,7 @@ async fn a_generation_ahead_of_the_assignment_is_refused() {
 /// right thing rather than everything.
 #[tokio::test]
 async fn the_leader_of_a_shard_can_report_it() {
-    let (app, store, keys, positions) = setup_with_positions().await;
+    let (app, store, keys) = setup().await;
     seed_node(&store, "broker-a", 7001).await;
     seed_shard(&store, "broker-a", 0).await;
     let bearer = token(&keys, vec!["node.manage:cluster:*"]);
@@ -545,19 +534,21 @@ async fn the_leader_of_a_shard_can_report_it() {
         shard: 0,
         kind: controlplane::model::ShardKind::Stream,
     };
-    assert!(reported_caught_up(&positions, &key, "broker-a"));
+    assert!(reported_caught_up(store.as_ref(), &key, "broker-a").await);
 }
 
 /// What promotion would conclude: is this node a candidate for this shard?
-fn reported_caught_up(
-    positions: &Positions,
+///
+/// Read back from the store, as placement does -- the report never lives
+/// anywhere else.
+async fn reported_caught_up(
+    store: &InMemoryStore,
     key: &controlplane::model::ShardKey,
     node_id: &str,
 ) -> bool {
     use controlplane::placement::CaughtUp;
-    controlplane::replica_positions::CaughtUpAt {
-        positions,
-        now_millis: 1,
-    }
-    .is_caught_up(key, node_id)
+    controlplane::replica_positions::ReplicaPositions::load(store, &LIVENESS)
+        .await
+        .expect("load reports")
+        .is_caught_up(key, node_id)
 }

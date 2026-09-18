@@ -478,6 +478,14 @@ have it. A report that did not land leaves the mark where it was, for the same
 reason: the argument rests on the control plane knowing who holds the record, so
 releasing on a failed report reaches the same window by another route.
 
+The report is written to the control plane's **store**, not kept by the
+instance that received it. That is the other half of the same argument: with
+several instances over one database, the instance a report reaches and the
+instance that later promotes need not be the same process, and a report held
+only in memory was a position no other promoter could use — an
+acknowledgement resting on it could not be made good at failover. See
+[control-plane.md](control-plane.md#replica-reports).
+
 That costs a control-plane round trip on the path of a quorum publish, which is
 the price of the acknowledgement meaning what it says. One report per shard per
 pass in the healthy case: the majority report already describes every follower,

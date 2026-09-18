@@ -38,7 +38,6 @@ pub struct AppState {
     /// worthless by the time it could be read back. The consequence is that a
     /// second control-plane instance starts knowing nothing and cannot promote
     /// until leaders have reported to *it* — see `docs/replication-design.md`.
-    pub replica_positions: Arc<crate::replica_positions::ReplicaPositions>,
     /// Whether this instance can serve, bounded and cached.
     pub readiness: Arc<crate::readiness::Readiness>,
     /// Requests currently being served, so a drain can say what it waited for.

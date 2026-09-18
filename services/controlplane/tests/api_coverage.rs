@@ -58,9 +58,6 @@ async fn harness() -> Harness {
             std::sync::Arc::new(controlplane::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
-        replica_positions: std::sync::Arc::new(
-            controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
-        ),
     };
     Harness {
         app: build_router(state).into_service(),

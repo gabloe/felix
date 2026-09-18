@@ -11,8 +11,8 @@ use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodePatchRequest, ShardAssignment, ShardAssignmentChange, ShardKey, Stream,
-    StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
+    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -177,6 +177,22 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Safe to run from several control-plane instances at once: each node is
     /// moved by exactly one of them, and only that one publishes the change.
     async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>>;
+    /// Record what a shard's leader reports about its replicas.
+    ///
+    /// A report at an older generation than the one held is dropped, not an
+    /// error: leadership moved on, and the old leader's view is about a
+    /// replica set that may no longer exist. `NotFound` when the shard has no
+    /// assignment -- nobody leads it, so nobody can report on it -- and a
+    /// deleted assignment takes its report with it, so a shard that is
+    /// removed and recreated does not inherit the old one's promotability.
+    ///
+    /// Stamp it with [`ControlPlaneStore::now_millis`]: freshness is judged
+    /// against that same clock by whichever instance runs placement, which
+    /// is the whole reason the report is in the store. Under Raft the leader
+    /// overwrites the stamp as it accepts the proposal, as for a heartbeat.
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()>;
+    /// Every report held, fresh or not; the reader judges freshness.
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>>;
     /// The clock that heartbeats are stamped with and expiry is judged against.
     ///
     /// One clock, because the two sides are compared. With several stateless

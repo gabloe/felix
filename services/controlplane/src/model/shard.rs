@@ -7,6 +7,8 @@
 //! read some time ago carries the generation it saw, and the control plane
 //! rejects it if placement has moved on. Without that, a slow broker's status
 //! could resurrect an ownership decision that was already replaced.
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -223,3 +225,26 @@ pub enum ShardAssignmentChangeOp {
 #[cfg(test)]
 #[path = "shard_tests.rs"]
 mod tests;
+
+/// What a shard's leader last reported about its replicas.
+///
+/// Promotion is gated on this. It lives in the store rather than in one
+/// control-plane instance's memory because the instance a report reaches and
+/// the instance that later promotes a replica need not be the same process --
+/// under Postgres every instance serves, and a report only one of them had
+/// seen was a position no promoter could use.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ReplicaReport {
+    pub key: ShardKey,
+    /// The assignment generation the leader held when it reported. A report
+    /// from an older generation says nothing about this one: the replica set
+    /// may be different.
+    pub generation: u64,
+    /// Replicas within the catch-up bound.
+    pub caught_up: BTreeSet<String>,
+    /// How far each replica had got when this was reported.
+    pub offsets: BTreeMap<String, u64>,
+    /// The store's clock when it was recorded. Never the broker's, which would
+    /// let a leader keep its own report alive.
+    pub reported_at_millis: u64,
+}

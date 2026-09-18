@@ -111,9 +111,6 @@ async fn fixture() -> (AppState, Arc<InMemoryStore>) {
             controlplane::readiness::AlwaysReady,
         ))),
         in_flight: Default::default(),
-        replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-            &Default::default(),
-        )),
     };
     (state, store)
 }

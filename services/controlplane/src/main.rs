@@ -100,7 +100,7 @@ where
     // at the same point the listener does.
     let reconcile_task = placement::spawn_reconciler(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
-        Arc::clone(&state.replica_positions),
+        state.node_liveness.clone(),
         Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
         leadership,
         api_shutdown.clone(),
@@ -384,9 +384,6 @@ async fn build_state(
             ),
             bootstrap_enabled: config.bootstrap.enabled,
             bootstrap_tokens: config.bootstrap.accepted_tokens(),
-            replica_positions: Arc::new(controlplane::replica_positions::ReplicaPositions::new(
-                &config.node_liveness,
-            )),
             node_liveness: config.node_liveness,
         },
         raft_handle,

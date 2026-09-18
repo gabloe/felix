@@ -25,8 +25,9 @@ use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
     Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodeLifecycle, NodePatchRequest, ShardAssignment, ShardAssignmentChange,
-    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+    Node, NodeChange, NodeLifecycle, NodePatchRequest, ReplicaReport, ShardAssignment,
+    ShardAssignmentChange, ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant,
+    TenantChange,
 };
 use crate::raft::RaftHandle;
 use crate::store::command::{MetaCommand, MetaResponse, decode_result, encode_command};
@@ -328,6 +329,20 @@ impl ControlPlaneStore for RaftStore {
 
     async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
         self.local().list_shard_assignments().await
+    }
+
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
+        match self
+            .propose(MetaCommand::RecordReplicaReport { report })
+            .await?
+        {
+            MetaResponse::Unit => Ok(()),
+            _ => Err(unexpected_shape("unit")),
+        }
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        self.local().list_replica_reports().await
     }
 
     async fn list_shard_assignments_for_node(

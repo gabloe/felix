@@ -119,22 +119,15 @@ pub(crate) async fn report_replica_status(
     Json(request): Json<ReplicaStatusRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
-    // This process's clock, *not* the store's — the opposite of a heartbeat,
-    // and for the same underlying reason.
-    //
-    // A heartbeat is stamped here and judged by the expiry sweep, which may be
-    // a different instance, so the two need a clock they share. Replica
-    // positions never leave this instance: they live in `AppState`, and the
-    // placement pass that reads them back runs in this process against
-    // `api::nodes::now_millis`. Reaching for the store's clock made the write
-    // side the database's reading and the read side ours, so under Postgres a
-    // skew between the two hosts expired fresh reports or kept stale ones —
-    // and a report wrongly called stale means a caught-up replica is not
-    // considered for promotion.
-    //
-    // Still not the caller's, which would let a broker keep its own report
-    // alive.
-    let now = now_millis();
+    // The store's clock, like a heartbeat, and for the same reason: the
+    // report is judged by the placement pass, which may run on a different
+    // instance, so the two sides need a clock they share. Not the caller's,
+    // which would let a broker keep its own report alive.
+    let now = state
+        .store
+        .now_millis()
+        .await
+        .map_err(|ref err| api_internal("read the store clock", err))?;
     // Not enforced: brokers still send 0 here, because the driver that reports
     // is spawned before registration returns an incarnation. The leadership
     // check below is the stronger one anyway — it bounds *which* shards a
@@ -189,17 +182,27 @@ pub(crate) async fn report_replica_status(
             continue;
         }
 
-        state.replica_positions.record(
-            key,
-            shard.generation,
-            shard.caught_up.into_iter().collect(),
-            shard
-                .replica_offsets
-                .into_iter()
-                .map(|replica| (replica.node_id, replica.durable_offset))
-                .collect(),
-            now,
-        );
+        match state
+            .store
+            .record_replica_report(crate::model::ReplicaReport {
+                key,
+                generation: shard.generation,
+                caught_up: shard.caught_up.into_iter().collect(),
+                offsets: shard
+                    .replica_offsets
+                    .into_iter()
+                    .map(|replica| (replica.node_id, replica.durable_offset))
+                    .collect(),
+                reported_at_millis: now,
+            })
+            .await
+        {
+            Ok(()) => {}
+            // The assignment went between the read above and the write: the
+            // shard is nobody's to report on any more.
+            Err(StoreError::NotFound(_)) => continue,
+            Err(ref err) => return Err(api_internal("record replica report", err)),
+        }
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
