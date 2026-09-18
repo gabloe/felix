@@ -76,6 +76,7 @@ deployment=$(az deployment group create \
     releaseUrl="${release_url}" \
     loadgenRef="${LOADGEN_REF}" \
     brokerCount="${BROKER_COUNT:-3}" \
+    loadgenCount="${LOADGEN_COUNT:-1}" \
     brokerVmSize="${BROKER_VM_SIZE:-Standard_D4as_v5}" \
     useLocalNvme="${USE_LOCAL_NVME:-false}" \
     sshPublicKey="$(cat "${SSH_KEY_FILE}")" \
@@ -86,6 +87,7 @@ deployment=$(az deployment group create \
 loadgen_ip=$(jq -r .loadgenPublicIp.value <<<"${deployment}")
 cp_ip=$(jq -r .controlPlaneIp.value <<<"${deployment}")
 brokers=$(jq -r '.brokerIps.value | join(",")' <<<"${deployment}")
+loadgens=$(jq -r '.loadgenNames.value | join(" ")' <<<"${deployment}")
 
 # The inventory is the contract between the session's scripts.
 mkdir -p "${here}/sessions"
@@ -97,6 +99,7 @@ RELEASE_TAG=${RELEASE_TAG}
 LOADGEN_IP=${loadgen_ip}
 CONTROLPLANE_IP=${cp_ip}
 BROKER_IPS=${brokers}
+LOADGENS="${loadgens}"
 BOOTSTRAP_TOKEN=${bootstrap_token}
 INV
 echo ">> inventory: ${here}/sessions/${SESSION}.env"
