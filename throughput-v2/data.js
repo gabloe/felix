@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789695540057,
+  "lastUpdate": 1789696493913,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10504,6 +10504,58 @@ window.BENCHMARK_DATA = {
             "range": "12472.94",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 572335.13\nmean: 577851.68\nstdev: 12472.94\ncv: 2.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6b29fbd2f65478876bf191d3d420b60c4d1dbaf0",
+          "message": "feat(config): refuse settings that are each fine alone and wrong together (#509)\n\n#416's last bullet: \"no cross-field validation beyond what each parser happens\nto do.\"\n\nEvery knob validates its own value where it is parsed. Nothing looked at pairs,\nand pairs are where the confusing failures live — a setting that can never take\neffect, or one that produces output the other end will not accept. Neither is an\nerror at the time; both surface later as behaviour nobody configured, with\nnothing to explain it.\n\nThree, all currently correct in the defaults and all invertible by hand:\n\n- `event_batch_max_bytes` above `max_frame_bytes` makes the broker send\n  subscribers frames larger than it will itself accept, and a client applying\n  the same limit drops them.\n- `pub_conn_inflight_bytes` above `pub_inflight_bytes` means the per-connection\n  limit can never be the one that applies, so one connection may take the whole\n  broker-wide allowance — the limit reads as protection and is not.\n- `cache_stream_recv_window` above `cache_conn_recv_window` means a stream can\n  never reach its own window, because the connection's runs out first.\n\nEqual is allowed in each. They bound each other and do not have to differ, and\nrefusing equality would fail a configuration that behaves exactly as written.\n\nChecked after both sources are folded, because a combination is only wrong once\nit is whole: a config file may fix what the environment set, or break what it\nhad right. A default that ever became a contradiction would stop every broker\nstarting, so there is a test asserting the defaults pass.\n\n`--print-config` runs the same checks without binding anything, so this is a\npre-flight failure rather than one found on the node.",
+          "timestamp": "2026-09-17T18:52:25-07:00",
+          "tree_id": "42a24519930b43e5a9e210969bc07f885e3eeb3d",
+          "url": "https://github.com/gabloe/felix/commit/6b29fbd2f65478876bf191d3d420b60c4d1dbaf0"
+        },
+        "date": 1789696493506,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 239608.85,
+            "range": "3805.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239608.85\nmean: 238018.54\nstdev: 3805.93\ncv: 1.60%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 239608.85,
+            "range": "3805.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 239608.85\nmean: 238018.54\nstdev: 3805.93\ncv: 1.60%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56227.79,
+            "range": "425.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56227.79\nmean: 56141.85\nstdev: 425.40\ncv: 0.76%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 562277.89,
+            "range": "4253.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 562277.89\nmean: 561418.53\nstdev: 4253.98\ncv: 0.76%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
