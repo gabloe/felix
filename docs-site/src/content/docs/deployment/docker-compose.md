@@ -74,7 +74,12 @@ services:
       # refuses to start without it. An unreachable one is tolerated — the
       # broker warns on each poll and carries on — but an absent one is not.
       - FELIX_CONTROLPLANE_URL=http://felix-controlplane:8443
+      # What the broker reads the metadata feeds with; see "Broker credential"
+      # below. Without it the broker starts, but learns no streams.
+      - FELIX_NODE_TOKEN_FILE=/run/secrets/felix-node-token
       - RUST_LOG=info
+    secrets:
+      - felix-node-token
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
@@ -82,6 +87,10 @@ services:
       timeout: 2s
       retries: 3
       start_period: 10s
+
+secrets:
+  felix-node-token:
+    file: ./felix-node-token
 ```
 
 **Start the broker:**
@@ -143,9 +152,16 @@ services:
       - FELIX_QUIC_BIND=0.0.0.0:5000
       - FELIX_BROKER_METRICS_BIND=0.0.0.0:8080
       - FELIX_CONTROLPLANE_URL=http://felix-controlplane:8443
+      - FELIX_NODE_TOKEN_FILE=/run/secrets/felix-node-token
       - RUST_LOG=info
+    secrets:
+      - felix-node-token
     depends_on:
       - felix-controlplane
+
+secrets:
+  felix-node-token:
+    file: ./felix-node-token
 ```
 
 Start the stack:
@@ -153,6 +169,38 @@ Start the stack:
 ```bash
 docker compose up -d
 ```
+
+### Broker credential
+
+The control plane's metadata feeds — the tenants, namespaces, streams and
+caches a broker seeds from — require a Felix token carrying
+`node.view:cluster:*`, and the broker presents it as `FELIX_NODE_TOKEN` or
+`FELIX_NODE_TOKEN_FILE`. That holds for a single broker as much as for a
+cluster member: without one the broker starts, warns once, and never learns a
+stream exists.
+
+Cluster scope cannot be granted by a tenant admin, so the credential comes out
+of bootstrap. Initialize the tenant with a broker role and assign the broker's
+principal to it, then exchange an IdP token for that principal:
+
+```json
+{
+  "display_name": "Tenant One",
+  "idp_issuers": [ ... ],
+  "initial_admin_principals": ["p:admin"],
+  "policies": [
+    { "subject": "role:broker", "object": "cluster:*", "action": "node.view" }
+  ],
+  "groupings": [
+    { "user": "p:broker", "role": "role:broker" }
+  ]
+}
+```
+
+The exchanged token goes in `./felix-node-token`. It expires like any Felix
+token; give the broker `FELIX_NODE_REFRESH_TOKEN_FILE` for it to re-mint, or
+rotate the file. The [bootstrap flow](/felix/features/security/#bootstrap-mode-day-0)
+covers the rest of that request.
 
 ### Full Stack with Observability
 
@@ -286,6 +334,7 @@ services:
       # Control plane
       - FELIX_CONTROLPLANE_URL=http://controlplane:8443
       - FELIX_CONTROLPLANE_SYNC_INTERVAL_MS=2000
+      - FELIX_NODE_TOKEN_FILE=/run/secrets/felix-node-token
       
       # Publishing
       - FELIX_ACK_ON_COMMIT=false

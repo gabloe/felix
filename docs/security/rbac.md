@@ -49,6 +49,11 @@ Allowed wildcards:
 - `namespace:{tenant_id}/*`
 - `stream:{tenant_id}/{namespace}/*`
 - `cache:{tenant_id}/{namespace}/*`
+- `stream:{tenant_id}/*/*` and `cache:{tenant_id}/*/*` — every stream or
+  cache in the tenant, which is what token exchange expands a tenant-wide
+  grant to. A wildcard namespace under a *named* leaf (`stream:t1/*/orders`)
+  is refused: a grant across namespaces should not look like a single-stream
+  grant.
 
 ### Cluster scope
 

@@ -20,7 +20,7 @@ use controlplane::app::{AppState, build_router};
 use controlplane::auth::felix_token::TenantSigningKeys;
 use controlplane::config::NodeLivenessConfig;
 use controlplane::store::memory::InMemoryStore;
-use controlplane::store::{AuthStore, StoreConfig};
+use controlplane::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use tokio_util::sync::CancellationToken;
 
 use crate::ports;
@@ -59,6 +59,13 @@ impl ControlPlane {
         }));
         let keys = controlplane::auth::keys::generate_signing_keys()
             .context("generate tenant signing keys")?;
+        store
+            .create_tenant(controlplane::model::Tenant {
+                tenant_id: tenant_id.to_string(),
+                display_name: tenant_id.to_string(),
+            })
+            .await
+            .context("seed tenant")?;
         store
             .set_tenant_signing_keys(tenant_id, keys.clone())
             .await
@@ -134,13 +141,25 @@ impl ControlPlane {
         })
     }
 
-    /// Associate this control plane's signing keys with `tenant_id`.
+    /// Create `tenant_id` and bind this control plane's signing keys to it.
     ///
-    /// Called again after the tenant is created through the API: keys set for a
-    /// tenant that does not exist yet do not survive its creation, and every
-    /// token minted here verifies against whatever the store holds at the time
-    /// the request arrives.
-    pub async fn seed_tenant_keys(&self, tenant_id: &str) -> Result<()> {
+    /// Straight into the store rather than through the API: creating a tenant
+    /// over HTTP takes an operator credential, and an operator is minted from
+    /// a tenant -- the one this creates. Keys go on after the row, because
+    /// creation resets them, and every token minted here verifies against
+    /// whatever the store holds when the request arrives.
+    pub async fn seed_tenant(&self, tenant_id: &str) -> Result<()> {
+        match self
+            .store
+            .create_tenant(controlplane::model::Tenant {
+                tenant_id: tenant_id.to_string(),
+                display_name: tenant_id.to_string(),
+            })
+            .await
+        {
+            Ok(_) | Err(controlplane::store::StoreError::Conflict(_)) => {}
+            Err(err) => return Err(err).context("seed tenant"),
+        }
         self.store
             .set_tenant_signing_keys(tenant_id, self.keys.clone())
             .await
@@ -204,6 +223,7 @@ impl ControlPlane {
                 format!("tenant.manage:tenant:{tenant_id}"),
                 format!("ns.manage:namespace:{tenant_id}/*"),
                 format!("stream.manage:stream:{tenant_id}/*/*"),
+                format!("cache.manage:cache:{tenant_id}/*/*"),
                 "node.view:cluster:*".to_string(),
             ],
             Duration::from_secs(3600),

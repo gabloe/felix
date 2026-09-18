@@ -13,16 +13,14 @@
 //! `cluster:*` can manage the whole fleet. Reads require
 //! `node.view:cluster:*`, since the listing exposes the cluster's network
 //! layout.
-use crate::api::error::{
-    ApiError, api_conflict, api_forbidden, api_internal, api_not_found, api_unauthorized,
-};
+use crate::api::error::{ApiError, api_conflict, api_forbidden, api_internal, api_not_found};
 use crate::api::types::{
     NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
     NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ReplicaStatusRequest,
     ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
 };
 use crate::app::AppState;
-use crate::auth::felix_token::verify_token;
+use crate::auth::bearer::{require_cluster_action, verified_claims};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,
 };
@@ -583,36 +581,6 @@ pub(crate) async fn get_node(
     Ok(Json(NodeView { node, placement }))
 }
 
-/// Require cluster-scoped `node.view` from a Felix bearer token.
-///
-/// The tenant comes from the token's own `tid` claim rather than the path,
-/// because `/v1/nodes` is not a tenant resource. That claim only selects which
-/// tenant's signing keys to check against — the signature is what grants trust,
-/// exactly as `kid` selects a key without conferring one.
-///
-/// Naming a tenant confers nothing here: the permission this requires is
-/// `node.view:cluster:*`, and no tenant scope contains a cluster object, so a
-/// tenant admin cannot write that rule for themselves.
-async fn require_cluster_node_view(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let (tenant_id, claims) = verified_claims(state, headers).await?;
-
-    let allowed = claims.perms.iter().any(|perm| {
-        // Parsed against the token's own tenant; a cluster object ignores it.
-        // Unparsable entries are skipped rather than trusted, so a malformed
-        // permission can never widen access.
-        matches!(
-            parse_permission(perm, &tenant_id),
-            Ok(parsed) if parsed.action == ACTION_NODE_VIEW && parsed.object == ParsedObject::Cluster
-        )
-    });
-
-    if allowed {
-        Ok(())
-    } else {
-        Err(api_forbidden("missing node.view:cluster:* permission"))
-    }
-}
-
 /// Require permission to change one node's membership.
 ///
 /// The node id comes from the request -- a path segment, or the body on
@@ -653,53 +621,11 @@ async fn require_node_manage(
     }
 }
 
-/// Verify a bearer token and return the tenant whose keys signed it.
-///
-/// Shared by the read and write guards so there is one verification path, not
-/// two that can drift.
-async fn verified_claims(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, crate::auth::felix_token::FelixClaims), ApiError> {
-    let bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| api_unauthorized("missing bearer token"))?;
-
-    let tenant_id = unverified_tenant(bearer)?;
-    let keys = state
-        .store
-        .get_tenant_signing_keys(&tenant_id)
-        .await
-        .map_err(|ref err| api_internal("failed to load signing keys", err))?;
-    let claims = verify_token(&keys, &tenant_id, bearer, 5)
-        .map_err(|_| api_unauthorized("invalid token"))?;
-    Ok((tenant_id, claims))
-}
-
-/// Read `tid` from an unverified token, only to choose a verification key.
-fn unverified_tenant(token: &str) -> Result<String, ApiError> {
-    use base64::Engine as _;
-
-    let payload = token
-        .split('.')
-        .nth(1)
-        .ok_or_else(|| api_unauthorized("malformed token"))?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|_| api_unauthorized("malformed token"))?;
-    let claims: serde_json::Value =
-        serde_json::from_slice(&decoded).map_err(|_| api_unauthorized("malformed token"))?;
-
-    claims
-        .get("tid")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| api_unauthorized("token has no tenant claim"))
+/// Reads require `node.view:cluster:*`. The tenant comes from the token's own
+/// `tid` claim rather than the path, because `/v1/nodes` is not a tenant
+/// resource; see [`require_cluster_action`].
+async fn require_cluster_node_view(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    require_cluster_action(state, headers, ACTION_NODE_VIEW).await
 }
 
 #[utoipa::path(

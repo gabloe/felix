@@ -2,8 +2,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::json_request;
 use common::read_json;
+use common::{Credentials, json_request_as, seed_credentials};
 use controlplane::api::types::FeatureFlags;
 use controlplane::app::{AppState, build_router};
 use controlplane::model::{RetentionPolicy, StreamKind};
@@ -11,11 +11,32 @@ use controlplane::store::{ControlPlaneStore, StoreConfig};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
-    let store = controlplane::store::memory::InMemoryStore::new(StoreConfig {
-        changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
-        change_retention_max_rows: Some(controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
-    });
+struct Harness {
+    app: axum::routing::RouterIntoService<Body, ()>,
+    store: Arc<controlplane::store::memory::InMemoryStore>,
+    credentials: Credentials,
+}
+
+impl Harness {
+    fn operator(&self) -> String {
+        self.credentials.operator()
+    }
+
+    fn admin(&self, tenant_id: &str) -> String {
+        self.credentials.tenant_admin(tenant_id)
+    }
+}
+
+async fn harness() -> Harness {
+    let store = Arc::new(controlplane::store::memory::InMemoryStore::new(
+        StoreConfig {
+            changes_limit: controlplane::config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: Some(
+                controlplane::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS,
+            ),
+        },
+    ));
+    let credentials = seed_credentials(store.as_ref()).await;
     let state = AppState {
         region: controlplane::api::types::Region {
             region_id: "local".to_string(),
@@ -27,7 +48,8 @@ fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
             tiered_storage: false,
             bridges: false,
         },
-        store: Arc::new(store),
+        store: Arc::clone(&store)
+            as Arc<dyn controlplane::store::ControlPlaneAuthStore + Send + Sync>,
         oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
@@ -40,46 +62,58 @@ fn app_with_state() -> axum::routing::RouterIntoService<Body, ()> {
             controlplane::replica_positions::ReplicaPositions::new(&Default::default()),
         ),
     };
-    build_router(state).into_service()
+    Harness {
+        app: build_router(state).into_service(),
+        store,
+        credentials,
+    }
 }
 
-async fn create_tenant(app: &axum::routing::RouterIntoService<Body, ()>) {
-    let req = json_request(
+/// Create `t1` as an operator and bind the test keys to it, so the admin
+/// tokens minted here verify against it.
+async fn create_tenant(h: &Harness) {
+    let req = json_request_as(
         "POST",
         "/v1/tenants",
+        &h.operator(),
         serde_json::json!({
             "tenant_id": "t1",
             "display_name": "Tenant One"
         }),
     );
-    let response = app.clone().oneshot(req).await.expect("tenant");
+    let response = h.app.clone().oneshot(req).await.expect("tenant");
     assert_eq!(response.status(), StatusCode::CREATED);
+    h.credentials.adopt(h.store.as_ref(), "t1").await;
 }
 
-async fn create_namespace(app: &axum::routing::RouterIntoService<Body, ()>) {
-    let req = json_request(
+async fn create_namespace(h: &Harness) {
+    let req = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &h.admin("t1"),
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
         }),
     );
-    let response = app.clone().oneshot(req).await.expect("namespace");
+    let response = h.app.clone().oneshot(req).await.expect("namespace");
     assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]
 async fn tenants_conflict_and_delete_not_found() {
-    let app = app_with_state();
+    let h = harness().await;
+    let app = h.app.clone();
+    let op = h.operator();
 
     // First create should succeed.
-    create_tenant(&app).await;
+    create_tenant(&h).await;
 
     // Second create should conflict.
-    let req = json_request(
+    let req = json_request_as(
         "POST",
         "/v1/tenants",
+        &op,
         serde_json::json!({
             "tenant_id": "t1",
             "display_name": "Tenant One"
@@ -92,6 +126,7 @@ async fn tenants_conflict_and_delete_not_found() {
     let delete = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete).await.expect("delete");
@@ -100,6 +135,7 @@ async fn tenants_conflict_and_delete_not_found() {
     let delete_again = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete_again).await.expect("delete");
@@ -108,22 +144,28 @@ async fn tenants_conflict_and_delete_not_found() {
 
 #[tokio::test]
 async fn namespaces_missing_tenant_and_conflict() {
-    let app = app_with_state();
+    let h = harness().await;
+    let app = h.app.clone();
+    let admin = h.admin("t1");
 
+    // A tenant that does not exist has no keys, so no credential can be
+    // valid for it: 401, and not a 404 that would say whether it exists.
     let list_missing = Request::builder()
         .uri("/v1/tenants/missing/namespaces")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("list");
     let response = app.clone().oneshot(list_missing).await.expect("list");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    create_tenant(&app).await;
+    create_tenant(&h).await;
 
-    create_namespace(&app).await;
+    create_namespace(&h).await;
 
-    let create_conflict = json_request(
+    let create_conflict = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces",
+        &admin,
         serde_json::json!({
             "namespace": "default",
             "display_name": "Default"
@@ -139,6 +181,7 @@ async fn namespaces_missing_tenant_and_conflict() {
     let delete_missing = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/other")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete_missing).await.expect("delete");
@@ -147,13 +190,17 @@ async fn namespaces_missing_tenant_and_conflict() {
 
 #[tokio::test]
 async fn caches_error_paths_and_changes() {
-    let app = app_with_state();
-    create_tenant(&app).await;
-    create_namespace(&app).await;
+    let h = harness().await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
+    create_tenant(&h).await;
+    create_namespace(&h).await;
 
-    let create = json_request(
+    let create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary Cache"
@@ -162,9 +209,10 @@ async fn caches_error_paths_and_changes() {
     let response = app.clone().oneshot(create).await.expect("create");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let conflict = json_request(
+    let conflict = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/caches",
+        &admin,
         serde_json::json!({
             "cache": "primary",
             "display_name": "Primary Cache"
@@ -175,14 +223,16 @@ async fn caches_error_paths_and_changes() {
 
     let get_missing = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get");
     let response = app.clone().oneshot(get_missing).await.expect("get");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let patch_missing = json_request(
+    let patch_missing = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/caches/missing",
+        &admin,
         serde_json::json!({
             "display_name": "Missing"
         }),
@@ -193,6 +243,7 @@ async fn caches_error_paths_and_changes() {
     let delete_missing = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/caches/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete_missing).await.expect("delete");
@@ -200,6 +251,7 @@ async fn caches_error_paths_and_changes() {
 
     let changes = Request::builder()
         .uri("/v1/caches/changes?since=0")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");
@@ -210,13 +262,17 @@ async fn caches_error_paths_and_changes() {
 
 #[tokio::test]
 async fn streams_error_paths_and_changes() {
-    let app = app_with_state();
-    create_tenant(&app).await;
-    create_namespace(&app).await;
+    let h = harness().await;
+    let app = h.app.clone();
+    let op = h.operator();
+    let admin = h.admin("t1");
+    create_tenant(&h).await;
+    create_namespace(&h).await;
 
-    let create = json_request(
+    let create = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": StreamKind::Stream,
@@ -230,9 +286,10 @@ async fn streams_error_paths_and_changes() {
     let response = app.clone().oneshot(create).await.expect("create");
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let conflict = json_request(
+    let conflict = json_request_as(
         "POST",
         "/v1/tenants/t1/namespaces/default/streams",
+        &admin,
         serde_json::json!({
             "stream": "orders",
             "kind": StreamKind::Stream,
@@ -248,14 +305,16 @@ async fn streams_error_paths_and_changes() {
 
     let get_missing = Request::builder()
         .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("get");
     let response = app.clone().oneshot(get_missing).await.expect("get");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let patch_missing = json_request(
+    let patch_missing = json_request_as(
         "PATCH",
         "/v1/tenants/t1/namespaces/default/streams/missing",
+        &admin,
         serde_json::json!({
             "retention": { "max_age_seconds": 7200, "max_size_bytes": null }
         }),
@@ -266,6 +325,7 @@ async fn streams_error_paths_and_changes() {
     let delete_missing = Request::builder()
         .method("DELETE")
         .uri("/v1/tenants/t1/namespaces/default/streams/missing")
+        .header("authorization", format!("Bearer {admin}"))
         .body(Body::empty())
         .expect("delete");
     let response = app.clone().oneshot(delete_missing).await.expect("delete");
@@ -273,6 +333,7 @@ async fn streams_error_paths_and_changes() {
 
     let changes = Request::builder()
         .uri("/v1/streams/changes?since=0")
+        .header("authorization", format!("Bearer {op}"))
         .body(Body::empty())
         .expect("changes");
     let response = app.clone().oneshot(changes).await.expect("changes");

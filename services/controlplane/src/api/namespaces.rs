@@ -2,6 +2,11 @@
 //!
 //! Implements CRUD, snapshot, and changefeed endpoints for namespaces, including
 //! tenant existence checks and error mapping.
+//!
+//! Every tenant-scoped endpoint requires `ns.manage` over the namespace, from
+//! a token minted for the tenant in the path; the feeds require
+//! `node.view:cluster:*`. The credential is checked before existence, so an
+//! unauthenticated caller cannot learn what exists by asking.
 use crate::api::ensure_tenant_exists;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{
@@ -9,11 +14,15 @@ use crate::api::types::{
     NamespaceSnapshotResponse,
 };
 use crate::app::AppState;
+use crate::auth::bearer::{require_cluster_action, require_tenant_action, tenant_scopes_for};
+use crate::auth::rbac::authorize::{
+    ACTION_NODE_VIEW, ACTION_NS_MANAGE, ParsedObject, Segment, object_within_scope,
+};
 use crate::model::{Namespace, NamespaceKey};
 use crate::store::StoreError;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::collections::HashMap;
 
@@ -32,13 +41,28 @@ use std::collections::HashMap;
 pub(crate) async fn list_namespaces(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<NamespaceListResponse>, ApiError> {
+    let scopes = tenant_scopes_for(&state, &tenant_id, &headers, ACTION_NS_MANAGE).await?;
     ensure_tenant_exists(&state, &tenant_id).await?;
     let items = state
         .store
         .list_namespaces(&tenant_id)
         .await
-        .map_err(|err| api_internal("failed to list namespaces", &err))?;
+        .map_err(|err| api_internal("failed to list namespaces", &err))?
+        .into_iter()
+        // Only what the caller could manage: a namespace admin sees their
+        // own, not the tenant's whole layout.
+        .filter(|ns| {
+            let target = ParsedObject::Namespace {
+                tenant_id: tenant_id.clone(),
+                namespace: Segment::Exact(ns.namespace.clone()),
+            };
+            scopes
+                .iter()
+                .any(|scope| object_within_scope(scope, &target))
+        })
+        .collect();
     Ok(Json(NamespaceListResponse { items }))
 }
 
@@ -59,8 +83,10 @@ pub(crate) async fn list_namespaces(
 pub(crate) async fn create_namespace(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<NamespaceCreateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_ns_manage(&state, &tenant_id, &headers, &body.namespace).await?;
     ensure_tenant_exists(&state, &tenant_id).await?;
     let namespace = Namespace {
         tenant_id,
@@ -93,7 +119,9 @@ pub(crate) async fn create_namespace(
 pub(crate) async fn delete_namespace(
     Path((tenant_id, namespace)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
+    require_ns_manage(&state, &tenant_id, &headers, &namespace).await?;
     ensure_tenant_exists(&state, &tenant_id).await?;
     let key = NamespaceKey {
         tenant_id: tenant_id.clone(),
@@ -106,6 +134,20 @@ pub(crate) async fn delete_namespace(
     }
 }
 
+/// `ns.manage` over the named namespace, from a token minted for this tenant.
+async fn require_ns_manage(
+    state: &AppState,
+    tenant_id: &str,
+    headers: &HeaderMap,
+    namespace: &str,
+) -> Result<(), ApiError> {
+    let target = ParsedObject::Namespace {
+        tenant_id: tenant_id.to_string(),
+        namespace: Segment::Exact(namespace.to_string()),
+    };
+    require_tenant_action(state, tenant_id, headers, ACTION_NS_MANAGE, &target).await
+}
+
 #[utoipa::path(
     get,
     path = "/v1/namespaces/snapshot",
@@ -116,7 +158,9 @@ pub(crate) async fn delete_namespace(
 )]
 pub(crate) async fn namespace_snapshot(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<NamespaceSnapshotResponse>, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_NODE_VIEW).await?;
     let snapshot = state
         .store
         .namespace_snapshot()
@@ -142,7 +186,9 @@ pub(crate) async fn namespace_snapshot(
 pub(crate) async fn namespace_changes(
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<NamespaceChangesResponse>, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_NODE_VIEW).await?;
     let since = params
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())

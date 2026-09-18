@@ -342,7 +342,7 @@ fn traffic_loop(
                             None,
                         )
                         .map(|(status, _)| status);
-                        let tenants = http(*api, "GET", "/v1/tenants", None, None)
+                        let tenants = http(*api, "GET", "/v1/tenants", Some(&bearer), None)
                             .map(|(_, body)| body.contains("\"t1\""));
                         eprintln!("  probe {api}: jwks={jwks:?} has_t1={tenants:?}");
                     }
@@ -458,6 +458,8 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
         vec![
             "node.manage:cluster:*".to_string(),
             "node.view:cluster:*".to_string(),
+            // The traffic loop creates tenants, and the checks below list them.
+            "tenant.manage:cluster:*".to_string(),
         ],
         Duration::from_secs(3_600),
     )
@@ -519,7 +521,7 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
         wait_ready(&mut instances[i], Duration::from_secs(30));
         // Ready is a promise: a restarted member must already hold its
         // committed state (the startup replay gate) before it reports fit.
-        let (_, tenants) = http(instances[i].api, "GET", "/v1/tenants", None, None)
+        let (_, tenants) = http(instances[i].api, "GET", "/v1/tenants", Some(&bearer), None)
             .expect("tenants after restart");
         assert!(
             tenants.contains("\"t1\""),
@@ -617,7 +619,7 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
     // including the one rebuilt from a wiped volume.
     for instance in &mut instances {
         let (status, body) =
-            http(instance.api, "GET", "/v1/tenants", None, None).expect("list tenants");
+            http(instance.api, "GET", "/v1/tenants", Some(&bearer), None).expect("list tenants");
         assert_eq!(status, 200);
         for tenant_id in &acked {
             assert!(

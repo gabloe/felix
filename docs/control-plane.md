@@ -254,8 +254,48 @@ The file form exists so a credential need not sit in an environment variable
 visible in a process listing. Whitespace is trimmed, and a blank value is
 treated as no credential rather than as an empty one.
 
-The same credential authenticates the shard-assignment watch, which is cluster
-metadata by the same argument.
+The same credential authenticates the shard-assignment watch and the metadata
+feeds the broker seeds from — tenants, namespaces, streams and caches — which
+are cluster metadata by the same argument. That makes it a broker's credential
+rather than a *member's*: a standalone broker with `FELIX_CONTROLPLANE_URL` and
+no `FELIX_NODE_ID` still presents it, and without one its sync is refused on
+every poll. It is told so once, at startup, and still starts, because the JWKS
+fetch that verifies client tokens is unauthenticated and keeps working.
+
+### Metadata API authorization
+
+Every endpoint that reads or changes the catalog takes a Felix bearer token.
+The check runs before the existence check, so a caller without a credential
+learns nothing from a 404: a tenant that does not exist has no signing keys,
+and a request against it answers `401` whatever the token says.
+
+| Endpoint | Requires | Minted from |
+| --- | --- | --- |
+| `GET/POST /v1/tenants`, `DELETE /v1/tenants/{id}` | `tenant.manage:cluster:*` | any tenant; the `tid` only picks the keys |
+| `/v1/tenants/{t}/namespaces[/{ns}]` | `ns.manage` over `namespace:{t}/{ns}` | tenant `t` |
+| `/v1/tenants/{t}/namespaces/{ns}/streams[/{s}]` | `stream.manage` over `stream:{t}/{ns}/{s}` | tenant `t` |
+| `/v1/tenants/{t}/namespaces/{ns}/caches[/{c}]` | `cache.manage` over `cache:{t}/{ns}/{c}` | tenant `t` |
+| `/v1/{tenants,namespaces,streams,caches}/{snapshot,changes}` | `node.view:cluster:*` | any tenant |
+
+A listing returns only what the caller could manage, so a namespace admin sees
+their namespace and not the tenant's layout. A tenant admin's token carries the
+manage actions already: token exchange expands `tenant.manage:tenant:{t}` to
+`ns.manage:namespace:{t}/*`, `stream.manage:stream:{t}/*/*` and
+`cache.manage:cache:{t}/*/*`.
+
+**The catalog is the operator's.** Which tenants exist is cluster metadata, not
+something any one tenant owns, so creating, listing and deleting tenants sits
+in cluster scope alongside membership — and deleting is operator-only even for
+the tenant's own admin, since it takes the signing keys with it. Cluster scope
+still confers nothing *inside* a tenant: an operator who can create `t1` cannot
+read its streams without a `t1` token.
+
+**Day 0** is the bootstrap listener, which is the only thing that works before
+any Felix token exists. An operator credential comes out of it the same way a
+broker's does: bootstrap an operator tenant with a policy granting
+`tenant.manage`, `node.view` and `node.manage` over `cluster:*` to a role,
+assign the operator principal to it, and exchange an IdP token. No tenant admin
+can write those rules afterwards, because no tenant scope contains `cluster:*`.
 
 ### Shard ownership
 

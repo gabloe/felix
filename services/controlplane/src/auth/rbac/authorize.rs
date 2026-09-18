@@ -165,8 +165,7 @@ pub fn parse_object(raw: &str, tenant_id: &str) -> Result<ParsedObject, String> 
         if tid != tenant_id {
             return Err("stream object tenant mismatch".to_string());
         }
-        let namespace = parse_segment(ns, false)?;
-        let stream = parse_segment(stream, true)?;
+        let (namespace, stream) = parse_leaf_segments(ns, stream)?;
         return Ok(ParsedObject::Stream {
             tenant_id: tid.to_string(),
             namespace,
@@ -178,8 +177,7 @@ pub fn parse_object(raw: &str, tenant_id: &str) -> Result<ParsedObject, String> 
         if tid != tenant_id {
             return Err("cache object tenant mismatch".to_string());
         }
-        let namespace = parse_segment(ns, false)?;
-        let cache = parse_segment(cache, true)?;
+        let (namespace, cache) = parse_leaf_segments(ns, cache)?;
         return Ok(ParsedObject::Cache {
             tenant_id: tid.to_string(),
             namespace,
@@ -316,6 +314,19 @@ pub fn validate_assignment_allowed(
         }
     }
     Ok(())
+}
+
+/// The namespace and leaf of a stream or cache object.
+///
+/// A wildcard namespace is allowed only under a wildcard leaf: `t1/*/*` is
+/// "every stream in the tenant", which is what token exchange expands a
+/// tenant-wide grant to. `t1/*/orders` is refused -- a grant across
+/// namespaces wearing the shape of a single-stream grant is the kind of rule
+/// a policy review reads past.
+fn parse_leaf_segments(ns: &str, leaf: &str) -> Result<(Segment, Segment), String> {
+    let leaf = parse_segment(leaf, true)?;
+    let namespace = parse_segment(ns, leaf == Segment::Any)?;
+    Ok((namespace, leaf))
 }
 
 fn parse_segment(raw: &str, allow_star: bool) -> Result<Segment, String> {
@@ -566,8 +577,24 @@ mod tests {
         assert!(parse_object("tenant:*", tenant).is_err());
         assert!(parse_object("stream:*/*", tenant).is_err());
         assert!(parse_object("cache:*/*", tenant).is_err());
-        assert!(parse_object("stream:t1/*/*", tenant).is_err());
-        assert!(parse_object("cache:t1/*/*", tenant).is_err());
+    }
+
+    /// The form token exchange expands `tenant.manage` and `ns.manage` to.
+    /// A token carrying it has to be readable by the control plane's own
+    /// resource API, or a tenant admin could not manage their streams.
+    #[test]
+    fn a_tenant_wide_stream_or_cache_object_parses_and_sits_under_the_tenant() {
+        let tenant = parse_object("tenant:t1", "t1").expect("tenant");
+        for raw in ["stream:t1/*/*", "cache:t1/*/*"] {
+            let object = parse_object(raw, "t1").expect(raw);
+            assert!(object_within_scope(&tenant, &object), "{raw}");
+            let named = parse_object(&raw.replace("*/*", "payments/orders"), "t1").expect(raw);
+            assert!(object_within_scope(&object, &named), "{raw} covers a name");
+        }
+        // But not the other way round: a namespace scope does not reach it.
+        let namespace = parse_object("namespace:t1/payments", "t1").expect("namespace");
+        let all = parse_object("stream:t1/*/*", "t1").expect("all");
+        assert!(!object_within_scope(&namespace, &all));
     }
 
     #[test]
