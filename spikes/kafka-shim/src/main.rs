@@ -1,13 +1,13 @@
-//! A Kafka-speaking front door, read-only, over a real Felix stream.
+//! A Kafka-speaking front door, read-only, over a real Felix shard log.
 //!
 //! Spike for #488, option A: `ApiVersions`, `Metadata`, `ListOffsets`, `Fetch`.
 //! The bar was a real client — librdkafka, via `kcat` — reading records out of
 //! a Felix shard, and it does.
 //!
-//! Records are read with `shard_log(..).read_from(offset, max_bytes)`, the same
+//! Records come from `shard_log(..).read_from(offset, max_bytes)`, the same
 //! call the replication driver ships with, so a Kafka `Fetch` and a follower's
-//! catch-up are reading the same log the same way. Offsets need no translation:
-//! Felix offsets are contiguous per shard, which is what Kafka assumes.
+//! catch-up read the same log the same way. Offsets need no translation: Felix
+//! offsets are contiguous per shard, which is what Kafka assumes.
 mod protocol;
 
 use anyhow::{Context, Result};
@@ -21,7 +21,7 @@ use tokio::net::{TcpListener, TcpStream};
 const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";
 /// The stream this shim exposes as a Kafka topic. One shard, so one partition:
-/// the mapping is the easy half, and multi-shard topics need only a wider
+/// the mapping is the easy half, and a multi-shard topic needs only a wider
 /// `Metadata` response.
 const TOPIC: &str = "orders";
 const PARTITIONS: i32 = 1;
@@ -50,7 +50,7 @@ impl Felix {
         }
     }
 
-    /// Records from `offset`, as a Kafka batch would carry them.
+    /// Records from `offset`, and the offset the batch actually starts at.
     async fn read(&self, offset: i64, max_bytes: usize) -> (i64, Vec<Record>) {
         let Some(log) = self.log().await else {
             return (offset, Vec::new());
@@ -77,12 +77,12 @@ impl Felix {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
-    let data_dir = std::env::var("SHIM_DATA_DIR").unwrap_or_else(|_| "/tmp/felix-kafka-spike".into());
+    let data_dir =
+        std::env::var("SHIM_DATA_DIR").unwrap_or_else(|_| "/tmp/felix-kafka-spike".into());
     std::fs::create_dir_all(&data_dir).context("data dir")?;
     let storage = DurableStorage::open(
         std::path::Path::new(&data_dir),
@@ -98,9 +98,9 @@ async fn main() -> Result<()> {
     //
     // A broker learns its streams from the control plane and refuses to publish
     // to one it has not been given, so publishing here would mean standing up a
-    // control plane as well. The log this writes is the same log, written by
-    // the same code — it is the catalog that is missing, not the storage. A
-    // shim that shipped would sit inside the broker and have both.
+    // control plane too. The log this writes is the same log, written by the
+    // same code — what is missing is the catalog, not the storage. A shim that
+    // shipped would live inside the broker and have both.
     let seed: usize = std::env::var("SHIM_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -163,6 +163,8 @@ async fn serve(mut socket: TcpStream, felix: Felix) -> Result<()> {
             Some(ApiKey::ListOffsets) => list_offsets(header.api_version, &mut buf, &felix).await,
             Some(ApiKey::Fetch) => fetch(header.api_version, &mut buf, &felix).await,
             None => {
+                // Every group request lands here, and this is where a client
+                // doing anything beyond a simple read stops.
                 tracing::warn!(api_key = header.api_key, "unsupported api key");
                 return Ok(());
             }
@@ -179,8 +181,8 @@ async fn serve(mut socket: TcpStream, felix: Felix) -> Result<()> {
 /// The highest `ApiVersions` this shim answers.
 ///
 /// Two, not three: v3 is "flexible" (KIP-482) — compact arrays and tagged
-/// fields throughout — which is a second encoding to implement, and the first
-/// real cost this spike turned up. librdkafka opens with v3.
+/// fields throughout — which is a second encoding to implement. librdkafka
+/// opens with v3, so this is the first cost the spike turned up.
 const MAX_API_VERSIONS: i16 = 2;
 
 /// `ApiVersions`: the version ranges this shim supports, per key.
@@ -190,7 +192,8 @@ const MAX_API_VERSIONS: i16 = 2;
 /// `UNSUPPORTED_VERSION` **in the v0 response format**, because the client
 /// cannot know which format to parse until it knows the version was refused.
 /// librdkafka then retries lower. Answer a v3 request in v0 shape *without*
-/// that error and it reports "Bad message format" and gives up.
+/// that error and it reports "Bad message format" and gives up — which is
+/// exactly what this spike did first.
 fn api_versions(version: i16) -> BytesMut {
     let mut out = BytesMut::new();
     if version > MAX_API_VERSIONS {
@@ -271,7 +274,7 @@ fn metadata(version: i16, _buf: &mut impl Buf) -> BytesMut {
     out
 }
 
-/// `ListOffsets`: earliest is 0, latest is one past the last fixture record.
+/// `ListOffsets`: earliest and latest come straight from the shard log.
 async fn list_offsets(version: i16, buf: &mut impl Buf, felix: &Felix) -> BytesMut {
     let _replica_id = buf.get_i32();
     if version >= 2 {
@@ -358,9 +361,9 @@ async fn fetch(version: i16, buf: &mut impl Buf, felix: &Felix) -> BytesMut {
             if version >= 5 {
                 let _log_start = buf.get_i64();
             }
-            let _max_bytes = buf.get_i32();
+            let max_bytes = buf.get_i32();
             let (_, high_watermark) = felix.bounds().await;
-            let (base_offset, remaining) = felix.read(fetch_offset, _max_bytes as usize).await;
+            let (base_offset, remaining) = felix.read(fetch_offset, max_bytes as usize).await;
 
             out.put_i32(index);
             out.put_i16(0); // error_code

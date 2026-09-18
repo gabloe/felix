@@ -6,9 +6,9 @@
 use bytes::{Buf, BufMut, BytesMut};
 
 /// CRC-32C. The v2 record batch uses Castagnoli, not the IEEE polynomial
-/// `crc32fast` implements — a client that computes the other one rejects every
-/// batch, which is the kind of detail that decides whether a shim is a weekend
-/// or a month.
+/// `crc32fast` implements — a broker that computes the other one has every
+/// batch rejected, which is the kind of detail that decides whether a shim is a
+/// weekend or a month.
 pub fn crc32c(bytes: &[u8]) -> u32 {
     const ALGO: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
     ALGO.checksum(bytes)
@@ -35,7 +35,11 @@ impl ApiKey {
     }
 }
 
-/// A request header, v1: the shape every request this spike answers arrives in.
+/// A request header: the shape every request this spike answers arrives in.
+///
+/// Header v2 (the flexible one) adds a tagged-field buffer after `client_id`
+/// and leaves everything before it alone, so this parses both and ignores the
+/// tail.
 #[derive(Debug)]
 pub struct RequestHeader {
     pub api_key: i16,
@@ -68,7 +72,7 @@ pub fn parse_request_header(buf: &mut impl Buf) -> RequestHeader {
     }
 }
 
-/// A varint, zigzag-encoded, as the record format uses.
+/// A zigzag varint, as the record format uses.
 pub fn put_varint(buf: &mut BytesMut, value: i32) {
     put_varlong(buf, value as i64);
 }
@@ -93,8 +97,8 @@ pub struct Record {
 /// Encode a v2 record batch.
 ///
 /// The layout is exact and clients check it: the CRC covers everything *after*
-/// the CRC field, `batch_length` counts everything after itself, and the
-/// per-record length is a varint of the bytes that follow it.
+/// the CRC field, `batch_length` counts everything after itself, and each
+/// record is prefixed by a varint of the bytes that follow it.
 pub fn encode_record_batch(base_offset: i64, first_timestamp: i64, records: &[Record]) -> BytesMut {
     let mut body = BytesMut::new();
     // From `attributes` onward — this is what the CRC covers.
@@ -127,8 +131,8 @@ pub fn encode_record_batch(base_offset: i64, first_timestamp: i64, records: &[Re
 
     let mut batch = BytesMut::new();
     batch.put_i64(base_offset);
-    // batch_length counts every byte after it: the 4 CRC bytes, the 4 before
-    // them (partition_leader_epoch + magic), and the body.
+    // `batch_length` counts every byte after it: the 4 CRC bytes, the 5 before
+    // them (partition_leader_epoch and magic), and the body.
     batch.put_i32((4 + 1 + 4 + body.len()) as i32);
     batch.put_i32(-1); // partition_leader_epoch
     batch.put_i8(2); // magic
