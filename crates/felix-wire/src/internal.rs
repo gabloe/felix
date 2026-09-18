@@ -34,6 +34,10 @@ pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Longest identifier (tenant, namespace, stream, node id) accepted.
 pub const MAX_IDENT_BYTES: usize = 512;
+/// Longest credential a forwarded request may carry. A Felix token is a JWT
+/// whose size is its permission list; this leaves room for a long one without
+/// letting a peer spend the body limit on it.
+pub const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 
 /// Most payloads one forwarded batch may carry.
 pub const MAX_BATCH_PAYLOADS: usize = 65_536;
@@ -117,6 +121,13 @@ pub enum Kind {
     ReplicateDeadLetterBootstrap = 19,
     ReplicateCounterRecords = 20,
     ReplicateCounterBootstrap = 21,
+    /// `ForwardPublish` plus the publisher's credential. A separate kind
+    /// because existing body layouts are frozen: an owner that predates it
+    /// refuses the kind, and one that knows it refuses the old kind instead,
+    /// since a forward with no credential is the hole this closes.
+    AuthorizedForwardPublish = 22,
+    /// `ForwardCacheOp` plus the caller's credential, by the same reasoning.
+    AuthorizedForwardCacheOp = 23,
 }
 
 impl Kind {
@@ -145,6 +156,8 @@ impl Kind {
             19 => Ok(Kind::ReplicateDeadLetterBootstrap),
             20 => Ok(Kind::ReplicateCounterRecords),
             21 => Ok(Kind::ReplicateCounterBootstrap),
+            22 => Ok(Kind::AuthorizedForwardPublish),
+            23 => Ok(Kind::AuthorizedForwardCacheOp),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -269,6 +282,18 @@ pub struct ForwardPublish {
     pub shard: ShardRef,
     pub ack: AckMode,
     pub payloads: Vec<Bytes>,
+    /// The publisher's own bearer token, verified again by the owner.
+    ///
+    /// The ingress broker checked it before forwarding, but the owner cannot
+    /// know that: a forwarder that skipped the check, or that is not a Felix
+    /// broker at all, sends the same bytes. Re-checking here is what makes
+    /// the owner's write depend on the client's authority rather than the
+    /// forwarder's honesty.
+    ///
+    /// Empty on the legacy `ForwardPublish` kind, which is decoded but which
+    /// an owner on this build refuses. Non-empty encodes as
+    /// [`Kind::AuthorizedForwardPublish`].
+    pub credential: String,
 }
 
 /// The owner accepted and wrote the batch.
@@ -351,6 +376,9 @@ pub struct ForwardCacheOp {
     pub value: Bytes,
     /// Expiry in milliseconds, or `0` for none. Only read for `Put`.
     pub ttl_ms: u64,
+    /// The caller's bearer token; see [`ForwardPublish::credential`].
+    /// Non-empty encodes as [`Kind::AuthorizedForwardCacheOp`].
+    pub credential: String,
 }
 
 /// The owner applied the operation.
@@ -519,7 +547,10 @@ pub enum InternalMessage {
 impl InternalMessage {
     pub fn kind(&self) -> Kind {
         match self {
-            Self::ForwardPublish(_) => Kind::ForwardPublish,
+            // The credential decides the kind, so a forwarder that has one
+            // always sends the kind an owner will check it on.
+            Self::ForwardPublish(m) if m.credential.is_empty() => Kind::ForwardPublish,
+            Self::ForwardPublish(_) => Kind::AuthorizedForwardPublish,
             Self::ForwardPublishOk(_) => Kind::ForwardPublishOk,
             Self::ForwardPublishError(_) => Kind::ForwardPublishError,
             Self::NotLeader(_) => Kind::NotLeader,
@@ -529,7 +560,8 @@ impl InternalMessage {
             Self::ReplicateOk(_) => Kind::ReplicateOk,
             Self::ReplicateError(_) => Kind::ReplicateError,
             Self::ReplicateBootstrap(_) => Kind::ReplicateBootstrap,
-            Self::ForwardCacheOp(_) => Kind::ForwardCacheOp,
+            Self::ForwardCacheOp(m) if m.credential.is_empty() => Kind::ForwardCacheOp,
+            Self::ForwardCacheOp(_) => Kind::AuthorizedForwardCacheOp,
             Self::ForwardCacheOk(_) => Kind::ForwardCacheOk,
             Self::ForwardCacheError(_) => Kind::ForwardCacheError,
             Self::ReplicateCacheRecords(_) => Kind::ReplicateCacheRecords,
@@ -593,6 +625,11 @@ impl InternalMessage {
                 for payload in &m.payloads {
                     body.put_u32(u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?);
                     body.extend_from_slice(payload);
+                }
+                // Last, and only on the authorized kind: the legacy layout in
+                // front of it is frozen.
+                if !m.credential.is_empty() {
+                    put_credential(&mut body, &m.credential)?;
                 }
             }
             Self::ForwardPublishOk(m) => {
@@ -676,6 +713,9 @@ impl InternalMessage {
                 body.put_u64(m.ttl_ms);
                 body.put_u32(u32::try_from(m.value.len()).map_err(|_| Error::FrameTooLarge)?);
                 body.extend_from_slice(&m.value);
+                if !m.credential.is_empty() {
+                    put_credential(&mut body, &m.credential)?;
+                }
             }
             Self::ForwardCacheOk(m) => {
                 body.put_u64(m.correlation_id);
@@ -725,7 +765,7 @@ impl InternalMessage {
         let mut body = body;
 
         match header.kind {
-            Kind::ForwardPublish => {
+            kind @ (Kind::ForwardPublish | Kind::AuthorizedForwardPublish) => {
                 let correlation_id = take_u64(&mut body)?;
                 let tenant_id = take_str(&mut body)?;
                 let namespace = take_str(&mut body)?;
@@ -750,6 +790,11 @@ impl InternalMessage {
                     }
                     payloads.push(body.split_to(len));
                 }
+                let credential = if kind == Kind::AuthorizedForwardPublish {
+                    take_credential(&mut body)?
+                } else {
+                    String::new()
+                };
                 if body.has_remaining() {
                     // Trailing bytes mean the body did not describe itself, so
                     // something is wrong with the peer, not merely with this
@@ -768,6 +813,7 @@ impl InternalMessage {
                     },
                     ack,
                     payloads,
+                    credential,
                 }))
             }
             Kind::ForwardPublishOk => {
@@ -910,7 +956,7 @@ impl InternalMessage {
                     _ => Self::ReplicateBootstrap(message),
                 })
             }
-            Kind::ForwardCacheOp => {
+            kind @ (Kind::ForwardCacheOp | Kind::AuthorizedForwardCacheOp) => {
                 let correlation_id = take_u64(&mut body)?;
                 let shard = ShardRef {
                     tenant_id: take_str(&mut body)?,
@@ -927,6 +973,11 @@ impl InternalMessage {
                     return Err(Error::Incomplete);
                 }
                 let value = body.split_to(len);
+                let credential = if kind == Kind::AuthorizedForwardCacheOp {
+                    take_credential(&mut body)?
+                } else {
+                    String::new()
+                };
                 expect_empty(&body)?;
                 Ok(Self::ForwardCacheOp(ForwardCacheOp {
                     correlation_id,
@@ -935,6 +986,7 @@ impl InternalMessage {
                     key,
                     value,
                     ttl_ms,
+                    credential,
                 }))
             }
             Kind::ForwardCacheOk => {
@@ -1035,6 +1087,28 @@ fn put_str(buf: &mut BytesMut, value: &str) -> Result<()> {
     buf.put_u32(value.len() as u32);
     buf.extend_from_slice(value.as_bytes());
     Ok(())
+}
+
+/// A credential is a string with its own, larger bound.
+fn put_credential(buf: &mut BytesMut, value: &str) -> Result<()> {
+    if value.is_empty() || value.len() > MAX_CREDENTIAL_BYTES {
+        return Err(Error::FrameTooLarge);
+    }
+    buf.put_u32(value.len() as u32);
+    buf.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn take_credential(buf: &mut Bytes) -> Result<String> {
+    let len = take_u32(buf)? as usize;
+    // An authorized kind with an empty credential is a contradiction, and
+    // decoding it as the legacy kind would let a peer choose the weaker check
+    // by sending the stronger kind.
+    if len == 0 || len > MAX_CREDENTIAL_BYTES || len > buf.remaining() {
+        return Err(Error::Incomplete);
+    }
+    let bytes = buf.split_to(len);
+    String::from_utf8(bytes.to_vec()).map_err(|_| Error::Incomplete)
 }
 
 fn take_str(buf: &mut Bytes) -> Result<String> {

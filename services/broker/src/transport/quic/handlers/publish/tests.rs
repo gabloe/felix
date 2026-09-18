@@ -520,6 +520,7 @@ fn make_auth_ctx(tenant_id: &str, perms: &[&str]) -> AuthContext {
     AuthContext {
         tenant_id: tenant_id.to_string(),
         matcher,
+        token: "test-token".to_string(),
     }
 }
 
@@ -731,6 +732,7 @@ async fn handle_publish_message_throttled_sends_error() {
         Some(7),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("throttled path");
@@ -784,6 +786,7 @@ async fn handle_publish_message_throttled_without_request_id_sends_error() {
         None,
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("throttled path");
@@ -833,6 +836,7 @@ async fn handle_publish_message_missing_request_id_returns_error() {
         None,
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("missing request id");
@@ -898,6 +902,7 @@ async fn handle_publish_message_drop_when_queue_full_and_ack_none() {
         None,
         Some(felix_wire::AckMode::None),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -959,6 +964,7 @@ async fn handle_publish_message_enqueue_error_reports_publish_error() {
         Some(44),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1012,6 +1018,7 @@ async fn handle_publish_message_stream_not_found_sends_error() {
         Some(42),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("stream not found");
@@ -1079,6 +1086,7 @@ async fn handle_publish_message_ack_sends_ok() {
         Some(5),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1143,6 +1151,7 @@ async fn handle_publish_message_ack_waiters_exhausted() {
         Some(7),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1224,6 +1233,7 @@ async fn handle_publish_message_ack_waiter_queue_full() {
         Some(8),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1304,6 +1314,7 @@ async fn handle_publish_message_ack_waiter_queue_full_with_permit() {
         Some(9),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1373,6 +1384,7 @@ async fn handle_publish_message_ack_waiter_queue_closed() {
         Some(10),
         Some(felix_wire::AckMode::PerMessage),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -1575,6 +1587,7 @@ async fn handle_publish_message_uni_missing_stream_returns_true() {
         "ns".to_string(),
         "stream".to_string(),
         vec![1],
+        String::new(),
     )
     .await
     .expect("missing stream");
@@ -1611,6 +1624,7 @@ async fn handle_publish_message_uni_enqueue_error_returns_false() {
         "ns".to_string(),
         "stream".to_string(),
         vec![1],
+        String::new(),
     )
     .await
     .expect("enqueue error");
@@ -1647,6 +1661,7 @@ async fn handle_publish_message_uni_drop_returns_true() {
         "ns".to_string(),
         "stream".to_string(),
         vec![1],
+        String::new(),
     )
     .await
     .expect("drop");
@@ -1668,6 +1683,7 @@ async fn handle_publish_batch_message_uni_missing_stream_returns_true() {
         "ns".to_string(),
         "stream".to_string(),
         vec![b"a".to_vec(), b"b".to_vec()],
+        String::new(),
     )
     .await
     .expect("missing stream");
@@ -1704,6 +1720,7 @@ async fn handle_publish_batch_message_uni_enqueue_error_returns_false() {
         "ns".to_string(),
         "stream".to_string(),
         vec![b"a".to_vec(), b"b".to_vec()],
+        String::new(),
     )
     .await
     .expect("enqueue error");
@@ -1740,6 +1757,7 @@ async fn handle_publish_batch_message_uni_drop_returns_true() {
         "ns".to_string(),
         "stream".to_string(),
         vec![b"a".to_vec(), b"b".to_vec()],
+        String::new(),
     )
     .await
     .expect("drop");
@@ -1889,6 +1907,7 @@ async fn handle_publish_batch_missing_request_id_returns_error() {
         None,
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("missing request id");
@@ -1939,6 +1958,7 @@ async fn handle_publish_batch_stream_not_found_sends_error() {
         Some(9),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("stream missing path");
@@ -2009,6 +2029,7 @@ async fn handle_publish_batch_enqueue_full_reports_error() {
         Some(11),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("enqueue full path");
@@ -2078,6 +2099,7 @@ async fn handle_publish_batch_enqueue_ok_sends_ack() {
         Some(13),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish batch");
@@ -2144,6 +2166,7 @@ async fn handle_publish_batch_message_drop_when_queue_full_and_ack_none() {
         None,
         Some(felix_wire::AckMode::None),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -2205,6 +2228,7 @@ async fn handle_publish_batch_message_enqueue_error_reports_publish_error() {
         Some(45),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -2274,6 +2298,7 @@ async fn handle_publish_batch_message_ack_on_commit_sends_waiter_message() {
         Some(46),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -2324,6 +2349,7 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
         Some(21),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("throttled path");
@@ -2378,6 +2404,7 @@ async fn handle_publish_batch_message_throttled_without_request_id_sends_error()
         None,
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("throttled path");
@@ -2443,6 +2470,7 @@ async fn handle_publish_batch_message_ack_waiters_exhausted() {
         Some(22),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -2523,6 +2551,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
         Some(23),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -2593,6 +2622,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         Some(24),
         Some(felix_wire::AckMode::PerBatch),
         false,
+        String::new(),
     )
     .await
     .expect("publish");
@@ -3095,6 +3125,7 @@ async fn a_forwarded_publish_is_stamped_with_the_shard_it_was_routed_for() {
         "stream",
         3,
         felix_wire::internal::AckMode::OnCommit,
+        "test-token",
     )
     .expect("a forwardable route with a peer pool must produce a target");
 

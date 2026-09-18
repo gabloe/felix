@@ -142,8 +142,8 @@ sequenceDiagram
 
     C->>B1: Publish(stream, key, batch)
     B1->>B1: hash the key, resolve the owner locally
-    B1->>B2: ForwardPublish(shard, generation, payloads)
-    B2->>B2: check ownership at that generation, then commit
+    B1->>B2: AuthorizedForwardPublish(shard, generation, payloads, client credential)
+    B2->>B2: check ownership at that generation, verify the credential, then commit
     B2-->>B1: ForwardPublishOk(offsets)
     B1-->>C: Ack
 ```

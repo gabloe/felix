@@ -11,6 +11,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use broker::auth::{BrokerAuth, ControlPlaneKeyStore};
 use broker::peer::{
     ForwardError, ForwardKey, ForwardTarget, ForwardingHandler, PeerPool, PeerServer,
     PeerTransportConfig, forward_publish,
@@ -18,6 +20,10 @@ use broker::peer::{
 use broker::shard_routing::{IngressRouter, routing_table_from};
 use broker::shard_watch::{ShardAssignment, ShardKey};
 use bytes::Bytes;
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use felix_authz::{
+    FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
+};
 use felix_broker::{Broker, StreamMetadata};
 use felix_router::{NodeRef, RegionRouter, ShardRouter};
 use felix_storage::EphemeralCache;
@@ -32,6 +38,71 @@ const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";
 const STREAM: &str = "orders";
 const OWNER: &str = "broker-b";
+const TEST_PRIVATE_KEY: [u8; 32] = [10u8; 32];
+
+/// Tokens the owner will verify: minted against a fixed key whose JWKS every
+/// owner here is handed directly, so no control plane is involved.
+fn issuer() -> (FelixTokenIssuer, Jwks) {
+    let signing_key = Ed25519SigningKey::from_bytes(&TEST_PRIVATE_KEY);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let jwks = Jwks {
+        keys: vec![Jwk {
+            kty: "OKP".to_string(),
+            kid: "k1".to_string(),
+            alg: "EdDSA".to_string(),
+            use_field: KeyUse::Sig,
+            crv: Some("Ed25519".to_string()),
+            x: Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key)),
+        }],
+    };
+    let mut materials = HashMap::new();
+    materials.insert(
+        TENANT.to_string(),
+        TenantKeyMaterial {
+            kid: "k1".to_string(),
+            alg: jsonwebtoken::Algorithm::EdDSA,
+            private_key: TEST_PRIVATE_KEY,
+            public_key,
+            jwks: jwks.clone(),
+        },
+    );
+    (
+        FelixTokenIssuer::new(
+            "felix-auth",
+            "felix-broker",
+            Duration::from_secs(900),
+            Arc::new(materials),
+        ),
+        jwks,
+    )
+}
+
+fn token(perms: &[&str]) -> String {
+    issuer()
+        .0
+        .mint(
+            &TenantId::new(TENANT),
+            "p:test",
+            perms.iter().map(|perm| perm.to_string()).collect(),
+        )
+        .expect("mint")
+}
+
+/// A credential that may publish to the stream every case here forwards to.
+fn publisher_token() -> String {
+    token(&[&format!(
+        "stream.publish:stream:{TENANT}/{NAMESPACE}/{STREAM}"
+    )])
+}
+
+fn owner_auth() -> Arc<BrokerAuth> {
+    let key_store = Arc::new(ControlPlaneKeyStore::new(
+        "http://localhost".to_string(),
+        Arc::new(TenantKeyCache::default()),
+    ));
+    key_store.insert_jwks(&TenantId::new(TENANT), issuer().1);
+    Arc::new(BrokerAuth::with_key_store(key_store))
+}
 
 fn shard_key() -> ShardKey {
     ShardKey {
@@ -150,6 +221,7 @@ impl Owner {
             // stream here is leader-acknowledged.
             None,
             std::time::Duration::from_secs(5),
+            owner_auth(),
         ))
     }
 }
@@ -217,6 +289,7 @@ async fn a_forwarded_publish_is_written_by_the_owner() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"hello")],
         FORWARD_BUDGET,
     )
@@ -255,6 +328,7 @@ async fn an_owner_behind_the_requester_refuses_rather_than_writing() {
         &target(listener.addr, 5),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"too-new")],
         FORWARD_BUDGET,
     )
@@ -294,6 +368,7 @@ async fn a_broker_that_no_longer_owns_the_shard_redirects() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"moved")],
         FORWARD_BUDGET,
     )
@@ -350,6 +425,7 @@ async fn a_redirect_that_loops_back_to_a_tried_owner_is_refused() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"loop")],
         FORWARD_BUDGET,
     )
@@ -407,6 +483,7 @@ async fn a_retryable_refusal_converges() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"retry-me")],
         FORWARD_BUDGET,
     )
@@ -457,6 +534,7 @@ async fn a_permanently_refusing_owner_fails_within_the_budget() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"never")],
         FORWARD_BUDGET,
     )
@@ -533,6 +611,7 @@ async fn a_lost_answer_is_reported_as_indeterminate_and_never_retried() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"exactly-once")],
         FORWARD_BUDGET,
     )
@@ -579,6 +658,7 @@ async fn an_unreachable_owner_fails_without_sending() {
         &target(dead, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"nowhere")],
         FORWARD_BUDGET,
     )
@@ -605,12 +685,65 @@ async fn an_owner_that_has_not_opened_the_shard_refuses() {
         &target(listener.addr, 1),
         &forward_key(),
         AckMode::OnCommit,
+        &publisher_token(),
         vec![Bytes::from_static(b"not-yet")],
         FORWARD_BUDGET,
     )
     .await
     .expect_err("an unopened shard must not accept writes");
     assert!(matches!(err, ForwardError::Refused { .. }), "{err:?}");
+
+    pool.shutdown().await;
+    listener.stop().await;
+}
+
+/// **The owner refuses a forward whose credential cannot publish, over the
+/// real transport, and writes nothing.** The ingress broker would have refused
+/// this before forwarding; the owner cannot know whether it did, which is the
+/// gap #503 named. Also the credential-less legacy frame, which is what a
+/// forwarder from before this build -- or something that is not a broker at
+/// all -- sends.
+#[tokio::test]
+async fn a_forward_the_client_was_not_entitled_to_is_refused_by_the_owner() {
+    let owner = Owner::new(OWNER, 1, true).await;
+    let mut subscription = owner
+        .broker
+        .subscribe(TENANT, NAMESPACE, STREAM, 0)
+        .await
+        .expect("subscribe");
+    let listener = Listener::start(OWNER, owner.handler("10.0.0.5:7000"));
+    let pool = pool();
+
+    let subscriber = token(&[&format!(
+        "stream.subscribe:stream:{TENANT}/{NAMESPACE}/{STREAM}"
+    )]);
+    for credential in [subscriber.as_str(), ""] {
+        let err = forward_publish(
+            &pool,
+            &target(listener.addr, 1),
+            &forward_key(),
+            AckMode::OnCommit,
+            credential,
+            vec![Bytes::from_static(b"not yours")],
+            FORWARD_BUDGET,
+        )
+        .await
+        .expect_err("the owner accepted a publish the client could not make");
+        match err {
+            ForwardError::Refused { detail, .. } => {
+                assert!(detail.contains("Unauthorized"), "{detail}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    // Nothing reached the stream.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), subscription.recv())
+            .await
+            .is_err(),
+        "a refused forward was delivered",
+    );
 
     pool.shutdown().await;
     listener.stop().await;

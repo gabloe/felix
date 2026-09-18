@@ -91,6 +91,8 @@ pub(crate) async fn apply_cache_op(
     cache_store: &dyn felix_storage::StorageApi,
     ingress: Option<&IngressRouter>,
     peers: Option<&crate::peer::PeerPool>,
+    // The caller's token, carried on a forward for the owner to verify.
+    credential: &str,
     tenant_id: &str,
     namespace: &str,
     cache: &str,
@@ -136,7 +138,7 @@ pub(crate) async fn apply_cache_op(
                     target.node_id
                 ));
             };
-            crate::peer::forward_cache_op(pool, &target, &forward_key, key, &request)
+            crate::peer::forward_cache_op(pool, &target, &forward_key, key, credential, &request)
                 .await
                 .map_err(|err| err.to_string())
         }
@@ -156,6 +158,7 @@ pub(crate) async fn apply_counter_op(
     broker: &felix_broker::Broker,
     ingress: Option<&IngressRouter>,
     peers: Option<&crate::peer::PeerPool>,
+    credential: &str,
     tenant_id: &str,
     namespace: &str,
     cache: &str,
@@ -192,9 +195,16 @@ pub(crate) async fn apply_counter_op(
                     target.node_id
                 ));
             };
-            let answer = crate::peer::forward_cache_op(pool, &target, &forward_key, key, &request)
-                .await
-                .map_err(|err| err.to_string())?;
+            let answer = crate::peer::forward_cache_op(
+                pool,
+                &target,
+                &forward_key,
+                key,
+                credential,
+                &request,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
             answer
                 .map(|bytes| felix_storage::counter_log::decode_sum(&bytes))
                 .transpose()

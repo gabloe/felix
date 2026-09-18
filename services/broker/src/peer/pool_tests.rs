@@ -390,6 +390,7 @@ mod correlation {
                 shard: shard(),
                 ack: AckMode::OnCommit,
                 payloads: vec![Bytes::from_static(b"hello")],
+                credential: String::new(),
             }),
             InternalMessage::ForwardPublishOk(ForwardPublishOk {
                 correlation_id: 7,
@@ -464,6 +465,7 @@ mod correlation {
                 shard: shard(),
                 ack: AckMode::OnCommit,
                 payloads: vec![Bytes::from_static(b"hello")],
+                credential: String::new(),
             }),
             99,
         );

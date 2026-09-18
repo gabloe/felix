@@ -120,13 +120,16 @@ sequenceDiagram
     participant B as Broker B (owner)
 
     A->>A: resolve shard -> Remote(B, generation)
-    A->>B: ForwardPublish(correlation, shard, generation, payloads)
+    A->>B: AuthorizedForwardPublish(correlation, shard, generation, payloads, credential)
     B->>B: check own ownership at that generation
-    alt B owns the shard at that generation
+    B->>B: verify the credential allows stream.publish here
+    alt B owns the shard at that generation and the client may publish
         B->>B: append and commit locally
         B-->>A: ForwardPublishOk(correlation, first_offset, last_offset)
     else B has moved on
         B-->>A: NotLeader(correlation, owner, its generation)
+    else the credential is missing or does not allow it
+        B-->>A: ForwardPublishError(correlation, Unauthorized)
     else B cannot serve
         B-->>A: ForwardPublishError(correlation, code)
     end
@@ -143,6 +146,35 @@ assignment generation it resolved against; the owner compares it with its own.
 
 That asymmetry is the point. A generation mismatch in either direction is an
 explicit typed answer, and **never a successful ownership claim**.
+
+### Authorization across a forward
+
+Ownership says the owner *may* write the shard. It says nothing about whether
+the client behind the forward may, and the owner cannot tell an honest
+forwarder from anything else that can reach its port. So a forward carries the
+client's own bearer token, and the owner verifies it exactly as a direct
+request is verified: against the tenant's keys, for `stream.publish` on that
+stream (or `cache.read` / `cache.write` for a cache operation). A credential
+that is missing, does not verify, or does not allow the action is refused
+`Unauthorized` before anything is written. The owner's decision therefore
+depends on the client's authority, not on the forwarder's honesty — which is
+the property peer authentication alone cannot give.
+
+The credential rides two kinds of its own, `AuthorizedForwardPublish` (22) and
+`AuthorizedForwardCacheOp` (23): the legacy layouts are frozen, so the field is
+appended on a new kind rather than added to the old one. A forwarder holding a
+credential always sends the authorized kind — the credential decides the kind,
+not a flag — and the legacy kinds, though still decodable, are refused by an
+owner on this build for the same reason a missing credential is. An owner from
+*before* these kinds answers them `UnsupportedKind`; the forwarder then sends
+the legacy kind once, which is all that owner can read and which it checks no
+differently, so a rolling upgrade keeps forwarding in that direction. See
+[upgrades](../docs-site/src/content/docs/deployment/upgrades.md) for the
+other direction.
+
+An authorized frame relabelled as the legacy kind has trailing bytes and is
+refused; a legacy frame relabelled as authorized has no credential to read and
+is refused. A peer cannot pick the weaker check by rewriting the kind.
 
 **The `shard` a forward names must be the shard the route was resolved for.**
 The owner appends to the shard the message names, so the routing decision and
@@ -214,13 +246,16 @@ sequenceDiagram
     participant B as Broker B (owner)
 
     A->>A: hash the key -> shard -> Remote(B, generation)
-    A->>B: ForwardCacheOp(correlation, shard, generation, op, key, value, ttl)
+    A->>B: AuthorizedForwardCacheOp(correlation, shard, generation, op, key, value, ttl, credential)
     B->>B: check own ownership at that generation
-    alt B owns the shard at that generation
+    B->>B: verify the credential allows the op (cache.read or cache.write)
+    alt B owns the shard at that generation and the client may
         B->>B: apply to its cache log
         B-->>A: ForwardCacheOk(correlation, value?)
     else B has moved on
         B-->>A: NotLeader(correlation, owner, its generation)
+    else the credential is missing or does not allow it
+        B-->>A: ForwardCacheError(correlation, Unauthorized)
     else B cannot serve
         B-->>A: ForwardCacheError(correlation, code)
     end
@@ -228,7 +263,9 @@ sequenceDiagram
 
 The same generation rules as a forwarded publish, and the same reason: a
 mismatch in either direction is a typed answer, never a successful ownership
-claim.
+claim. The same credential check too — `Get` and `CounterGet` need
+`cache.read`, everything else `cache.write` — for the reason given under
+[Authorization across a forward](#authorization-across-a-forward).
 
 `ForwardCacheOk` carries the value a `Get` found or a `Delete` removed, and
 nothing for a `Put`. The value is length-prefixed **behind a presence byte**, so
@@ -365,7 +402,7 @@ Typed, because they need different responses:
 | version mismatch | the peer speaks a version this broker does not know | the connection closes; there is no frame to answer with, because a reply would carry the version the peer just rejected |
 | `StaleRoute` | the *responder* is behind the requester's generation | retry shortly; the owner is catching up |
 | `Unavailable` | the owner cannot serve right now, e.g. still opening | retry with backoff |
-| `Unauthorized` | the peer is not permitted | do not retry |
+| `Unauthorized` | the peer is not permitted, or the credential a forward carries is missing or does not allow the write | do not retry |
 | `Overload` | the owner is shedding load | retry with backoff |
 | `ProtocolVersion` | version not understood | do not retry; close |
 | `Malformed` | the body did not decode | do not retry; close |
@@ -373,6 +410,7 @@ Typed, because they need different responses:
 | `LogGap` | a replication batch starts past the follower's tail | resume from `expected_offset` |
 | `LogConflict` | a replication batch disagrees with stored bytes | do not retry; the logs have diverged |
 | `FencedEpoch` | the sender named an epoch older than the responder's | do not retry; it is no longer the leader |
+| `UnsupportedKind` | the responder predates the kind that was sent | do not retry with that kind; a forwarder falls back to the legacy forward kind once |
 
 `ReplicateBootstrap` is kind 10. A peer that predates it rejects the kind rather
 than misreading the body, which is why it is a new kind rather than a field on

@@ -306,6 +306,7 @@ pub(crate) fn needs_quorum(target: &Option<PublishTarget>) -> bool {
 /// disagreeing about the shard is precisely the bug this replaced.
 pub(crate) const UNKEYED_SHARD: u32 = 0;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn publish_target(
     route: PublishRoute,
     publish_ctx: &PublishContext,
@@ -318,6 +319,9 @@ pub(crate) fn publish_target(
     // which shard the key belongs to.
     shard: u32,
     ack: felix_wire::internal::AckMode,
+    // The publisher's own token. It travels with a forward so the owner can
+    // check it rather than trust that this broker did.
+    credential: &str,
 ) -> Option<PublishTarget> {
     match route {
         PublishRoute::Local(handle) => Some(PublishTarget::Resolved {
@@ -355,6 +359,7 @@ pub(crate) fn publish_target(
                     shard,
                 },
                 ack,
+                credential: credential.to_string(),
             })
         }
         PublishRoute::Refused => None,

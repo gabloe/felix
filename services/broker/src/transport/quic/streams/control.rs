@@ -420,6 +420,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                     ack,
                     sample,
+                    auth_ctx
+                        .as_ref()
+                        .map_or_else(String::new, |ctx| ctx.token.clone()),
                 )
                 .await?;
             }
@@ -468,6 +471,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                     ack,
                     sample,
+                    auth_ctx
+                        .as_ref()
+                        .map_or_else(String::new, |ctx| ctx.token.clone()),
                 )
                 .await?;
             }
@@ -733,6 +739,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     broker.cache(),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
+                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
                     tenant_id.as_str(),
                     namespace.as_str(),
                     cache.as_str(),
@@ -856,6 +863,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     broker.cache(),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
+                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1020,6 +1028,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &broker,
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
+                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1108,6 +1117,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &broker,
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
+                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1628,6 +1638,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     broker.cache(),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
+                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,

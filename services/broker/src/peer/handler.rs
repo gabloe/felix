@@ -12,9 +12,19 @@
 //!   it at a newer generation. `NotLeader`, naming the current owner.
 //! - **The requester is ahead** — this broker's watch has not caught up.
 //!   `StaleRoute`. It must not accept: it may already have lost the shard.
+//!
+//! Ownership says this broker *may* write the shard; it says nothing about
+//! whether the client behind the forward may. That is the second check: the
+//! request carries the client's own token, and it is verified here against
+//! the same keys and the same action a direct publish would be. A forwarder
+//! that skipped its check, or that is not a Felix broker at all, is refused
+//! `Unauthorized`, and so is one that carries no credential.
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use felix_authz::{
+    Action, CacheScope, Namespace, StreamName, TenantId, cache_resource, stream_resource,
+};
 use felix_broker::Broker;
 use felix_router::{Resolution, ShardRouter};
 use felix_wire::internal::{
@@ -24,6 +34,7 @@ use felix_wire::internal::{
 
 use super::metrics;
 use super::server::PeerRequestHandler;
+use crate::auth::BrokerAuth;
 use crate::shard_routing::{Dispatch, IngressRouter};
 use crate::shard_watch::{ShardKey, ShardKind};
 
@@ -45,6 +56,9 @@ pub struct ForwardingHandler {
     /// failover then lost the record.
     marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
     quorum_timeout: std::time::Duration,
+    /// Verifies the client credential a forward carries, against the same
+    /// keys a direct request is checked with.
+    auth: Arc<BrokerAuth>,
 }
 
 impl ForwardingHandler {
@@ -55,6 +69,7 @@ impl ForwardingHandler {
         advertise_addr: String,
         marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
         quorum_timeout: std::time::Duration,
+        auth: Arc<BrokerAuth>,
     ) -> Self {
         Self {
             broker,
@@ -63,7 +78,41 @@ impl ForwardingHandler {
             advertise_addr,
             marks,
             quorum_timeout,
+            auth,
         }
+    }
+
+    /// Whether the client behind a forward may perform `action` on `resource`.
+    ///
+    /// The forwarder already asked this; the answer is not trusted because the
+    /// owner cannot tell an honest forwarder from anything else that can reach
+    /// its port. `Err` is the detail for an `Unauthorized` refusal. The token
+    /// never appears in it.
+    async fn authorize(
+        &self,
+        credential: &str,
+        tenant_id: &str,
+        action: Action,
+        resource: &str,
+    ) -> Result<(), String> {
+        if credential.is_empty() {
+            return Err(
+                "forwarded with no credential: the forwarding broker predates credentialed \
+                 forwards, or stripped it"
+                    .to_string(),
+            );
+        }
+        let ctx = self
+            .auth
+            .authenticate(tenant_id, credential)
+            .await
+            .map_err(|err| format!("the publisher's credential was refused: {err}"))?;
+        if ctx.tenant_id != tenant_id || !ctx.matcher.allows(action, resource) {
+            return Err(format!(
+                "the publisher's credential does not allow {action:?} on {resource}"
+            ));
+        }
+        Ok(())
     }
 
     /// Every check a forwarded request must pass before it touches storage.
@@ -165,6 +214,24 @@ impl ForwardingHandler {
 
         if let Some(denial) = self.check_ownership(correlation_id, &key, publish.shard.generation) {
             return denial.into_publish_answer(correlation_id);
+        }
+
+        let resource = stream_resource(
+            &TenantId::new(&key.tenant_id),
+            &Namespace::new(&key.namespace),
+            &StreamName::new(&key.stream),
+        );
+        if let Err(detail) = self
+            .authorize(
+                &publish.credential,
+                &key.tenant_id,
+                Action::StreamPublish,
+                &resource,
+            )
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
+            return error(correlation_id, ErrorCode::Unauthorized, detail);
         }
 
         let handle = match self
@@ -280,6 +347,27 @@ impl ForwardingHandler {
 
         if let Some(denial) = self.check_ownership(correlation_id, &key, op.shard.generation) {
             return denial.into_cache_answer(correlation_id);
+        }
+
+        let action = match op.op {
+            CacheOpKind::Get | CacheOpKind::CounterGet => Action::CacheRead,
+            CacheOpKind::Put | CacheOpKind::Delete | CacheOpKind::CounterAdd => Action::CacheWrite,
+        };
+        let resource = cache_resource(
+            &TenantId::new(&key.tenant_id),
+            &Namespace::new(&key.namespace),
+            &CacheScope::new(&key.stream),
+        );
+        if let Err(detail) = self
+            .authorize(&op.credential, &key.tenant_id, action, &resource)
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
+            return InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::Unauthorized,
+                detail,
+            });
         }
 
         let cache = self.broker.cache();

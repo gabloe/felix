@@ -126,7 +126,7 @@ If it changes `FORMAT_VERSION`, back up first and do not plan to roll back.
 |---|---|
 | Nothing versioned | Reverse the order above |
 | Client protocol capability | Safe; clients lose the feature |
-| Internal protocol *kind* | Safe once every broker is back on the old build |
+| Internal protocol *kind* | Safe once every broker is back on the old build; see the note on credentialed forwards below |
 | `INTERNAL_VERSION` | Cutover again, in both directions |
 | `FORMAT_VERSION` | **Not possible.** Restore from backup |
 
@@ -149,3 +149,22 @@ felix-broker --print-config
 
 See [Observability](/felix/features/observability/) for what to watch while a
 rollout is in progress.
+
+### A note on credentialed forwards
+
+Forwarded publishes and cache operations carry the client's credential on
+kinds of their own, and an upgraded owner refuses the credential-less legacy
+kinds — that refusal is the fix, not a side effect. During a rolling broker
+upgrade the two builds meet in both directions, and they behave differently:
+
+- **Upgraded broker forwarding to an old owner.** The old owner answers
+  `UnsupportedKind`; the forwarder sends the legacy kind once instead, and the
+  publish goes through. That owner checks nothing either way, so nothing is
+  lost that the upgrade had gained.
+- **Old broker forwarding to an upgraded owner.** Refused `Unauthorized`, and
+  the client's publish fails, until that broker is upgraded too.
+
+So the window is bounded by how long un-upgraded brokers keep forwarding to
+upgraded ones: upgrade brokers quickly and in one pass, and expect publishes
+that cross the boundary in that direction to fail with `Unauthorized` while it
+is open. Rolling back closes it the same way in reverse.
