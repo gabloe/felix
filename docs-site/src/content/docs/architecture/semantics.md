@@ -255,9 +255,13 @@ pub struct Subscription {
 subscriber_queue_capacity: 512  # Per-subscriber buffer size
 subscriber_writer_lanes: 4
 subscriber_lane_shard: auto
+```
 
-# Larger buffer tolerates more bursty subscribers
-subscriber_queue_capacity: 4096  # Trade memory for burst tolerance
+A larger buffer tolerates more bursty subscribers, trading memory for burst
+tolerance:
+
+```yaml
+subscriber_queue_capacity: 4096
 ```
 
 :::tip[Sizing Buffer Depth]

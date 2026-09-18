@@ -307,26 +307,19 @@ fanout_batch_size: 64                  # Fanout batch size
 
 **Recommended settings by workload**:
 
+| Workload | `event_batch_max_events` | `event_batch_max_delay_us` |
+|----------|--------------------------|----------------------------|
+| Ultra-low latency | 4 | 50 |
+| Low latency | 8 | 100 |
+| Balanced (default) | 64 | 250 |
+| High throughput | 128 | 1000 |
+| Maximum throughput | 256 | 2000 |
+
+For example, the high-throughput profile as a config file:
+
 ```yaml
-# Ultra-low latency
-event_batch_max_events: 4
-event_batch_max_delay_us: 50
-
-# Low latency
-event_batch_max_events: 8
-event_batch_max_delay_us: 100
-
-# Balanced (default)
-event_batch_max_events: 64
-event_batch_max_delay_us: 250
-
-# High throughput
 event_batch_max_events: 128
 event_batch_max_delay_us: 1000
-
-# Maximum throughput
-event_batch_max_events: 256
-event_batch_max_delay_us: 2000
 ```
 
 #### Queue Depths and Byte Budgets
