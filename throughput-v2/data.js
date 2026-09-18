@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789711973797,
+  "lastUpdate": 1789726706545,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10712,6 +10712,58 @@ window.BENCHMARK_DATA = {
             "range": "10368.29",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 632333.04\nmean: 625584.83\nstdev: 10368.29\ncv: 1.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c31024eb4d9bc25383b90d09c89284ea917c8524",
+          "message": "fix(peer): verify the client's credential at the owner of a forwarded write (#514)\n\nA forwarded publish or cache op carried the shard and the payloads and the\nowner re-checked ownership and generation only, so its write rested on the\nforwarder having checked the client. Now the forward carries the client's\nown bearer token, on two new kinds, and the owner verifies it against the\ntenant's keys for the action it performs before writing. No credential, a\ncredential that does not verify, or one that does not allow the action is\nrefused Unauthorized; the legacy kinds still decode and are refused too.\n\nAn upgraded broker falls back to the legacy kind once toward an owner that\npredates the new ones, so a rolling upgrade keeps forwarding in that\ndirection; the other direction fails until the old broker is upgraded.\n\nCloses #503.",
+          "timestamp": "2026-09-18T03:15:48-07:00",
+          "tree_id": "82fd7e9cba59a8f941e3862b53b6c1118113e9ce",
+          "url": "https://github.com/gabloe/felix/commit/c31024eb4d9bc25383b90d09c89284ea917c8524"
+        },
+        "date": 1789726705983,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 257481.2,
+            "range": "3052.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 257481.20\nmean: 259227.66\nstdev: 3052.26\ncv: 1.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 257481.2,
+            "range": "3052.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 257481.20\nmean: 259227.66\nstdev: 3052.26\ncv: 1.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 59140.55,
+            "range": "1876.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 59140.55\nmean: 60181.35\nstdev: 1876.29\ncv: 3.12%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 591405.45,
+            "range": "18762.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 591405.45\nmean: 601813.52\nstdev: 18762.90\ncv: 3.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
