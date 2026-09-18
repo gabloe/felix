@@ -1,0 +1,21 @@
+# Metadata kept in the control-plane instances themselves: a three-member
+# Raft group with a volume each, and the brokers holding per-broker
+# credentials so each carries node.manage over its own id only.
+controlplane:
+  replicas: 3
+  storage:
+    backend: raft
+    raft:
+      volume:
+        size: 2Gi
+        storageClassName: fast-ssd
+  antiAffinity: hard
+broker:
+  replicas: 3
+  credential:
+    existingSecret: felix-broker-credentials
+    perBroker: true
+    refreshTokenKey: refresh
+  antiAffinity: hard
+  topologySpread:
+    whenUnsatisfiable: DoNotSchedule

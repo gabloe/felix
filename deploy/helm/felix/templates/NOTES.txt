@@ -1,0 +1,40 @@
+{{- $cp := .Values.controlplane }}
+{{- $b := .Values.broker }}
+Felix {{ .Chart.AppVersion }} ({{ .Release.Name }} in {{ .Release.Namespace }})
+
+{{- if $cp.enabled }}
+
+Control plane: {{ $cp.replicas }} instance(s), {{ $cp.storage.backend }} store
+  API inside the cluster:  http://{{ include "felix.controlplane.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ $cp.service.port }}
+  Ready when:              kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/component=controlplane
+{{- if $cp.bootstrap.enabled }}
+
+  !! Bootstrap is ON. It is reachable only through its own Service:
+       kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "felix.controlplane.fullname" . }}-bootstrap {{ $cp.bootstrap.port }}
+     Initialise the operator tenant, mint the broker credential, then upgrade
+     with controlplane.bootstrap.enabled=false. It is not for day 1.
+{{- end }}
+{{- end }}
+
+{{- if $b.enabled }}
+
+Brokers: {{ $b.replicas }}, region {{ $b.region }}
+  First connection:        {{ include "felix.broker.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ $b.clientService.port }} (UDP/QUIC)
+  Each broker's name:      {{ include "felix.broker.fullname" . }}-<n>.{{ include "felix.broker.headless" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ $b.ports.client }}
+  Credential Secret:       {{ $b.credential.existingSecret }}{{ if $b.credential.perBroker }} (one key per broker, named after the pod){{ end }}
+  Peer mTLS:               {{ if $b.peerTls.enabled }}on, issued per pod by cert-manager ({{ $b.peerTls.issuerKind }}/{{ $b.peerTls.issuerName }}){{ else }}OFF: the internal port is encrypted but unauthenticated; the NetworkPolicy is the boundary{{ end }}
+  Halted replicas:         kubectl -n {{ .Release.Namespace }} exec {{ include "felix.broker.fullname" . }}-0 -- wget -qO- http://127.0.0.1:{{ $b.ports.metrics }}/replication/halted
+
+  Clients verify the broker's own certificate, exported inside each pod at
+  /var/lib/felix/export/broker-cert.pem. Copy it out:
+    kubectl -n {{ .Release.Namespace }} exec {{ include "felix.broker.fullname" . }}-0 -- cat /var/lib/felix/export/broker-cert.pem
+{{- else }}
+
+Brokers are disabled. Bootstrap the control plane, create the credential
+Secret, then:
+  helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reuse-values \
+    --set broker.enabled=true --set broker.credential.existingSecret=<secret>
+{{- end }}
+
+The runbook, including the credential and rolling upgrades, is at
+https://gabloe.github.io/felix/deployment/kubernetes/

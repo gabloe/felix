@@ -1,0 +1,37 @@
+# Peer mTLS on the internal port, issued per pod by cert-manager's CSI
+# driver, with clients arriving through a UDP load balancer and told an
+# external name.
+controlplane:
+  replicas: 2
+  storage:
+    backend: postgres
+    postgres:
+      existingSecret: felix-postgres
+  bootstrap:
+    enabled: true
+    existingSecret: felix-bootstrap
+    previousTokenKey: previous
+broker:
+  replicas: 5
+  credential:
+    existingSecret: felix-broker-credential
+  peerTls:
+    enabled: true
+    issuerName: felix-peer-ca
+    issuerKind: ClusterIssuer
+  clientAdvertiseAddr: "$(POD_NAME).brokers.example.com:5000"
+  clientService:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+  networkPolicy:
+    clientNamespaceSelectors:
+      - matchLabels:
+          kubernetes.io/metadata.name: apps
+    metricsNamespaceSelectors:
+      - matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  shutdown:
+    preStopSeconds: 20
+    drainTimeoutMs: 60000
+    terminationGracePeriodSeconds: 120

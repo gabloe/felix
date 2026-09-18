@@ -1,0 +1,105 @@
+# felix
+
+The Felix control plane and a stateful broker cluster, as one Helm release.
+
+What it renders:
+
+| Component | Shape | Why |
+| --- | --- | --- |
+| Control plane, Postgres backend | Deployment, `maxUnavailable: 0`, `maxSurge: 1` | Instances are stateless over one HA database; a new one is ready before an old one goes, and readiness is what the Service routes on. |
+| Control plane, Raft backend | StatefulSet with a volume per member and a headless Service | Members have identities; the peers map is derived from the replica count and each member's id from its pod ordinal. |
+| Brokers | StatefulSet with a volume each, `OrderedReady` | The pod name is the node id: what the broker registers as, what shards are assigned to, and under peer mTLS the DNS name its certificate carries. Replacing a pod keeps all of it. |
+| Budgets | PodDisruptionBudgets | Voluntary disruption takes at most one broker at a time, which keeps a replication-factor-three shard's quorum. |
+| Network policy | Internal port admitted from broker pods only | Without peer mTLS reachability is the boundary; with it, this is the second fence. The internal port is never on a Service. |
+| Peer mTLS (optional) | A cert-manager CSI volume per pod | Each broker needs a certificate issued to its own name; the CSI driver is what can vary a volume per pod of one StatefulSet. |
+
+Secrets are referenced, never rendered: the Postgres URL, the bootstrap token
+and the broker credential come from Secrets the operator creates. Value
+combinations that are each fine alone and wrong together refuse to render
+(see [Refusals](#refusals)).
+
+## Install
+
+The chart is in this repository; there is no published index yet.
+
+```bash
+helm install felix deploy/helm/felix -n felix --create-namespace \
+  --set controlplane.storage.postgres.existingSecret=felix-postgres \
+  --set broker.enabled=false \
+  --set controlplane.bootstrap.enabled=true \
+  --set controlplane.bootstrap.existingSecret=felix-bootstrap
+```
+
+Brokers start disabled because a broker refuses to start without a credential,
+and the credential comes out of the control plane's day-0 bootstrap. The full
+sequence, including minting it, is on the
+[Kubernetes deployment page](https://gabloe.github.io/felix/deployment/kubernetes/).
+Once the credential is in a Secret:
+
+```bash
+helm upgrade felix deploy/helm/felix -n felix --reuse-values \
+  --set broker.enabled=true \
+  --set broker.credential.existingSecret=felix-broker-credential \
+  --set controlplane.bootstrap.enabled=false
+```
+
+## Values
+
+The ones that decide the shape of a release. `values.yaml` documents the rest,
+and `values.schema.json` rejects a misspelt key rather than ignoring it.
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `controlplane.replicas` | `2` | Instances. Odd and at least three under `raft`; exactly one under `memory`. |
+| `controlplane.storage.backend` | `postgres` | `memory`, `postgres` or `raft`. |
+| `controlplane.storage.postgres.existingSecret` | — | Secret holding the connection URL under `urlKey` (`url`). Required for `postgres`. |
+| `controlplane.storage.raft.volume` | `1Gi` | The volume each Raft member keeps its log and snapshots on. |
+| `controlplane.bootstrap.enabled` | `false` | The day-0 listener, on its own ClusterIP Service. Turn it off after use. |
+| `controlplane.bootstrap.existingSecret` | — | Secret holding the bootstrap token under `tokenKey`, and the previous one under `previousTokenKey` while rotating. |
+| `controlplane.shutdown.predrainMs` / `drainTimeoutMs` | `2000` / `10000` | Readiness fails, the instance keeps serving for the predrain, then drains. The grace period is derived. |
+| `controlplane.podDisruptionBudget.minAvailable` | `1` | Must be below `replicas`. |
+| `broker.replicas` | `3` | Brokers. |
+| `broker.credential.existingSecret` | — | Secret holding the Felix token the broker presents. Required while brokers are enabled. |
+| `broker.credential.perBroker` | `false` | One key per broker, named after the pod, so each carries `node.manage:node:<its id>` and nothing wider. |
+| `broker.credential.refreshTokenKey` | — | An IdP refresh token for re-minting before expiry. |
+| `broker.controlplaneUrl` | this release's | Where the control plane is, when it is not in this release. |
+| `broker.storage.size` / `storageClassName` | `50Gi` / cluster default | The volume each broker keeps its logs on. |
+| `broker.ports.client` / `internal` / `metrics` | `5000` / `5001` / `8080` | Clients; brokers to each other; probes and Prometheus. Client and internal may not share a port. |
+| `broker.clientAdvertiseAddr` | pod DNS name on the client port | What discovery hands clients for each broker. `$(POD_NAME)` and `$(POD_NAMESPACE)` expand per pod. |
+| `broker.clientService.type` | `ClusterIP` | The first hop for clients. `LoadBalancer` needs a provider that balances UDP. |
+| `broker.peerTls.enabled` | `false` | Mutual TLS on the internal port, issued per pod by cert-manager's CSI driver from `issuerName`/`issuerKind`. |
+| `broker.shutdown.preStopSeconds` / `drainTimeoutMs` | `15` / `40000` | The endpoints controller's head start, then the drain. The grace period is derived; an explicit one that is too short is refused. |
+| `broker.podDisruptionBudget.maxUnavailable` | `1` | Must be below `replicas`, and at most one once there are three or more. |
+| `broker.antiAffinity` / `topologySpread` | `soft` / zone, `ScheduleAnyway` | `hard` refuses to co-locate; `DoNotSchedule` refuses to skew. |
+| `broker.networkPolicy.enabled` | `true` | Needs a CNI that enforces NetworkPolicy; otherwise it is inert. |
+| `broker.config` | `{}` | The broker's config file, as a map. Its keys override the environment, so leave binds and identity to the chart. |
+| `image.registry` / `*.image.digest` | `ghcr.io` / — | Pin by digest in production; a digest wins over a tag. |
+| `serviceMonitor.enabled` | `false` | Prometheus Operator ServiceMonitors for both workloads. |
+
+## Refusals
+
+`helm template` fails, with the reason, when:
+
+- `postgres` has no `existingSecret`, or `bootstrap` is on without one.
+- `raft` has fewer than three members, or an even number.
+- `memory` has more than one replica.
+- brokers are enabled with no credential Secret, or with no control plane and no `controlplaneUrl`.
+- the client and internal ports are the same.
+- a budget would let every broker, or two replicas of one shard, go at once; or would never let a control-plane instance go.
+- an explicit grace period is shorter than the preStop sleep plus the drain.
+- a key is not in the schema.
+
+`task chart:check` (`scripts/check_chart.py`) renders every value set under
+`ci/`, checks the output for the properties above, and checks that each of
+these refusals still refuses.
+
+## Requirements
+
+- Kubernetes 1.25 or later, Helm 3.8 or later.
+- A StorageClass for the broker volumes, and for Raft members.
+- For the Postgres backend: a database with one writable endpoint and
+  synchronous replication, as [Control-plane HA](https://gabloe.github.io/felix/deployment/control-plane-ha/)
+  sets out. The chart does not deploy one.
+- For peer mTLS: cert-manager, cert-manager-csi-driver, and an Issuer or
+  ClusterIssuer for the peer CA.
+- For the NetworkPolicy to mean anything: a CNI that enforces it.

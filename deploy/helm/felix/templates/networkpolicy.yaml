@@ -1,0 +1,52 @@
+{{- if and .Values.broker.enabled .Values.broker.networkPolicy.enabled }}
+{{- $b := .Values.broker }}
+{{- $np := $b.networkPolicy }}
+# The internal port is for brokers. Without peer mTLS anything that reaches
+# it is a broker, so reachability is the boundary; with it, this is the
+# second fence. Either way it is never a Service port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "felix.broker.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "felix.broker.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Brokers, to each other.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "felix.broker.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: {{ int $b.ports.internal }}
+    # Clients.
+    - {{- if $np.clientNamespaceSelectors }}
+      from:
+        {{- range $np.clientNamespaceSelectors }}
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      ports:
+        - protocol: UDP
+          port: {{ int $b.ports.client }}
+    # Scrapers and probes.
+    - {{- if $np.metricsNamespaceSelectors }}
+      from:
+        {{- range $np.metricsNamespaceSelectors }}
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ int $b.ports.metrics }}
+{{- end }}

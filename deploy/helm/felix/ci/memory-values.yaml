@@ -1,0 +1,14 @@
+# Trying the chart out: one control plane that keeps nothing across a
+# restart, no brokers yet. The first install of a real cluster looks like
+# this too, until bootstrap has minted the broker credential.
+controlplane:
+  replicas: 1
+  storage:
+    backend: memory
+  bootstrap:
+    enabled: true
+    existingSecret: felix-bootstrap
+  podDisruptionBudget:
+    enabled: false
+broker:
+  enabled: false

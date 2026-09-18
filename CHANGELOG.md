@@ -26,6 +26,22 @@ for what the current release actually guarantees.
   peer link is encrypted but unauthenticated, as before, and startup now
   warns. Node ids must be valid DNS names under mTLS. The cluster test
   harness runs every cluster test under mTLS.
+- A Helm chart, at `deploy/helm/felix`, for the control plane and a broker
+  cluster. The control plane is a Deployment over Postgres, rolling one
+  instance at a time with none unavailable, or a StatefulSet under the Raft
+  backend with a volume per member and the peers map derived from the
+  release. Brokers are a StatefulSet whose pod name is the node id, with a
+  volume each, the pod IP advertised to peers and the pod's DNS name to
+  clients, the credential and Postgres URL taken from Secrets the operator
+  creates, probes and a preStop-plus-drain grace period the chart derives,
+  PodDisruptionBudgets that keep a replication-factor-three quorum, anti-
+  affinity and zone spread, a NetworkPolicy that admits the internal port
+  from brokers only, and optional peer mTLS issued per pod by cert-manager's
+  CSI driver. Value combinations that are each fine alone and wrong together
+  (an even Raft group, a budget wider than the replica count, a drain longer
+  than its grace period, a backend without its store) refuse to render.
+  `task chart:check` lints and renders it every way `ci/` describes and
+  asserts those properties on the output; CI runs it (#131, #132).
 
 ### Fixed
 

@@ -1,0 +1,22 @@
+apiVersion: v2
+name: felix
+description: >-
+  The Felix control plane and a stateful broker cluster: a Deployment (Postgres)
+  or StatefulSet (Raft) for the control plane, a StatefulSet for the brokers,
+  and the budgets, probes, and network policy that keep a rolling operation
+  from taking a shard's replicas with it.
+type: application
+# The chart's own version; bump on any change to the templates or defaults.
+version: 0.1.0
+# The Felix release the defaults were written against. Image tags default to
+# this; pin by digest in production.
+appVersion: "0.4.0-preview"
+kubeVersion: ">=1.25.0-0"
+home: https://gabloe.github.io/felix/
+sources:
+  - https://github.com/gabloe/felix
+keywords:
+  - felix
+  - streaming
+  - quic
+  - pubsub

@@ -200,6 +200,14 @@ tasks:
       # it names a project-board row the reader has never seen — so unlike the
       # status-claim report this one can fail.
       - "python3 scripts/check_public_docs_refs.py"
+  chart:check:
+    desc: "Lint and render the Helm chart every way ci/ describes, and check the result keeps its promises"
+    # helm and PyYAML; no cluster. The refusals are checked too, so a value
+    # combination the templates are meant to reject cannot quietly start
+    # rendering again.
+    cmds:
+      - "python3 scripts/check_chart.py"
+
   docs:status:
     desc: "List the docs' claims that something is not built — read these when closing a milestone"
     # Not in docs:evidence, because it cannot fail on its own: a claim that

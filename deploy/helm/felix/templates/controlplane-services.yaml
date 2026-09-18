@@ -1,0 +1,77 @@
+{{- if .Values.controlplane.enabled }}
+{{- $cp := .Values.controlplane }}
+{{- $name := include "felix.controlplane.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+  {{- with $cp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $cp.service.type }}
+  # Routes on readiness: an instance whose store is unreachable, or that is
+  # draining, leaves rotation by itself.
+  ports:
+    - name: api
+      port: {{ int $cp.service.port }}
+      targetPort: api
+      protocol: TCP
+    - name: metrics
+      port: {{ int $cp.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "felix.controlplane.selectorLabels" . | nindent 4 }}
+{{- if eq $cp.storage.backend "raft" }}
+---
+# Stable per-member names for the peers map.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "felix.controlplane.headless" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  clusterIP: None
+  # Members must find each other before they are ready, or no group forms.
+  publishNotReadyAddresses: true
+  ports:
+    - name: api
+      port: {{ int $cp.service.port }}
+      targetPort: api
+      protocol: TCP
+  selector:
+    {{- include "felix.controlplane.selectorLabels" . | nindent 4 }}
+{{- end }}
+{{- if $cp.bootstrap.enabled }}
+---
+# The day-0 listener, on its own Service so it is never behind the API's
+# load balancer and never exposed by exposing the API. Reach it with
+# `kubectl port-forward`, then turn bootstrap off.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  type: ClusterIP
+  ports:
+    - name: bootstrap
+      port: {{ int $cp.bootstrap.port }}
+      targetPort: bootstrap
+      protocol: TCP
+  selector:
+    {{- include "felix.controlplane.selectorLabels" . | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,38 @@
+{{- $cp := .Values.controlplane }}
+{{- $b := .Values.broker }}
+{{- if and $cp.enabled $cp.podDisruptionBudget.enabled (gt (int $cp.replicas) 1) }}
+# Voluntary disruption (drains, upgrades of the node pool) keeps at least
+# this many instances serving. Involuntary loss is the platform's, and the
+# Service's readiness routing handles it.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "felix.controlplane.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  minAvailable: {{ int $cp.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "felix.controlplane.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if and $b.enabled $b.podDisruptionBudget.enabled }}
+---
+# One broker at a time. A shard replicated three ways keeps its quorum with
+# one replica away; two away and every Quorum publish on it waits.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "felix.broker.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  maxUnavailable: {{ int $b.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "felix.broker.selectorLabels" . | nindent 6 }}
+{{- end }}
