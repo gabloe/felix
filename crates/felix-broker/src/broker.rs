@@ -111,6 +111,9 @@ pub struct Broker {
     /// *something* landed, and coalescing a burst into one wake-up is the
     /// behaviour wanted rather than a queue of them to drain.
     pub(crate) appended: Arc<tokio::sync::Notify>,
+    /// Seeds producer ids; randomly keyed at construction.
+    producer_ids: ahash::RandomState,
+    producer_id_counter: std::sync::atomic::AtomicU64,
 }
 
 // `Broker` is `Send + Sync` from its fields alone: every field is an `RwLock`,
@@ -171,6 +174,15 @@ pub struct StreamMetadata {
     pub shards: u32,
     /// What an acknowledgement of a publish to this stream means.
     pub consistency: ConsistencyLevel,
+}
+
+/// What an idempotent publish did: the batch's outcome, and whether that
+/// outcome is from this call or from the batch's first arrival.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdempotentOutcome {
+    pub outcome: PublishOutcome,
+    /// The batch had already been appended; nothing was written this time.
+    pub duplicate: bool,
 }
 
 /// What a publish did.
@@ -278,6 +290,8 @@ impl Broker {
             counters: None,
             cache_watches,
             appended: Arc::new(tokio::sync::Notify::new()),
+            producer_ids: ahash::RandomState::new(),
+            producer_id_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -416,6 +430,65 @@ impl Broker {
             .publish_batch_with_outcome(handle, payloads)
             .await?
             .subscribers)
+    }
+
+    /// A producer id no other producer of this broker holds.
+    ///
+    /// Random rather than counted, so ids from two brokers, or from one
+    /// broker across a restart, do not collide with each other's sequences.
+    pub fn new_producer_id(&self) -> u64 {
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = self.producer_ids.build_hasher();
+        hasher.write_u64(
+            self.producer_id_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or(0),
+        );
+        // Zero is reserved for "no producer" in places that carry the id
+        // beside an optional; never hand it out.
+        hasher.finish().max(1)
+    }
+
+    /// Publish a batch that is appended once however many times it arrives.
+    ///
+    /// `sequence` is this producer's count of batches on this shard, from
+    /// zero. The next expected is appended and remembered; one already
+    /// appended is answered with its original outcome and nothing is written;
+    /// a gap, a producer this broker does not know, or a sequence older than
+    /// it remembers is refused with the matching [`BrokerError`], and nothing
+    /// is written then either. See `producers.rs`.
+    pub async fn publish_batch_idempotent(
+        &self,
+        handle: &StreamHandle,
+        producer_id: u64,
+        sequence: u64,
+        payloads: &[Bytes],
+    ) -> Result<IdempotentOutcome> {
+        let producers = &handle.state.producers;
+        // The turn serialises this producer's batches, so two re-sends of one
+        // sequence cannot both find it unappended. Taken before classifying,
+        // and held across the append and the remembering, for that reason.
+        let turn = producers.turn(producer_id, sequence)?;
+        let _turn = turn.lock().await;
+        match producers.classify(producer_id, sequence)? {
+            crate::producers::Sequenced::Duplicate(outcome) => Ok(IdempotentOutcome {
+                outcome,
+                duplicate: true,
+            }),
+            crate::producers::Sequenced::Append => {
+                let outcome = self.publish_batch_with_outcome(handle, payloads).await?;
+                producers.remember(producer_id, sequence, outcome);
+                Ok(IdempotentOutcome {
+                    outcome,
+                    duplicate: false,
+                })
+            }
+        }
     }
 
     /// Publish, and report the log offsets the batch was assigned.

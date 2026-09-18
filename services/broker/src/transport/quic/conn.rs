@@ -233,6 +233,49 @@ fn build_publish_context(
                             }
                         }
                     }
+                    PublishTarget::Idempotent {
+                        handle,
+                        shard,
+                        producer_id,
+                        sequence,
+                    } => match &lease_for_worker {
+                        // The same commit fence as a plain publish: see above.
+                        Some(lease) if !lease.is_valid_now() => {
+                            crate::lease_metrics::record_refusal(
+                                crate::lease_metrics::BOUNDARY_COMMIT,
+                            );
+                            Err(anyhow::anyhow!(
+                                "lease lapsed before the record could be committed"
+                            ))
+                        }
+                        _ => {
+                            match broker_for_worker
+                                .publish_batch_idempotent(
+                                    handle,
+                                    *producer_id,
+                                    *sequence,
+                                    &job.payloads,
+                                )
+                                .await
+                            {
+                                // A duplicate waits on the same quorum the
+                                // original did: its offsets are the original's,
+                                // and the answer must mean the same thing.
+                                Ok(idempotent) => {
+                                    crate::replication::quorum::await_quorum(
+                                        handle,
+                                        shard.as_ref(),
+                                        &idempotent.outcome,
+                                        marks_for_worker.as_deref(),
+                                        ingress_for_worker.as_deref(),
+                                        quorum_timeout,
+                                    )
+                                    .await
+                                }
+                                Err(err) => Err(err.into()),
+                            }
+                        }
+                    },
                     #[cfg(test)]
                     PublishTarget::Named {
                         tenant_id,

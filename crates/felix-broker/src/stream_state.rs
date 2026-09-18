@@ -68,6 +68,8 @@ pub(crate) struct StreamState {
     /// broker restart. Read on the publish path, so an atomic rather than a
     /// lock.
     consistency: AtomicU8,
+    /// The producers whose sequences this shard's leader remembers.
+    pub(crate) producers: crate::producers::ProducerTable,
 }
 
 /// The stream's live subscribers, keyed by an id that is never reused.
@@ -122,6 +124,7 @@ impl StreamState {
             queued_items: Arc::new(AtomicUsize::new(0)),
             durable,
             commit_sequencer: CommitSequencer::new(0),
+            producers: crate::producers::ProducerTable::default(),
         }
     }
 

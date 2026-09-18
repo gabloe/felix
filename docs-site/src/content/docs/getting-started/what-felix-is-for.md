@@ -147,6 +147,7 @@ These are shipped and measured. If you need one of these, Felix is usable now.
 | QUIC transport, TLS 1.3 always on | ✅ Today | Multiplexed streams, no head-of-line blocking, tuned path-MTU/cwnd/socket buffers |
 | Publish / subscribe with high fanout | ✅ Today | Shared-frame fanout encodes a publish batch once regardless of subscriber count |
 | Batched publish and batched delivery | ✅ Today | Count- and time-bounded, JSON or binary framing |
+| Idempotent producers | 🚧 Partial | A broker-assigned producer id and a per-shard sequence (`producer_init`, `publish_idempotent`, negotiated as `FEATURE_IDEMPOTENT_PRODUCER`): the leader appends the sequence it expects, answers a re-send of one it holds without appending it, and refuses a gap or a forgotten producer with a typed reason. `ClusterClient::idempotent_producer` re-sends across reconnects and follows the leader. Proven on a `Quorum` stream replicated three ways. Partial because the sequences live in the leader's memory: a leader change ends the producer with a typed refusal rather than carrying its sequence over, and the JSON encoding is the only one that carries a sequence |
 | Bounded per-subscriber queues | ✅ Today | Explicit depth limits at every stage |
 | Slow-consumer isolation | ✅ Today | `Block`, `DropNew` (default), `DropOld` — see [`SubQueuePolicy`](/felix/reference/configuration/) |
 | Key/value cache with TTL | ✅ Today | Scoped `(tenant, namespace, cache, key)`, lazy expiry against an absolute expiry time that survives a restart |
@@ -202,9 +203,12 @@ for behavior at thousands of subscribers or across a network.
   been attempted too many times. A consumer must expect the same record twice —
   a crash after handling and before acknowledging is indistinguishable from a
   crash before handling. See [Queues](/felix/features/queues/).
-- **Exactly-once is not implemented and is not on the roadmap.** The two shapes
-  above are the two Felix intends to offer. Deduplicate in the application,
-  keyed on something in the record.
+- **Idempotent producers, not exactly-once delivery.** A producer that takes
+  an id from the broker and numbers its batches can re-send a publish whose
+  acknowledgement never arrived and have it land once — the shard's leader
+  answers a sequence it already holds without appending it. Delivery stays one
+  of the two shapes above: a consumer can still see a record twice on
+  redelivery. Deduplicate there, keyed on something in the record.
 - **Per-stream ordering** preserved for a given subscriber. No ordering across streams.
 - **Resumable subscriptions over the wire, for durable streams.** `Subscribe`
   carries an optional `start` — `latest` (the default, and what every older

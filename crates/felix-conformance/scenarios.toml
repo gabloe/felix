@@ -257,6 +257,19 @@ publishes silently has changed the delivery guarantee without saying so.
 """
 
 [[scenario]]
+id = "retry.idempotent_producers_re_send_ambiguous_outcomes"
+required = false
+title = "An idempotent producer re-sends an ambiguous publish, and it lands once"
+detail = """
+With a producer id and a sequence (`producer_init`, `publish_idempotent`) the
+ambiguous outcome above stops being ambiguous: the broker answers a re-send of
+a batch it already holds without appending it again. A client's producer must
+re-send under the *same* sequence after a lost acknowledgement, advance the
+sequence only on an acknowledgement, and stop on a `publish_refused` — a gap or
+an unknown producer is not something a re-send can mend.
+"""
+
+[[scenario]]
 id = "retry.transport_failures_are_retried_against_another_broker"
 required = false
 title = "A connection failure is retried elsewhere, not against the dead broker"

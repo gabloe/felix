@@ -95,7 +95,7 @@ impl ReconnectPolicy {
     /// whichever broker was just promoted, which is the moment it can least
     /// afford a thundering herd. The broker's own peer pool jitters its redials
     /// for exactly this reason.
-    fn delay_before(&self, attempt: usize) -> Duration {
+    pub(crate) fn delay_before(&self, attempt: usize) -> Duration {
         let ceiling = self
             .backoff
             .saturating_mul(1u32 << attempt.min(16) as u32)
@@ -626,6 +626,26 @@ impl ClusterClient {
         ))
     }
 
+    /// A producer whose publishes land once, however many times they are
+    /// sent, re-sent across reconnects like [`Self::publish_at_least_once`]
+    /// and without the duplicate. See [`crate::IdempotentProducer`].
+    pub async fn idempotent_producer(&self) -> Result<super::idempotent::IdempotentProducer<'_>> {
+        let producer_id = self.client().await.producer_init().await?;
+        Ok(super::idempotent::IdempotentProducer::for_cluster(
+            self,
+            producer_id,
+        ))
+    }
+
+    pub(crate) fn policy(&self) -> &ReconnectPolicy {
+        &self.policy
+    }
+
+    /// A client to one broker, with this cluster client's name and config.
+    pub(crate) async fn connect_to(&self, addr: SocketAddr) -> Result<Client> {
+        Client::connect(addr, &self.server_name, self.config.clone()).await
+    }
+
     /// Publish with a routing key, which decides the shard.
     ///
     /// Without a key every record lands on shard 0, which makes a multi-shard
@@ -734,7 +754,7 @@ impl ClusterClient {
     ///
     /// Held exclusively while it runs, so publishes queue behind it rather than
     /// racing to build several replacements for the same failure.
-    async fn reconnect(&self) -> Result<()> {
+    pub(crate) async fn reconnect(&self) -> Result<()> {
         let endpoints = self.endpoints.read().await.clone();
         {
             let mut slot = self.client.write().await;

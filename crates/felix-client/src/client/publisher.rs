@@ -549,6 +549,38 @@ impl Publisher {
             .await
     }
 
+    /// One batch under a producer's sequence, appended once however many
+    /// times it is sent. Always acknowledged, only once committed.
+    ///
+    /// The low-level send: the sequence is the caller's to keep, and a refusal
+    /// comes back as a [`crate::PublishRefused`]. [`crate::IdempotentProducer`]
+    /// is the form that keeps the sequence and does the re-sending.
+    pub async fn publish_idempotent_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        producer_id: u64,
+        sequence: u64,
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
+        let request_id = worker.request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::PublishIdempotent {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            payloads,
+            key: None,
+            request_id,
+            producer_id,
+            sequence,
+        };
+        self.send_message(worker, message, AckMode::PerBatch, Some(request_id))
+            .await
+    }
+
     async fn publish_batch_json_keyed(
         &self,
         tenant_id: &str,
@@ -560,8 +592,6 @@ impl Publisher {
     ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
-        // Batch publish uses the same queue/writer as single messages.
-        let (response_tx, response_rx) = oneshot::channel();
         let request_id = if ack == AckMode::None {
             None
         } else {
@@ -576,6 +606,19 @@ impl Publisher {
             request_id,
             ack: Some(ack),
         };
+        self.send_message(worker, message, ack, request_id).await
+    }
+
+    /// Queue a JSON publish on `worker` and wait for its answer.
+    async fn send_message(
+        &self,
+        worker: &PublishWorker,
+        message: Message,
+        ack: AckMode,
+        request_id: Option<u64>,
+    ) -> Result<()> {
+        // Batch publish uses the same queue/writer as single messages.
+        let (response_tx, response_rx) = oneshot::channel();
         let permit = self
             .inner
             .admission
@@ -871,6 +914,15 @@ pub(crate) async fn run_publisher_writer_with_limit(
                             counters
                                 .pub_items_out_err
                                 .fetch_add(entry.item_count, Ordering::Relaxed);
+                        }
+                        // A typed refusal is the broker's answer to one
+                        // request on a stream it keeps serving, so the
+                        // requests behind it are still going to be answered
+                        // in order. Failing the worker here would hand a
+                        // producer's next batch a copy of this refusal.
+                        if err.downcast_ref::<crate::PublishRefused>().is_some() {
+                            let _ = entry.response.send(Err(err));
+                            continue;
                         }
                         let message = err.to_string();
                         let _ = entry.response.send(Err(err));

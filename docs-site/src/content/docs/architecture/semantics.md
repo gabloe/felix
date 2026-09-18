@@ -73,13 +73,18 @@ group**, which requires an acknowledgement per record, redelivers anything
 unanswered once its visibility timeout lapses, and dead-letters a record that has
 been attempted too many times.
 
-**Exactly-once is not implemented and is not planned.** At-most-once and
-at-least-once are the two guarantees Felix intends to offer. End-to-end
-exactly-once needs idempotent producers with sequence numbers, transactional
-coordination across the log and the consumer's own state, and deduplication on
-receive — and the last of those has to live in the application regardless,
-because the application is the only thing that knows what makes two records the
-same. Deduplicate there, keyed on something the record carries.
+**Idempotent producers are implemented; exactly-once delivery is not.** A
+producer takes an id from the broker and numbers its batches, and a batch
+re-sent after a lost acknowledgement lands once: the shard's leader answers a
+sequence it already holds from memory rather than appending it again. That
+closes the ambiguous-outcome gap on the publish side (`ClusterClient::idempotent_producer`,
+negotiated as `FEATURE_IDEMPOTENT_PRODUCER`). It does not make delivery
+exactly-once: a consumer can still see a record twice on redelivery, and
+end-to-end exactly-once would also need transactional coordination across the
+log and the consumer's own state, and deduplication on receive — which has to
+live in the application regardless, because the application is the only thing
+that knows what makes two records the same. Deduplicate there, keyed on
+something the record carries.
 
 :::caution[Three fields on a stream are declared and not enforced]
 `kind` is the one most likely to mislead: creating a stream with `kind: Queue`
@@ -126,8 +131,9 @@ same log, with the same fsync policy. What changes is what the acknowledgement
 that cannot reach a majority **stops accepting writes** rather than accepting
 ones it might not keep. A publish with no reachable majority is refused, and a
 refusal means *"this cannot be vouched for"* rather than *"this did not
-happen"* — the record may well have landed on the leader. Retry, and make the
-retry idempotent.
+happen"* — the record may well have landed on the leader. Retry through an
+idempotent producer, which re-sends under the same sequence and cannot land
+it twice.
 
 `Leader` is one round trip instead of two, and it moves the moment you find out.
 If the leader dies holding a record nothing else has, the control plane will not
@@ -686,7 +692,7 @@ assert!(fast_count >= expected_count);
 
 | Property | Today | Not built |
 |----------|-------|-----------|
-| **Pub/Sub delivery** | At-most-once ephemeral, at-least-once durable | Exactly-once |
+| **Pub/Sub delivery** | At-most-once ephemeral, at-least-once durable; idempotent producers land a re-sent publish once | Exactly-once delivery |
 | **Consumer groups** | At-least-once, bounded redelivery, dead letters | Shard assignment across a group's consumers |
 | **Message ordering** | Per shard | Configurable cross-shard |
 | **Subscriber isolation** | Yes | — |
@@ -712,9 +718,11 @@ assert!(fast_count >= expected_count);
 - Application can handle duplicates (idempotent processing)
 - Durability matters more than latency
 
-**Exactly-once is not implemented**, and is not on the near roadmap. If
-duplicates are unacceptable — billing, accounting — the deduplication has to be
-in the application, keyed on something the record carries.
+**Exactly-once delivery is not implemented.** An idempotent producer keeps a
+publish retry from duplicating the record; a consumer's redelivery is still
+at-least-once. If duplicates are unacceptable on the consuming side — billing,
+accounting — the deduplication has to be in the application, keyed on
+something the record carries.
 
 ### Cache Usage Patterns
 

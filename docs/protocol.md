@@ -79,6 +79,35 @@ Message schemas below are shown in pseudo-struct notation for readability; on th
 { "type": "publish_batch", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payloads": ["<base64>", ...], "ack": "<none|per_batch>" }
 ```
 
+### ProducerInit
+```
+{ "type": "producer_init", "request_id": <u64> }
+```
+Asks the broker for a producer id. Only sent to a broker that advertised
+`FEATURE_IDEMPOTENT_PRODUCER`; see [idempotent producers](#idempotent-producers).
+
+### ProducerInitOk (server -> client)
+```
+{ "type": "producer_init_ok", "request_id": <u64>, "producer_id": <u64> }
+```
+
+### PublishIdempotent
+```
+{ "type": "publish_idempotent", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payloads": ["<base64>", ...], "key": "<base64, optional>", "request_id": <u64>, "producer_id": <u64>, "sequence": <u64> }
+```
+A batch the broker appends once however many times it arrives. Always
+acknowledged, with `publish_ok` or `publish_refused`. `sequence` counts this
+producer's batches on the shard from zero, one per batch whatever its size.
+
+### PublishRefused (server -> client)
+```
+{ "type": "publish_refused", "request_id": <u64>, "reason": <reason>, "message": "<string>" }
+```
+Where `reason` is one of `{"sequence_gap": {"expected": <u64>}}`,
+`"unknown_producer"`, `"sequence_expired"`, or
+`{"not_leader": {"node_id": "<string>", "addr": "<host:port, optional>"}}`.
+Only ever sent in answer to a `publish_idempotent`.
+
 ### Subscribe
 ```
 { "type": "subscribe", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "start": <"latest"|"earliest"|{"offset": <number>}> }
@@ -421,6 +450,45 @@ stream.
   behind. With event offsets negotiated a client can *detect* that loss, because
   a gap between consecutive delivered offsets is exactly a drop.
 
+### Idempotent producers
+
+A publish whose acknowledgement never arrived is ambiguous: the record may be
+on the broker, and re-sending it would land it twice. `publish_idempotent`
+removes the ambiguity. A producer takes an id from the broker
+(`producer_init`), numbers its batches on each shard from zero, and sends the
+number with each batch. The shard's leader keeps, per producer, the next
+sequence it expects and the outcome of the last 64 it appended:
+
+| The batch's sequence is | The leader |
+| --- | --- |
+| the next expected | appends it, remembers it, answers `publish_ok` |
+| one it remembers | answers `publish_ok` and appends nothing — the same answer the first send got, including the `Quorum` wait on the same offsets |
+| past the next expected | refuses with `sequence_gap` naming the expected one; what was skipped is not here, and continuing would leave a hole the producer believes is filled |
+| older than it remembers | refuses with `sequence_expired`; whether it was appended cannot be told |
+| from a producer it has never seen, and not zero | refuses with `unknown_producer`; there is nothing to check against, and the producer must start again under a new id |
+
+So a producer re-sends a batch it got no answer for under the *same* sequence,
+advances only on `publish_ok`, and stops on any refusal but `not_leader`.
+
+**Only the leader takes them.** A `publish_idempotent` that arrives at a broker
+that does not lead the shard is refused with `not_leader`, naming the leader
+and where clients reach it, rather than forwarded: forwarded, one batch could
+reach the leader from two ingress brokers with nothing to tell the second
+from the first. A client sends it to the broker named.
+
+**The sequences live in the leader's memory.** They survive everything but the
+leader: a new leader knows no producers, answers `unknown_producer`, and the
+producer starts again under a new id. A batch that was in flight across a
+failover is therefore reported as a refusal rather than either landed or
+dropped silently — the re-send is safe while the leader that took the first
+copy is the one answering, which is the common case, and honest about the
+one it is not. Persisting sequences through replication is the follow-up that
+would close that case.
+
+The id is 64 random bits, chosen by the broker, so producers from different
+brokers and across a restart cannot collide with each other's sequences. A
+producer is forgotten once it is the coldest of 4096 on a shard.
+
 ## Protocol Flows (v1)
 
 ### 1) Publish/Subscribe flow (handshake + control + events)
@@ -625,6 +693,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0040` | `FEATURE_CACHE_WATCH` | The broker accepts `cache_watch` |
 | `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
 | `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
+| `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent`, and answers the latter's refusals as `publish_refused` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:

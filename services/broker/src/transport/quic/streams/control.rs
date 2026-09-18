@@ -340,7 +340,12 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                         // with no routing snapshot answers 1,
                                         // which is the truth for a single-node
                                         // deployment rather than a guess.
-                                        | felix_wire::FEATURE_STREAM_SHARDS,
+                                        | felix_wire::FEATURE_STREAM_SHARDS
+                                        // Advertised unconditionally: the
+                                        // sequences live with the shard's
+                                        // leader, which every broker is for
+                                        // the shards it leads.
+                                        | felix_wire::FEATURE_IDEMPOTENT_PRODUCER,
                                 ),
                             },
                             None => Message::Ok,
@@ -474,6 +479,96 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     auth_ctx
                         .as_ref()
                         .map_or_else(String::new, |ctx| ctx.token.clone()),
+                    None,
+                )
+                .await?;
+            }
+            Message::PublishIdempotent {
+                tenant_id,
+                namespace,
+                stream,
+                payloads,
+                key,
+                request_id,
+                producer_id,
+                sequence,
+            } => {
+                if !authorize_stream(
+                    auth_ctx.as_ref(),
+                    &tenant_id,
+                    Action::StreamPublish,
+                    &namespace,
+                    &stream,
+                    Some(request_id),
+                    &authz_ctx,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                handle_publish_batch_message(
+                    &broker,
+                    &publish_ctx,
+                    &mut stream_cache,
+                    &mut stream_cache_key,
+                    throttled,
+                    config.ack_on_commit,
+                    AckEncoding::Idempotent,
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    &ack_waiters,
+                    &ack_waiter_tx,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payloads,
+                    key,
+                    Some(request_id),
+                    // Always acknowledged: a producer that never learns the
+                    // answer cannot know what to send next.
+                    Some(felix_wire::AckMode::PerBatch),
+                    sample,
+                    auth_ctx
+                        .as_ref()
+                        .map_or_else(String::new, |ctx| ctx.token.clone()),
+                    Some((producer_id, sequence)),
+                )
+                .await?;
+            }
+            Message::ProducerInit { request_id } => {
+                // Authenticated like everything else on this stream. The id
+                // itself carries no authority: a batch under it is authorised
+                // against the stream it names, like any other.
+                if auth_ctx.is_none() {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "not authenticated",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::ProducerInitOk {
+                            request_id,
+                            producer_id: broker.new_producer_id(),
+                        }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
                 )
                 .await?;
             }
@@ -1717,6 +1812,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::EventStreamHello { .. }
             | Message::PublishOk { .. }
             | Message::PublishError { .. }
+            | Message::PublishRefused { .. }
+            | Message::ProducerInitOk { .. }
             | Message::AuthOk { .. }
             | Message::TopologyView { .. }
             | Message::StreamShardsView { .. }

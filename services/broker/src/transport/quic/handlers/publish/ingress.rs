@@ -25,6 +25,15 @@ pub(crate) enum PublishTarget {
         /// and so nothing to wait for.
         shard: Option<crate::shard_watch::ShardKey>,
     },
+    /// This broker leads the shard and the batch names its producer: appended
+    /// once however many times it arrives. Never forwarded, because only the
+    /// leader holds the sequences a re-send is checked against.
+    Idempotent {
+        handle: StreamHandle,
+        shard: Option<crate::shard_watch::ShardKey>,
+        producer_id: u64,
+        sequence: u64,
+    },
     /// Another broker owns the shard. The batch is sent there and its answer
     /// relayed, from the same worker a local write would have used, so the ack
     /// path is identical either way.
@@ -120,7 +129,7 @@ pub(crate) async fn enqueue_publish(
     mut cancel: Option<watch::Receiver<bool>>,
 ) -> Result<bool> {
     let worker_index = match &job.target {
-        PublishTarget::Resolved { handle, .. } => {
+        PublishTarget::Resolved { handle, .. } | PublishTarget::Idempotent { handle, .. } => {
             handle.id() as usize % publish_ctx.worker_count.max(1)
         }
         // Hashed by name, because there is no local handle to hash. Same

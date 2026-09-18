@@ -90,9 +90,15 @@ When the broker in use goes away:
   the record twice — the broker cannot tell, because only your application holds
   an identity that would make deduplication possible. The name is the contract.
 
-There is no third option that is both. A publish that fails after the broker
-wrote it and before the acknowledgement arrived is genuinely ambiguous, and the
-choice of what to do about it is the application's.
+**`idempotent_producer` reconnects, resends, and does not duplicate.** The
+producer takes an id from the broker and numbers its batches; a batch re-sent
+under the same number is answered from what the leader remembers rather than
+appended again, so the ambiguous publish above stops being ambiguous. A batch
+for a shard led elsewhere is refused with the leader's address and the
+producer follows it. The one case it does not cover is a leader change while
+a batch is in flight: the new leader knows no producers and says so, and the
+producer ends on that stream with a typed refusal rather than guessing. See
+`docs/protocol.md`, "Idempotent producers".
 
 **A single-shard subscription does not survive a failover.** It is bound to the
 connection it was created on. Record `Event.offset` as you go and resubscribe

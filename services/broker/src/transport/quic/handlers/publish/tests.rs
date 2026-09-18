@@ -1908,6 +1908,7 @@ async fn handle_publish_batch_missing_request_id_returns_error() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("missing request id");
@@ -1959,6 +1960,7 @@ async fn handle_publish_batch_stream_not_found_sends_error() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("stream missing path");
@@ -2030,6 +2032,7 @@ async fn handle_publish_batch_enqueue_full_reports_error() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("enqueue full path");
@@ -2100,6 +2103,7 @@ async fn handle_publish_batch_enqueue_ok_sends_ack() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish batch");
@@ -2167,6 +2171,7 @@ async fn handle_publish_batch_message_drop_when_queue_full_and_ack_none() {
         Some(felix_wire::AckMode::None),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -2229,6 +2234,7 @@ async fn handle_publish_batch_message_enqueue_error_reports_publish_error() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -2299,6 +2305,7 @@ async fn handle_publish_batch_message_ack_on_commit_sends_waiter_message() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -2350,6 +2357,7 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("throttled path");
@@ -2405,6 +2413,7 @@ async fn handle_publish_batch_message_throttled_without_request_id_sends_error()
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("throttled path");
@@ -2471,6 +2480,7 @@ async fn handle_publish_batch_message_ack_waiters_exhausted() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -2552,6 +2562,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -2623,6 +2634,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         Some(felix_wire::AckMode::PerBatch),
         false,
         String::new(),
+        None,
     )
     .await
     .expect("publish");
@@ -3135,5 +3147,82 @@ async fn a_forwarded_publish_is_stamped_with_the_shard_it_was_routed_for() {
             "the batch must name the shard the route was resolved for",
         ),
         _ => panic!("expected a forward target"),
+    }
+}
+
+/// A refusal of an idempotent publish carries its reason; every other
+/// encoding, and every other error, is the prose it always was.
+mod idempotent_acks {
+    use super::*;
+    use felix_wire::PublishRefusalReason;
+
+    #[test]
+    fn a_typed_refusal_is_answered_as_publish_refused() {
+        let err = anyhow::Error::from(felix_broker::BrokerError::SequenceGap { expected: 4 });
+        match AckEncoding::Idempotent.refuse(3, &err) {
+            Outgoing::Message(Message::PublishRefused {
+                request_id: 3,
+                reason: PublishRefusalReason::SequenceGap { expected: 4 },
+                ..
+            }) => {}
+            other => panic!("expected a typed refusal, got {other:?}"),
+        }
+        let err =
+            anyhow::Error::from(felix_broker::BrokerError::UnknownProducer { producer_id: 1 });
+        assert!(matches!(
+            AckEncoding::Idempotent.refuse(3, &err),
+            Outgoing::Message(Message::PublishRefused {
+                reason: PublishRefusalReason::UnknownProducer,
+                ..
+            })
+        ));
+        let err = anyhow::Error::from(felix_broker::BrokerError::SequenceExpired { sequence: 0 });
+        assert!(matches!(
+            AckEncoding::Idempotent.refuse(3, &err),
+            Outgoing::Message(Message::PublishRefused {
+                reason: PublishRefusalReason::SequenceExpired,
+                ..
+            })
+        ));
+    }
+
+    /// An error with no producer meaning stays a `publish_error`, so a
+    /// producer treats it as a failure to get an answer and re-sends.
+    #[test]
+    fn an_untyped_error_stays_a_publish_error() {
+        let err = anyhow::anyhow!("lease lapsed before the record could be committed");
+        assert!(matches!(
+            AckEncoding::Idempotent.refuse(3, &err),
+            Outgoing::Message(Message::PublishError { request_id: 3, .. })
+        ));
+    }
+
+    /// The JSON and binary encodings never emit `publish_refused`, whatever
+    /// the error: a client that did not send `publish_idempotent` did not
+    /// say it could decode one.
+    #[test]
+    fn plain_publishes_are_never_answered_with_a_refusal() {
+        let err = anyhow::Error::from(felix_broker::BrokerError::SequenceGap { expected: 4 });
+        assert!(matches!(
+            AckEncoding::Json.refuse(3, &err),
+            Outgoing::Message(Message::PublishError { request_id: 3, .. })
+        ));
+        assert!(matches!(
+            AckEncoding::Binary.refuse(3, &err),
+            Outgoing::PublishAck {
+                request_id: 3,
+                error: Some(_)
+            }
+        ));
+    }
+
+    /// Success is a plain `publish_ok` in the idempotent encoding, the same
+    /// frame the producer already reads for an ordinary batch.
+    #[test]
+    fn success_is_a_plain_publish_ok() {
+        assert!(matches!(
+            AckEncoding::Idempotent.ok(9),
+            Outgoing::Message(Message::PublishOk { request_id: 9 })
+        ));
     }
 }

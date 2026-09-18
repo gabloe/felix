@@ -355,7 +355,22 @@ Stated because a guarantee without its failure model is a slogan.
   A broker suspended *between* the commit-time lease check and its write
   reaching disk is a residual window bounded by the margin. The margin is a
   choice rather than a proof, and it is the one clock-shaped assumption left.
-- **No exactly-once delivery**, and no transactions.
+- **Idempotent producers, not exactly-once delivery.** A producer that takes an
+  id from the broker and numbers its batches can re-send a batch whose
+  acknowledgement never arrived and have it land once: the shard's leader
+  answers a sequence it already holds from memory rather than appending it.
+  That closes the ambiguous-outcome gap on the publish side, while the leader
+  that took the first copy is the one answering; a new leader knows no
+  producers and says so, so a batch in flight across a failover is reported
+  rather than silently landed or dropped. The consumer side is unchanged: a
+  subscriber can still see a record twice on redelivery, and there are no
+  transactions. See [`docs/protocol.md`](protocol.md), "Idempotent producers".
+
+  > `a_re_sent_batch_lands_once`, `a_non_leader_names_the_leader`, and
+  > `a_gap_is_refused_with_the_expected_sequence` in
+  > `crates/felix-cluster/tests/idempotent.rs`, on a `Quorum` stream replicated
+  > three ways; `racing_re_sends_append_once` in `crates/felix-broker` for the
+  > two re-sends that arrive at once.
 - **No cross-region ordering or routing guarantees.**
 - **A group is bound to the shard the caller names.** Consuming a whole
   multi-shard stream through a group means polling each shard's group
