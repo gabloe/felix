@@ -56,11 +56,81 @@ impl PeerRequestHandler for UnavailableHandler {
     }
 }
 
+/// How many inbound connections are open, in total and per source address.
+///
+/// The accept loop had no bound at all: QUIC caps streams per connection and
+/// the decoder caps a frame, but nothing capped connections, so one caller
+/// could make this broker hold 64 MiB × 1024 streams × as many connections as
+/// it opened (#504).
+///
+/// Per-source as well as total, because the total alone does not stop one peer
+/// consuming the whole allowance — and a peer looping on a reconnect bug is
+/// likelier than a hostile one, and starves the rest of the cluster just the
+/// same.
+#[derive(Debug, Default)]
+struct Admitted {
+    total: usize,
+    per_source: std::collections::HashMap<std::net::IpAddr, usize>,
+}
+
+/// Holds a connection's place in the count, and gives it back on drop.
+///
+/// A guard rather than a decrement at the end of `serve_connection`: that
+/// function has several exits and a task can be cancelled between any of them,
+/// and a count that leaks is a broker that stops accepting peers after an
+/// uptime nobody can correlate with anything.
+struct Admission {
+    counts: Arc<parking_lot::Mutex<Admitted>>,
+    source: std::net::IpAddr,
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock();
+        counts.total = counts.total.saturating_sub(1);
+        if let Some(count) = counts.per_source.get_mut(&self.source) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                // Or the map grows by one entry per address ever seen, which is
+                // its own slow exhaustion.
+                counts.per_source.remove(&self.source);
+            }
+        }
+    }
+}
+
+impl Admitted {
+    /// Take a place for `source`, or say which limit refused it.
+    fn admit(
+        counts: &Arc<parking_lot::Mutex<Self>>,
+        source: std::net::IpAddr,
+        max_total: usize,
+        max_per_source: usize,
+    ) -> Result<Admission, &'static str> {
+        let mut guard = counts.lock();
+        if guard.total >= max_total {
+            return Err("total");
+        }
+        let for_source = guard.per_source.entry(source).or_insert(0);
+        if *for_source >= max_per_source {
+            return Err("per_source");
+        }
+        *for_source += 1;
+        guard.total += 1;
+        Ok(Admission {
+            counts: Arc::clone(counts),
+            source,
+        })
+    }
+}
+
 /// The broker-internal listener.
 pub struct PeerServer {
     server: QuicServer,
     node_id: String,
     handler: Arc<dyn PeerRequestHandler>,
+    max_inbound_connections: usize,
+    max_inbound_per_source: usize,
 }
 
 impl PeerServer {
@@ -76,6 +146,8 @@ impl PeerServer {
             server,
             node_id,
             handler,
+            max_inbound_connections: config.max_inbound_connections,
+            max_inbound_per_source: config.max_inbound_per_source,
         })
     }
 
@@ -85,6 +157,7 @@ impl PeerServer {
 
     /// Accept peer connections until cancelled.
     pub async fn serve(self, shutdown: CancellationToken) {
+        let counts: Arc<parking_lot::Mutex<Admitted>> = Arc::default();
         loop {
             let connection = tokio::select! {
                 _ = shutdown.cancelled() => break,
@@ -99,6 +172,33 @@ impl PeerServer {
                         continue;
                     }
                 },
+            };
+
+            // Admission before anything else is spawned for it. A connection
+            // refused here has cost one handshake; one accepted can cost a
+            // thousand streams of buffered frames, and the point is to decide
+            // before that.
+            //
+            // Refused rather than queued: a peer told no can back off, where
+            // one left waiting cannot tell a busy broker from a stuck one.
+            let source = connection.info().peer_addr.ip();
+            let admission = match Admitted::admit(
+                &counts,
+                source,
+                self.max_inbound_connections,
+                self.max_inbound_per_source,
+            ) {
+                Ok(admission) => admission,
+                Err(limit) => {
+                    tracing::warn!(
+                        peer = %connection.info().peer_addr,
+                        limit,
+                        "refusing an internal connection: at the inbound limit",
+                    );
+                    metrics::record_inbound_rejected(limit);
+                    connection.close(2u32.into(), b"internal connection limit reached");
+                    continue;
+                }
             };
 
             // A backstop, not the enforcement: TLS has already refused any
@@ -130,6 +230,9 @@ impl PeerServer {
             let shutdown = shutdown.clone();
             let served = connection.clone();
             connection.spawn_pump(async move {
+                // The guard lives as long as the connection is served, and
+                // gives its place back however that ends.
+                let _admission = admission;
                 serve_connection(served, node_id, handler, shutdown).await;
             });
         }

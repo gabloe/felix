@@ -38,6 +38,22 @@ const DEFAULT_STREAMS_PER_CONN: usize = 4;
 /// forwarded publish for as long as the timeout allows.
 const DEFAULT_MAX_INFLIGHT_PER_PEER: usize = 1024;
 
+/// Inbound peer connections this broker will hold at once.
+///
+/// A peer opens `conns_per_peer` (1 by default), so this is room for a cluster
+/// far larger than any Felix has been run at, and still a bound: without one, a
+/// single caller can make this broker hold 64 MiB × 1024 streams × however many
+/// connections it cares to open (#504).
+const DEFAULT_MAX_INBOUND_CONNECTIONS: usize = 512;
+
+/// Inbound connections from any one address.
+///
+/// The total alone does not stop one peer consuming the whole allowance, which
+/// is the case that matters: a peer looping on a reconnect bug is more likely
+/// than a hostile one, and it starves every other broker in the cluster before
+/// anyone notices.
+const DEFAULT_MAX_INBOUND_PER_SOURCE: usize = 16;
+
 /// How long a forwarded request waits for its terminal response.
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 5_000;
 
@@ -84,6 +100,10 @@ pub struct PeerTransportConfig {
     pub conns_per_peer: usize,
     pub streams_per_conn: usize,
     pub max_inflight_per_peer: usize,
+    /// Inbound connections held at once, across all peers.
+    pub max_inbound_connections: usize,
+    /// Inbound connections held at once from any one address.
+    pub max_inbound_per_source: usize,
     #[serde(serialize_with = "as_millis")]
     pub request_timeout: Duration,
     #[serde(serialize_with = "as_millis")]
@@ -117,6 +137,8 @@ impl Default for PeerTransportConfig {
             conns_per_peer: DEFAULT_CONNS_PER_PEER,
             streams_per_conn: DEFAULT_STREAMS_PER_CONN,
             max_inflight_per_peer: DEFAULT_MAX_INFLIGHT_PER_PEER,
+            max_inbound_connections: DEFAULT_MAX_INBOUND_CONNECTIONS,
+            max_inbound_per_source: DEFAULT_MAX_INBOUND_PER_SOURCE,
             request_timeout: Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS),
             idle_timeout: Duration::from_millis(DEFAULT_IDLE_TIMEOUT_MS),
             reconnect_base: Duration::from_millis(DEFAULT_RECONNECT_BASE_MS),
@@ -166,6 +188,13 @@ impl PeerTransportConfig {
         if let Some(value) = env_usize("FELIX_INTERNAL_MAX_INFLIGHT").filter(|v| *v > 0) {
             config.max_inflight_per_peer = value;
         }
+        if let Some(value) = env_usize("FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS").filter(|v| *v > 0)
+        {
+            config.max_inbound_connections = value;
+        }
+        if let Some(value) = env_usize("FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE").filter(|v| *v > 0) {
+            config.max_inbound_per_source = value;
+        }
         if let Some(value) = env_millis("FELIX_INTERNAL_REQUEST_TIMEOUT_MS") {
             config.request_timeout = value;
         }
@@ -199,6 +228,17 @@ impl PeerTransportConfig {
                     "FELIX_INTERNAL_BIND ({}) and FELIX_QUIC_BIND ({client_bind}) share a port; \
                      the internal and client-facing listeners must be separate",
                     self.bind
+                ),
+            ));
+        }
+        if self.max_inbound_per_source > self.max_inbound_connections {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE ({}) exceeds \
+                     FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS ({}); the per-source \
+                     limit would never be the one that applies",
+                    self.max_inbound_per_source, self.max_inbound_connections
                 ),
             ));
         }

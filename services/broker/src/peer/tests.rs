@@ -751,3 +751,96 @@ async fn a_frame_kind_this_broker_does_not_know_is_refused_without_ending_the_st
     connection.close(0u32.into(), b"done");
     listener.stop().await;
 }
+
+/// **The listener refuses past its inbound limit rather than accepting
+/// everything.**
+///
+/// QUIC caps streams per connection and the decoder caps a frame, but nothing
+/// capped *connections* — so one caller could make a broker hold 64 MiB × 1024
+/// streams × however many it opened (#504). The cap survives peer
+/// authentication too: an authenticated peer looping on a reconnect bug is
+/// still unbounded, and is likelier than a hostile one.
+#[tokio::test]
+async fn the_listener_refuses_past_its_inbound_connection_limit() {
+    use felix_transport::{QuicClient, TransportConfig};
+
+    let mut config = config();
+    config.max_inbound_connections = 2;
+    config.max_inbound_per_source = 2;
+    let listener = Listener::start_on(PEER, Arc::new(CountingHandler::default()), config).await;
+
+    let client = QuicClient::bind(
+        "127.0.0.1:0".parse().expect("addr"),
+        crate::peer::tls::client_config().expect("client config"),
+        TransportConfig::default(),
+    )
+    .expect("bind");
+
+    // Two are served, and stay open.
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        let connection = client
+            .connect(listener.addr, "felix-internal")
+            .await
+            .expect("within the limit");
+        // Exercised, not merely established: a connection the listener has not
+        // yet counted proves nothing about the limit.
+        let (mut send, mut recv) = connection.open_bi().await.expect("open");
+        crate::peer::codec::write_frame(&mut send, &forward())
+            .await
+            .expect("write");
+        crate::peer::codec::read_frame(&mut recv)
+            .await
+            .expect("read");
+        held.push(connection);
+    }
+
+    // The third is refused. The handshake succeeds — the listener closes it
+    // after, which is what a QUIC peer at its limit can do — so the refusal
+    // shows up on first use rather than on connect.
+    let refused = client.connect(listener.addr, "felix-internal").await;
+    let over_limit = match refused {
+        Err(_) => true,
+        Ok(connection) => {
+            let opened = connection.open_bi().await;
+            match opened {
+                Err(_) => true,
+                Ok((mut send, mut recv)) => {
+                    let wrote = crate::peer::codec::write_frame(&mut send, &forward()).await;
+                    wrote.is_err()
+                        || !matches!(
+                            crate::peer::codec::read_frame(&mut recv).await,
+                            Ok(crate::peer::codec::Incoming::Message(_))
+                        )
+                }
+            }
+        }
+    };
+    assert!(
+        over_limit,
+        "a third connection was served against a limit of two, so the cap does \
+         not bound anything",
+    );
+
+    // And dropping one gives its place back, or the broker stops accepting
+    // peers after an uptime nobody can correlate with anything.
+    held.pop();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let after_release = client
+        .connect(listener.addr, "felix-internal")
+        .await
+        .expect("connect after a release");
+    let (mut send, mut recv) = after_release.open_bi().await.expect("open");
+    crate::peer::codec::write_frame(&mut send, &forward())
+        .await
+        .expect("write");
+    assert!(
+        matches!(
+            crate::peer::codec::read_frame(&mut recv).await,
+            Ok(crate::peer::codec::Incoming::Message(_))
+        ),
+        "a released place was never given back",
+    );
+
+    listener.stop().await;
+}
