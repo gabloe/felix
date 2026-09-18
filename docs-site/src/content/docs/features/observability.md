@@ -141,6 +141,26 @@ rebuild is the right move.
 
 A healthy broker answers `[]`, not 404.
 
+### Bootstrap attempts
+
+`felix_bootstrap_attempts_total{outcome,reason}` covers the day-0 credential.
+Bootstrap is presented once per tenant, by an operator, and never again — so a
+*rejected* attempt is either a misconfigured deploy or someone guessing, and a
+burst of `already_initialized` refusals against live tenants is what a leaked
+token looks like.
+
+```promql
+# Anything but the two normal outcomes is worth waking for.
+rate(felix_bootstrap_attempts_total{outcome="rejected"}[5m])
+
+# A leaked token being tried against tenants that already exist.
+rate(felix_bootstrap_attempts_total{reason="already_initialized"}[5m])
+```
+
+`reason` is a small closed set — `missing_token`, `malformed_token`,
+`invalid_token`, `no_token_configured`, `already_initialized`, `ok` — so it is
+safe to group by. The token itself is never logged, including a near miss.
+
 **Example queries**:
 
 ```promql

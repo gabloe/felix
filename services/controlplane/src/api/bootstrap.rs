@@ -60,7 +60,7 @@ pub async fn initialize(
         return Err(api_not_enabled("bootstrap not enabled"));
     }
 
-    ensure_bootstrap_authorized(&state, &headers)?;
+    ensure_bootstrap_authorized(&state, &headers, &tenant_id)?;
 
     if body.display_name.trim().is_empty() {
         return Err(api_validation_error("display_name is required"));
@@ -177,6 +177,16 @@ pub async fn initialize(
     {
         Ok(keys) => keys,
         Err(crate::store::StoreError::Conflict(_)) => {
+            // Not a failure: an already-initialized tenant refusing a second
+            // bootstrap is the control working. Counted so a burst of them is
+            // visible, since repeated attempts against live tenants is what a
+            // leaked token looks like.
+            tracing::info!(
+                tenant_id = %tenant_id,
+                "bootstrap refused: tenant already initialized",
+            );
+            metrics::counter!(ATTEMPTS, "outcome" => "refused", "reason" => "already_initialized")
+                .increment(1);
             return Err(api_conflict(
                 "already_initialized",
                 "tenant already initialized",
@@ -184,6 +194,18 @@ pub async fn initialize(
         }
         Err(err) => return Err(api_internal("failed to bootstrap tenant auth", &err)),
     };
+
+    // A tenant is initialized exactly once, so this line is the record that it
+    // happened, who it granted, and when — the audit question an operator asks
+    // months later is "who has admin on this tenant and how did they get it".
+    tracing::info!(
+        tenant_id = %tenant_id,
+        kid = %keys.current.kid,
+        admin_principals = body.initial_admin_principals.len(),
+        issuers = body.idp_issuers.len(),
+        "tenant initialized by bootstrap",
+    );
+    metrics::counter!(ATTEMPTS, "outcome" => "initialized", "reason" => "ok").increment(1);
 
     Ok(Json(BootstrapInitializeResponse {
         tenant_id: tenant_id.clone(),
@@ -201,15 +223,27 @@ pub async fn initialize(
 /// is dropped once the deploy settles. Transport-level client authentication is
 /// enforced *before* this runs when bootstrap mTLS is configured — see
 /// [`crate::tls`] — which is the second factor the token alone does not give.
-fn ensure_bootstrap_authorized(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+fn ensure_bootstrap_authorized(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_id: &str,
+) -> Result<(), ApiError> {
     let token = match headers.get("X-Felix-Bootstrap-Token") {
-        Some(value) => value
-            .to_str()
-            .map_err(|_| api_unauthorized("invalid bootstrap token"))?,
-        None => return Err(api_unauthorized("missing bootstrap token")),
+        Some(value) => match value.to_str() {
+            Ok(token) => token,
+            Err(_) => {
+                audit_rejected(tenant_id, "malformed_token");
+                return Err(api_unauthorized("invalid bootstrap token"));
+            }
+        },
+        None => {
+            audit_rejected(tenant_id, "missing_token");
+            return Err(api_unauthorized("missing bootstrap token"));
+        }
     };
 
     if state.bootstrap_tokens.is_empty() {
+        audit_rejected(tenant_id, "no_token_configured");
         return Err(api_internal_message("bootstrap token missing"));
     }
 
@@ -220,10 +254,34 @@ fn ensure_bootstrap_authorized(state: &AppState, headers: &HeaderMap) -> Result<
         matched |= constant_time_eq(token.as_bytes(), expected.as_bytes());
     }
     if !matched {
+        audit_rejected(tenant_id, "invalid_token");
         return Err(api_unauthorized("invalid bootstrap token"));
     }
 
     Ok(())
+}
+
+/// The counter to alert on.
+///
+/// Bootstrap is the day-0 credential: it is presented once per tenant, by an
+/// operator, and never again. A rejected attempt is therefore either a
+/// misconfigured deploy or someone guessing, and both are worth waking for —
+/// which nothing could do before, because this endpoint logged nothing at all
+/// and emitted no metric.
+const ATTEMPTS: &str = "felix_bootstrap_attempts_total";
+
+/// Rejected, with why — never with the token that was offered.
+///
+/// The reason is a small closed set rather than the error text so a dashboard
+/// can group it, and a near-miss token is not written to a log that is shipped
+/// somewhere less protected than the token is.
+fn audit_rejected(tenant_id: &str, reason: &'static str) {
+    tracing::warn!(
+        tenant_id = %tenant_id,
+        reason,
+        "bootstrap attempt rejected",
+    );
+    metrics::counter!(ATTEMPTS, "outcome" => "rejected", "reason" => reason).increment(1);
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
