@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789764027617,
+  "lastUpdate": 1789765270929,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11544,6 +11544,58 @@ window.BENCHMARK_DATA = {
             "range": "27913.27",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 536651.20\nmean: 535901.91\nstdev: 27913.27\ncv: 5.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92c48672c1b2285cb8f77abd3a373cabe617b4fc",
+          "message": "perf(azure): sample broker CPU in a way that is true (#543)\n\nThe old sampler ran `top -bn4` mid-run through `az vm run-command`, which takes\nseconds to reach a VM -- often landing after a ~26s case had already finished,\nand reporting an idle machine. In the two-broker session it recorded the *only*\nbroker doing any writing, 14.3M appends and 58.9 GB, as 100% idle. A wrong\nnumber is worse than no number: that reading is what made the broker look\nuninvolved while it was the whole bottleneck.\n\nNow the sampler is armed on every broker *before* the load starts, differences\n/proc/stat at 1 Hz into a file, and afterwards averages only the samples that\nwere actually busy, so the idle head and tail stay out of the mean. This is the\nmethod that produced the clean 50-51% reading behind #535.\n\nIt also reports **softirq**, which `top`'s summary line does not separate and\nwhich is ~10% of a loaded broker -- QUIC/UDP packet processing and AEAD. That\nis exactly the term that distinguishes \"CPU bound\" from \"waiting on the disk\",\nwhich is the question the next matrix run exists to answer.\n\nVerified by generating the remote scripts and executing them against\n/proc/stat-shaped input rather than eyeballing the escaping: the sampler writes\nthe seven expected fields, and the analysis returns\n`busy=79% us=40 sy=25 si=13 wa=1`.\n\nPart of #537.",
+          "timestamp": "2026-09-18T13:54:41-07:00",
+          "tree_id": "411de6454de55f9342cebf62dae2e8a703539d48",
+          "url": "https://github.com/gabloe/felix/commit/92c48672c1b2285cb8f77abd3a373cabe617b4fc"
+        },
+        "date": 1789765270077,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 225488.3,
+            "range": "2328.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225488.30\nmean: 224834.92\nstdev: 2328.48\ncv: 1.04%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 225488.3,
+            "range": "2328.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 225488.30\nmean: 224834.92\nstdev: 2328.48\ncv: 1.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54992.44,
+            "range": "1084.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54992.44\nmean: 54625.61\nstdev: 1084.96\ncv: 1.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 549924.38,
+            "range": "10849.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 549924.38\nmean: 546256.13\nstdev: 10849.61\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
