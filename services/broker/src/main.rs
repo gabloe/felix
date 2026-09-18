@@ -57,6 +57,17 @@ use tokio_util::task::TaskTracker;
 // and runs multiple background tasks concurrently.
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `--print-config` before anything is bound, so it can be run against a
+    // live deployment's environment without a port conflict.
+    //
+    // It doubles as a pre-flight check: the config is loaded the same way
+    // startup loads it, so a file that will not parse or a key the broker does
+    // not know fails here — before a rollout — with the same message it would
+    // have produced on the node.
+    if std::env::args().any(|arg| arg == "--print-config") {
+        return print_config();
+    }
+
     // Default shutdown trigger: SIGTERM or SIGINT. SIGTERM is what Kubernetes,
     // systemd, and `docker stop` actually send; SIGINT only covers an interactive
     // Ctrl-C. Evaluated as an argument, so the handlers are installed before
@@ -65,6 +76,30 @@ async fn main() -> Result<()> {
     // `run_with_shutdown` is written so we can reuse the same startup logic
     // in tests or alternative hosting environments by passing a different future.
     run_with_shutdown(lifecycle::termination_signal()).await
+}
+
+/// Print the configuration this broker would run with, and stop.
+///
+/// The question an operator actually has is "what is this process running
+/// with", and until now the only answer was to read the environment, the config
+/// file, and the defaults in the source, then combine them by hand.
+///
+/// YAML because that is what the config file is, so the shape is one an
+/// operator already recognises. The credential is redacted: this output exists
+/// to be pasted into an issue.
+///
+/// Unrecognised variables go to stderr rather than into the document, so the
+/// warnings survive a `> config.yml` and the document stays a document.
+fn print_config() -> Result<()> {
+    for warning in felix_common::env_registry::unrecognised_warnings() {
+        eprintln!("warning: {warning}");
+    }
+    let config = config::BrokerConfig::from_env_or_yaml().context("load broker configuration")?;
+    println!(
+        "{}",
+        serde_yaml_ng::to_string(&config).context("render the configuration")?
+    );
+    Ok(())
 }
 
 /// Start the broker and run until the provided `shutdown` future resolves.
