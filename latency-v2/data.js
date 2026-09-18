@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789747763062,
+  "lastUpdate": 1789749184492,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14256,6 +14256,72 @@ window.BENCHMARK_DATA = {
             "range": "526.29",
             "unit": "us",
             "extra": "trials: 5\nmedian: 437.00\nmean: 777.20\nstdev: 526.29\ncv: 67.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4767a8859695d7cf9ba439f9af209123e1eae936",
+          "message": "release: 0.4.0 (#531)\n\nWorkspace and every internal path dependency move from `0.4.0-preview` to\n`0.4.0`, with the Helm chart's appVersion. The chart's own version stays at\n0.1.0: it ships for the first time in this release, so there is no published\nversion to bump from.\n\nThe CHANGELOG needed more than a header move. `Unreleased` documented about\nten changes; there are 90 commits since v0.3.1, 54 of them substantive, and\nthe missing ones included the entire Python client, container images, refresh\ntokens, seven replication and storage performance changes, and around twenty\ncorrectness fixes -- four separate cross-host clock bugs among them. Written\nup as a full release entry, with the existing prose kept as it stood.\n\nAdds a Known limitations section naming #527, #130, #529, #524 and the\nRF=1-only performance figures, so the release ships its gaps in writing.\n\nAlso fixes two link refs: `Unreleased` compared against v0.3.0 despite v0.3.1\nexisting, and v0.3.1 had no link at all.\n\nSECURITY.md moves the supported line to 0.4.x and makes the preview row\ngeneric, since `0.4.0-preview` no longer names anything.",
+          "timestamp": "2026-09-18T09:30:24-07:00",
+          "tree_id": "81a64916b9672e1c552fd99f66e96b4ede51056b",
+          "url": "https://github.com/gabloe/felix/commit/4767a8859695d7cf9ba439f9af209123e1eae936"
+        },
+        "date": 1789749181597,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 161.00\nstdev: 0.71\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "3.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 207.80\nstdev: 3.42\ncv: 1.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "135.56",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 299.20\nstdev: 135.56\ncv: 45.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 200.20\nstdev: 0.84\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 412,
+            "range": "8.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 412.00\nmean: 410.60\nstdev: 8.44\ncv: 2.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1157,
+            "range": "605.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1157.00\nmean: 1184.80\nstdev: 605.13\ncv: 51.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
