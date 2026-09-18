@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789689012353,
+  "lastUpdate": 1789689960758,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13068,6 +13068,72 @@ window.BENCHMARK_DATA = {
             "range": "22.65",
             "unit": "us",
             "extra": "trials: 5\nmedian: 334.00\nmean: 349.20\nstdev: 22.65\ncv: 6.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e4023bc59852c8d6c196f9e8e5134a582eae11a",
+          "message": "spike(kafka): what a Kafka wire shim would take, measured against librdkafka (#498)\n\n* spike(kafka): a read-only Kafka front door over a Felix shard log\n\nEvidence for #488, committed before it is measured further so it cannot be\nlost again.\n\nApiVersions, Metadata, ListOffsets and Fetch, hand-rolled — a crate that\nalready implemented them would answer a different question than 'how much work\nis this'. Records come from shard_log(..).read_from(), the call the replication\ndriver ships with.\n\n* docs(kafka): the shim spike, its result, and the recommendation\n\nAnswers #488 with what the spike did rather than with an estimate.\n\n`kcat` reads records out of a Felix shard log with correct offsets, from 533\nlines and four API keys. The parts that looked hard were not: Felix offsets are\ncontiguous per shard and needed no translation, a shard mapped to a partition\nunchanged, and `Fetch` turned out to be `read_from` — the call replication\nalready ships with.\n\nWhat cost time was the protocol's own bootstrapping. librdkafka opens with\n`ApiVersions` v3, the flexible encoding, and a broker that does not speak it\nmust answer `UNSUPPORTED_VERSION` in the *v0* response format, because the\nclient cannot know which format to parse until it learns the version was\nrefused. Get that wrong and it reports \"Bad message format\" and stops — before\nanything else in the protocol can be reached. Then CRC-32C rather than IEEE,\nand the v2 record batch's varints and length framing.\n\nThe finding that decides it is where it stops. Asked to join a group, `kcat`\nprints \"Waiting for group rebalance\" and hangs: there is no protocol-level way\nto tell a consumer that a broker has no coordinator. That is precisely the\nfailure the issue said in advance would make the answer no.\n\nSo: option A is worth shipping only as a read-only export and only with the\ngroup case made to fail loudly; option B is blocked on idempotent producers\n(#422) rather than on protocol work, because modern clients default to\n`enable.idempotence=true` and the shim's other two choices are refusing them or\nlying about a durability guarantee; option C should not be attempted.\n\n`why-felix.md` already told readers to use something else. It now says so\ndeliberately, with the reason and a pointer.",
+          "timestamp": "2026-09-17T17:03:26-07:00",
+          "tree_id": "219d7f38cfc15d58afe5cd0a61be457b47564521",
+          "url": "https://github.com/gabloe/felix/commit/0e4023bc59852c8d6c196f9e8e5134a582eae11a"
+        },
+        "date": 1789689958556,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 157.20\nstdev: 1.10\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 201,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 199.80\nstdev: 3.27\ncv: 1.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 229,
+            "range": "132.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 229.00\nmean: 289.20\nstdev: 132.40\ncv: 45.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 196.40\nstdev: 0.89\ncv: 0.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 388,
+            "range": "10.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 388.00\nmean: 392.20\nstdev: 10.94\ncv: 2.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 535,
+            "range": "114.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 535.00\nmean: 583.40\nstdev: 114.65\ncv: 19.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
