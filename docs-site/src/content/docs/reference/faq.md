@@ -160,7 +160,9 @@ claims to those subjects and evaluates role permissions:
 
 ## Will there be clients for other languages?
 
-The Rust SDK is the only client today. Others are planned but not started.
+Rust and Python ship today; Python is a binding over the Rust client rather
+than a reimplementation, and passes every required scenario in the client
+conformance catalogue. TypeScript, Go and C# are not started.
 The wire protocol is language-neutral and documented precisely for this
 reason — see [Wire Protocol](/felix/architecture/wire-protocol/) — and a
 conformance runner exists to check an implementation against it.
