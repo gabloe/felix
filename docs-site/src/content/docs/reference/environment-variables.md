@@ -1045,6 +1045,32 @@ listener closes. It is spent *inside* the platform's kill deadline, so
 `terminationGracePeriodSeconds` must cover this plus
 `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`. A second SIGTERM ends the wait early.
 
+### `FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS`
+
+**Description**: Inbound peer connections this broker holds at once, across all
+peers. Over the limit, a connection is refused rather than queued — a peer told
+no can back off, where one left waiting cannot tell a busy broker from a stuck
+one.
+
+**Type**: Integer
+
+**Default**: `512`
+
+### `FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE`
+
+**Description**: Inbound peer connections from any one address. The total alone
+does not stop one peer consuming the whole allowance, which is the case that
+matters: a peer looping on a reconnect bug starves the rest of the cluster
+before anyone notices.
+
+Startup refuses a value above
+`FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS`, since the per-source limit would then
+never be the one that applies.
+
+**Type**: Integer
+
+**Default**: `16`
+
 ## Configuration File
 
 ### `FELIX_BROKER_CONFIG`
