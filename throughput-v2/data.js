@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789711781963,
+  "lastUpdate": 1789711973797,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10660,6 +10660,58 @@ window.BENCHMARK_DATA = {
             "range": "16641.35",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557142.43\nmean: 557657.89\nstdev: 16641.35\ncv: 2.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66cc5581f001bce5ce45e449ceac20620ad630a3",
+          "message": "test(docs): load every YAML block in the docs and check what it names (#515)\n\nThe deployment pages carry hundreds of lines of Kubernetes and Compose\nYAML that nothing parsed; one block did not load at all and the page looked\nfine. A test in felix-common now loads every fenced yaml block under docs/\nand docs-site/, checks Compose build args and --build-arg flags against the\nDockerfiles, checks ghcr.io/gabloe images against the two that are\npublished, and checks FELIX_* names in the manifests against the env\nregistry. In Rust rather than a docs-site script because the workspace\nalready has a YAML parser and no npm dependency is needed.\n\nIts first run found two blocks with duplicate keys; both fixed.\n\nCloses #493.",
+          "timestamp": "2026-09-17T23:08:46-07:00",
+          "tree_id": "8c2d224b1a6ea7a16380ae525428c36e3bf1eca4",
+          "url": "https://github.com/gabloe/felix/commit/66cc5581f001bce5ce45e449ceac20620ad630a3"
+        },
+        "date": 1789711973394,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 273568.22,
+            "range": "4745.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 273568.22\nmean: 271934.87\nstdev: 4745.63\ncv: 1.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 273568.22,
+            "range": "4745.63",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 273568.22\nmean: 271934.87\nstdev: 4745.63\ncv: 1.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 63233.3,
+            "range": "1036.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 63233.30\nmean: 62558.48\nstdev: 1036.83\ncv: 1.66%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 632333.04,
+            "range": "10368.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 632333.04\nmean: 625584.83\nstdev: 10368.29\ncv: 1.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
