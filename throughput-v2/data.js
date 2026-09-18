@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789726864431,
+  "lastUpdate": 1789728845733,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10816,6 +10816,58 @@ window.BENCHMARK_DATA = {
             "range": "12156.08",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 560693.70\nmean: 561793.61\nstdev: 12156.08\ncv: 2.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2509c1ae95da62c98472b7222535298d364551d7",
+          "message": "feat(controlplane): count and log every refused credential (#519)\n\nUnauthorized attempts against the control plane were rejected and nothing\nelse: a broker with a stale credential, or something that is not a broker,\ngot a 401 or 403 and left no trace an operator could see. Every refusal now\ngoes through one path that counts it, with a bounded reason label, and logs\nthe reason and message, never the token.\n\nCloses #126.",
+          "timestamp": "2026-09-18T03:51:53-07:00",
+          "tree_id": "92b04a63e265eef085749f3d2259248185222c5b",
+          "url": "https://github.com/gabloe/felix/commit/2509c1ae95da62c98472b7222535298d364551d7"
+        },
+        "date": 1789728845150,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 378920.54,
+            "range": "13585.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 378920.54\nmean: 377068.81\nstdev: 13585.14\ncv: 3.60%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 378920.54,
+            "range": "13585.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 378920.54\nmean: 377068.81\nstdev: 13585.14\ncv: 3.60%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 83474.92,
+            "range": "3333.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 83474.92\nmean: 81742.76\nstdev: 3333.56\ncv: 4.08%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 834749.16,
+            "range": "33335.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 834749.16\nmean: 817427.59\nstdev: 33335.61\ncv: 4.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
