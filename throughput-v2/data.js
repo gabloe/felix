@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789731108249,
+  "lastUpdate": 1789732279958,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10920,6 +10920,58 @@ window.BENCHMARK_DATA = {
             "range": "5882.31",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 600388.10\nmean: 596657.54\nstdev: 5882.31\ncv: 0.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "890adb5ec25bbecb35a9ce7ad2f00ae57b30c484",
+          "message": "feat(deploy): a Helm chart for the control plane and a broker cluster (#521)\n\nThe Kubernetes page said \"you write the manifests\". The chart at\ndeploy/helm/felix is those manifests: a Deployment over Postgres that\nrolls one instance at a time with none unavailable, or a StatefulSet under\nRaft with a volume per member and the peers map derived from the release;\nbrokers as a StatefulSet whose pod name is the node id, with a volume\neach, the pod IP advertised to peers and the pod's DNS name to clients,\nthe credential and Postgres URL from Secrets the operator creates, probes\nand a derived grace period, budgets that keep a replication-factor-three\nquorum, anti-affinity and zone spread, a NetworkPolicy admitting the\ninternal port from brokers only, and optional peer mTLS issued per pod by\ncert-manager's CSI driver.\n\nCombinations that are each fine alone and wrong together refuse to\nrender. scripts/check_chart.py renders every value set under ci/, asserts\nthose properties on the output, and checks each refusal still refuses;\n`task chart:check` and a CI job run it.\n\nCloses #131. Closes #132.",
+          "timestamp": "2026-09-18T04:49:00-07:00",
+          "tree_id": "3b1cf14257ee3ee464612391fd625021c9448f44",
+          "url": "https://github.com/gabloe/felix/commit/890adb5ec25bbecb35a9ce7ad2f00ae57b30c484"
+        },
+        "date": 1789732278602,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 322862.46,
+            "range": "4595.72",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 322862.46\nmean: 320583.86\nstdev: 4595.72\ncv: 1.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 322862.46,
+            "range": "4595.72",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 322862.46\nmean: 320583.86\nstdev: 4595.72\ncv: 1.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 77211.2,
+            "range": "1090.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 77211.20\nmean: 77066.68\nstdev: 1090.20\ncv: 1.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 772111.97,
+            "range": "10902.06",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 772111.97\nmean: 770666.83\nstdev: 10902.06\ncv: 1.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
