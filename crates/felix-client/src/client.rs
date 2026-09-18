@@ -5,6 +5,7 @@ pub(crate) mod cache_watch;
 pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod event_router;
+pub(crate) mod idempotent;
 #[cfg(feature = "in-process")]
 pub(crate) mod inprocess;
 pub(crate) mod publisher;

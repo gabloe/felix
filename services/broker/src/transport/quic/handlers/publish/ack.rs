@@ -26,6 +26,7 @@ use crate::transport::quic::{
 ///   acked path. Kept as a distinct variant rather than reusing `Message` because
 ///   the reply encoding has to match the request encoding — a client that sent a
 ///   `FLAG_BINARY_PUBLISH_ACKED` frame is reading a binary ack frame, not JSON.
+#[derive(Debug)]
 pub(crate) enum Outgoing {
     Message(Message),
     CacheMessage(Message),
@@ -49,13 +50,18 @@ pub(crate) enum Outgoing {
 pub(crate) enum AckEncoding {
     Json,
     Binary,
+    /// A `publish_idempotent`: JSON, with a refusal the producer can act on
+    /// answered as `publish_refused` rather than as prose.
+    Idempotent,
 }
 
 impl AckEncoding {
     /// Build a success ack in this encoding.
     pub(crate) fn ok(self, request_id: u64) -> Outgoing {
         match self {
-            AckEncoding::Json => Outgoing::Message(Message::PublishOk { request_id }),
+            AckEncoding::Json | AckEncoding::Idempotent => {
+                Outgoing::Message(Message::PublishOk { request_id })
+            }
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 error: None,
@@ -67,15 +73,50 @@ impl AckEncoding {
     pub(crate) fn error(self, request_id: u64, message: impl Into<String>) -> Outgoing {
         let message = message.into();
         match self {
-            AckEncoding::Json => Outgoing::Message(Message::PublishError {
-                request_id,
-                message,
-            }),
+            AckEncoding::Json | AckEncoding::Idempotent => {
+                Outgoing::Message(Message::PublishError {
+                    request_id,
+                    message,
+                })
+            }
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 error: Some(message),
             },
         }
+    }
+
+    /// Build the ack for a publish the worker refused.
+    ///
+    /// The same as [`Self::error`] except for an idempotent publish, where a
+    /// refusal the producer must act on carries its reason: a gap means stop,
+    /// an unknown producer means start again, and a string would make every
+    /// client parse prose to tell them apart.
+    pub(crate) fn refuse(self, request_id: u64, err: &anyhow::Error) -> Outgoing {
+        if self == AckEncoding::Idempotent
+            && let Some(reason) = refusal_reason(err)
+        {
+            return Outgoing::Message(Message::PublishRefused {
+                request_id,
+                reason,
+                message: err.to_string(),
+            });
+        }
+        self.error(request_id, err.to_string())
+    }
+}
+
+/// The typed reason behind a worker's refusal of an idempotent publish, when
+/// it has one.
+fn refusal_reason(err: &anyhow::Error) -> Option<felix_wire::PublishRefusalReason> {
+    use felix_wire::PublishRefusalReason as Reason;
+    match err.downcast_ref::<felix_broker::BrokerError>()? {
+        felix_broker::BrokerError::SequenceGap { expected } => Some(Reason::SequenceGap {
+            expected: *expected,
+        }),
+        felix_broker::BrokerError::UnknownProducer { .. } => Some(Reason::UnknownProducer),
+        felix_broker::BrokerError::SequenceExpired { .. } => Some(Reason::SequenceExpired),
+        _ => None,
     }
 }
 

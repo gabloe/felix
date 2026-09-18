@@ -13,6 +13,20 @@ for what the current release actually guarantees.
 
 ### Added
 
+- Idempotent producers (#422). A client asks the broker for a producer id
+  (`producer_init`) and sends its batches as `publish_idempotent` with a
+  per-shard sequence; the shard's leader appends the sequence it expects,
+  answers a re-send of one it already holds with the original outcome and no
+  second append, and refuses a gap, an unknown producer, or a sequence older
+  than it remembers with a typed `publish_refused`. A batch for a shard led
+  elsewhere is refused with the leader's address rather than forwarded.
+  Negotiated as `FEATURE_IDEMPOTENT_PRODUCER`. `ClusterClient::idempotent_producer`
+  and `Client::idempotent_producer` re-send under the same sequence after an
+  ambiguous outcome, follow a not-leader refusal, and end on any other. The
+  sequences live in the leader's memory: a new leader answers
+  `unknown_producer`, so a batch in flight across a failover is reported rather
+  than silently landed or dropped.
+
 - A leader rebuilds a halted follower itself. A follower whose log diverged
   from the leader's, or that refused a bootstrap because it held records of
   its own, is told to discard its copy of the shard (`ReplicateRebuild`,

@@ -58,6 +58,7 @@ mod error;
 pub mod group_delivery;
 pub mod group_reader;
 mod keys;
+mod producers;
 mod registry;
 pub mod replication;
 mod stream_state;
@@ -66,8 +67,8 @@ mod subscription;
 pub mod timings;
 
 pub use broker::{
-    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, PublishOutcome, ResumedSubscription,
-    StartPosition, StreamHandle, StreamMetadata,
+    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, IdempotentOutcome, PublishOutcome,
+    ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
 };
 pub use cache_watch::{CacheChangeEvent, CacheWatchFilter, CacheWatchHub, CacheWatchSubscription};
 pub use config::SubQueuePolicy;

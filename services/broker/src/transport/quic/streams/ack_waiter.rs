@@ -216,7 +216,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            encoding.error(request_id, err.to_string()),
+                                            encoding.refuse(request_id, &err),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -337,7 +337,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            encoding.error(request_id, err.to_string()),
+                                            encoding.refuse(request_id, &err),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,

@@ -292,9 +292,29 @@ impl PublishContext {
 pub(crate) fn needs_quorum(target: &Option<PublishTarget>) -> bool {
     matches!(
         target,
-        Some(PublishTarget::Resolved { handle, .. })
+        Some(PublishTarget::Resolved { handle, .. } | PublishTarget::Idempotent { handle, .. })
             if handle.consistency() == felix_broker::ConsistencyLevel::Quorum
     )
+}
+
+/// The shard a local publish waits on for its quorum, when this broker is in
+/// a cluster. Built the same way `resolve_route` built the key it dispatched
+/// on, so the shard a publish waits for is the shard it landed on. `None` on a
+/// single-node broker, which has no replica set and so nothing to wait for.
+pub(crate) fn local_shard_key(
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+) -> Option<ShardKey> {
+    publish_ctx.ingress.as_ref().map(|_| ShardKey {
+        tenant_id: tenant_id.to_string(),
+        namespace: namespace.to_string(),
+        stream: stream.to_string(),
+        shard,
+        kind: ShardKind::Stream,
+    })
 }
 
 /// The shard a publish that carries no routing key belongs to.
@@ -326,15 +346,7 @@ pub(crate) fn publish_target(
     match route {
         PublishRoute::Local(handle) => Some(PublishTarget::Resolved {
             handle,
-            // Built the same way `resolve_route` built the key it dispatched
-            // on, so the shard a publish waits for is the shard it landed on.
-            shard: publish_ctx.ingress.as_ref().map(|_| ShardKey {
-                tenant_id: tenant_id.to_string(),
-                namespace: namespace.to_string(),
-                stream: stream.to_string(),
-                shard,
-                kind: ShardKind::Stream,
-            }),
+            shard: local_shard_key(publish_ctx, tenant_id, namespace, stream, shard),
         }),
         PublishRoute::Forward(target) => {
             if publish_ctx.peers.is_none() {

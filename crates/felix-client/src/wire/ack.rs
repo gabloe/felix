@@ -164,6 +164,11 @@ pub(crate) async fn wait_for_ack(
             }
             Err(anyhow::anyhow!("publish failed: {message}"))
         }
+        Some(Message::PublishRefused {
+            request_id: ack_id,
+            reason,
+            message,
+        }) if ack_id == request_id => Err(crate::PublishRefused { reason, message }.into()),
         other => Err(anyhow::anyhow!("publish failed: {other:?}")),
     }
 }

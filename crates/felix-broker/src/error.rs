@@ -69,4 +69,17 @@ pub enum BrokerError {
     /// exists to prevent.
     #[error("durable storage error: {0}")]
     Storage(String),
+    /// An idempotent batch skipped ahead of the sequence this broker expected.
+    /// What was skipped is not here, so continuing past it would leave a hole
+    /// the producer believes is filled.
+    #[error("sequence gap: expected {expected}")]
+    SequenceGap { expected: u64 },
+    /// An idempotent batch from a producer this broker holds no sequence for,
+    /// and not its first. Nothing can be checked against.
+    #[error("unknown producer {producer_id}: nothing to check its sequence against")]
+    UnknownProducer { producer_id: u64 },
+    /// An idempotent batch re-sent from further back than this broker
+    /// remembers, so whether it was appended cannot be told.
+    #[error("sequence {sequence} is older than the window this broker keeps")]
+    SequenceExpired { sequence: u64 },
 }

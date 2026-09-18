@@ -541,6 +541,56 @@ pub enum Message {
         request_id: u64,
         message: String,
     },
+    /// Ask the broker for a producer id.
+    ///
+    /// Only ever sent to a broker that advertised `FEATURE_IDEMPOTENT_PRODUCER`.
+    /// The id is the broker's to assign, so two producers can never pick the
+    /// same one and have their sequences confused for each other's.
+    ProducerInit {
+        request_id: u64,
+    },
+    /// The producer id the broker assigned.
+    ProducerInitOk {
+        request_id: u64,
+        producer_id: u64,
+    },
+    /// A batch the broker appends once, however many times it arrives.
+    ///
+    /// `sequence` counts this producer's batches on this shard from zero, one
+    /// per batch whatever its size. The broker appends a batch whose sequence
+    /// is the next it expects, answers a re-send of one it already holds with
+    /// `publish_ok` and no second append, and refuses anything else with
+    /// `publish_refused`. Only ever sent to a broker that advertised
+    /// `FEATURE_IDEMPOTENT_PRODUCER`, and always acknowledged: a producer that
+    /// never learns the answer cannot know what to send next.
+    PublishIdempotent {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        #[serde(with = "crate::base64_serde::base64_vec")]
+        payloads: Vec<Vec<u8>>,
+        /// Routes the batch like `PublishBatch.key`. The sequence is per
+        /// shard, so a producer keeps one counter per key's shard.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::base64_serde::base64_option_bytes"
+        )]
+        key: Option<Bytes>,
+        request_id: u64,
+        producer_id: u64,
+        sequence: u64,
+    },
+    /// A `publish_idempotent` the broker would not append, with a reason the
+    /// producer can act on rather than prose it would have to parse.
+    ///
+    /// Only ever sent to a client that offered `FEATURE_IDEMPOTENT_PRODUCER`,
+    /// which it did by sending `publish_idempotent` at all.
+    PublishRefused {
+        request_id: u64,
+        reason: PublishRefusalReason,
+        message: String,
+    },
     // Generic success response.
     Ok,
     // Protocol-level error for invalid requests or unexpected message types.
@@ -587,6 +637,42 @@ pub enum CursorErrorReason {
     TooOld,
     /// The offset is past the end of the stream.
     InFuture,
+}
+
+/// Why a `publish_idempotent` was not appended.
+///
+/// Each names a different remedy, which is why they are not one string. A
+/// gap means the producer skipped ahead and must not continue as if it had
+/// not; an unknown producer means this broker holds nothing to check against
+/// and the producer must start again with a new id; an expired sequence is a
+/// re-send from further back than the broker remembers; and not-leader means
+/// the batch went to a broker that does not hold the shard's sequences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishRefusalReason {
+    /// The sequence is past the next one expected; what was skipped is lost
+    /// to this broker and the producer must not carry on past it.
+    SequenceGap {
+        /// The sequence the broker would have appended.
+        expected: u64,
+    },
+    /// The broker holds no sequence for this producer on this shard and the
+    /// batch was not its first. Nothing can be checked against, so nothing
+    /// is appended; the producer needs a new id.
+    UnknownProducer,
+    /// The sequence is older than the window the broker keeps, so whether it
+    /// was appended cannot be told any more.
+    SequenceExpired,
+    /// This broker does not lead the shard, and only the leader holds the
+    /// sequences; the batch has to go to the broker named here.
+    NotLeader {
+        /// Who leads it.
+        node_id: String,
+        /// `host:port` the leader serves clients on, or absent when the
+        /// cluster has not been told where clients reach it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<String>,
+    },
 }
 
 /// Where a subscription should begin.

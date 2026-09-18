@@ -80,6 +80,7 @@ pub use client::cache_watch::{CacheChange, CacheWatch, CacheWatchFilter, CacheWa
 pub use client::client::Client;
 pub use client::client::{NotLeaderError, SubscribeCursorError};
 pub use client::cluster::{ClusterClient, ReconnectPolicy};
+pub use client::idempotent::IdempotentProducer;
 #[cfg(feature = "in-process")]
 pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
@@ -88,7 +89,27 @@ pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
 pub use config::{ClientConfig, ClientSubQueuePolicy};
 pub use counters::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
-pub use felix_wire::{CursorErrorReason, StartPosition};
+pub use felix_wire::{CursorErrorReason, PublishRefusalReason, StartPosition};
+
+/// The broker would not append an idempotent publish, and said why.
+///
+/// Carried as a typed error so a producer can act on the reason rather than
+/// parse the message: a sequence gap means stop, an unknown producer means
+/// start again under a new id, and neither is a transport failure to retry.
+/// Recover it from an `anyhow::Error` with `downcast_ref`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishRefused {
+    pub reason: PublishRefusalReason,
+    pub message: String,
+}
+
+impl std::fmt::Display for PublishRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "publish refused ({:?}): {}", self.reason, self.message)
+    }
+}
+
+impl std::error::Error for PublishRefused {}
 
 pub(crate) use macros::{t_now_if, t_should_sample};
 

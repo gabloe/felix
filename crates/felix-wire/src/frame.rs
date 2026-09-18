@@ -155,6 +155,18 @@ pub const FEATURE_CACHE_WATCH_RETAINED: u32 = 0x0000_0080;
 /// which is worse than refusing to count at all.
 pub const FEATURE_COUNTERS: u32 = 0x0000_0100;
 
+/// The broker assigns producer ids (`producer_init`) and accepts
+/// `publish_idempotent`: a batch carrying a producer id and a sequence number,
+/// which it appends once however many times it arrives. A re-send of a batch
+/// the broker already holds is acknowledged with the original's outcome rather
+/// than appended again, and a refusal comes back as `publish_refused` with a
+/// reason a client can act on.
+///
+/// Both messages exist only under this bit: a client offers the bit in its own
+/// features to say it can decode `publish_refused`, and sends the requests
+/// only to a broker that advertised it.
+pub const FEATURE_IDEMPOTENT_PRODUCER: u32 = 0x0000_0200;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -164,7 +176,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_STREAM_SHARDS
     | FEATURE_CACHE_WATCH
     | FEATURE_CACHE_WATCH_RETAINED
-    | FEATURE_COUNTERS;
+    | FEATURE_COUNTERS
+    | FEATURE_IDEMPOTENT_PRODUCER;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

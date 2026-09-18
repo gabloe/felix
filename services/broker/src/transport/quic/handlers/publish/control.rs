@@ -21,8 +21,8 @@ use crate::transport::quic::handlers::publish::ack::{
 };
 use crate::transport::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
 use crate::transport::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, UNKEYED_SHARD, internal_ack, publish_target,
-    resolve_route,
+    PublishContext, PublishJob, PublishRoute, StreamHandleCache, UNKEYED_SHARD, internal_ack,
+    publish_target, resolve_route,
 };
 use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
 
@@ -287,6 +287,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         Some(ack),
         sample,
         auth_ctx.token.clone(),
+        None,
     )
     .await
 }
@@ -753,6 +754,10 @@ pub(crate) async fn handle_publish_batch_message(
     sample: bool,
     // The publisher's token, carried on a forward for the owner to verify.
     credential: String,
+    // `(producer_id, sequence)` for a `publish_idempotent`; the batch is then
+    // appended once however many times it arrives, acknowledged only once
+    // committed, and never forwarded.
+    producer: Option<(u64, u64)>,
 ) -> Result<()> {
     #[cfg(feature = "telemetry")]
     {
@@ -855,26 +860,85 @@ pub(crate) async fn handle_publish_batch_message(
     // same shard, or the owner appends to a different log than the one this
     // broker dispatched on.
     let shard = resolve_shard(publish_ctx, &tenant_id, &namespace, &stream, key.as_deref());
-    let target = publish_target(
-        resolve_route(
-            broker,
-            publish_ctx.authority(),
-            stream_cache,
-            stream_cache_key,
-            &tenant_id,
-            &namespace,
-            &stream,
-            shard,
-        )
-        .await,
-        publish_ctx,
+    let route = resolve_route(
+        broker,
+        publish_ctx.authority(),
+        stream_cache,
+        stream_cache_key,
         &tenant_id,
         &namespace,
         &stream,
         shard,
-        internal_ack(ack),
-        &credential,
-    );
+    )
+    .await;
+    let target = match producer {
+        None => publish_target(
+            route,
+            publish_ctx,
+            &tenant_id,
+            &namespace,
+            &stream,
+            shard,
+            internal_ack(ack),
+            &credential,
+        ),
+        Some((producer_id, sequence)) => match route {
+            PublishRoute::Local(handle) => Some(PublishTarget::Idempotent {
+                handle,
+                shard: super::local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
+                producer_id,
+                sequence,
+            }),
+            // Only the leader holds the sequences a re-send is checked
+            // against, so an idempotent batch is not forwarded: forwarded, a
+            // duplicate could land on the owner from two ingress brokers with
+            // nothing to tell the second from the first. The producer is told
+            // where to go instead.
+            PublishRoute::Forward(owner) => {
+                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
+                let request_id = request_id.expect("request id checked");
+                let addr = publish_ctx.client_endpoints.as_ref().and_then(|endpoints| {
+                    endpoints
+                        .snapshot()
+                        .iter()
+                        .find(|endpoint| endpoint.node_id == owner.node_id)
+                        .map(|endpoint| endpoint.addr.clone())
+                });
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        out_ack_tx,
+                        out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        ack_throttle_tx,
+                        Outgoing::Message(Message::PublishRefused {
+                            request_id,
+                            message: format!(
+                                "shard {shard} of {tenant_id}/{namespace}/{stream} is led by {}; \
+                                 an idempotent publish must go to the leader",
+                                owner.node_id
+                            ),
+                            reason: felix_wire::PublishRefusalReason::NotLeader {
+                                node_id: owner.node_id,
+                                addr,
+                            },
+                        }),
+                    )
+                    .await,
+                    ack_timeout_state,
+                    ack_throttle_tx,
+                    cancel_tx,
+                )
+                .await?;
+                return Ok(());
+            }
+            PublishRoute::Refused => None,
+        },
+    };
+    // An idempotent publish is acknowledged only once committed, like a
+    // forward or a `Quorum` publish: "accepted into the queue" says nothing
+    // about whether the sequence was taken, which is what the producer needs
+    // to know before it sends the next.
+    let idempotent = producer.is_some();
     // See the single-publish path: a forward is acknowledged only once the owner
     // has answered, whatever `ack_on_commit` says, and a `Quorum` publish only
     // once a majority holds it.
@@ -911,13 +975,13 @@ pub(crate) async fn handle_publish_batch_message(
     // Same reasoning as the JSON path above: `Quorum` outranks the local
     // ack-on-commit policy, because it is the stream saying this broker alone
     // cannot answer for the record.
-    let (response_tx, response_rx) =
-        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding || quorum) {
-            let (response_tx, response_rx) = oneshot::channel();
-            (Some(response_tx), Some(response_rx))
-        } else {
-            (None, None)
-        };
+    let commit_ack = ack_on_commit || forwarding || quorum || idempotent;
+    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && commit_ack {
+        let (response_tx, response_rx) = oneshot::channel();
+        (Some(response_tx), Some(response_rx))
+    } else {
+        (None, None)
+    };
     let fanout_start = t_now_if(sample);
     let enqueue_result = enqueue_publish(
         publish_ctx,
@@ -929,7 +993,7 @@ pub(crate) async fn handle_publish_batch_message(
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit || forwarding || quorum {
+        } else if commit_ack {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -1002,7 +1066,7 @@ pub(crate) async fn handle_publish_batch_message(
     // answer to "is this on a majority", and answering it anyway is how a
     // `Quorum` stream came to behave exactly like a `Leader` one whenever
     // `ack_on_commit` was off -- which is the default.
-    if !ack_on_commit && !forwarding && !quorum {
+    if !commit_ack {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.
