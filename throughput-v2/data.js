@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789749669041,
+  "lastUpdate": 1789758400880,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11336,6 +11336,58 @@ window.BENCHMARK_DATA = {
             "range": "6005.94",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 594832.09\nmean: 594440.78\nstdev: 6005.94\ncv: 1.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4bb2b4eaf25986d3be1f88722e01ac2bef9dcec4",
+          "message": "perf(azure): provision N load generators, and pin that group commit still groups (#538)\n\n* perf(azure): provision N load generators, and let a run sweep them\n\nOne D4 generator is crypto-bound near ~1.15 GB/s, comfortably under what a\nbroker absorbs, so a broker's ceiling cannot be established with one of them.\nrun-nvme-multi.sh has always expected felixperf-loadgen-2 and -3, but the\ntemplate only ever built one machine, so the multi-generator control had to be\nassembled by hand -- which is how it came to be skipped.\n\nloadgenCount (default 1, so every existing session is unchanged) builds them in\na loop. Generator 0 keeps the bare name and the only public address: it is the\njump host and every script already addresses it that way. The rest are -2, -3,\nmatching what run-nvme-multi.sh expects. The deployment now outputs their names\nand session.sh records them in the inventory as LOADGENS, so a runner does not\nhave to guess.\n\nrun-nvme-multi.sh sourced that inventory *after* its own LOADGENS default,\nwhich would have made the inventory clobber a value given on the command line\n-- exactly the sweep the script exists to run. An explicit LOADGENS now wins,\nand the run says which generators it used.\n\n* perf(azure): quote LOADGENS in the session inventory\n\nThe inventory is sourced by every run script, and LOADGENS holds several\nwords, so writing it unquoted made `source` run the second and third generator\nnames as commands:\n\n    sessions/<name>.env:8: command not found: felixperf-loadgen-2\n\nAny future multi-value inventory field needs the same care.\n\n* test(storage): pin that concurrent durable appends share a flush\n\nAn Azure session measured the group-commit fan-in\n(`felix_storage_sync_batch_appends`) at 1.004-1.007 with 48 concurrent\npublishers and a ~300 us mean flush, which is a hard ceiling of roughly one\nbatch per flush and explains the ~1000 MB/s per-broker wall (#535).\n\nThis asks the same question in-process, and the storage layer answers it\ncorrectly: 64 durable appends cost 277ms serially and 38ms 16-way concurrent,\na 7.25x speedup. The flushes coalesce exactly as `disk_log/sync.rs` says they\ndo.\n\nSo the fan-in of 1 seen in production is not a storage bug, and this test is\nwhat says so -- and keeps saying so, because a regression here would be\ninvisible until the next cluster session otherwise.\n\nThe threshold is deliberately loose at 2x. It is not a latency budget; it is\nthe difference between \"the flushes coalesced\" and \"they did not\".\n\n* test(broker): pin that concurrent publishes reach the flush together\n\nBisects the serialisation behind #535. An Azure session measured the\ngroup-commit fan-in at 1.004-1.007 with 48 publishers, so callers were reaching\n`ensure_durable` one at a time. The storage layer was already exonerated -- it\ncoalesces at 7.25x when driven concurrently -- which left the question of which\nlayer above it drops the concurrency.\n\nNot this one. `Broker::publish` at 16-way is 10.97x cheaper per publish than\nserial (243.9ms vs 22.2ms for 64 publishes), so `felix-broker` hands storage\nthe concurrency it needs.\n\nThat leaves `services/broker`'s QUIC publish ingress as the only layer between\na client and the log that has not been ruled out, and it has a mechanism that\nfits: `publish_worker_index` maps a stream handle to exactly one worker\n(`handle.id() % worker_count`), and that worker's loop awaits each publish to\ncompletion before taking the next off its queue.\n\nTwo tests now bracket the problem -- this one and the storage-level one -- so a\nregression in either layer is caught in CI rather than in the next cluster\nsession. `docs/storage-performance.md` sets a fan-in budget of >= 8 and says\noutright that CI does not gate on it; that gap is how this went unseen.\n\n* test(cluster): reproduce the publish-ingress serialisation on a laptop (#535)\n\nConfirms over real QUIC what the Azure sessions measured, and completes the\nbisect:\n\n  felix-storage group commit      7.25x speedup   coalesces\n  felix-broker publish           10.97x speedup   preserves concurrency\n  full stack over QUIC            fan-in 1.000    serialised\n\n16 publishers on 16 separate connections, one durable shard, OnCommit, and the\nfan-in read off the broker's own metrics endpoint rather than inferred from\ntimings. Azure measured 1.004 on an L8as_v4; this measures 1.000 on a laptop in\nabout two seconds.\n\n`FELIX_CORE_SHARDS=1` was worth ruling out and is worse on both counts: 13.7\nMB/s against 38.6, and the same fan-in of 1.000. It is the wrong direction --\n\"exactly one publish worker per shard\" is more serialisation, not less -- which\nis consistent with #155 having disabled it in the performance workflows.\n\nCommitted ignored, not deleted. It fails today for a reason already filed, and\nit is the only reproduction that reaches the transport; deleting it would mean\nre-deriving it from a cluster session next time. Un-ignore when fixed and raise\nthe threshold to the >= 8 that docs/storage-performance.md budgets.\n\nWhat this does not yet explain: the harness opens one connection per publisher\nand publish workers are per connection, so 16 connections should give 16\nworkers and a fan-in near 16. The per-connection worker loop is necessary but\nnot sufficient, and the remaining candidate is a per-shard serialisation inside\nthe worker that both in-process tests bypass by calling Broker::publish\ndirectly.",
+          "timestamp": "2026-09-18T12:03:51-07:00",
+          "tree_id": "6cb24d91c806831988189768ffe8509bdeea0281",
+          "url": "https://github.com/gabloe/felix/commit/4bb2b4eaf25986d3be1f88722e01ac2bef9dcec4"
+        },
+        "date": 1789758399943,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 234587.25,
+            "range": "3059.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234587.25\nmean: 234148.72\nstdev: 3059.97\ncv: 1.31%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 234587.25,
+            "range": "3059.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 234587.25\nmean: 234148.72\nstdev: 3059.97\ncv: 1.31%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54217.04,
+            "range": "1549.30",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54217.04\nmean: 54103.55\nstdev: 1549.30\ncv: 2.86%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 542170.36,
+            "range": "15493.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 542170.36\nmean: 541035.47\nstdev: 15493.01\ncv: 2.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
