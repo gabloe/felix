@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789732276113,
+  "lastUpdate": 1789733819759,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13926,6 +13926,72 @@ window.BENCHMARK_DATA = {
             "range": "433.70",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1307.00\nmean: 1091.60\nstdev: 433.70\ncv: 39.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08a1282bd232998e511c3ea301c2f34e027dc314",
+          "message": "feat(replication): rebuild halted followers under a policy (#520)\n\nA follower that halted -- because its log diverged from the leader's, or\nbecause it held records and refused a bootstrap -- stayed halted until an\noperator discarded its copy by hand, and the replication factor drifted\ntoward one across failovers with nothing calling it a failure.\n\nThe leader now repairs it. ReplicateRebuild (kind 24) tells a follower of\nthe shard, at the leader's generation, to discard one of its logs and\nstart again at the leader's oldest surviving offset; shipping resumes\nfrom there and the follower is caught up when it reaches the tail. The\nsame fence applies as to storing records, since a superseded leader\nmaking a follower discard its copy is the most damage a stale leader\ncould do.\n\nIt happens under a policy, because a rebuild is a full transfer and\nevery halted follower at once is an outage:\nFELIX_REPLICATION_REBUILD_MAX_CONCURRENT caps rebuilds in flight per\nleader (default 1, 0 leaves every halt to an operator as before) and\nFELIX_REPLICATION_REBUILD_BYTES_PER_SEC paces a rebuilding follower.\nA fenced halt is never rebuilt; a refusal is remembered for the\ngeneration; an unreachable follower is asked again.\n\nCloses #424.",
+          "timestamp": "2026-09-18T05:14:38-07:00",
+          "tree_id": "d5494df26fc9dc8b411ab641c860dbb09467bc9b",
+          "url": "https://github.com/gabloe/felix/commit/08a1282bd232998e511c3ea301c2f34e027dc314"
+        },
+        "date": 1789733817343,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 77,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 77.00\nmean: 78.20\nstdev: 3.27\ncv: 4.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 110,
+            "range": "7.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 110.00\nmean: 111.60\nstdev: 7.64\ncv: 6.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 132,
+            "range": "100.08",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 173.20\nstdev: 100.08\ncv: 57.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 104,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 104.00\nmean: 103.80\nstdev: 0.45\ncv: 0.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 228,
+            "range": "111.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 228.00\nmean: 298.20\nstdev: 111.14\ncv: 37.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 385,
+            "range": "3201.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 385.00\nmean: 2647.80\nstdev: 3201.47\ncv: 120.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
