@@ -1,7 +1,7 @@
 # A throwaway spike for #488: how much of the Kafka wire protocol does a real
 # client need before it can read a Felix stream?
 #
-# Outside the workspace on purpose. This is evidence, not a product: it exists
+# Outside the workspace on purpose. This is evidence, not a product: it is here
 # to be measured and then deleted or promoted, and it must not become something
 # `task lint` keeps alive by habit.
 [package]
@@ -19,8 +19,9 @@ crc = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# A real broker behind the shim. AGPL-3.0, like anything embedding the broker —
-# which is itself one of the decisions, since a shim would ship inside Felix.
+# A real Felix broker, behind the shim. AGPL-3.0, like anything that embeds the
+# broker — which is one of the things a shim would have to decide, since it
+# would ship as part of Felix rather than beside it.
 felix-broker = { path = "../../crates/felix-broker" }
 felix-storage = { path = "../../crates/felix-storage" }
 

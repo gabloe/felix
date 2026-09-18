@@ -38,6 +38,10 @@ pub const OUTCOME_UNREACHABLE: &str = "unreachable";
 pub const OUTCOME_HANDSHAKE: &str = "handshake";
 pub const OUTCOME_OK: &str = "ok";
 pub const OUTCOME_ERROR: &str = "error";
+/// A frame kind this build does not know, refused without dropping the stream.
+/// Expected during a rolling upgrade and nowhere else — a steady non-zero rate
+/// means a peer is sending something this broker will never serve.
+pub const OUTCOME_UNSUPPORTED: &str = "unsupported_kind";
 pub const OUTCOME_TIMEOUT: &str = "timeout";
 pub const OUTCOME_DISCONNECTED: &str = "disconnected";
 /// This broker was asked for a shard it does not own, and said so.

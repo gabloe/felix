@@ -698,3 +698,113 @@ fn the_four_replication_kinds_are_distinguishable() {
     let distinct: std::collections::HashSet<_> = encoded.iter().map(|(_, b)| b).collect();
     assert_eq!(distinct.len(), 4, "two kinds encode identically");
 }
+
+/// **Every body begins with its correlation id.**
+///
+/// A responder that meets a kind it does not know steps over the body and
+/// answers anyway, and it can only do that because the correlation id is at a
+/// fixed place in every body. Adding a field before it would make a refusal
+/// unmatchable and leave dropping the connection as the only option — so this
+/// is a protocol invariant, not a convention.
+#[test]
+fn every_body_begins_with_its_correlation_id() {
+    let shard = ShardRef {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        generation: 4,
+    };
+    let id = 0x0102_0304_0506_0708u64;
+    let messages = vec![
+        InternalMessage::Hello(Hello {
+            correlation_id: id,
+            node_id: "broker-a".to_string(),
+        }),
+        InternalMessage::HelloOk(HelloOk {
+            correlation_id: id,
+            node_id: "broker-a".to_string(),
+        }),
+        InternalMessage::ReplicateRecords(ReplicateRecords {
+            correlation_id: id,
+            shard: shard.clone(),
+            first_offset: 10,
+            checksum: 7,
+            payloads: vec![Bytes::from_static(b"r")],
+        }),
+        InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: id,
+            durable_offset: 11,
+        }),
+        InternalMessage::ReplicateError(ReplicateError {
+            correlation_id: id,
+            code: ErrorCode::LogGap,
+            expected_offset: 3,
+            detail: "gap".to_string(),
+        }),
+        InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
+            correlation_id: id,
+            shard,
+            base_offset: 100,
+        }),
+        InternalMessage::ForwardPublishError(ForwardPublishError {
+            correlation_id: id,
+            code: ErrorCode::Unavailable,
+            detail: "no".to_string(),
+        }),
+    ];
+
+    for message in messages {
+        let encoded = message.encode().expect("encode");
+        let body = &encoded[InternalHeader::LEN..];
+        assert_eq!(
+            correlation_id_in(body),
+            Some(id),
+            "{message:?} does not begin with its correlation id, so a peer that \
+             does not know its kind could not answer it",
+        );
+    }
+}
+
+/// The envelope is readable even when the kind is not.
+///
+/// This is what lets an older peer step over a frame from a newer one rather
+/// than dropping the stream every in-flight request is sharing.
+#[test]
+fn an_unknown_kind_still_has_a_readable_envelope() {
+    let mut frame = BytesMut::new();
+    frame.put_u32(INTERNAL_MAGIC);
+    frame.put_u16(INTERNAL_VERSION);
+    frame.put_u16(60_000); // A kind from some later build.
+    frame.put_u32(9);
+    frame.extend_from_slice(&[0u8; 9]);
+    let frame = frame.freeze();
+
+    let envelope = FrameEnvelope::decode(&frame).expect("the envelope is frozen and readable");
+    assert_eq!(envelope.kind, 60_000);
+    assert_eq!(envelope.length, 9);
+    // And the typed decode still refuses it, which is what selects the body
+    // layout and must never guess.
+    assert!(InternalMessage::decode(frame).is_err());
+}
+
+/// A wrong magic or version is *not* steppable.
+///
+/// The envelope's own fields are the thing being trusted, so the framing has to
+/// be ours before a length from it means anything.
+#[test]
+fn a_frame_that_is_not_ours_has_no_envelope_to_read() {
+    let mut alien = BytesMut::new();
+    alien.put_u32(0xDEAD_BEEF);
+    alien.put_u16(INTERNAL_VERSION);
+    alien.put_u16(1);
+    alien.put_u32(0);
+    assert!(FrameEnvelope::decode(&alien.freeze()).is_err());
+
+    let mut future = BytesMut::new();
+    future.put_u32(INTERNAL_MAGIC);
+    future.put_u16(INTERNAL_VERSION + 1);
+    future.put_u16(1);
+    future.put_u32(0);
+    assert!(FrameEnvelope::decode(&future.freeze()).is_err());
+}

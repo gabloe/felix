@@ -676,3 +676,78 @@ fn a_quiet_peer_connection_is_kept_alive_inside_its_idle_window() {
         "keep-alive {keep_alive:?} leaves no margin inside idle window {idle:?}",
     );
 }
+
+/// **A kind this broker does not know is refused, and the stream lives.**
+///
+/// Adding a `Kind` is the protocol's sanctioned additive change, and it is only
+/// additive if an older peer can refuse one frame instead of dropping the lane.
+/// These streams are long-lived and multiplex every in-flight request, so
+/// killing one on an unrecognised frame turns "the peer is newer than me" into
+/// "every request in flight to that peer failed" — and made adding a kind a
+/// cutover rather than an upgrade.
+///
+/// The frozen header is what makes stepping over it possible: it says how long
+/// the body is, and every body begins with its correlation id, so the refusal
+/// can name the request that caused it.
+#[tokio::test]
+async fn a_frame_kind_this_broker_does_not_know_is_refused_without_ending_the_stream() {
+    use bytes::BufMut;
+    use felix_transport::{QuicClient, TransportConfig};
+
+    let listener = Listener::start(PEER, Arc::new(CountingHandler::default())).await;
+
+    let client = QuicClient::bind(
+        "127.0.0.1:0".parse().expect("addr"),
+        crate::peer::tls::client_config().expect("client config"),
+        TransportConfig::default(),
+    )
+    .expect("bind");
+    let connection = client
+        .connect(listener.addr, "felix-internal")
+        .await
+        .expect("connect");
+    let (mut send, mut recv) = connection.open_bi().await.expect("open");
+
+    // A frame from some later build: our framing, our version, a kind that does
+    // not exist yet, and a body whose first eight bytes are the correlation id
+    // every body starts with.
+    const FROM_THE_FUTURE: u16 = 60_000;
+    const CORRELATION: u64 = 0x5eed_1234_5eed_1234;
+    let mut frame = bytes::BytesMut::new();
+    frame.put_u32(felix_wire::internal::INTERNAL_MAGIC);
+    frame.put_u16(felix_wire::internal::INTERNAL_VERSION);
+    frame.put_u16(FROM_THE_FUTURE);
+    frame.put_u32(12);
+    frame.put_u64(CORRELATION);
+    frame.put_u32(0xabad_1dea);
+    send.write_all(&frame).await.expect("write");
+
+    let refusal = crate::peer::codec::read_frame(&mut recv)
+        .await
+        .expect("the stream must still be readable");
+    let crate::peer::codec::Incoming::Message(InternalMessage::ForwardPublishError(err)) = refusal
+    else {
+        panic!("expected a typed refusal, got something else");
+    };
+    assert_eq!(err.code, ErrorCode::UnsupportedKind);
+    assert_eq!(
+        err.correlation_id, CORRELATION,
+        "the refusal did not name the request, so a caller could not match it",
+    );
+
+    // The point of the whole thing: the same stream still serves.
+    crate::peer::codec::write_frame(&mut send, &forward())
+        .await
+        .expect("write a request this broker does know");
+    let answer = crate::peer::codec::read_frame(&mut recv)
+        .await
+        .expect("read");
+    assert!(
+        matches!(answer, crate::peer::codec::Incoming::Message(_)),
+        "the stream was dropped after the unknown kind, so every request \
+         sharing it would have failed",
+    );
+
+    connection.close(0u32.into(), b"done");
+    listener.stop().await;
+}

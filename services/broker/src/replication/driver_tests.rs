@@ -950,20 +950,24 @@ async fn a_failed_replica_report_holds_the_quorum_mark_back() {
         let _ = axum::serve(listener, app.into_make_service()).await;
     });
 
-    let report_to = ReportTo {
-        client: reqwest::Client::new(),
-        base_url: format!("http://{addr}"),
-        node_id: LOCAL.to_string(),
-        token: None,
-        incarnation: 0,
-    };
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
 
     replicate_once(
         &follower,
         &broker,
         &router,
         &marks,
-        Some(&report_to),
+        Some(&reporter),
         &mut cursors,
         &mut HashMap::new(),
         &mut HashMap::new(),
@@ -1481,20 +1485,24 @@ async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
         let _ = axum::serve(listener, app.into_make_service()).await;
     });
 
-    let report_to = ReportTo {
-        client: reqwest::Client::new(),
-        base_url: format!("http://{addr}"),
-        node_id: LOCAL.to_string(),
-        token: None,
-        incarnation: 0,
-    };
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
 
     replicate_once(
         &follower,
         &broker,
         &router,
         &marks,
-        Some(&report_to),
+        Some(&reporter),
         &mut HashMap::new(),
         &mut HashMap::new(),
         &mut HashMap::new(),
@@ -1517,4 +1525,48 @@ async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
     }
 
     server.abort();
+}
+
+/// **A record the only follower disagrees with is never acknowledged.**
+///
+/// This is the end of the chain #406 described. A follower keeps an orphan from
+/// a dead leader; the new leader reuses that offset for its own record; and if
+/// the mark moved past it anyway, `Quorum` would acknowledge a record no
+/// majority holds — and the follower, looking level, would then be promoted
+/// over it.
+///
+/// The two links before this one are checked next door, on a real follower log:
+/// `a_batch_wholly_overlapping_does_not_confirm_past_itself` and
+/// `an_orphan_at_a_reused_offset_is_reported_as_a_conflict` in
+/// `felix-broker`. This is the part that decides whether a client is told yes.
+#[tokio::test]
+async fn a_quorum_mark_does_not_pass_a_record_the_follower_disagrees_with() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let marks = QuorumMarks::new();
+
+    replicate_once(
+        &DivergingFollower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    // What holds here is that the mark is derived from where followers actually
+    // are: this one never got past its first batch, so no majority reaches the
+    // leader's tail and there is nothing to mark. A mark taken from the
+    // leader's own tail instead fails this with "reached Some(3)", which is
+    // what acknowledging on the leader's word alone would look like.
+    let mark = marks.offset(&watch_key(&key()), 4);
+    assert!(
+        mark.is_none_or(|offset| offset < 3),
+        "the quorum mark reached {mark:?} with the only follower in \
+         disagreement, so a record no majority holds was acknowledged",
+    );
 }

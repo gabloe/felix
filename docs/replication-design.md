@@ -290,11 +290,15 @@ Anything else halts, as before. That is the same shape Kafka arrived at without
 Raft (KIP-101, KIP-279), reached without adding a message: the generation is
 already on every batch, and the follower's own history supplies the rest.
 
-Not exchanging it is deliberate. A new internal message kind cannot be sent to
-a peer that might not understand it — an undecodable frame ends the stream, and
-those streams are long-lived lanes multiplexing every in-flight request, so a
-probe costs far more than it learns. Repairing from what a follower already
-knows needs no negotiation and no rolling-upgrade order.
+Not exchanging it is deliberate, and the reason has since narrowed. It used to
+be that a new kind could not be sent to a peer that might not understand it: an
+unknown kind ended the stream, and those streams are long-lived lanes carrying
+every in-flight request, so a probe cost far more than it learned. A peer now
+steps over a kind it does not know and refuses that one frame, so the cost is no
+longer prohibitive — but it is still a round trip, and repairing from what a
+follower already knows needs none, along with no negotiation and no
+rolling-upgrade order. An older peer predating that change still drops the
+stream, so a probe would also have to wait out a deployment.
 
 What it gives up is the case where the follower's history is absent or does not
 reach back far enough. Those halt, which is exactly today's behaviour.
@@ -475,11 +479,25 @@ reason: the argument rests on the control plane knowing who holds the record, so
 releasing on a failed report reaches the same window by another route.
 
 That costs a control-plane round trip on the path of a quorum publish, which is
-the price of the acknowledgement meaning what it says. It is one round trip per
-shard per pass in the healthy case: the majority report already describes every
-follower, because they finish together. A follower that answers late enough to
-move after that report sends a second one, so a replica that is level does not
-look behind — and so out of promotion — until the next pass.
+the price of the acknowledgement meaning what it says. One report per shard per
+pass in the healthy case: the majority report already describes every follower,
+because they finish together. A follower that answers late enough to move after
+that report sends a second one, so a replica that is level does not look behind
+— and so out of promotion — until the next pass.
+
+**Reports are not one round trip each.** A flush takes every report queued at
+that moment and sends them as one request, which the endpoint has always
+accepted; reports arriving while that request is in flight go together in the
+next one. So a pass shipping sixteen shards concurrently costs round trips
+proportional to how long the control plane takes to answer, not to how many
+shards this broker leads.
+
+Group commit rather than a window, and for the reason `disk_log/sync.rs` makes
+the same choice: a timer would add its own wait to a pass with a single shard to
+report, which is the deployment least able to spare it on a `Quorum` publish.
+Batches grow under load, which is when they are worth having, and an idle broker
+waits for nothing. `felix_broker_replica_reports_per_request` says how well it
+is working — one, on a broker leading hundreds of shards, means it is not.
 
 A wait that runs out is reported as a failure, and the distinction matters: the
 records *are* durable on the leader and may yet reach a majority. The broker is
