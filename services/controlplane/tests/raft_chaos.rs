@@ -268,7 +268,6 @@ fn traffic_loop(
         let call = |method: &str, path: &str, body: Option<&[u8]>, expect: &[u16]| -> Option<u16> {
             stats.calls.fetch_add(1, Ordering::Relaxed);
             let mut outcome = http(ready[0], method, path, Some(&bearer), body);
-            let mut retried = false;
             if outcome.is_none() {
                 // The connection died before an answer. As in the rolling
                 // restart's harness: retry against what is ready *now*, not
@@ -295,7 +294,6 @@ fn traffic_loop(
                     });
                 if let Some(addr) = retry {
                     stats.failovers.fetch_add(1, Ordering::Relaxed);
-                    retried = true;
                     outcome = http(addr, method, path, Some(&bearer), body);
                 }
             }
@@ -304,18 +302,20 @@ fn traffic_loop(
                 // The one ambiguous outcome in the harness, and it is a
                 // *success*.
                 //
-                // The retry above only happens when the first attempt's
-                // connection died before an answer — which does not mean it
-                // did not land. A create that committed and then lost its
-                // answer comes back from the retry as `409 already exists`,
-                // and that conflict is the first attempt reporting itself.
+                // A create that committed and then lost its answer comes back
+                // as `409 already exists`, and that conflict is an earlier
+                // attempt of this same call reporting itself. Every id here is
+                // used once (`t-chaos-N`, counting up), so a conflict cannot be
+                // anyone else's write.
                 //
-                // Every id here is used once (`t-chaos-N`, counting up), so a
-                // conflict cannot be anyone else's write. Counting it as a
-                // failure made the chaos assertion fail whenever a fault
-                // landed in the window between commit and reply, which is
-                // precisely the window the faults are injected to open.
-                Some((409, _)) if retried && method == "POST" => Some(409),
+                // Deliberately not conditioned on the harness having retried.
+                // `RaftStore::write` retries a proposal itself when an attempt
+                // exceeds its cap, so a command that committed just as the cap
+                // expired is re-proposed and answered `409` on the caller's
+                // *first* HTTP attempt — no dead connection, no harness retry.
+                // Requiring `retried` here scored that as a failed call, which
+                // is the window the faults exist to open.
+                Some((409, _)) if method == "POST" => Some(409),
                 other => {
                     stats.failures.fetch_add(1, Ordering::Relaxed);
                     eprintln!(
