@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789746223253,
+  "lastUpdate": 1789746399861,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11128,6 +11128,58 @@ window.BENCHMARK_DATA = {
             "range": "6701.16",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 548727.53\nmean: 549951.99\nstdev: 6701.16\ncv: 1.22%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69507aa2b352141a206e6e82bcde07dd4e208d76",
+          "message": "perf(azure): seed Quorum streams, so RF=3 can be measured (#526)\n\nEvery published throughput and latency figure is RF=1 `Leader`, which is not\nthe configuration the docs recommend. The seed hardcoded `\"consistency\":\n\"Leader\"` for both streams and left a comment saying the Leader vs Quorum\ncomparison \"registers its own streams per run\" -- nothing does, so #425 had\nno stream to run against.\n\nSeeds the two durability settings crossed with the two consistency levels:\nperf, perf-durable, perf-quorum, perf-durable-quorum. One seed covers every\ncombination a run wants to price, and the loadgen already takes --stream, so\nnothing else needs to change.\n\nAt REPLICATION_FACTOR=1 a quorum of one is the leader and the -quorum streams\nmeasure the same path as their siblings. Seeded anyway so the names are stable\nacross tiers and a run script does not need to know the replication factor to\nknow what to ask for.\n\nChecked with `dash -n` and the case arms expanded under dash, since this runs\non the loadgen under dash via run-command.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-18T08:43:24-07:00",
+          "tree_id": "0f70c39f33ffea8efb80c3ef1a6965b475c7c291",
+          "url": "https://github.com/gabloe/felix/commit/69507aa2b352141a206e6e82bcde07dd4e208d76"
+        },
+        "date": 1789746399031,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 226710.89,
+            "range": "1638.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 226710.89\nmean: 227526.64\nstdev: 1638.04\ncv: 0.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 226710.89,
+            "range": "1638.04",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 226710.89\nmean: 227526.64\nstdev: 1638.04\ncv: 0.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 53656.84,
+            "range": "1146.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 53656.84\nmean: 53920.95\nstdev: 1146.79\ncv: 2.13%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 536568.38,
+            "range": "11467.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 536568.38\nmean: 539209.49\nstdev: 11467.88\ncv: 2.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
