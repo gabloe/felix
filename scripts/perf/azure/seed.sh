@@ -87,8 +87,16 @@ done
 
 # --- 3. wait for the brokers to register ------------------------------------
 echo ">> waiting for the brokers to register and take their shards"
+# The *admin* token, not the load generator's. The client-scoped token in
+# felix-session/token deliberately carries no `node.view:cluster:*` -- that is
+# #513's scoping working -- so polling /v1/nodes with it answers 403 forever,
+# `|| echo 0` swallows it, and the loop reports "0/N registered" after burning
+# its full five minutes. That false zero was mistaken for a flake on every
+# session since #513; it is deterministic.
 poll_out="$(run_on_str "$(loadgen_vm)" "set -eu
-TOKEN=\$(cat /home/felix/felix-session/token)
+TOKEN=\$(curl -fsS -X POST 'http://${CONTROLPLANE_IP}:8080/v1/tenants/${TENANT}/token/exchange' \
+  -H 'Authorization: Bearer ${IDP_TOKEN}' -H 'Content-Type: application/json' -d '{}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"felix_token\"])')
 n=0
 i=0
 while [ \$i -lt 60 ]; do
