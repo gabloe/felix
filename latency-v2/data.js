@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789764024490,
+  "lastUpdate": 1789765267484,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14652,6 +14652,72 @@ window.BENCHMARK_DATA = {
             "range": "817.67",
             "unit": "us",
             "extra": "trials: 5\nmedian: 680.00\nmean: 1218.40\nstdev: 817.67\ncv: 67.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92c48672c1b2285cb8f77abd3a373cabe617b4fc",
+          "message": "perf(azure): sample broker CPU in a way that is true (#543)\n\nThe old sampler ran `top -bn4` mid-run through `az vm run-command`, which takes\nseconds to reach a VM -- often landing after a ~26s case had already finished,\nand reporting an idle machine. In the two-broker session it recorded the *only*\nbroker doing any writing, 14.3M appends and 58.9 GB, as 100% idle. A wrong\nnumber is worse than no number: that reading is what made the broker look\nuninvolved while it was the whole bottleneck.\n\nNow the sampler is armed on every broker *before* the load starts, differences\n/proc/stat at 1 Hz into a file, and afterwards averages only the samples that\nwere actually busy, so the idle head and tail stay out of the mean. This is the\nmethod that produced the clean 50-51% reading behind #535.\n\nIt also reports **softirq**, which `top`'s summary line does not separate and\nwhich is ~10% of a loaded broker -- QUIC/UDP packet processing and AEAD. That\nis exactly the term that distinguishes \"CPU bound\" from \"waiting on the disk\",\nwhich is the question the next matrix run exists to answer.\n\nVerified by generating the remote scripts and executing them against\n/proc/stat-shaped input rather than eyeballing the escaping: the sampler writes\nthe seven expected fields, and the analysis returns\n`busy=79% us=40 sy=25 si=13 wa=1`.\n\nPart of #537.",
+          "timestamp": "2026-09-18T13:54:41-07:00",
+          "tree_id": "411de6454de55f9342cebf62dae2e8a703539d48",
+          "url": "https://github.com/gabloe/felix/commit/92c48672c1b2285cb8f77abd3a373cabe617b4fc"
+        },
+        "date": 1789765264507,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 162.40\nstdev: 0.89\ncv: 0.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "6.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 212.40\nstdev: 6.07\ncv: 2.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 260,
+            "range": "1397.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 260.00\nmean: 877.40\nstdev: 1397.36\ncv: 159.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "4.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 202.00\nstdev: 4.00\ncv: 1.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 401,
+            "range": "160.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 401.00\nmean: 473.80\nstdev: 160.06\ncv: 33.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 960,
+            "range": "398.11",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 960.00\nmean: 985.00\nstdev: 398.11\ncv: 40.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
