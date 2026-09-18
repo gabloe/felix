@@ -1090,6 +1090,50 @@ export FELIX_BROKER_CONFIG="/tmp/felix-dev.yml"
 **Behavior**:
 - If set and file missing: **error**
 - If not set and default missing: **continue with defaults**
+- **A key the broker does not know is an error**, naming the key. A setting
+  that looks like it is in effect and is not is worse than a refusal, so a
+  misspelled key stops startup rather than silently leaving the default in
+  place. The same is true of the control plane's config file, nested sections
+  included.
+
+## Seeing what is in effect
+
+```bash
+felix-broker --print-config
+```
+
+Prints the configuration the broker would run with — defaults, the config file,
+and the environment already folded together — as YAML, and exits. Nothing is
+bound, so it is safe to run on a node that is already serving.
+
+It doubles as a **pre-flight check**. The config is loaded exactly as startup
+loads it, so a file that will not parse, or a key the broker does not know,
+fails here with the same message it would have produced on the node — before a
+rollout rather than during one.
+
+The node credential is shown as `<redacted>`, or `<unset>` when there is none:
+this output is meant to be pasted into an issue, and whether a token is set is
+exactly what someone debugging a registration failure needs to see. Warnings
+about unrecognised variables go to stderr, so `--print-config > current.yml`
+gives a clean document and still shows them.
+
+## Typos in variable names
+
+A misspelled *variable* cannot be refused the same way — the process cannot
+tell a typo from a variable meant for something else sharing the container. So
+both binaries warn instead, at startup, naming every `FELIX_*` variable that is
+set and that nothing reads:
+
+```text
+WARN FELIX_METRICS_BIND is set and nothing reads it — did you mean one of
+     FELIX_BROKER_METRICS_BIND, FELIX_CONTROLPLANE_METRICS_BIND? Those
+     settings are using their defaults
+```
+
+The suggestion looks for a missing segment first and a misspelling second, so
+a plausible-but-wrong shorter name — the mistake someone makes without noticing
+— is matched to the real one. Nothing close enough means no suggestion rather
+than the nearest arbitrary name.
 
 ## Logging
 

@@ -190,6 +190,9 @@ tasks:
     cmds:
       - "python3 scripts/check_doc_evidence.py"
       - "python3 scripts/check_env_reference.py"
+      # And that the *runtime* knows them, so a mistyped name is reported
+      # rather than quietly taking a default.
+      - "python3 scripts/check_env_registry.py"
       # Belongs here for the same reason: a feature bit or a message variant is
       # added in Rust, and that is the moment the docs fall behind.
       - "python3 scripts/check_capability_docs.py"

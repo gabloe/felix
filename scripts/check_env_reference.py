@@ -45,7 +45,20 @@ NOT_OPERATIONAL = {
 
 def read_by_code() -> set[str]:
     out = subprocess.run(
-        ["git", "grep", "-hoE", r'"FELIX_[A-Z0-9_]+"', "--", "*.rs"],
+        # Test files are excluded: a name that appears only in one is a
+        # fixture — a deliberately wrong name, or a setting exercised by a
+        # harness — not a knob an operator has. Counting them made
+        # `FELIX_QUIC_BINDD` look like something to document.
+        [
+            "git",
+            "grep",
+            "-hoE",
+            r'"FELIX_[A-Z0-9_]+"',
+            "--",
+            "*.rs",
+            ":!*_tests.rs",
+            ":!*/tests/*",
+        ],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -54,8 +67,21 @@ def read_by_code() -> set[str]:
     return {line.strip('"') for line in out.splitlines()}
 
 
+#: One section of the reference exists to show names that do **not** exist —
+#: what a typo looks like, and what the startup warning suggests instead. Read
+#: literally, every name in it is "documented and read by nothing", which is the
+#: very thing it is explaining. Skipped rather than exempted by name, so the
+#: examples can change without anyone remembering to update a list here.
+EXAMPLES_OF_WRONG_NAMES = "## Typos in variable names"
+
+
 def documented() -> set[str]:
-    return set(re.findall(r"FELIX_[A-Z0-9_]+", REFERENCE.read_text()))
+    text = REFERENCE.read_text()
+    if EXAMPLES_OF_WRONG_NAMES in text:
+        start = text.index(EXAMPLES_OF_WRONG_NAMES)
+        end = text.find("\n## ", start + 1)
+        text = text[:start] + (text[end:] if end != -1 else "")
+    return set(re.findall(r"FELIX_[A-Z0-9_]+", text))
 
 
 def main() -> int:

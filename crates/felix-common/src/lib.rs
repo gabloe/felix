@@ -9,6 +9,9 @@ pub mod lifecycle;
 // The broker-to-control-plane shapes. Not gated: they are serde types, and the
 // two ends need them whether or not either runs a process.
 pub mod membership;
+// Every FELIX_* variable the workspace reads, so a typo is reported rather than
+// silently taking a default. Not gated: it is a list and two pure functions.
+pub mod env_registry;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

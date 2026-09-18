@@ -85,7 +85,14 @@ const DEFAULT_RECONNECT_MAX_MS: u64 = 5_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 2_000;
 
 /// Broker-internal transport settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Durations are printed as milliseconds, matching the variables that set
+/// them. Serde's default for `Duration` is `{ secs, nanos }`, which is correct
+/// and unreadable next to `FELIX_PEER_REQUEST_TIMEOUT_MS`.
+fn as_millis<S: serde::Serializer>(value: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(value.as_millis() as u64)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PeerTransportConfig {
     /// Where the internal listener binds. Distinct from `quic_bind`, and
     /// startup refuses if they are equal.
@@ -97,10 +104,15 @@ pub struct PeerTransportConfig {
     pub max_inbound_connections: usize,
     /// Inbound connections held at once from any one address.
     pub max_inbound_per_source: usize,
+    #[serde(serialize_with = "as_millis")]
     pub request_timeout: Duration,
+    #[serde(serialize_with = "as_millis")]
     pub idle_timeout: Duration,
+    #[serde(serialize_with = "as_millis")]
     pub reconnect_base: Duration,
+    #[serde(serialize_with = "as_millis")]
     pub reconnect_max: Duration,
+    #[serde(serialize_with = "as_millis")]
     pub handshake_timeout: Duration,
     /// Test-only: a file naming peers this broker must not exchange with.
     ///
